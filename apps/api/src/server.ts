@@ -6,7 +6,7 @@ import sensible from "@fastify/sensible";
 import closeWithGrace from "close-with-grace";
 import type { IServerOptions } from "./types.js";
 import type { SerializerSchemaOptions } from "./types/fastify.js";
-import { stopBackgroundWorkers } from "./queues/background-workers.js";
+import { stopStaleGatewayCheck } from "./queues/background-workers.js";
 import { stopQueues } from "./queues/station-detection.js";
 import { stopMetricBucketQueues } from "./queues/metric-buckets.js";
 import { authPlugin } from "./services/auth/index.js";
@@ -88,7 +88,7 @@ export function createServer(options: IServerOptions) {
     } else {
       server.log.info(`${signal} received, server closing`);
     }
-    await Promise.all([server.close(), stopQueues(), stopMetricBucketQueues(), stopBackgroundWorkers()]);
+    await Promise.all([server.close(), stopQueues(), stopMetricBucketQueues(), stopStaleGatewayCheck()]);
   });
 
   const start = async () => {

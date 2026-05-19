@@ -1,3 +1,18 @@
+// Worker registrations for queues whose worker bodies are co-located here.
+//
+// Workers exported from this module:
+//   - startStaleGatewayCheck      (lives in apps/api)
+//   - startMetricBucketEnsure     (lives in apps/workers/rollups)
+//   - startStationEventWorker     (lives in apps/workers/processor-consumer)
+//
+// Producers / helpers exported and called from elsewhere:
+//   - scheduleNextEnsureTick      (called by shift-change worker, both lives in rollups)
+//   - runMetricBucketEnsureTick   (the tick body; also exported for direct invocation)
+//
+// Each `start*` is self-contained: opens its own Worker + Queue, leaves the
+// others alone. apps/api boots only `startStaleGatewayCheck`; apps/workers
+// boots the other two via their respective worker modes.
+
 import { Queue, Worker } from "bullmq";
 import { bullmqConfig } from "../config.js";
 import prisma from "../database/client.js";
@@ -21,40 +36,35 @@ let stationEventExecutionWorker: Worker | null = null;
 let bucketEnsureWorker: Worker | null = null;
 let bucketEnsureQueue: Queue | null = null;
 
-export async function startBackgroundWorkers(options?: { skipStationEventExecution?: boolean }) {
-  if (staleGatewayWorker || staleGatewayQueue || bucketEnsureWorker) {
+function bullmqConnection() {
+  if (!REDIS_URL) return null;
+  return { url: REDIS_URL, connectTimeout: bullmqConfig.connectTimeout };
+}
+
+// ────────────────────────────────────────────────────────────────
+// stale-gateway-check — apps/api
+// ────────────────────────────────────────────────────────────────
+
+export async function startStaleGatewayCheck(): Promise<void> {
+  if (staleGatewayWorker) return;
+
+  const connection = bullmqConnection();
+  if (!connection) {
+    console.log("[stale-gateway-check] REDIS_URL not set, skipping");
     return;
   }
-
-  if (!REDIS_URL) {
-    console.log("[workers] REDIS_URL not set, skipping background workers");
-    return;
-  }
-
-  const connection = {
-    url: REDIS_URL,
-    connectTimeout: bullmqConfig.connectTimeout,
-  };
 
   staleGatewayWorker = new Worker(
     "stale-gateway-check",
     async () => {
       const cutoff = new Date(Date.now() - 60 * 1000);
-
       const result = await prisma.gateway.updateMany({
-        where: {
-          status: "ONLINE",
-          lastHeartbeat: { lt: cutoff },
-        },
-        data: {
-          status: "OFFLINE",
-        },
+        where: { status: "ONLINE", lastHeartbeat: { lt: cutoff } },
+        data: { status: "OFFLINE" },
       });
-
       if (result.count > 0) {
         console.log(`Marked ${result.count} gateway(s) as OFFLINE`);
       }
-
       return { marked: result.count };
     },
     {
@@ -67,7 +77,6 @@ export async function startBackgroundWorkers(options?: { skipStationEventExecuti
   staleGatewayWorker.on("completed", (job, result) => {
     console.log(`Job ${job.id} completed`, result);
   });
-
   staleGatewayWorker.on("failed", (job, err) => {
     console.error(`Job ${job?.id} failed`, err);
   });
@@ -79,51 +88,31 @@ export async function startBackgroundWorkers(options?: { skipStationEventExecuti
     { name: "check-stale-gateways", opts: { removeOnComplete: true, removeOnFail: { count: 10 } } },
   );
 
-  console.log("[workers] stale-gateway-check started");
+  console.log("[stale-gateway-check] started");
+}
 
-  if (!options?.skipStationEventExecution) {
-    stationEventExecutionWorker = new Worker(
-      STATION_EVENT_EXECUTION_QUEUE,
-      async (job) => {
-        const executionId = job.data.executionId as string | undefined;
-        if (!executionId) {
-          throw new Error("executionId is required");
-        }
+export async function stopStaleGatewayCheck(): Promise<void> {
+  await Promise.all([staleGatewayWorker?.close(), staleGatewayQueue?.close()]);
+  staleGatewayWorker = null;
+  staleGatewayQueue = null;
+}
 
-        const result = await runStationEventExecution(executionId);
-        if ("error" in result) {
-          throw new Error(result.error);
-        }
+// ────────────────────────────────────────────────────────────────
+// metric-bucket-ensure — apps/workers/rollups
+// ────────────────────────────────────────────────────────────────
 
-        return result.data;
-      },
-      {
-        connection,
-        concurrency: 3,
-        stalledInterval: bullmqConfig.stalledInterval,
-        drainDelay: bullmqConfig.drainDelay,
-      },
-    );
+export async function startMetricBucketEnsure(): Promise<void> {
+  if (bucketEnsureWorker) return;
 
-    stationEventExecutionWorker.on("completed", (job, result) => {
-      console.log(`Station event job ${job.id} completed`, result);
-    });
-
-    stationEventExecutionWorker.on("failed", (job, err) => {
-      console.error(`Station event job ${job?.id} failed`, err);
-    });
-
-    console.log("[workers] station-event-execution started");
+  const connection = bullmqConnection();
+  if (!connection) {
+    console.log("[metric-bucket-ensure] REDIS_URL not set, skipping");
+    return;
   }
 
-  // ── Metric bucket ensure (self-chaining, ~60s) ─────────────────
-  // Ensures shift/hour buckets exist for all entities that already
-  // have at least one bucket. Catches missed shift rollovers in case
-  // the scheduled delayed job failed or was lost.
-  //
-  // Uses a self-chaining delayed job instead of a repeating scheduler
-  // so that the shift-change worker can preempt the next tick by
-  // triggering it immediately (delay: 0).
+  // Self-chaining delayed job (~60s). Uses delayed jobs (not a repeating
+  // scheduler) so the shift-change worker can preempt the next tick by
+  // re-adding with delay: 0.
   bucketEnsureWorker = new Worker(
     "metric-bucket-ensure",
     async () => {
@@ -141,53 +130,54 @@ export async function startBackgroundWorkers(options?: { skipStationEventExecuti
   );
 
   bucketEnsureWorker.on("failed", (job, err) => {
-    console.error(`[workers] Bucket ensure job ${job?.id} failed`, err);
+    console.error(`[metric-bucket-ensure] Bucket ensure job ${job?.id} failed`, err);
   });
 
   bucketEnsureQueue = new Queue("metric-bucket-ensure", { connection });
 
-  // Seed the first tick immediately
+  // Seed the first tick. Deterministic job ID makes this a no-op if another
+  // instance has already seeded — safe under horizontal scaling.
   await bucketEnsureQueue.add(
     "ensure-metric-buckets",
     {},
     { jobId: ENSURE_TICK_JOB_ID, delay: 0, removeOnComplete: true, removeOnFail: { count: 10 } },
   );
 
-  console.log("[workers] metric-bucket-ensure started (self-chaining, ~60s)");
+  console.log("[metric-bucket-ensure] started (self-chaining, ~60s)");
 
-  // Startup sweep: catch any expired-shift staging rows that didn't get
-  // flushed while the process was down (cycle-close lazy flush + the
-  // shift-change worker may both have been offline). Fire-and-forget so
-  // boot isn't blocked on it. Same callable used by the shift-change
-  // worker and any future periodic sweep.
+  // Startup sweep: flush any expired-shift staging rows that the cycle-close
+  // lazy flush + shift-change worker missed while the process was down.
+  // Fire-and-forget so boot isn't blocked on it.
   flushAllExpiredShiftUsage()
     .then((results) => {
       const total = results.reduce((acc, r) => acc + r.flushedRows, 0);
       if (total > 0) {
-        console.log(`[workers] startup sweep flushed ${total} staging row(s) across ${results.length} shift(s)`);
+        console.log(
+          `[metric-bucket-ensure] startup sweep flushed ${total} staging row(s) across ${results.length} shift(s)`,
+        );
       }
     })
-    .catch((err) => console.error("[workers] startup material-shift flush failed:", err));
+    .catch((err) => console.error("[metric-bucket-ensure] startup material-shift flush failed:", err));
 }
 
-// ── Shared tick body + scheduling ────────────────────────────────
+export async function stopMetricBucketEnsure(): Promise<void> {
+  await Promise.all([bucketEnsureWorker?.close(), bucketEnsureQueue?.close()]);
+  bucketEnsureWorker = null;
+  bucketEnsureQueue = null;
+}
 
-/**
- * Run the metric-bucket-ensure tick. Extracted so the shift-change
- * worker can also call it directly.
- */
+// ── Tick body — extracted so the shift-change worker can call it directly ──
+
 export async function runMetricBucketEnsureTick(): Promise<{ checked: number; archived: number }> {
   const now = new Date();
   const ctx = new MetricsContext();
 
-  // ── Materialize ShiftInstance rows (7-day lookahead) ──────────
   try {
     const { created, candidates } = await materializeShiftInstances();
     if (created > 0) {
-      console.log(`[workers] Materialized ${created} shift instance(s)`);
+      console.log(`[metric-bucket-ensure] Materialized ${created} shift instance(s)`);
     }
 
-    // Schedule shift-change delayed job for the next boundary per scope
     const nowMs = now.getTime();
     const nextByScope = new Map<string, { time: Date; scopeKey: string }>();
     for (const c of candidates) {
@@ -204,10 +194,9 @@ export async function runMetricBucketEnsureTick(): Promise<{ checked: number; ar
       await scheduleShiftChanges([...nextByScope.values()]);
     }
   } catch (err) {
-    console.error("[workers] Failed to materialize shift instances:", err);
+    console.error("[metric-bucket-ensure] Failed to materialize shift instances:", err);
   }
 
-  // ── Reconcile StationJobLog entries ───────────────────────────
   try {
     const stationsNeedingLog = await prisma.$queryRaw<
       Array<{
@@ -239,7 +228,9 @@ export async function runMetricBucketEnsureTick(): Promise<{ checked: number; ar
         INSERT INTO "StationJobLog" (id, "stationId", "jobId", "jobBlobId", "startTime", "standardCycle", "createdAt", "updatedAt")
         VALUES (gen_random_uuid(), ${station.stationId}::uuid, ${station.jobId}::uuid, ${station.jobBlobId}::uuid, ${now}, ${station.standardCycle}, NOW(), NOW())
       `;
-      console.log(`[workers] Reconciled missing StationJobLog for station ${station.stationId}, job ${station.jobId}`);
+      console.log(
+        `[metric-bucket-ensure] Reconciled missing StationJobLog for station ${station.stationId}, job ${station.jobId}`,
+      );
 
       await ensureBuckets(
         {
@@ -253,13 +244,9 @@ export async function runMetricBucketEnsureTick(): Promise<{ checked: number; ar
       );
     }
   } catch (err) {
-    console.error("[workers] Failed to reconcile StationJobLog entries:", err);
+    console.error("[metric-bucket-ensure] Failed to reconcile StationJobLog entries:", err);
   }
 
-  // ── Ensure buckets for all active stations ─────────────────────
-  // Proactively create buckets for every non-deleted station,
-  // even if they have no existing buckets yet. This ensures
-  // STATION buckets appear at shift start without needing a cycle.
   const allStations = await prisma.$queryRaw<Array<{ entityId: string; siteId: string; entityName: string }>>`
     SELECT s.id AS "entityId", s."siteId", s.name AS "entityName"
     FROM "Station" s
@@ -278,13 +265,8 @@ export async function runMetricBucketEnsureTick(): Promise<{ checked: number; ar
     await ensureBucketsBatch(stationInputs, ctx);
   }
 
-  // ── Batch ensure buckets for all other active entities ────────
   const activeEntities = await prisma.$queryRaw<
-    Array<{
-      entityType: string;
-      entityId: string;
-      siteId: string;
-    }>
+    Array<{ entityType: string; entityId: string; siteId: string }>
   >`
     SELECT DISTINCT "entityType", "entityId", "siteId" FROM "MetricBucket"
     WHERE "entityType" != 'STATION'
@@ -299,40 +281,33 @@ export async function runMetricBucketEnsureTick(): Promise<{ checked: number; ar
 
   await ensureBucketsBatch(ensureInputs, ctx);
 
-  // ── Archive old buckets to MetricBucketLog ────────────────────
   let archived = 0;
   try {
     archived = await archiveOldBuckets(ctx);
   } catch (err) {
-    console.error("[workers] Failed to archive old buckets:", err);
+    console.error("[metric-bucket-ensure] Failed to archive old buckets:", err);
   }
 
-  // ── Flush expired-shift staging rows into the immutable ledger ──
-  // Same callable used by startup, shift-change boundary, and any future
-  // dedicated periodic worker. Bounded staleness: at most 60s after a
-  // shift ends without an event-driven trigger firing.
   try {
     const flushed = await flushAllExpiredShiftUsage();
     const total = flushed.reduce((acc, r) => acc + r.flushedRows, 0);
     if (total > 0) {
-      console.log(`[workers] minute-tick flushed ${total} staging row(s) across ${flushed.length} shift(s)`);
+      console.log(
+        `[metric-bucket-ensure] minute-tick flushed ${total} staging row(s) across ${flushed.length} shift(s)`,
+      );
     }
   } catch (err) {
-    console.error("[workers] Failed to flush expired shift usage:", err);
+    console.error("[metric-bucket-ensure] Failed to flush expired shift usage:", err);
   }
 
   return { checked: activeEntities.length, archived };
 }
 
 /**
- * Schedule the next metric-bucket-ensure tick.
- *
- * Uses a deterministic job ID so only one pending tick exists at a
- * time. If a tick is currently running (job ID active), the add is
- * a no-op — BullMQ won't create a duplicate.
- *
- * The shift-change worker calls this with delayMs=0 to trigger an
- * immediate tick after publishing live events.
+ * Schedule the next metric-bucket-ensure tick. Used by the shift-change
+ * worker (with delayMs=0) to preempt the next tick after publishing live
+ * events. Both callers live in the same node process (rollups), so this is
+ * a direct in-process function call rather than a cross-process enqueue.
  */
 export async function scheduleNextEnsureTick(delayMs = ENSURE_TICK_INTERVAL_MS): Promise<void> {
   if (!bucketEnsureQueue) return;
@@ -348,22 +323,18 @@ export async function scheduleNextEnsureTick(delayMs = ENSURE_TICK_INTERVAL_MS):
   );
 }
 
-/**
- * Start only the station-event-execution worker.
- * Used by the server process when workers are split across processes.
- */
-export async function startStationEventWorker() {
+// ────────────────────────────────────────────────────────────────
+// station-event-execution — apps/workers/processor-consumer
+// ────────────────────────────────────────────────────────────────
+
+export async function startStationEventWorker(): Promise<void> {
   if (stationEventExecutionWorker) return;
 
-  if (!REDIS_URL) {
-    console.log("[workers] REDIS_URL not set, skipping station event worker");
+  const connection = bullmqConnection();
+  if (!connection) {
+    console.log("[station-event-execution] REDIS_URL not set, skipping");
     return;
   }
-
-  const connection = {
-    url: REDIS_URL,
-    connectTimeout: bullmqConfig.connectTimeout,
-  };
 
   stationEventExecutionWorker = new Worker(
     STATION_EVENT_EXECUTION_QUEUE,
@@ -372,12 +343,10 @@ export async function startStationEventWorker() {
       if (!executionId) {
         throw new Error("executionId is required");
       }
-
       const result = await runStationEventExecution(executionId);
       if ("error" in result) {
         throw new Error(result.error);
       }
-
       return result.data;
     },
     {
@@ -391,31 +360,14 @@ export async function startStationEventWorker() {
   stationEventExecutionWorker.on("completed", (job, result) => {
     console.log(`Station event job ${job.id} completed`, result);
   });
-
   stationEventExecutionWorker.on("failed", (job, err) => {
     console.error(`Station event job ${job?.id} failed`, err);
   });
 
-  console.log("[workers] station-event-execution started (server process, concurrency 10)");
+  console.log("[station-event-execution] started (concurrency 10)");
 }
 
-export async function stopStationEventWorker() {
+export async function stopStationEventWorker(): Promise<void> {
   await stationEventExecutionWorker?.close();
   stationEventExecutionWorker = null;
-}
-
-export async function stopBackgroundWorkers() {
-  await Promise.all([
-    staleGatewayWorker?.close(),
-    staleGatewayQueue?.close(),
-    stationEventExecutionWorker?.close(),
-    bucketEnsureWorker?.close(),
-    bucketEnsureQueue?.close(),
-  ]);
-
-  staleGatewayWorker = null;
-  staleGatewayQueue = null;
-  stationEventExecutionWorker = null;
-  bucketEnsureWorker = null;
-  bucketEnsureQueue = null;
 }

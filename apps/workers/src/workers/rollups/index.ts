@@ -1,20 +1,20 @@
-// Rollups worker — runs the metric-rollup pipeline.
+// Rollups worker — runs the entire metric-rollup pipeline.
 //
-// Composes worker registrations from apps/api's source modules:
-//   - metric-bucket-ensure (from queues/background-workers)
-//   - shift-bucket-create (from queues/metric-buckets)
-//   - shift-change (from queues/shift-change)
-//   - combined metrics tick + observer (from services/metrics/batcher)
+//   - metric-bucket-ensure (self-chaining ~60s tick)
+//   - shift-bucket-create  (BullMQ consumer + producer)
+//   - shift-change         (BullMQ delayed; triggers ensure tick at boundary)
+//   - metrics combined tick + observer (5s setInterval, dirty-bucket consumer)
+//   - archive              (called from inside the ensure tick)
 //
-// At cutover, apps/api stops registering these workers in main.ts, and the
-// rollups process becomes the sole consumer. Until then they overlap safely
-// (BullMQ guarantees each job to exactly one worker).
+// All five are tightly coupled (ensure ↔ shift-change callback, ensure ↔
+// archive ↔ tick share MetricsContext caches, etc.) so they live in one
+// node process. Each `start*` is idempotent and self-contained.
 
 import { createPrismaClient } from "@rw/db";
 import { initEventsBridge } from "@rw/runtime/events-bus";
 import {
-  startBackgroundWorkers,
-  stopBackgroundWorkers,
+  startMetricBucketEnsure,
+  stopMetricBucketEnsure,
   scheduleNextEnsureTick,
 } from "@rw/api/queues/background-workers";
 import {
@@ -39,7 +39,7 @@ export async function startRollups(): Promise<void> {
   await registerMetricBucketWorkers();
   await initShiftChangeQueue();
   await registerShiftChangeWorker(scheduleNextEnsureTick);
-  await startBackgroundWorkers({ skipStationEventExecution: true });
+  await startMetricBucketEnsure();
   startDirtyBucketConsumer();
 
   console.log("[rollups] all workers started");
@@ -47,11 +47,7 @@ export async function startRollups(): Promise<void> {
 
 export async function stopRollups(): Promise<void> {
   await stopDirtyBucketConsumer();
-  await Promise.all([
-    stopBackgroundWorkers(),
-    stopMetricBucketQueues(),
-    stopShiftChangeQueue(),
-  ]);
+  await Promise.all([stopMetricBucketEnsure(), stopMetricBucketQueues(), stopShiftChangeQueue()]);
   if (cleanupBridge) await cleanupBridge();
   const { createPrismaClient: getClient } = await import("@rw/db");
   await getClient("rollups").$disconnect();
