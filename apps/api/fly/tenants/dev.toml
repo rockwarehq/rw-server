@@ -1,0 +1,22 @@
+app = 'rw-dev-api'
+
+# Fly secrets (set via flyctl secrets set -a rw-dev-api):
+# - DATABASE_URL, REDIS_URL, JWT_SECRET, RESEND_API_KEY,
+# - MQTT_GATEWAY_REALY_*, PROCESSOR_SHARED_SECRET, AWS_*
+[_meta]
+required_secrets = ['DATABASE_URL', 'REDIS_URL', 'JWT_SECRET', 'RESEND_API_KEY', 'MQTT_GATEWAY_REALY_URL', 'MQTT_GATEWAY_REALY_USER', 'MQTT_GATEWAY_REALY_PASSWORD']
+domain = 'dev-api.rockware.io'
+
+[env]
+HOST = '0.0.0.0'
+LOG_LEVEL = 'debug'
+APP_BASE_URL = 'https://dev.rockware.io'
+BUCKET_NAME = 'rw-dev'
+DEV_CYCLE_SIMULATOR = '1'
+
+[[http_service.checks]]
+interval = '10s'
+timeout = '2s'
+grace_period = '30s'
+method = 'GET'
+path = '/health'

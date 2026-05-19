@@ -1,0 +1,7 @@
+app = 'dixie-workers'
+
+[_meta]
+required_secrets = ['DATABASE_URL', 'REDIS_URL', 'MQTT_BROKER_URL', 'MQTT_USERNAME', 'MQTT_PASSWORD', 'PROCESSOR_SHARED_SECRET']
+
+[env]
+LOG_LEVEL = 'info'

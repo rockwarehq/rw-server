@@ -1,0 +1,37 @@
+primary_region = 'iad'
+
+[build]
+
+# Three process groups — scale independently with:
+#   fly scale count -a <tenant>-workers rollups=1 processor=1 processor_consumer=2
+[processes]
+rollups            = 'node dist/main.js --worker rollups'
+processor          = 'node dist/main.js --worker processor'
+processor_consumer = 'node dist/main.js --worker processor-consumer'
+
+[env]
+NODE_ENV = 'production'
+PORT = '9465'
+
+# Internal-only healthcheck (no public HTTP).
+[[services]]
+internal_port = 9465
+protocol = 'tcp'
+processes = ['rollups', 'processor', 'processor_consumer']
+
+  [[services.tcp_checks]]
+  interval = '15s'
+  timeout = '2s'
+  grace_period = '30s'
+
+  [[services.http_checks]]
+  interval = '15s'
+  timeout = '2s'
+  grace_period = '30s'
+  method = 'GET'
+  path = '/healthz'
+
+[[vm]]
+memory = '512mb'
+cpu_kind = 'shared'
+cpus = 1
