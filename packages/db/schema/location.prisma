@@ -1,0 +1,39 @@
+// @deprecated - This model is kept for database migration purposes only.
+// Use Site, Workcenter, and Station models instead.
+// All application code should use the new hierarchy: Site -> Workcenter -> Station
+
+enum LocationType {
+  SITE
+  AREA
+  LINE
+  CELL
+  OTHER
+}
+
+model Location {
+  id          String       @id @default(uuid()) @db.Uuid
+  name        String
+  type        LocationType @default(OTHER)
+  description String?
+  attrs       Json         @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // Self-referential hierarchy
+  parentId String?    @db.Uuid
+  parent   Location?  @relation("LocationHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children Location[] @relation("LocationHierarchy")
+
+  // Datasources at this location (deprecated - use Site)
+  datasources Datasource[]
+
+  // Gateways at this location (deprecated - use Site)
+  gateways Gateway[]
+
+  // Workspace ownership (only set on SITE locations)
+  workspaceId String?    @db.Uuid
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}

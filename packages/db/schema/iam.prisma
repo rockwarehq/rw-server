@@ -1,0 +1,57 @@
+/// Role-based access control for the User principal tier.
+///
+/// Permissions are `resource:action` strings defined in code (src/iam/permissions.ts),
+/// not stored here. Roles carry an array of those strings.
+///
+/// A Role belongs to a Workspace and is either workspace-scoped or site-scoped.
+/// A RoleAssignment links a WorkspaceMembership to a Role, optionally narrowed
+/// to one Site.
+
+enum RoleScope {
+  WORKSPACE
+  SITE
+}
+
+/// Internal Rockware staff. Users with a SystemRole resolve permissions from
+/// code (SYSTEM_ROLE_PERMISSIONS) rather than RoleAssignment rows; they never
+/// appear as members of a customer workspace.
+enum SystemRole {
+  SUPPORT
+  ENGINEER
+}
+
+model Role {
+  id          String    @id @default(uuid()) @db.Uuid
+  workspaceId String    @db.Uuid
+  name        String
+  description String?
+  scope       RoleScope
+  permissions String[]
+  isSystem    Boolean   @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  workspace   Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  assignments RoleAssignment[]
+
+  @@unique([workspaceId, name, scope])
+  @@index([workspaceId])
+}
+
+model RoleAssignment {
+  id           String @id @default(uuid()) @db.Uuid
+  membershipId String @db.Uuid
+  roleId       String @db.Uuid
+
+  siteId String? @db.Uuid
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  membership WorkspaceMembership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  role       Role                @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  site       Site?               @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@index([membershipId])
+  @@index([siteId])
+}

@@ -1,0 +1,307 @@
+model Workcenter {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  attrs       Json    @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // Site ownership (required)
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  // Process type (optional)
+  processTypeId String?      @db.Uuid
+  processType   ProcessType? @relation(fields: [processTypeId], references: [id], onDelete: SetNull)
+
+  // Self-referential hierarchy
+  parentId String?      @db.Uuid
+  parent   Workcenter?  @relation("WorkcenterHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children Workcenter[] @relation("WorkcenterHierarchy")
+
+  // Stations
+  stations            Station[]
+  shiftAssignment     ShiftAssignment[]
+  shiftInstances      ShiftInstance[]
+  statusReasons       StatusReason[]
+  displays            Display[]
+  itemDispositionLogs ItemDispositionLog[]
+  shiftComments       ShiftComment[]
+
+  @@unique([siteId, parentId, name])
+  @@index([siteId])
+  @@index([parentId])
+}
+
+enum StationState {
+  UP
+  DOWN
+}
+
+enum StationStatus {
+  FAST
+  SLOW
+  UP
+  DOWN
+}
+
+enum DowntimeDetectUnit {
+  SECONDS
+}
+
+enum SlowDetectUnit {
+  PERCENTAGE
+}
+
+enum StationClassificationType {
+  MACHINE_SPEC
+  GROUP
+}
+
+enum StationEventExecutionStatus {
+  RUNNING
+  FAILED
+  SUCCEEDED
+}
+
+model Station {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  attrs       Json    @default("{}")
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  // Site ownership (required)
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  // Workcenter (optional - station can be directly under site)
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id], onDelete: Restrict)
+
+  // Current job assignment (many-to-one — multiple stations can share a job)
+  currentJobId String? @db.Uuid
+  currentJob   Job?    @relation("StationCurrentJob", fields: [currentJobId], references: [id], onDelete: SetNull)
+
+  // Blob versioning (config fields)
+  currentBlobId String?       @unique @db.Uuid
+  currentBlob   StationBlob?  @relation("StationCurrent", fields: [currentBlobId], references: [id])
+  blobs         StationBlob[] @relation("StationBlobs")
+
+  classifications StationClassification[]
+
+  // Allowed jobs (many-to-many via join table)
+  allowedJobs   StationJob[]
+  statusReasons StatusReason[]
+
+  // Relations
+  stateLogs           StationStateLog[]
+  stationDatasources  StationDatasource[]
+  events              StationEvent[]
+  cycles              Cycle[]
+  jobLogs             StationJobLog[]
+  itemDispositionLogs ItemDispositionLog[]
+  displays            Display[]
+  logonSessions       StationLogonSession[]
+  shiftComments       ShiftComment[]
+  materialShiftUsage  MaterialShiftUsage[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+  @@index([workcenterId])
+  @@index([currentJobId])
+}
+
+model StationStateLog {
+  id        String       @id @default(uuid()) @db.Uuid
+  startTime DateTime     @db.Timestamptz(3)
+  endTime   DateTime?    @db.Timestamptz(3)
+  state     StationState
+  blockId   String
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  stationBlobId String?      @db.Uuid
+  stationBlob   StationBlob? @relation(fields: [stationBlobId], references: [id])
+
+  jobBlobId String?  @db.Uuid
+  jobBlob   JobBlob? @relation(fields: [jobBlobId], references: [id])
+
+  status         StationStatus?
+  statusReasonId String?        @db.Uuid
+  statusReason   StatusReason?  @relation(fields: [statusReasonId], references: [id], onDelete: SetNull)
+
+  @@index([stationId])
+  @@index([stationId, endTime])
+  @@index([stationId, startTime])
+  @@index([statusReasonId])
+  @@index([jobBlobId])
+}
+
+/// Assignment: links a Datasource to a Station
+model StationDatasource {
+  id String @id @default(uuid()) @db.Uuid
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  datasourceId String     @db.Uuid
+  datasource   Datasource @relation(fields: [datasourceId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([stationId, datasourceId])
+  @@index([stationId])
+  @@index([datasourceId])
+}
+
+model StationEvent {
+  id      String  @id @default(uuid()) @db.Uuid
+  name    String
+  enabled Boolean @default(true)
+
+  /// [EventTrigger]
+  trigger Json
+  /// [EventAction[]]
+  actions Json
+
+  lastRunAt DateTime? @db.Timestamptz(3)
+  runCount  Int       @default(0)
+  version   Int       @default(1)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  executions StationEventExecution[]
+
+  @@index([stationId, enabled])
+  @@index([stationId, createdAt])
+}
+
+model StationEventExecution {
+  id     String                      @id @default(uuid()) @db.Uuid
+  status StationEventExecutionStatus @default(RUNNING)
+
+  payload Json @default("{}")
+
+  completedAt DateTime? @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+
+  stationEventId String       @db.Uuid
+  stationEvent   StationEvent @relation(fields: [stationEventId], references: [id], onDelete: Cascade)
+
+  @@index([stationEventId, createdAt])
+  @@index([stationEventId, status])
+}
+
+model StationBlob {
+  id      String @id @default(uuid()) @db.Uuid
+  version Int
+
+  standardCycle         Decimal?           @db.Decimal(10, 2)
+  inLineCalculations    Boolean            @default(false)
+  inStationCalculations Boolean            @default(false)
+  downtimeDetect        Decimal?           @db.Decimal(10, 2)
+  downtimeDetectUnit    DowntimeDetectUnit @default(SECONDS)
+  slowDetect            Decimal?           @db.Decimal(10, 2)
+  slowDetectUnit        SlowDetectUnit     @default(PERCENTAGE)
+
+  // Process type (optional, single)
+  processTypeId String?      @db.Uuid
+  processType   ProcessType? @relation(fields: [processTypeId], references: [id], onDelete: SetNull)
+
+  stationId String  @db.Uuid
+  station   Station @relation("StationBlobs", fields: [stationId], references: [id], onDelete: Cascade)
+
+  currentOfStation    Station?             @relation("StationCurrent")
+  cycles              Cycle[]
+  stateLogs           StationStateLog[]
+  itemDispositionLogs ItemDispositionLog[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([stationId, version])
+  @@index([stationId])
+}
+
+/// Assignment (implicit m2m): links Classifications to Stations
+model StationClassification {
+  id    String                    @id @default(uuid()) @db.Uuid
+  name  String
+  type  StationClassificationType
+  attrs Json                      @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  stations Station[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}
+
+/// Log of job assignments on a station. Each entry records when a job was
+/// assigned and (optionally) when it was replaced or cleared. The open entry
+/// (endTime IS NULL) represents the currently active job.
+model StationJobLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  jobId String @db.Uuid
+  job   Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  /// Snapshot of the job blob version at assignment time.
+  jobBlobId String @db.Uuid
+
+  startTime         DateTime  @db.Timestamptz(3)
+  endTime           DateTime? @db.Timestamptz(3) // null = currently running
+  /// Standard cycle time (seconds) snapshotted from the job blob at assignment time.
+  standardCycle     Decimal?  @db.Decimal(10, 2)
+  /// Watermark for incremental bucket accumulation. The background worker
+  /// advances this on each tick so only the delta since the last tick is processed.
+  lastAccumulatedAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([stationId])
+  @@index([stationId, endTime])
+  @@index([stationId, startTime])
+  @@index([jobId])
+}
+
+/// Assignment: links allowed Jobs to a Station
+model StationJob {
+  id String @id @default(uuid()) @db.Uuid
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  jobId String @db.Uuid
+  job   Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([stationId, jobId])
+  @@index([stationId])
+  @@index([jobId])
+}

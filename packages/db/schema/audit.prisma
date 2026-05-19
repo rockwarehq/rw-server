@@ -1,0 +1,49 @@
+enum AuditAction {
+  // User invitations
+  USER_INVITED
+  INVITE_VERIFIED
+  INVITE_COMPLETED
+  INVITE_FAILED
+  INVITE_EXPIRED
+
+  // Password reset
+  PASSWORD_RESET_REQUESTED
+  PASSWORD_RESET_COMPLETED
+  PASSWORD_RESET_FAILED
+
+  // Authentication
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  LOGIN_LOCKED
+  LOGOUT
+  ACCOUNT_UNLOCKED
+
+  // Account changes
+  PASSWORD_CHANGED
+  USER_DISABLED
+  USER_ENABLED
+
+  // Operator logon
+  OPERATOR_LOGON
+  OPERATOR_LOGOFF
+  OPERATOR_LOGON_FAILED
+  OPERATOR_SUPERVISOR_CHALLENGE
+  OPERATOR_SUPERVISOR_CHALLENGE_FAILED
+}
+
+model AuditLog {
+  id          String      @id @default(uuid()) @db.Uuid
+  action      AuditAction
+  userId      String?     @db.Uuid // Target user (may be null for failed lookups)
+  actorId     String?     @db.Uuid // Who performed action (null for self-service)
+  workspaceId String?     @db.Uuid
+  ipAddress   String?
+  userAgent   String?
+  metadata    Json? // Additional context (e.g., reason, attempts count)
+  createdAt   DateTime    @default(now()) @db.Timestamptz(3)
+
+  @@index([userId])
+  @@index([actorId])
+  @@index([action])
+  @@index([createdAt])
+}

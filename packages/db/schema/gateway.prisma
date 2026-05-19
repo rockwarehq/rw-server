@@ -1,0 +1,95 @@
+enum GatewayHosting {
+  SELF // Customer's hardware
+  ROCKWARE // Rockware-shipped appliance
+}
+
+enum GatewayStatus {
+  PROVISIONED // Created, never connected
+  ONLINE // Connected and healthy
+  OFFLINE // Was online, missed heartbeats
+  DISABLED // Administratively disabled
+}
+
+model Gateway {
+  id           String         @id @default(uuid()) @db.Uuid
+  name         String
+  description  String?
+  serialNumber String         @unique
+  claimCode    String? // One-time code for gateway to claim a token
+  hosting      GatewayHosting @default(SELF)
+  status       GatewayStatus  @default(PROVISIONED)
+
+  // Connection
+  lastHeartbeat DateTime? @db.Timestamptz(3)
+
+  // Spec version (incremented when datasources/points/groups change)
+  specVersion   Int      @default(1)
+  specUpdatedAt DateTime @default(now()) @db.Timestamptz(3)
+
+  // Versioning (reported by gateway)
+  edgeVersion String?
+  osInfo      String?
+
+  // Health snapshot (updated on heartbeat)
+  health Json? // { cpu, memoryPct, diskPct, uptime }
+
+  // Operational snapshot (updated on heartbeat)
+  metrics Json? // { pointsPerSec, messagesPerMin, errorCount }
+
+  metadata Json @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // @deprecated - Use siteId instead. This field is kept for database migration purposes only.
+  locationId String?   @db.Uuid
+  location   Location? @relation(fields: [locationId], references: [id], onDelete: Restrict)
+
+  // Site (where the gateway is physically installed)
+  siteId String? @db.Uuid
+  site   Site?   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  datasources Datasource[]
+  tokens      GatewayToken[]
+  commands    CommandQueue[]
+
+  @@index([siteId])
+}
+
+enum CommandStatus {
+  PENDING
+  ACK
+  COMPLETED
+  FAILED
+  EXPIRED
+}
+
+model CommandQueue {
+  id      String        @id @default(uuid()) @db.Uuid
+  command String // e.g., "config:reload", "tag:write", "system:restart"
+  payload Json          @default("{}")
+  status  CommandStatus @default(PENDING)
+  result  Json?
+
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  ackedAt     DateTime? @db.Timestamptz(3)
+  completedAt DateTime? @db.Timestamptz(3)
+  expiresAt   DateTime? @db.Timestamptz(3)
+
+  gatewayId String  @db.Uuid
+  gateway   Gateway @relation(fields: [gatewayId], references: [id], onDelete: Cascade)
+}
+
+model GatewayToken {
+  id        String  @id @default(uuid()) @db.Uuid
+  name      String?
+  tokenHash String  @unique
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt DateTime? @db.Timestamptz(3)
+  revokedAt DateTime? @db.Timestamptz(3)
+  lastUsed  DateTime? @db.Timestamptz(3)
+
+  gatewayId String  @db.Uuid
+  gateway   Gateway @relation(fields: [gatewayId], references: [id], onDelete: Cascade)
+}

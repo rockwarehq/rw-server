@@ -1,0 +1,235 @@
+enum BucketEntityType {
+  STATION
+  WORKCENTER
+  SITE
+  JOB
+}
+
+enum BucketGranularity {
+  MINUTE
+  HOUR
+  SHIFT
+  DAY
+}
+
+/// Aggregated KPI data for a time window on an entity (station, workcenter, site, or job).
+///
+/// ── Columns needed for OEE calculation ──────────────────────────
+///
+/// | Column                          | Used in          | Description                                                          |
+/// |---------------------------------|------------------|----------------------------------------------------------------------|
+/// | runSeconds                      | Availability     | Total seconds the station was in UP state within this bucket         |
+/// | elapsedPlannedProductionSeconds | Availability     | Time elapsed so far minus planned downtime (clips to now if active)  |
+/// | idealCycleSeconds               | Performance      | Sum of standard cycle time for each cycle completed in this bucket   |
+/// | goodItems                       | Quality          | Generated: totalItems - badItems                                     |
+/// | totalItems                      | Quality          | Total items produced across all cycles                               |
+///
+/// ── Additional KPI columns (not used in OEE formula) ────────────
+///
+/// | Column                   | Description                                                                    |
+/// |--------------------------|--------------------------------------------------------------------------------|
+/// | totalCycles              | Total completed cycles in this bucket                                          |
+/// | goodCycles               | Generated: totalCycles - badCycles                                             |
+/// | badCycles                | Cycles with status BAD                                                         |
+/// | badItems                 | Items produced by BAD cycles                                                   |
+/// | expectedCycles           | How many cycles should complete in the full bucket: floor(pps / standardCycle) |
+/// | expectedItems            | expectedCycles * items-per-cycle                                               |
+/// | downSeconds              | Total seconds the station was in DOWN state                                    |
+/// | plannedDownSeconds       | Subset of downSeconds where the reason is marked as planned                    |
+/// | unplannedDownSeconds     | Subset of downSeconds where the reason is unplanned                            |
+/// | plannedProductionSeconds | Generated: durationSeconds - plannedDownSeconds                                |
+/// | totalCycleSeconds        | Sum of actual cycle durations (start to end) clipped to bucket                 |
+/// | elapsedExpectedCycles    | Like expectedCycles but clipped to elapsed time (for in-progress buckets)      |
+/// | elapsedExpectedItems     | Like expectedItems but clipped to elapsed time                                 |
+/// | currentStandardCycle     | Standard cycle time (seconds) of the last/current job — display only           |
+model MetricBucket {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  entityType BucketEntityType
+  entityId   String           @db.Uuid
+  /// Human-readable name of the entity (station, workcenter, or site name).
+  entityName String           @default("")
+
+  /// Hierarchical dotted path encoding the entity's full ancestry.
+  /// e.g. "site.{id}.workcenter.{id}.station.{id}"
+  path String @default("")
+
+  granularity     BucketGranularity
+  /// Human-readable granularity label (e.g. "Hour", "Shift 1", "Day").
+  granularityName String            @default("")
+  startTime       DateTime          @db.Timestamptz(3)
+  durationSeconds Int
+
+  /// Optional reference to the ShiftInstance this bucket falls within.
+  /// Set for HOUR and SHIFT granularity buckets when a shift schedule exists.
+  /// Null for DAY granularity, clock-aligned hours (no shift), and MINUTE.
+  /// No FK constraint — purely informational.
+  shiftInstanceId String? @db.Uuid
+
+  /// Business date this bucket belongs to. Derived from ShiftInstance.businessDate
+  /// when a shift schedule exists, or from the local calendar date (using
+  /// Site.timezone) of startTime when no shift schedule exists.
+  /// Used for archival: buckets are archived when businessDate < current business date.
+  businessDate DateTime? @db.Date
+
+  /// Human-readable shift name for this bucket (e.g. "Shift 1", "Night Shift").
+  /// Null for DAY granularity or when no shift schedule exists.
+  businessShift String?
+
+  // ── KPIs: Counting ────────────────────────────────────────────
+  totalCycles    Int @default(0)
+  expectedCycles Int @default(0)
+  badCycles      Int @default(0)
+  totalItems     Int @default(0)
+  badItems       Int @default(0)
+  expectedItems  Int @default(0)
+
+  // ── KPIs: Duration (integer seconds) ──────────────────────────
+  runSeconds           Int @default(0)
+  downSeconds          Int @default(0)
+  plannedDownSeconds   Int @default(0)
+  unplannedDownSeconds Int @default(0)
+
+  // ── KPIs: Time (integer seconds) ──────────────────────────────
+  idealCycleSeconds Int @default(0)
+  totalCycleSeconds Int @default(0)
+
+  // ── KPIs: Elapsed (for in-progress OEE) ───────────────────────
+  elapsedExpectedCycles           Int @default(0)
+  elapsedExpectedItems            Int @default(0)
+  elapsedPlannedProductionSeconds Int @default(0)
+
+  // ── Display: current job's standard cycle ─────────────────────
+  currentStandardCycle Decimal? @db.Decimal(10, 2)
+
+  /// Job ID of the station's current job when this bucket was last updated.
+  /// Display-only — not additive, not summed in rollups. Null for
+  /// WORKCENTER/SITE entities and when no job is assigned.
+  currentJobId   String? @db.Uuid
+  /// Human-readable name of the current job. Same semantics as currentJobId.
+  currentJobName String?
+
+  // ── Computed columns (PostgreSQL generated columns) ────────────
+  // Read-only — values are auto-computed by the database.
+  // Application code must NOT write to these columns.
+
+  /// Good cycles = totalCycles - badCycles
+  goodCycles Int? @default(dbgenerated())
+  /// Good items = totalItems - badItems
+  goodItems  Int? @default(dbgenerated())
+
+  /// Planned production time = durationSeconds - plannedDownSeconds
+  plannedProductionSeconds Int? @default(dbgenerated())
+
+  /// Availability = runSeconds / elapsedPlannedProductionSeconds
+  /// NULL when elapsedPlannedProductionSeconds = 0 (no production window).
+  availability Decimal? @default(dbgenerated()) @db.Decimal(10, 6)
+  /// Performance = idealCycleSeconds / runSeconds
+  /// NULL when elapsedPlannedProductionSeconds = 0; 0 when runSeconds = 0.
+  performance  Decimal? @default(dbgenerated()) @db.Decimal(10, 6)
+  /// Quality = (totalItems - badItems) / totalItems
+  /// NULL when elapsedPlannedProductionSeconds = 0; 0 when totalItems = 0.
+  quality      Decimal? @default(dbgenerated()) @db.Decimal(10, 6)
+  /// OEE = (idealCycleSeconds * (totalItems - badItems)) / (elapsedPlannedProductionSeconds * totalItems)
+  /// NULL when elapsedPlannedProductionSeconds = 0; 0 when totalItems = 0.
+  oee          Decimal? @default(dbgenerated()) @db.Decimal(10, 6)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([entityType, entityId, granularity, startTime])
+  @@index([siteId, granularity, startTime])
+  @@index([siteId, businessDate])
+}
+
+/// Historical (archived) metric buckets. Same schema as MetricBucket
+/// but without DB-generated columns — OEE ratios are snapshotted at
+/// archive time. Rows are moved here from MetricBucket when the
+/// business day rolls over, keeping the active table small.
+model MetricBucketLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  entityType BucketEntityType
+  entityId   String           @db.Uuid
+  entityName String           @default("")
+
+  path String @default("")
+
+  granularity     BucketGranularity
+  granularityName String            @default("")
+  startTime       DateTime          @db.Timestamptz(3)
+  durationSeconds Int
+
+  shiftInstanceId String? @db.Uuid
+
+  businessDate  DateTime? @db.Date
+  businessShift String?
+
+  // ── KPIs: Counting ────────────────────────────────────────────
+  totalCycles    Int @default(0)
+  expectedCycles Int @default(0)
+  badCycles      Int @default(0)
+  totalItems     Int @default(0)
+  badItems       Int @default(0)
+  expectedItems  Int @default(0)
+
+  // ── KPIs: Duration (integer seconds) ──────────────────────────
+  runSeconds           Int @default(0)
+  downSeconds          Int @default(0)
+  plannedDownSeconds   Int @default(0)
+  unplannedDownSeconds Int @default(0)
+
+  // ── KPIs: Time (integer seconds) ──────────────────────────────
+  idealCycleSeconds Int @default(0)
+  totalCycleSeconds Int @default(0)
+
+  // ── KPIs: Elapsed (for in-progress OEE) ───────────────────────
+  elapsedExpectedCycles           Int @default(0)
+  elapsedExpectedItems            Int @default(0)
+  elapsedPlannedProductionSeconds Int @default(0)
+
+  // ── Display: current job's standard cycle ─────────────────────
+  currentStandardCycle Decimal? @db.Decimal(10, 2)
+
+  /// Job ID of the station's current job when this bucket was last updated.
+  currentJobId   String? @db.Uuid
+  /// Human-readable name of the current job.
+  currentJobName String?
+
+  // ── Computed columns (PostgreSQL generated columns) ────────────
+  // Same formulas as MetricBucket — auto-compute on every write.
+  // Application code must NOT write to these columns.
+
+  /// Good cycles = totalCycles - badCycles
+  goodCycles Int? @default(dbgenerated())
+  /// Good items = totalItems - badItems
+  goodItems  Int? @default(dbgenerated())
+
+  /// Planned production time = durationSeconds - plannedDownSeconds
+  plannedProductionSeconds Int? @default(dbgenerated())
+
+  /// Availability = runSeconds / elapsedPlannedProductionSeconds
+  availability Decimal? @default(dbgenerated()) @db.Decimal(10, 6)
+  /// Performance = idealCycleSeconds / runSeconds
+  performance  Decimal? @default(dbgenerated()) @db.Decimal(10, 6)
+  /// Quality = (totalItems - badItems) / totalItems
+  quality      Decimal? @default(dbgenerated()) @db.Decimal(10, 6)
+  /// OEE = (idealCycleSeconds * (totalItems - badItems)) / (elapsedPlannedProductionSeconds * totalItems)
+  oee          Decimal? @default(dbgenerated()) @db.Decimal(10, 6)
+
+  /// When this row was archived from MetricBucket
+  archivedAt DateTime @default(now()) @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([entityType, entityId, granularity, startTime])
+  @@index([siteId, granularity, startTime])
+  @@index([siteId, businessDate])
+}

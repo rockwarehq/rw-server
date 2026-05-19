@@ -1,0 +1,35 @@
+{
+  "name": "@rw/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./client": "./dist/client.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate deploy",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "seed": "tsx seed.ts"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.5.0",
+    "@prisma/client": "^7.5.0",
+    "dotenv": "^17.2.3",
+    "pg": "^8.16.3",
+    "prisma": "^7.5.0"
+  },
+  "peerDependencies": {
+    "prisma-json-types-generator": "^4.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.8",
+    "prisma-json-types-generator": "^4.1.1",
+    "tsx": "^4.19.4",
+    "typescript": "~6.0.2"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "@rw/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node dist/main.js",
+    "dev": "tsx watch src/main.ts"
+  },
+  "dependencies": {
+    "@rw/db": "workspace:*",
+    "@rw/runtime": "workspace:*",
+    "dotenv": "^17.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.8",
+    "tsx": "^4.19.4",
+    "typescript": "~6.0.2"
+  }
+}

@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+
+# Prisma generated client
+packages/db/src/generated/
+**/generated/prisma/
+
+# Build artifacts
+*.tsbuildinfo
+coverage/
+
+# Fly generated configs
+fly.generated.toml
+apps/*/fly.generated.toml

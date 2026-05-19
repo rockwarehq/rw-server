@@ -1,0 +1,61 @@
+enum UserStatus {
+  PENDING // Invited but hasn't set password
+  ACTIVE // Can log in
+  DISABLED // Administratively disabled
+}
+
+model User {
+  id           String     @id @default(uuid()) @db.Uuid
+  email        String     @unique
+  passwordHash String? // Null until invite completed
+  firstName    String? // Depricated - use employee profile
+  lastName     String? // Depricated - use employee profile
+  status       UserStatus @default(PENDING)
+
+  // Invite flow - tokens stored as SHA256 hashes
+  inviteTokenHash   String?   @unique
+  inviteTokenExpiry DateTime? @db.Timestamptz(3)
+  inviteAttempts    Int       @default(0) // Brute-force protection
+  invitedBy         String?   @db.Uuid
+  invitedAt         DateTime? @db.Timestamptz(3)
+
+  // Password reset - tokens stored as SHA256 hashes
+  resetTokenHash   String?   @unique
+  resetTokenExpiry DateTime? @db.Timestamptz(3)
+  resetAttempts    Int       @default(0) // Brute-force protection
+
+  // Login lockout
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime? @db.Timestamptz(3)
+
+  // Internal Rockware staff marker. When set, permissions resolve from code
+  // (SYSTEM_ROLE_PERMISSIONS) and the user must not hold WorkspaceMembership
+  // rows — enforced in the service layer.
+  systemRole SystemRole?
+
+  lastLoginAt DateTime? @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  memberships           WorkspaceMembership[]
+  refreshTokens         RefreshToken[]
+  shiftComments         ShiftComment[]
+  materialLedgerEntries MaterialLedgerEntry[]
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  tokenHash String    @unique
+  expiresAt DateTime  @db.Timestamptz(3)
+  revokedAt DateTime? @db.Timestamptz(3)
+  userAgent String?
+  ipAddress String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}

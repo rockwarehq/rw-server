@@ -1,0 +1,53 @@
+enum CycleStatus {
+  DISCARD
+  BAD
+  GOOD
+}
+
+model Cycle {
+  id           String      @id @default(uuid()) @db.Uuid
+  rejectNumber Int         @default(0)
+  cycleStatus  CycleStatus
+
+  // Timing
+  start          DateTime  @db.Timestamptz(3)
+  end            DateTime? @db.Timestamptz(3)
+  equipmentStart DateTime? @db.Timestamptz(3)
+  equipmentEnd   DateTime? @db.Timestamptz(3)
+
+  attrs Json @default("{}")
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id])
+
+  orderId String?    @db.Uuid
+  order   WorkOrder? @relation(fields: [orderId], references: [id])
+
+  // Snapshot: blob IDs at point in time
+  stationBlobId String?      @db.Uuid
+  stationBlob   StationBlob? @relation(fields: [stationBlobId], references: [id])
+
+  jobBlobId String  @db.Uuid
+  jobBlob   JobBlob @relation(fields: [jobBlobId], references: [id])
+
+  toolBlobs ToolBlob[]
+
+  jobTools JobTool[]
+
+  inventoryItems      InventoryItem[]
+  itemDispositionLogs ItemDispositionLog[]
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([stationId, end])
+  @@index([siteId, end])
+  @@index([siteId, deletedAt, end])
+  @@index([stationId, deletedAt, end])
+  @@index([jobBlobId])
+  @@index([orderId])
+}

@@ -1,0 +1,125 @@
+enum DataSourceType {
+  DEVICE
+  KIOSK
+  SERVICE
+  VIRTUAL
+}
+
+enum DatasourceStatus {
+  DRAFT
+  ACTIVE
+}
+
+model Datasource {
+  id     String           @id @default(uuid()) @db.Uuid
+  name   String
+  type   DataSourceType   @default(DEVICE)
+  status DatasourceStatus @default(DRAFT)
+  attrs  Json             @default("{}")
+
+  // Driver info (denormalized - snapshot at creation)
+  driver        String // Driver name, e.g., "modbus-tcp"
+  driverVersion String // Driver version when created, e.g., "1.0.0"
+
+  // Driver-defined configuration (validated against driver.connectionSchema)
+  // Optional at creation (DRAFT status), validated on publish
+  connection Json @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  points      Point[]
+  pointGroups PointGroup[]
+
+  gateway   Gateway? @relation(fields: [gatewayId], references: [id], onDelete: SetNull)
+  gatewayId String?  @db.Uuid
+
+  // @deprecated - Use siteId instead. This field is kept for database migration purposes only.
+  locationId String?   @db.Uuid
+  location   Location? @relation(fields: [locationId], references: [id], onDelete: Restrict)
+
+  // Site
+  siteId String? @db.Uuid
+  site   Site?   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  // Many-to-many with Station
+  stationDatasources StationDatasource[]
+
+  @@index([siteId])
+}
+
+model Point {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+
+  address     String
+  dataType    String
+  scaleFactor Float  @default(1.0) // Multiplier to convert raw to engineering units
+  offset      Float  @default(0.0) // Additive offset after scaling
+  config      Json   @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  datasourceId String     @db.Uuid
+  datasource   Datasource @relation(fields: [datasourceId], references: [id], onDelete: Cascade)
+
+  groupId     String?      @db.Uuid
+  group       PointGroup?  @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  pointValues PointValue[]
+}
+
+model PointGroup {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  pollRateMs  Int     @default(1000)
+  config      Json    @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  datasourceId String     @db.Uuid
+  datasource   Datasource @relation(fields: [datasourceId], references: [id], onDelete: Cascade)
+
+  points Point[]
+}
+
+enum PointValueQuality {
+  GOOD
+  BAD
+  UNKNOWN
+}
+
+model PointValue {
+  id                 String            @id @db.Uuid
+  previousValueRaw   Json?
+  quality            PointValueQuality @default(UNKNOWN)
+  valueRaw           Json
+  previousValue      Float?
+  value              Float?
+  timestamp          DateTime          @db.Timestamptz(3)
+  gatewayTimestamp   DateTime          @db.Timestamptz(3)
+  processorTimestamp DateTime          @default(now()) @db.Timestamptz(3)
+
+  pointId String @db.Uuid
+
+  point Point @relation(fields: [pointId], references: [id], onDelete: Cascade)
+
+  @@index([pointId, timestamp])
+  @@index([timestamp])
+}
+
+model Driver {
+  id       String @id @default(uuid()) @db.Uuid
+  name     String // Package name, e.g., "modbus-tcp"
+  version  String // Semver, e.g., "1.0.0"
+  /// [DriverManifest]
+  manifest Json // Full driver manifest including schemas
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([name, version])
+}

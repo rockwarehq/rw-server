@@ -1,0 +1,58 @@
+enum DisplayStatus {
+  UNCLAIMED
+  CLAIMED
+}
+
+model Display {
+  id        String        @id @default(uuid()) @db.Uuid
+  name      String?
+  claimCode String?       @unique
+  status    DisplayStatus @default(UNCLAIMED)
+  attrs     Json          @default("{}")
+
+  bootstrapSecretHash       String?
+  bootstrapSecretCreatedAt  DateTime? @db.Timestamptz(3)
+  bootstrapSecretLastUsedAt DateTime? @db.Timestamptz(3)
+
+  siteId String? @db.Uuid
+  site   Site?   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  dashboardId String?    @db.Uuid
+  dashboard   Dashboard? @relation(fields: [dashboardId], references: [id], onDelete: SetNull)
+
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id], onDelete: SetNull)
+
+  stationId String?  @db.Uuid
+  station   Station? @relation(fields: [stationId], references: [id], onDelete: SetNull)
+
+  claimedAt  DateTime? @db.Timestamptz(3)
+  lastSeenAt DateTime? @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+
+  logonSessions StationLogonSession[]
+  refreshTokens DisplayRefreshToken[]
+
+  @@index([siteId])
+  @@index([claimCode])
+  @@index([dashboardId])
+  @@index([workcenterId])
+  @@index([stationId])
+}
+
+model DisplayRefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  tokenHash String    @unique
+  expiresAt DateTime  @db.Timestamptz(3)
+  revokedAt DateTime? @db.Timestamptz(3)
+  userAgent String?
+  ipAddress String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  displayId String  @db.Uuid
+  display   Display @relation(fields: [displayId], references: [id], onDelete: Cascade)
+
+  @@index([displayId])
+}

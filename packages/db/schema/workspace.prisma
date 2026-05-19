@@ -1,0 +1,174 @@
+model Workspace {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String  @unique
+  slug        String  @unique
+  description String?
+  isDefault   Boolean @default(false) // Auto-assign new users here
+  settings    Json    @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  memberships WorkspaceMembership[]
+
+  // Root SITE locations owned by this workspace (deprecated - use sites)
+  locations Location[]
+
+  // Sites owned by this workspace
+  sites Site[]
+
+  // Employee profiles owned by this workspace
+  employees Employee[]
+
+  // RBAC
+  roles Role[]
+}
+
+/// Membership: links a User to a Workspace and owns that user's role assignments.
+model WorkspaceMembership {
+  id String @id @default(uuid()) @db.Uuid
+
+  joinedAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  workspaceId String    @db.Uuid
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  employeeId String?   @db.Uuid
+  employee   Employee? @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+
+  roleAssignments RoleAssignment[]
+
+  @@unique([userId, workspaceId])
+  @@unique([workspaceId, employeeId])
+  @@index([workspaceId])
+  @@map("WorkspaceMember")
+}
+
+model Site {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  timezone    String  @default("UTC")
+  attrs       Json    @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // Workspace ownership (required)
+  workspaceId String    @db.Uuid
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Children
+  workcenters            Workcenter[]
+  gateways               Gateway[]
+  datasources            Datasource[]
+  stations               Station[]
+  cycles                 Cycle[]
+  products               Product[]
+  materials              Material[]
+  tools                  Tool[]
+  jobs                   Job[]
+  orders                 WorkOrder[]
+  shiftPattern           ShiftPattern[]
+  shiftAssignment        ShiftAssignment[]
+  shiftInstances         ShiftInstance[]
+  stationClassifications StationClassification[]
+  processTypes           ProcessType[]
+  statusReasons          StatusReason[]
+  metricBuckets          MetricBucket[]
+  metricBucketLogs       MetricBucketLog[]
+  toolStatuses           ToolStatus[]
+  toolClassifications    ToolClassification[]
+  toolLocations          ToolLocation[]
+  dashboards             Dashboard[]
+  displays               Display[]
+  andonRules             SiteAndonRule[]
+  stautsCategories       StatusCategory[]
+  itemDispositions       ItemDisposition[]
+  itemDispositionReason  ItemDispositionReason[]
+  itemDispositionLogs    ItemDispositionLog[]
+  employeeRoles          EmployeeRole[]
+  employeeSiteAccess     EmployeeSiteAccess[]
+  customers              Customer[]
+  fulfillmentOrders      Order[]                 @relation("SiteFulfillmentOrders")
+  shiftComments          ShiftComment[]
+  roleAssignments        RoleAssignment[]
+  materialLedgerEntries  MaterialLedgerEntry[]
+  materialShiftUsage     MaterialShiftUsage[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}
+
+model ProcessType {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  workcenters            Workcenter[]
+  stationBlobs           StationBlob[]
+  statusReasons          StatusReason[]
+  jobs                   Job[]
+  itemDispositionReasons ItemDispositionReason[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}
+
+/// Assignment (implicit m2m): links site-wide status reasons to Workcenters and Stations
+model StatusReason {
+  id            String  @id @default(uuid()) @db.Uuid
+  name          String
+  isPlannedDown Boolean @default(false)
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  categoryId String?         @db.Uuid
+  category   StatusCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  processTypes ProcessType[]
+  stateLogs    StationStateLog[]
+  workcenters  Workcenter[]
+  stations     Station[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+  @@index([categoryId])
+}
+
+/// Used in (StatusReason) to group like reasons
+model StatusCategory {
+  id   String @id @default(uuid()) @db.Uuid
+  name String
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  statusReasons StatusReason[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}

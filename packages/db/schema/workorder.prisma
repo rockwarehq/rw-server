@@ -1,0 +1,41 @@
+enum WorkOrderStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model WorkOrder {
+  id          String          @id @default(uuid()) @db.Uuid
+  orderNumber String
+  status      WorkOrderStatus @default(PENDING)
+
+  targetQuantity    Int
+  completedQuantity Int @default(0)
+  scrapQuantity     Int @default(0)
+
+  dueDate  DateTime? @db.Timestamptz(3)
+  priority Int       @default(0)
+  notes    String?
+  attrs    Json      @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  jobId String? @db.Uuid
+  job   Job?    @relation(fields: [jobId], references: [id])
+
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  cycles Cycle[]
+
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@unique([siteId, orderNumber])
+  @@index([jobId])
+  @@index([productId])
+}

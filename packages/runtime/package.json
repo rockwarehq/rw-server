@@ -1,0 +1,29 @@
+{
+  "name": "@rw/runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./events-bus": "./dist/events-bus.js",
+    "./bullmq-config": "./dist/bullmq-config.js",
+    "./logger": "./dist/logger.js",
+    "./http-host": "./dist/http-host.js",
+    "./lifecycle": "./dist/lifecycle.js",
+    "./job-payloads": "./dist/job-payloads.js"
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@orpc/server": "^1.14.0",
+    "bullmq": "^5.66.5",
+    "ioredis": "^5.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.8",
+    "typescript": "~6.0.2"
+  }
+}

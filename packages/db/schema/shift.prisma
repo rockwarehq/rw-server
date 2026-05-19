@@ -1,0 +1,263 @@
+/// A reusable template that defines the shift schedule for a site.
+/// Contains one or more ShiftDefinitions that describe the shifts
+/// within each rotation day.
+///
+/// Workflow:
+///   1. Create a ShiftPattern with its ShiftDefinitions.
+///   2. Assign it to a Site (and optionally a Workcenter) via ShiftAssignment.
+///      Once assigned, the pattern is effectively frozen — do not edit.
+///   3. To make changes, clone the pattern, modify the clone, and assign it.
+///      The clone's `clonedFromId` tracks lineage.
+///   4. Each assignment always points to a frozen pattern, so historical
+///      data stays consistent.
+model ShiftPattern {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Human-readable name for the pattern (e.g., "Standard 3-Shift").
+  name String
+
+  /// Controls how the business date is derived for a block of shifts
+  /// on a given rotation day:
+  ///   false → business date = calendar date when the FIRST shift starts
+  ///   true  → business date = calendar date when the LAST shift ends
+  ///
+  /// Example (rotation day with 3 shifts spanning midnight):
+  ///   Shift 1: 3/9 8:30am–5:00pm
+  ///   Shift 2: 3/9 5:00pm–3/10 12:45am
+  ///   Shift 3: 3/10 12:45am–8:30am
+  ///
+  ///   useEndDateForBusinessDate = false → business date = 3/9
+  ///   useEndDateForBusinessDate = true  → business date = 3/10
+  useEndDateForBusinessDate Boolean @default(true)
+
+  /// How many days before the rotation repeats (e.g., 7 for a weekly cycle).
+  /// Each day can have a different set of ShiftDefinitions.
+  totalDaysInRotation Int @default(8)
+
+  /// Optional constraint: which day of the week the rotation is designed
+  /// to start on (e.g., "MONDAY"). Used when assigning mid-cycle — if the
+  /// pattern starts on Monday but is assigned on Wednesday, the assignment
+  /// knows to begin on rotation day 3.
+  startOnDayOfWeek String?
+
+  // ── Clone lineage ──
+  clonedFromId   String?        @db.Uuid
+  clonedFrom     ShiftPattern?  @relation("ClonedPatterns", fields: [clonedFromId], references: [id])
+  clonedPatterns ShiftPattern[] @relation("ClonedPatterns")
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  shifts     ShiftDefinition[]
+  assignment ShiftAssignment? // 1:1 — immutable once assigned
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+}
+
+/// A single shift within a rotation day. Multiple ShiftDefinitions
+/// per dayOfRotation form the complete schedule for that day.
+///
+/// Shifts are ordered by `sortOrder` within a rotation day. The
+/// `startDayOffset` field explicitly resolves midnight-crossing
+/// ambiguity: a shift with startDayOffset=1 starts on the calendar
+/// day after the rotation day's anchor date.
+///
+/// Example — 3 shifts on rotation day 1 (local times):
+///   sortOrder=1  startTime="08:30"  durationHrs=8.5   startDayOffset=0  → 08:30–17:00
+///   sortOrder=2  startTime="17:00"  durationHrs=7.75  startDayOffset=0  → 17:00–00:45+1
+///   sortOrder=3  startTime="00:45"  durationHrs=7.75  startDayOffset=1  → 00:45–08:30 (next calendar day)
+///
+/// Computing absolute start time:
+///   absoluteStart = rotationDayAnchorDate + startDayOffset days + startTime
+///   absoluteEnd   = absoluteStart + durationHrs
+model ShiftDefinition {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Which day in the rotation cycle this shift belongs to (1-based).
+  /// Different rotation days can have entirely different shift configurations.
+  dayOfRotation Int
+
+  /// Ordering within the rotation day (1-based). Determines the sequence
+  /// of shifts and drives UI display order.
+  sortOrder Int
+
+  /// How many calendar days after the rotation day's anchor date this
+  /// shift starts. 0 = same calendar day, 1 = next calendar day.
+  /// Eliminates midnight-crossing ambiguity — no runtime inference needed.
+  startDayOffset Int @default(0)
+
+  /// Start time in "HH:mm" format (local site time, e.g., "08:30", "22:45").
+  /// Combined with startDayOffset, the runtime can directly compute the
+  /// absolute calendar day and time.
+  startTime String
+
+  /// Duration in fractional hours (e.g., 8.5 = 8 hours 30 minutes).
+  durationHrs Float
+
+  /// Human-readable name (e.g., "Shift 1", "Night Shift").
+  shiftName String
+
+  pattern   ShiftPattern @relation(fields: [patternId], references: [id], onDelete: Cascade)
+  patternId String       @db.Uuid
+
+  instances ShiftInstance[]
+
+  /// Assignments that use this definition as their rotation start point.
+  startAssignments ShiftAssignment[]
+
+  @@unique([patternId, dayOfRotation, sortOrder])
+  @@index([patternId, dayOfRotation])
+}
+
+/// Links a ShiftPattern to a Site and optional Workcenter, activating it.
+///
+/// Multiple assignments can exist for the same entity over time. When
+/// assignments overlap, the most recently created one wins.
+///
+/// Example: A 7-day rotation designed to start on Monday is assigned on
+/// Wednesday at the 2nd shift. `rotationStartDefinition` points to the
+/// ShiftDefinition for rotation day 3, sortOrder 2. On the first calendar
+/// day only shifts with sortOrder >= 2 are materialized. From day 2 onward
+/// all shifts materialize normally.
+model ShiftAssignment {
+  id String @id @default(uuid()) @db.Uuid
+
+  pattern   ShiftPattern @relation(fields: [patternId], references: [id])
+  patternId String       @db.Uuid
+
+  /// The calendar date when this assignment takes effect.
+  rotationStartDate DateTime @db.Timestamptz(3)
+
+  /// Optional end date. Null means the assignment is open-ended.
+  rotationEndDate DateTime? @db.Timestamptz(3)
+
+  /// Optional reference to the ShiftDefinition where this assignment's
+  /// rotation begins. Encodes both the rotation day (via dayOfRotation)
+  /// and the first shift to materialize on the start date (via sortOrder).
+  ///
+  /// When null, the assignment starts at rotation day 1 and materializes
+  /// all shifts from the first day onward.
+  rotationStartDefinitionId String?          @db.Uuid
+  rotationStartDefinition   ShiftDefinition? @relation(fields: [rotationStartDefinitionId], references: [id])
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  workCenterId String?     @db.Uuid
+  workCenter   Workcenter? @relation(fields: [workCenterId], references: [id])
+
+  instances ShiftInstance[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([patternId])
+  @@index([siteId])
+  @@index([workCenterId])
+}
+
+/// Materialized shift window — a concrete, pre-computed row representing
+/// one shift at a specific point in time for a specific entity.
+///
+/// Created just-in-time at each shift boundary by the BullMQ shift
+/// boundary job (same job that creates MetricBuckets). Stores absolute
+/// UTC timestamps and the pre-computed business date, so runtime queries
+/// are simple indexed lookups with no rotation math.
+///
+/// Scope:
+///   workCenterId = null → site-level instance (default for all workcenters)
+///   workCenterId = set  → workcenter-level instance (override)
+///
+/// Query patterns:
+///
+///   Find shift for a workcenter at a timestamp (check override first):
+///     WHERE workCenterId = ? AND startTime <= ? AND endTime > ?
+///
+///   Fall back to site-level default:
+///     WHERE siteId = ? AND workCenterId IS NULL
+///       AND startTime <= ? AND endTime > ?
+///
+///   Split a time range across shifts:
+///     WHERE siteId = ? AND workCenterId IS NULL
+///       AND startTime < rangeEnd AND endTime > rangeStart
+///     ORDER BY startTime
+///
+///   All shifts for a business date:
+///     WHERE siteId = ? AND businessDate = ?
+///     ORDER BY startTime
+model ShiftInstance {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// The assignment that was active when this instance was created.
+  assignmentId String          @db.Uuid
+  assignment   ShiftAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  /// The template definition this instance was materialized from.
+  definitionId String          @db.Uuid
+  definition   ShiftDefinition @relation(fields: [definitionId], references: [id])
+
+  /// Site this shift belongs to (always set).
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  /// Workcenter this shift is scoped to. Null = site-level default.
+  workCenterId String?     @db.Uuid
+  workCenter   Workcenter? @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
+
+  /// Human-readable shift name copied from the definition (e.g., "Shift 1").
+  shiftName String
+
+  /// Pre-computed business date derived from the pattern's
+  /// useEndDateForBusinessDate flag and the rotation day's shift block.
+  businessDate DateTime @db.Date
+
+  /// Absolute UTC start of this shift.
+  startTime DateTime @db.Timestamptz(3)
+
+  /// Absolute UTC end of this shift.
+  endTime DateTime @db.Timestamptz(3)
+
+  itemDispositionLogs ItemDispositionLog[]
+  logonSessions       StationLogonSession[]
+  shiftComments       ShiftComment[]
+  materialShiftUsage  MaterialShiftUsage[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([assignmentId, startTime])
+  @@index([workCenterId, startTime, endTime])
+  @@index([siteId, startTime, endTime])
+  @@index([siteId, businessDate])
+  @@index([workCenterId, businessDate])
+}
+
+model ShiftComment {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  shiftInstanceId String        @db.Uuid
+  shiftInstance   ShiftInstance @relation(fields: [shiftInstanceId], references: [id], onDelete: Cascade)
+
+  workcenterId String     @db.Uuid
+  workcenter   Workcenter @relation(fields: [workcenterId], references: [id], onDelete: Cascade)
+
+  /// null = workcenter-overall comment; non-null = per-station comment
+  stationId String?  @db.Uuid
+  station   Station? @relation(fields: [stationId], references: [id], onDelete: SetNull)
+
+  text String
+
+  createdById String? @db.Uuid
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([shiftInstanceId])
+  @@index([shiftInstanceId, stationId])
+  @@index([stationId])
+}

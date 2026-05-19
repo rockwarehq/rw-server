@@ -1,0 +1,129 @@
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model EmployeeRole {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  permissions String[] @default([])
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  siteAccess EmployeeSiteAccess[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}
+
+model Employee {
+  id          String         @id @default(uuid()) @db.Uuid
+  workspaceId String         @db.Uuid
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  status      EmployeeStatus @default(ACTIVE)
+
+  // Versioned profile/security snapshot.
+  versionId String?           @unique @db.Uuid
+  version   EmployeeVersion?  @relation("EmployeeCurrentVersion", fields: [versionId], references: [id])
+  versions  EmployeeVersion[] @relation("EmployeeVersions")
+
+  siteAccess  EmployeeSiteAccess[]
+  memberships WorkspaceMembership[]
+
+  // Login lockout
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  logonSessions StationLogonSession[]
+
+  @@index([workspaceId, status])
+}
+
+/// Versioned snapshot of employee profile and workspace-wide operator credentials.
+model EmployeeVersion {
+  id      String @id @default(uuid()) @db.Uuid
+  version Int
+
+  firstName      String
+  lastName       String
+  employeeNumber String?
+  pinHash        String? // bcrypt, for operator PIN checks
+  badgeNumber    String? // physical token (RFID/barcode)
+
+  employeeId String   @db.Uuid
+  employee   Employee @relation("EmployeeVersions", fields: [employeeId], references: [id], onDelete: Cascade)
+
+  currentOf Employee? @relation("EmployeeCurrentVersion")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  logonSessions StationLogonSession[]
+
+  @@unique([employeeId, version])
+  @@index([employeeId])
+  @@index([badgeNumber])
+}
+
+model EmployeeSiteAccess {
+  id String @id @default(uuid()) @db.Uuid
+
+  employeeId String   @db.Uuid
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  roleId String       @db.Uuid
+  role   EmployeeRole @relation(fields: [roleId], references: [id])
+
+  status EmployeeStatus @default(ACTIVE)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([employeeId, siteId])
+  @@index([siteId, status])
+  @@index([roleId])
+}
+
+model StationLogonSession {
+  id String @id @default(uuid()) @db.Uuid
+
+  // Nullable — null for generic (name-only) logons
+  employeeId String?   @db.Uuid
+  employee   Employee? @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  // Snapshot of the employee version at logon time
+  versionId String?          @db.Uuid
+  version   EmployeeVersion? @relation(fields: [versionId], references: [id])
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  displayId String  @db.Uuid
+  display   Display @relation(fields: [displayId], references: [id], onDelete: Cascade)
+
+  // For generic (name-only) logons where employeeId is null
+  genericName String?
+
+  logonMethod String // "EMPLOYEE_ID" | "PIN" | "BADGE" | "GENERIC"
+  logonTime   DateTime  @default(now()) @db.Timestamptz(3)
+  logoffTime  DateTime? @db.Timestamptz(3)
+
+  shiftInstanceId String?        @db.Uuid
+  shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([stationId, logoffTime])
+  @@index([employeeId])
+  @@index([displayId])
+}

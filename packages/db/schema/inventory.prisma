@@ -1,0 +1,552 @@
+// ---------------------------------------------------------------------------
+// Order Fulfillment
+// ---------------------------------------------------------------------------
+
+enum OrderStatus {
+  DRAFT
+  OPEN
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+enum LineItemStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+}
+
+model Customer {
+  id   String @id @default(uuid()) @db.Uuid
+  name String
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  orders Order[]
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}
+
+model Order {
+  id                    String       @id @default(uuid()) @db.Uuid
+  orderNumber           String
+  status                OrderStatus  @default(DRAFT)
+  previousStatus        OrderStatus?
+  sequence              Int?
+  priority              Int          @default(0)
+  notes                 String?
+  poNumber              String?
+  defaultTargetQuantity Int          @default(1)
+  startDate             DateTime?    @db.Timestamptz(3)
+  dueDate               DateTime?    @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation("SiteFulfillmentOrders", fields: [siteId], references: [id])
+
+  customerId String?   @db.Uuid
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  lineItems OrderLineItem[]
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@unique([siteId, orderNumber])
+  @@index([siteId, status])
+  @@index([siteId, sequence])
+  @@index([customerId])
+}
+
+model OrderLineItem {
+  id                String         @id @default(uuid()) @db.Uuid
+  targetQuantity    Int
+  completedQuantity Int            @default(0)
+  scrapQuantity     Int            @default(0)
+  status            LineItemStatus @default(PENDING)
+
+  orderId String @db.Uuid
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  allocations OrderInventoryAllocation[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([orderId, productId])
+  @@index([productId])
+}
+
+model OrderInventoryAllocation {
+  id       String @id @default(uuid()) @db.Uuid
+  quantity Int    @default(1)
+
+  inventoryItemId String?        @db.Uuid
+  inventoryItem   InventoryItem? @relation(fields: [inventoryItemId], references: [id])
+
+  orderLineItemId String        @db.Uuid
+  orderLineItem   OrderLineItem @relation(fields: [orderLineItemId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([orderLineItemId])
+  @@index([inventoryItemId])
+}
+
+// ---------------------------------------------------------------------------
+// Products & Materials
+// ---------------------------------------------------------------------------
+
+enum WeightUnit {
+  KG
+  LB
+  G
+  OZ
+  MT
+  TON
+}
+
+model Product {
+  id            String  @id @default(uuid()) @db.Uuid
+  currentBlobId String? @unique @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  currentBlob ProductBlob?  @relation("ProductCurrent", fields: [currentBlobId], references: [id])
+  blobs       ProductBlob[] @relation("ProductBlobs")
+
+  materials          ProductMaterial[]
+  materialAltGroups  ProductMaterialAltGroup[]
+  materialShiftUsage MaterialShiftUsage[]
+  jobProducts        JobProduct[]
+  workOrders         WorkOrder[]
+  pictures           ProductPicture[]
+  orderLineItems     OrderLineItem[]
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+}
+
+model ProductBlob {
+  id          String      @id @default(uuid()) @db.Uuid
+  version     Int
+  sku         String
+  name        String?
+  description String?
+  externalSku String?
+  weight      Decimal?    @db.Decimal(14, 4)
+  weightUnits WeightUnit?
+  itemCost    Decimal?    @db.Decimal(14, 4)
+  attrs       Json        @default("{}")
+
+  productId String  @db.Uuid
+  product   Product @relation("ProductBlobs", fields: [productId], references: [id])
+
+  currentOfProduct     Product?              @relation("ProductCurrent")
+  inventoryItems       InventoryItem[]
+  itemDispositionLogs  ItemDispositionLog[]
+  productMaterialBlobs ProductMaterialBlob[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([productId, version])
+  @@index([productId])
+}
+
+model Material {
+  id            String  @id @default(uuid()) @db.Uuid
+  currentBlobId String? @unique @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  currentBlob MaterialBlob?  @relation("MaterialCurrent", fields: [currentBlobId], references: [id])
+  blobs       MaterialBlob[] @relation("MaterialBlobs")
+
+  products      ProductMaterial[]
+  ledgerEntries MaterialLedgerEntry[]
+  shiftUsage    MaterialShiftUsage[]
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+}
+
+model MaterialBlob {
+  id             String      @id @default(uuid()) @db.Uuid
+  version        Int
+  name           String?
+  shortCode      String?
+  materialNumber String
+  classification String?
+  description    String?
+  externalNumber String?
+  weightUnits    WeightUnit?
+  unitCost       Decimal?    @db.Decimal(14, 4)
+  attrs          Json        @default("{}")
+
+  materialId String   @db.Uuid
+  material   Material @relation("MaterialBlobs", fields: [materialId], references: [id])
+
+  currentOfMaterial    Material?             @relation("MaterialCurrent")
+  productMaterialBlobs ProductMaterialBlob[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([materialId, version])
+  @@index([materialId])
+}
+
+/// Groups alternative ProductMaterials on a product. Only one option in the
+/// group is active at a time (via `activeProductMaterialId`). A ProductMaterial
+/// with no group is standalone and always active. `label` is optional — groups
+/// can exist unnamed.
+model ProductMaterialAltGroup {
+  id        String  @id @default(uuid()) @db.Uuid
+  productId String  @db.Uuid
+  label     String?
+
+  activeProductMaterialId String? @unique @db.Uuid
+
+  product Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  active  ProductMaterial?  @relation("ProductMaterialAltGroupActive", fields: [activeProductMaterialId], references: [id])
+  options ProductMaterial[] @relation("ProductMaterialAltGroupOptions")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([productId, label])
+  @@index([productId])
+}
+
+/// Assignment: links a Material to a Product (versioned data lives in ProductMaterialBlob).
+/// Two independent gates control whether this assignment contributes to a cycle's
+/// InventoryItems and appears in selection UIs:
+///   - `archivedAt`: if non-null, this assignment is globally disabled — never
+///     added to inventory, never shown in alternate-selection dropdowns.
+///   - Group membership: if `altGroupId` is null, the material is standalone.
+///     If set, it's the group's pick only when `group.activeProductMaterialId == id`.
+model ProductMaterial {
+  id            String  @id @default(uuid()) @db.Uuid
+  currentBlobId String? @unique @db.Uuid
+
+  productId  String  @db.Uuid
+  materialId String  @db.Uuid
+  altGroupId String? @db.Uuid
+
+  product  Product                  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  material Material                 @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  altGroup ProductMaterialAltGroup? @relation("ProductMaterialAltGroupOptions", fields: [altGroupId], references: [id], onDelete: SetNull)
+
+  activeOfAltGroup ProductMaterialAltGroup? @relation("ProductMaterialAltGroupActive")
+
+  currentBlob ProductMaterialBlob?  @relation("ProductMaterialCurrent", fields: [currentBlobId], references: [id])
+  blobs       ProductMaterialBlob[] @relation("ProductMaterialBlobs")
+
+  attrs Json @default("{}")
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  @@unique([productId, materialId])
+  @@index([materialId])
+  @@index([altGroupId])
+}
+
+model ProductMaterialBlob {
+  id      String @id @default(uuid()) @db.Uuid
+  version Int
+
+  weight      Decimal?    @db.Decimal(14, 4)
+  weightUnits WeightUnit?
+  itemCost    Decimal?    @db.Decimal(14, 4)
+  attrs       Json        @default("{}")
+
+  productMaterialId String          @db.Uuid
+  productMaterial   ProductMaterial @relation("ProductMaterialBlobs", fields: [productMaterialId], references: [id], onDelete: Cascade)
+
+  materialBlobId String       @db.Uuid
+  materialBlob   MaterialBlob @relation(fields: [materialBlobId], references: [id])
+
+  productBlobId String      @db.Uuid
+  productBlob   ProductBlob @relation(fields: [productBlobId], references: [id])
+
+  currentOfProductMaterial ProductMaterial?     @relation("ProductMaterialCurrent")
+  inventoryItems           InventoryItem[]
+  itemDispositionLogs      ItemDispositionLog[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([productMaterialId, version])
+  @@index([productMaterialId])
+  @@index([materialBlobId])
+}
+
+model InventoryItem {
+  id    String @id @default(uuid()) @db.Uuid
+  attrs Json   @default("{}")
+
+  cycleId String @db.Uuid
+  cycle   Cycle  @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+
+  // Snapshot: blob IDs at point in time
+  jobProductBlobId String?         @db.Uuid
+  jobProductBlob   JobProductBlob? @relation(fields: [jobProductBlobId], references: [id])
+
+  productBlobId String      @db.Uuid
+  productBlob   ProductBlob @relation(fields: [productBlobId], references: [id])
+
+  toolBlobId String?   @db.Uuid
+  toolBlob   ToolBlob? @relation(fields: [toolBlobId], references: [id])
+
+  toolCavityBlobId String?         @db.Uuid
+  toolCavityBlob   ToolCavityBlob? @relation(fields: [toolCavityBlobId], references: [id])
+
+  productMaterialBlobs ProductMaterialBlob[]
+  orderAllocations     OrderInventoryAllocation[]
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([cycleId])
+  @@index([cycleId, deletedAt])
+  @@index([jobProductBlobId])
+  @@index([productBlobId])
+  @@index([toolBlobId])
+  @@index([toolCavityBlobId])
+}
+
+/// Product picture stored in S3-compatible storage (Tigris)
+model ProductPicture {
+  id        String  @id @default(uuid()) @db.Uuid
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  key         String // S3 object key: "products/{productId}/{uuid}.{ext}"
+  filename    String // Original filename
+  contentType String // MIME type (image/jpeg, image/png, etc.)
+  size        Int // File size in bytes
+  isPrimary   Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([productId])
+}
+
+model ItemDisposition {
+  id   String @id @default(uuid()) @db.Uuid
+  name String
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  itemDispositionReasons ItemDispositionReason[] @relation("DispositionReasonDispositions")
+  itemDispositionLogs    ItemDispositionLog[]
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}
+
+model ItemDispositionReason {
+  id   String @id @default(uuid()) @db.Uuid
+  name String
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  processTypeId String?      @db.Uuid
+  processType   ProcessType? @relation(fields: [processTypeId], references: [id], onDelete: SetNull)
+
+  itemDispositions    ItemDisposition[]    @relation("DispositionReasonDispositions")
+  itemDispositionLogs ItemDispositionLog[]
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}
+
+model ItemDispositionLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  quantity Int @default(1)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id])
+
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id])
+
+  cycleId String? @db.Uuid
+  cycle   Cycle?  @relation(fields: [cycleId], references: [id])
+
+  shiftInstanceId String?        @db.Uuid // In the case there is an entry for a previous date/shift.
+  shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id])
+
+  itemDispositionId String?          @db.Uuid
+  itemDisposition   ItemDisposition? @relation(fields: [itemDispositionId], references: [id])
+
+  dispositionReasonId String?                @db.Uuid
+  dispositionReason   ItemDispositionReason? @relation(fields: [dispositionReasonId], references: [id])
+
+  // Snapshot: blob IDs at point in time
+  stationBlobId String?      @db.Uuid
+  stationBlob   StationBlob? @relation(fields: [stationBlobId], references: [id])
+
+  jobProductBlobId String?         @db.Uuid
+  jobProductBlob   JobProductBlob? @relation(fields: [jobProductBlobId], references: [id])
+
+  productBlobId String      @db.Uuid
+  productBlob   ProductBlob @relation(fields: [productBlobId], references: [id])
+
+  toolBlobId String?   @db.Uuid
+  toolBlob   ToolBlob? @relation(fields: [toolBlobId], references: [id])
+
+  toolCavityBlobId String?         @db.Uuid
+  toolCavityBlob   ToolCavityBlob? @relation(fields: [toolCavityBlobId], references: [id])
+
+  productMaterialBlobs ProductMaterialBlob[]
+
+  @@index([stationId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Material Ledger
+// ---------------------------------------------------------------------------
+
+/// The book of record for every quantity-changing material event.
+///
+/// Manual events (receipts, adjustments, write-offs, transfers) are append-only:
+/// each event is one immutable row. Production consumption is tracked as
+/// `PRODUCTION` rows that are **mutable during a shift** — the same row
+/// accumulates weight as cycles close, via the `MaterialShiftUsage` binding.
+/// Once the shift ends nothing touches the row again.
+///
+/// Balance is a single aggregate: `SUM(quantity) WHERE materialId = ?`.
+enum MaterialLedgerKind {
+  RECEIPT // stock received from supplier
+  ADJUSTMENT // manual audit delta (signed)
+  WRITE_OFF // damaged, expired, scrapped (negative)
+  TRANSFER_IN // from another site
+  TRANSFER_OUT // to another site (negative)
+  OPENING_BALANCE // initial count at onboarding
+  PRODUCTION // production usage; mutable-during-shift, incremented by cycle close
+}
+
+model MaterialLedgerEntry {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  materialId String   @db.Uuid
+  material   Material @relation(fields: [materialId], references: [id], onDelete: Restrict)
+
+  kind     MaterialLedgerKind
+  quantity Decimal            @db.Decimal(18, 4)
+  unit     WeightUnit
+
+  unitCost    Decimal? @db.Decimal(14, 4)
+  reference   String?
+  note        String?
+  description String?
+
+  performedByUserId String? @db.Uuid
+  performedByUser   User?   @relation(fields: [performedByUserId], references: [id], onDelete: SetNull)
+
+  /// For PRODUCTION rows: every staging row whose flush contributed to this
+  /// ledger entry's quantity. A single PRODUCTION row aggregates all
+  /// (station, job, product) consumption of a single material in a single
+  /// shift, so the back-relation is a list. Empty for manual events.
+  shiftUsages MaterialShiftUsage[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([materialId, createdAt])
+  @@index([siteId, createdAt])
+}
+
+/// Staging area for production consumption during an open shift. Each row is
+/// the running total for one (shift, station, job, product, material) scope;
+/// `quantity` and `itemCount` increment with each cycle close. Once the shift
+/// ends, `flushShiftUsage` writes one immutable PRODUCTION ledger entry per
+/// staging row, sets `flushedAt`, and links the ledger row via
+/// `flushedLedgerEntryId`. Flushed staging rows are kept as audit trails —
+/// they record the exact rollup that produced each ledger entry.
+model MaterialShiftUsage {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  shiftInstanceId String        @db.Uuid
+  shiftInstance   ShiftInstance @relation(fields: [shiftInstanceId], references: [id], onDelete: Cascade)
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  jobId String @db.Uuid
+  job   Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  materialId String   @db.Uuid
+  material   Material @relation(fields: [materialId], references: [id], onDelete: Restrict)
+
+  /// Running consumption total during the shift. Stored positive (the amount
+  /// CONSUMED). At flush, an immutable ledger entry of `-quantity` is created.
+  quantity Decimal    @db.Decimal(18, 4)
+  unit     WeightUnit
+
+  /// Number of InventoryItems that contributed to this staging row.
+  itemCount Int @default(0)
+
+  /// Timestamp when this staging row was flushed to the ledger. Null while
+  /// the row is still mutable (shift open). Once set, the row is frozen and
+  /// `flushedLedgerEntryId` points at the resulting immutable ledger entry.
+  flushedAt            DateTime?            @db.Timestamptz(3)
+  flushedLedgerEntryId String?              @db.Uuid
+  flushedLedgerEntry   MaterialLedgerEntry? @relation(fields: [flushedLedgerEntryId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([shiftInstanceId, stationId, jobId, productId, materialId])
+  @@index([materialId, flushedAt])
+  @@index([siteId, shiftInstanceId])
+  @@index([stationId])
+  @@index([jobId])
+  @@index([flushedLedgerEntryId])
+}

@@ -1,0 +1,282 @@
+model Tool {
+  id            String  @id @default(uuid()) @db.Uuid
+  currentBlobId String? @unique @db.Uuid
+
+  pmCount   Int? @default(0)
+  lifeCount Int? @default(0)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  currentBlob ToolBlob?  @relation("ToolCurrent", fields: [currentBlobId], references: [id])
+  blobs       ToolBlob[] @relation("ToolBlobs")
+
+  // Status (optional, single)
+  toolStatusId String?     @db.Uuid
+  toolStatus   ToolStatus? @relation(fields: [toolStatusId], references: [id], onDelete: SetNull)
+
+  // Location (optional, one-to-one)
+  toolLocationId String?       @unique @db.Uuid
+  toolLocation   ToolLocation? @relation(fields: [toolLocationId], references: [id], onDelete: SetNull)
+
+  classifications ToolClassification[]
+
+  toolCavities ToolCavity[]
+  jobs         JobTool[]
+  jobProducts  JobProduct[]
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  @@index([toolStatusId])
+  @@index([toolLocationId])
+}
+
+model ToolBlob {
+  id          String  @id @default(uuid()) @db.Uuid
+  version     Int
+  name        String
+  description String?
+  pmLimit     Int?
+  pmWarn      Int?
+  cavityCount Int?
+
+  toolId String @db.Uuid
+  tool   Tool   @relation("ToolBlobs", fields: [toolId], references: [id])
+
+  currentOfTool       Tool?                @relation("ToolCurrent")
+  inventoryItems      InventoryItem[]
+  itemDispositionLogs ItemDispositionLog[]
+  cycles              Cycle[]
+
+  attrs Json @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([toolId, version])
+  @@index([toolId])
+}
+
+model ToolCavity {
+  id            String  @id @default(uuid()) @db.Uuid
+  currentBlobId String? @unique @db.Uuid
+
+  toolId String @db.Uuid
+  tool   Tool   @relation(fields: [toolId], references: [id], onDelete: Cascade)
+
+  currentBlob ToolCavityBlob?  @relation("ToolCavityCurrent", fields: [currentBlobId], references: [id])
+  blobs       ToolCavityBlob[] @relation("ToolCavityBlobs")
+
+  jobProducts JobProduct[]
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([toolId])
+}
+
+model ToolCavityBlob {
+  id       String @id @default(uuid()) @db.Uuid
+  version  Int
+  name     String
+  position Int?
+
+  toolCavityId String     @db.Uuid
+  toolCavity   ToolCavity @relation("ToolCavityBlobs", fields: [toolCavityId], references: [id])
+
+  currentOfToolCavity ToolCavity?          @relation("ToolCavityCurrent")
+  inventoryItems      InventoryItem[]
+  itemDispositionLogs ItemDispositionLog[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([toolCavityId, version])
+  @@index([toolCavityId])
+}
+
+model Job {
+  id            String  @id @default(uuid()) @db.Uuid
+  currentBlobId String? @unique @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  currentBlob JobBlob?  @relation("JobCurrent", fields: [currentBlobId], references: [id])
+  blobs       JobBlob[] @relation("JobBlobs")
+
+  tools       JobTool[]
+  jobProducts JobProduct[]
+  orders      WorkOrder[]
+
+  currentOfStations  Station[]            @relation("StationCurrentJob")
+  stationJobs        StationJob[]
+  stationJobLogs     StationJobLog[]
+  materialShiftUsage MaterialShiftUsage[]
+
+  // Process type (optional, single)
+  processTypeId String?      @db.Uuid
+  processType   ProcessType? @relation(fields: [processTypeId], references: [id], onDelete: SetNull)
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  @@index([processTypeId])
+}
+
+enum StandardCycleUnit {
+  SECONDS
+}
+
+model JobBlob {
+  id                String            @id @default(uuid()) @db.Uuid
+  version           Int
+  name              String
+  description       String?
+  standardCycle     Decimal?          @db.Decimal(10, 2)
+  standardCycleUnit StandardCycleUnit @default(SECONDS)
+  productsPerCycle  Int               @default(1)
+  attrs             Json              @default("{}")
+
+  jobId String @db.Uuid
+  job   Job    @relation("JobBlobs", fields: [jobId], references: [id])
+
+  currentOfJob Job?              @relation("JobCurrent")
+  cycles       Cycle[]
+  stateLogs    StationStateLog[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([jobId, version])
+  @@index([jobId])
+}
+
+/// Assignment: links a Tool to a Job
+model JobTool {
+  id       String  @id @default(uuid()) @db.Uuid
+  isActive Boolean @default(true)
+
+  jobId  String @db.Uuid
+  toolId String @db.Uuid
+
+  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  tool Tool @relation(fields: [toolId], references: [id], onDelete: Cascade)
+
+  cycles Cycle[]
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@unique([jobId, toolId])
+  @@index([toolId])
+}
+
+/// Assignment: links a Product (and optional Tool/ToolCavity) to a Job (versioned via JobProductBlob)
+model JobProduct {
+  id            String  @id @default(uuid()) @db.Uuid
+  currentBlobId String? @unique @db.Uuid
+
+  jobId        String  @db.Uuid
+  productId    String  @db.Uuid
+  toolId       String? @db.Uuid
+  toolCavityId String? @db.Uuid
+
+  job        Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  product    Product     @relation(fields: [productId], references: [id])
+  tool       Tool?       @relation(fields: [toolId], references: [id])
+  toolCavity ToolCavity? @relation(fields: [toolCavityId], references: [id])
+
+  currentBlob JobProductBlob?  @relation("JobProductCurrent", fields: [currentBlobId], references: [id])
+  blobs       JobProductBlob[] @relation("JobProductBlobs")
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([jobId])
+  @@index([productId])
+  @@index([toolId])
+  @@index([toolCavityId])
+}
+
+model JobProductBlob {
+  id       String  @id @default(uuid()) @db.Uuid
+  version  Int
+  isActive Boolean @default(true)
+  quantity Int     @default(1)
+
+  jobProductId String     @db.Uuid
+  jobProduct   JobProduct @relation("JobProductBlobs", fields: [jobProductId], references: [id])
+
+  currentOfJobProduct JobProduct?          @relation("JobProductCurrent")
+  inventoryItems      InventoryItem[]
+  itemDispositionLogs ItemDispositionLog[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([jobProductId, version])
+  @@index([jobProductId])
+}
+
+enum ToolClassificationType {
+  MACHINE_SPEC
+  GROUP
+}
+
+model ToolStatus {
+  id   String @id @default(uuid()) @db.Uuid
+  name String
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  tools Tool[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}
+
+/// Assignment (implicit m2m): links Classifications to Tools
+model ToolClassification {
+  id    String                 @id @default(uuid()) @db.Uuid
+  name  String
+  type  ToolClassificationType
+  attrs Json                   @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  tools Tool[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}
+
+model ToolLocation {
+  id       String @id @default(uuid()) @db.Uuid
+  location String
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  tool Tool?
+
+  @@index([siteId])
+}

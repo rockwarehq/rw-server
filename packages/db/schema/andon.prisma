@@ -1,0 +1,18 @@
+model SiteAndonRule {
+  id                  String   @id @default(uuid()) @db.Uuid
+  name                String?
+  expression          String
+  referencedVariables String[] @default([])
+  colorHex            String
+  sortOrder           Int
+  enabled             Boolean  @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@index([siteId])
+  @@index([siteId, sortOrder])
+}
