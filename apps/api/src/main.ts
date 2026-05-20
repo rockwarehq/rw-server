@@ -46,12 +46,12 @@ async function main() {
   const server = createServer(serverConfig);
   await server.start();
 
-  // Subscribe to the cross-process events-bus so stream events published
-  // by apps/workers reach this instance's oRPC subscribers.
-  cleanupBridge = await initEventsBridge("subscriber");
-  // Same for metric-bus events (rollup BucketChange + live MetricValueEvent)
-  // that frontend live-update components (current-shift-recap etc.) depend on.
-  cleanupMetricsBridge = await initMetricsBridge("subscriber");
+  // `both` mode: subscribes to receive worker-published events AND publishes
+  // its own events through Redis so SSE clients on other api machines see
+  // them too (horizontal-scaling safe). The process's own publishes loop
+  // back through Redis (~1ms) — fine for SSE latency, no double-delivery.
+  cleanupBridge = await initEventsBridge("both");
+  cleanupMetricsBridge = await initMetricsBridge("both");
 
   // Producer-side queues that HTTP/RPC handlers enqueue against. These
   // initialize Queue instances; the workers consuming them run elsewhere

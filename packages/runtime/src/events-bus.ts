@@ -1,8 +1,17 @@
 // Cross-process event bus — lifted from rw-server/src/rpc/events-bus.ts.
 //
-// - apps/api runs `subscriber` mode: subscribes to Redis and feeds events into
-//   the local EventPublisher for oRPC clients.
-// - apps/workers runs `publisher` mode: publishStreamEvent sends to Redis.
+// Modes:
+//   - `publisher`  — publishStreamEvent sends to Redis only (no local fan-out).
+//     Use for processes with no SSE clients (apps/workers/{rollups,
+//     processor-consumer}).
+//   - `subscriber` — receives from Redis and republishes to local
+//     EventPublisher. publishStreamEvent stays in-process. Use this only when
+//     the process never publishes events itself.
+//   - `both`       — publishStreamEvent sends to Redis AND the process
+//     subscribes; its own publishes loop back through Redis (~1ms) so local
+//     subscribers see them too. Required for apps/api when horizontally
+//     scaled: any HTTP handler that publishes (e.g., employee logon → station
+//     metric change) must reach SSE clients on every api machine.
 
 import { EventPublisher } from "@orpc/server";
 import { Redis } from "ioredis";
@@ -101,40 +110,44 @@ export function subscribeStreamEvents(options?: { signal?: AbortSignal }): Async
   return eventPublisher.subscribe("event", options);
 }
 
-export async function initEventsBridge(mode: "publisher" | "subscriber"): Promise<() => Promise<void>> {
+export async function initEventsBridge(mode: "publisher" | "subscriber" | "both"): Promise<() => Promise<void>> {
   const redisUrl = process.env.REDIS_URL;
   if (!redisUrl) {
     console.log("[events-bus] REDIS_URL not set, skipping bridge");
     return async () => {};
   }
 
-  if (mode === "publisher") {
+  const cleanups: Array<() => void> = [];
+
+  if (mode === "publisher" || mode === "both") {
     const pub = new Redis(redisUrl);
     publishFn = (event) => {
       pub.publish(STREAM_EVENTS_CHANNEL, JSON.stringify(event)).catch((err: unknown) => {
         console.error("[events-bus] Failed to publish to Redis:", err);
       });
     };
-    console.log("[events-bus] Publishing stream events via Redis");
-    return async () => {
-      pub.disconnect();
-    };
+    console.log(`[events-bus] Publishing stream events via Redis (mode=${mode})`);
+    cleanups.push(() => pub.disconnect());
   }
 
-  const sub = new Redis(redisUrl);
-  sub.subscribe(STREAM_EVENTS_CHANNEL).catch((err: unknown) => {
-    console.error("[events-bus] Failed to subscribe:", err);
-  });
-  sub.on("message", (_channel: string, message: string) => {
-    try {
-      const event = JSON.parse(message) as StreamEvent;
-      eventPublisher.publish("event", event);
-    } catch (err) {
-      console.error("[events-bus] Failed to parse event from Redis:", err);
-    }
-  });
-  console.log("[events-bus] Subscribing to stream events via Redis");
+  if (mode === "subscriber" || mode === "both") {
+    const sub = new Redis(redisUrl);
+    sub.subscribe(STREAM_EVENTS_CHANNEL).catch((err: unknown) => {
+      console.error("[events-bus] Failed to subscribe:", err);
+    });
+    sub.on("message", (_channel: string, message: string) => {
+      try {
+        const event = JSON.parse(message) as StreamEvent;
+        eventPublisher.publish("event", event);
+      } catch (err) {
+        console.error("[events-bus] Failed to parse event from Redis:", err);
+      }
+    });
+    console.log(`[events-bus] Subscribing to stream events via Redis (mode=${mode})`);
+    cleanups.push(() => sub.disconnect());
+  }
+
   return async () => {
-    sub.disconnect();
+    for (const c of cleanups) c();
   };
 }
