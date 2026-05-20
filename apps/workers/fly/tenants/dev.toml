@@ -26,6 +26,14 @@ required_secrets = [
 [env]
 LOG_LEVEL = 'debug'
 
+# Dev override: shrink Prisma pool so rollups direct (port 5432) + pgbouncer
+# server pool fit under PSDB dev branch's 25 max_connections cap. Default
+# DEFAULT_POOL is api=5, rollups=10, processor=5, processor-consumer=10.
+# At 5 across the board: rollups=5 direct + pgbouncer ~15 = 20 slots, with
+# headroom for the prisma migration release_command (1 slot). Drop or remove
+# for prod tenants with larger DB capacity.
+DB_POOL_SIZE = '5'
+
 # processor → api RPC (triggerEvent / listEventsForProcessor / getTagSnapshots)
 # Use fly's private DNS to skip the public proxy. NO trailing /rpc — the
 # client wrapper appends /rpc itself (see apps/workers/src/workers/processor).
