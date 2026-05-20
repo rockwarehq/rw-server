@@ -1,5 +1,5 @@
 import { type Result, TaggedError } from "better-result";
-import type { TagValueSnapshot } from "../station-events/types.ts";
+import type { TagValueSnapshot } from "../station-events/types.js";
 
 export type JsonObject = Record<string, unknown>;
 

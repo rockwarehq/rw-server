@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import type { ParsedEvent } from "../pipeline/types.ts";
-import { createStationEventsProcessor } from "./station-events-processor.ts";
-import { StationEventCache } from "../station-events/station-event-cache.ts";
-import { TagSnapshotCache } from "../station-events/tag-snapshot-cache.ts";
-import type { StationEventDefinition } from "../station-events/types.ts";
+import type { ParsedEvent } from "../pipeline/types.js";
+import { createStationEventsProcessor } from "./station-events-processor.js";
+import { StationEventCache } from "../station-events/station-event-cache.js";
+import { TagSnapshotCache } from "../station-events/tag-snapshot-cache.js";
+import type { StationEventDefinition } from "../station-events/types.js";
 
 const testLogger = {
   debug() {},

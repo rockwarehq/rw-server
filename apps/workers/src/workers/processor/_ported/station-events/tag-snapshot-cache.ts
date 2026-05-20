@@ -1,5 +1,5 @@
-import type { PointReading } from "./point-reading.ts";
-import type { TagValueSnapshot } from "./types.ts";
+import type { PointReading } from "./point-reading.js";
+import type { TagValueSnapshot } from "./types.js";
 
 function nowIso(): string {
   return new Date().toISOString();

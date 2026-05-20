@@ -2,9 +2,20 @@ primary_region = 'iad'
 
 [build]
 
+# Applies pending Prisma migrations in a temporary machine before the main
+# release rolls out. Reads DATABASE_URL_MIGRATION (direct, port 5432) — set
+# via fly secrets. Failure here aborts the deploy. Idempotent: a deploy with
+# no pending migrations is a fast no-op. Both api and workers run this so
+# either app can be deployed in any order without coupling schema drift to
+# deploy ordering.
+[deploy]
+release_command = 'pnpm -w db:migrate'
+
 [processes]
 app = 'node dist/main.js'
 
+# DEV_CYCLE_SIMULATOR is local-dev only — never set it in any fly tenant
+# config. On fly, cycles ALWAYS come from workers/processor (MQTT ingest).
 [env]
 NODE_ENV = 'production'
 PORT = '3000'

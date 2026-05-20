@@ -4,7 +4,7 @@
 
 export * as site from "./site/index.js";
 export * as workcenter from "./workcenter/index.js";
-export * as station from "./station/index.js";
+export * as station from "@rw/domain/services/facility/station/index";
 export * as processType from "./process-type/index.js";
 export * as statusCategory from "./status-category/index.js";
 export * as statusReason from "./status-reason/index.js";

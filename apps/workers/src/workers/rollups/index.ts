@@ -16,18 +16,18 @@ import {
   startMetricBucketEnsure,
   stopMetricBucketEnsure,
   scheduleNextEnsureTick,
-} from "@rw/api/queues/background-workers";
+} from "@rw/domain/queues/background-workers";
 import {
   initMetricBucketQueues,
   registerMetricBucketWorkers,
   stopMetricBucketQueues,
-} from "@rw/api/queues/metric-buckets";
+} from "@rw/domain/queues/metric-buckets";
 import {
   initShiftChangeQueue,
   registerShiftChangeWorker,
   stopShiftChangeQueue,
-} from "@rw/api/queues/shift-change";
-import { startDirtyBucketConsumer, stopDirtyBucketConsumer } from "@rw/api/services/metrics/batcher";
+} from "@rw/domain/queues/shift-change";
+import { startDirtyBucketConsumer, stopDirtyBucketConsumer } from "@rw/domain/services/metrics/batcher";
 
 let cleanupBridge: (() => Promise<void>) | null = null;
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { createDispatcher } from "./dispatcher.ts";
+import { createDispatcher } from "./dispatcher.js";
 import type {
   EventPreprocessor,
   Metrics,
@@ -10,7 +10,7 @@ import type {
   ProcessorRuntimeEntry,
   RuntimeSnapshot,
   RuntimeSubmitResult,
-} from "./types.ts";
+} from "./types.js";
 
 function createEvent(id: string): ParsedEvent {
   const now = Date.now();

@@ -4,18 +4,10 @@ process.env.TZ = "UTC";
 
 import "dotenv/config";
 import { startHostServer, onShutdown } from "@rw/runtime";
-
-import { startRollups, stopRollups } from "./workers/rollups/index.js";
-import { startProcessor, stopProcessor } from "./workers/processor/index.js";
-import { startProcessorConsumer, stopProcessorConsumer } from "./workers/processor-consumer/index.js";
+import { createPrismaClient } from "@rw/db";
 
 type WorkerName = "rollups" | "processor" | "processor-consumer";
-
-const WORKERS: Record<WorkerName, { start: () => Promise<void>; stop: () => Promise<void> }> = {
-  rollups: { start: startRollups, stop: stopRollups },
-  processor: { start: startProcessor, stop: stopProcessor },
-  "processor-consumer": { start: startProcessorConsumer, stop: stopProcessorConsumer },
-};
+const WORKER_NAMES: readonly WorkerName[] = ["rollups", "processor", "processor-consumer"];
 
 function parseFlag(flag: string): string | null {
   const idx = process.argv.indexOf(flag);
@@ -23,16 +15,57 @@ function parseFlag(flag: string): string | null {
   return process.argv[idx + 1] ?? null;
 }
 
+async function loadWorker(name: WorkerName): Promise<{ start: () => Promise<void>; stop: () => Promise<void> }> {
+  switch (name) {
+    case "rollups": {
+      const m = await import("./workers/rollups/index.js");
+      return { start: m.startRollups, stop: m.stopRollups };
+    }
+    case "processor": {
+      const m = await import("./workers/processor/index.js");
+      return { start: m.startProcessor, stop: m.stopProcessor };
+    }
+    case "processor-consumer": {
+      const m = await import("./workers/processor-consumer/index.js");
+      return { start: m.startProcessorConsumer, stop: m.stopProcessorConsumer };
+    }
+  }
+}
+
 async function main(): Promise<void> {
   const requested = parseFlag("--worker") ?? process.env.WORKER ?? null;
-  if (!requested || !(requested in WORKERS)) {
-    console.error(`[workers] usage: --worker <${Object.keys(WORKERS).join("|")}>`);
+  if (!requested || !(WORKER_NAMES as readonly string[]).includes(requested)) {
+    console.error(`[workers] usage: --worker <${WORKER_NAMES.join("|")}>`);
     console.error(`[workers] received: ${requested}`);
     process.exit(1);
   }
 
   const name = requested as WorkerName;
-  const entry = WORKERS[name];
+
+  // Per-mode DATABASE_URL override. Rollups want a DIRECT (port 5432, not
+  // pgbouncer at 6432) connection because the rollup tick runs long CTE
+  // queries that pgbouncer transaction-mode either breaks or holds open for
+  // the whole transaction (defeating the pool). Other modes (processor,
+  // processor-consumer) keep using the shared pooled DATABASE_URL.
+  //
+  // If DATABASE_URL_ROLLUPS is unset, rollups falls back to DATABASE_URL —
+  // fine for local dev where both endpoints are the same Postgres.
+  const ROLE_DB_URL: Partial<Record<WorkerName, string | undefined>> = {
+    rollups: process.env.DATABASE_URL_ROLLUPS,
+  };
+  const override = ROLE_DB_URL[name];
+  if (override) {
+    process.env.DATABASE_URL = override;
+    console.log(`[workers] DATABASE_URL_${name.toUpperCase().replaceAll("-", "_")} override applied`);
+  }
+
+  // Initialize Prisma with this worker's role BEFORE dynamic-importing the
+  // worker module. The worker imports @rw/domain transitively, which calls
+  // createPrismaClient("api") at module-eval. The first call wins on pool
+  // sizing, so we have to win the race here with the actual role.
+  createPrismaClient(name);
+
+  const entry = await loadWorker(name);
 
   const port = Number.parseInt(process.env.PORT ?? "", 10) || 9465;
   let ready = false;

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import type { Metrics, ParsedEvent, ProcessorContext } from "../pipeline/types.ts";
-import { createUniqueTopicsProcessor } from "./unique-topics-processor.ts";
+import type { Metrics, ParsedEvent, ProcessorContext } from "../pipeline/types.js";
+import { createUniqueTopicsProcessor } from "./unique-topics-processor.js";
 
 function createEvent(topic: string): ParsedEvent {
   const now = Date.now();

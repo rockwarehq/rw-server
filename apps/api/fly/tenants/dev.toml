@@ -1,10 +1,22 @@
 app = 'rw-dev-api'
 
 # Fly secrets (set via flyctl secrets set -a rw-dev-api):
-# - DATABASE_URL, REDIS_URL, JWT_SECRET, RESEND_API_KEY,
-# - MQTT_GATEWAY_REALY_*, PROCESSOR_SHARED_SECRET, AWS_*
+# - DATABASE_URL (pooled, port 6432)
+# - DATABASE_URL_MIGRATION (direct, port 5432) — used by [deploy] release_command
+# - REDIS_URL, JWT_SECRET, RESEND_API_KEY, PROCESSOR_SHARED_SECRET
+# - MQTT_GATEWAY_REALY_*, AWS_*
 [_meta]
-required_secrets = ['DATABASE_URL', 'REDIS_URL', 'JWT_SECRET', 'RESEND_API_KEY', 'MQTT_GATEWAY_REALY_URL', 'MQTT_GATEWAY_REALY_USER', 'MQTT_GATEWAY_REALY_PASSWORD']
+required_secrets = [
+  'DATABASE_URL',
+  'DATABASE_URL_MIGRATION',
+  'REDIS_URL',
+  'JWT_SECRET',
+  'RESEND_API_KEY',
+  'PROCESSOR_SHARED_SECRET',
+  'MQTT_GATEWAY_REALY_URL',
+  'MQTT_GATEWAY_REALY_USER',
+  'MQTT_GATEWAY_REALY_PASSWORD',
+]
 domain = 'dev-api.rockware.io'
 
 [env]
@@ -12,7 +24,8 @@ HOST = '0.0.0.0'
 LOG_LEVEL = 'debug'
 APP_BASE_URL = 'https://dev.rockware.io'
 BUCKET_NAME = 'rw-dev'
-DEV_CYCLE_SIMULATOR = '1'
+# DEV_CYCLE_SIMULATOR is local-dev only. On fly, cycles ALWAYS come from
+# workers/processor (MQTT ingest). Do not set DEV_CYCLE_SIMULATOR here.
 
 [[http_service.checks]]
 interval = '10s'

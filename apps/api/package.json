@@ -28,6 +28,7 @@
     "@fastify/type-provider-json-schema-to-ts": "^5.0.0",
     "@orpc/server": "^1.14.0",
     "@rw/db": "workspace:*",
+    "@rw/domain": "workspace:*",
     "@rw/runtime": "workspace:*",
     "ajv": "^8.17.1",
     "bcrypt": "^6.0.0",

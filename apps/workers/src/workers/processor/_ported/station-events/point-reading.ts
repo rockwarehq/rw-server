@@ -1,4 +1,4 @@
-import type { ParsedEvent } from "../pipeline/types.ts";
+import type { ParsedEvent } from "../pipeline/types.js";
 
 export interface PointReading {
   pointId: string;

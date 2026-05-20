@@ -1,10 +1,17 @@
 import "dotenv/config";
 import { defineConfig } from "prisma/config";
 
-// DATABASE_URL is only required for `prisma migrate`/runtime; `prisma generate`
-// runs in CI/build without it. Use the raw env var rather than env() so codegen
-// doesn't fail when DATABASE_URL is absent.
-const databaseUrl = process.env.DATABASE_URL ?? "postgresql://placeholder:placeholder@localhost:5432/placeholder";
+// Migrations MUST run against a direct (non-pooled) connection — pgbouncer
+// transaction mode breaks Prisma's migration engine (advisory locks, session
+// state, DDL). Prefer DATABASE_URL_MIGRATION if set, otherwise fall back to
+// DATABASE_URL (still works when the whole app uses direct connections).
+//
+// `prisma generate` runs in CI/build without DB env; the placeholder keeps
+// codegen from failing.
+const databaseUrl =
+  process.env.DATABASE_URL_MIGRATION ??
+  process.env.DATABASE_URL ??
+  "postgresql://placeholder:placeholder@localhost:5432/placeholder";
 
 export default defineConfig({
   schema: "schema",

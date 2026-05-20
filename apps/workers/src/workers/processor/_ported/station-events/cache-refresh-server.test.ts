@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { startStationEventsCacheRefreshServer } from "./cache-refresh-server.ts";
+import { startStationEventsCacheRefreshServer } from "./cache-refresh-server.js";
 
 const testLogger = {
   debug() {},

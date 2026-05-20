@@ -1,13 +1,13 @@
-import type { ParsedEvent, Processor } from "../pipeline/types.ts";
-import { extractPointReadings, readingKeys } from "../station-events/point-reading.ts";
+import type { ParsedEvent, Processor } from "../pipeline/types.js";
+import { extractPointReadings, readingKeys } from "../station-events/point-reading.js";
 import type {
   StationEventCache,
   CompiledStationEvent,
   StationEventsRpcClient,
-} from "../station-events/station-event-cache.ts";
-import type { TagSnapshotCache } from "../station-events/tag-snapshot-cache.ts";
-import type { TagValueSnapshot } from "../station-events/types.ts";
-import { evaluateTrigger } from "../station-events/trigger-evaluator.ts";
+} from "../station-events/station-event-cache.js";
+import type { TagSnapshotCache } from "../station-events/tag-snapshot-cache.js";
+import type { TagValueSnapshot } from "../station-events/types.js";
+import { evaluateTrigger } from "../station-events/trigger-evaluator.js";
 
 interface StationEventsProcessorConfig {
   timeoutMs: number;

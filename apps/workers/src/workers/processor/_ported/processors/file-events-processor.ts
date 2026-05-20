@@ -1,6 +1,6 @@
 import { appendFile } from "node:fs/promises";
 
-import type { Logger, LiveEventEnvelope, ParsedEvent, Processor } from "../pipeline/types.ts";
+import type { Logger, LiveEventEnvelope, ParsedEvent, Processor } from "../pipeline/types.js";
 
 interface FileEventsProcessorConfig {
   filePath: string;

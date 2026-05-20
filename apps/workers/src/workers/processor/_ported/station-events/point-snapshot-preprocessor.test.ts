@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import type { ParsedEvent } from "../pipeline/types.ts";
-import { createPointSnapshotPreprocessor } from "./point-snapshot-preprocessor.ts";
-import { TagSnapshotCache } from "./tag-snapshot-cache.ts";
+import type { ParsedEvent } from "../pipeline/types.js";
+import { createPointSnapshotPreprocessor } from "./point-snapshot-preprocessor.js";
+import { TagSnapshotCache } from "./tag-snapshot-cache.js";
 
 function createPointsEvent(): ParsedEvent {
   const now = Date.now();

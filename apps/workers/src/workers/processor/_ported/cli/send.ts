@@ -1,6 +1,6 @@
 import mqtt from "mqtt";
 
-import { loadConfig } from "../config.ts";
+import { loadConfig } from "../config.js";
 
 function connectClient() {
   const config = loadConfig();

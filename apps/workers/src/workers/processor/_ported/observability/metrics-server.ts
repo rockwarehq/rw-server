@@ -1,7 +1,7 @@
 import http, { type Server } from "node:http";
 
-import { getMetricsContentType, renderMetricsText } from "../pipeline/metrics.ts";
-import type { Logger } from "../pipeline/types.ts";
+import { getMetricsContentType, renderMetricsText } from "../pipeline/metrics.js";
+import type { Logger } from "../pipeline/types.js";
 
 export interface MetricsServerConfig {
   enabled: boolean;

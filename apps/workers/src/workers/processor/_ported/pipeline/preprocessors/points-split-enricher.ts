@@ -1,6 +1,6 @@
 import { v7 as uuidv7 } from "uuid";
 
-import type { EventPreprocessor, JsonObject, ParsedEvent } from "../types.ts";
+import type { EventPreprocessor, JsonObject, ParsedEvent } from "../types.js";
 
 interface PointRow {
   scaleFactor: number;

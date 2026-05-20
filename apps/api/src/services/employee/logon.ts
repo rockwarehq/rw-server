@@ -3,7 +3,7 @@ import type { Prisma } from "../../database/generated/client.js";
 import { publishMetricValueChange } from "../../rpc/metrics-bus.js";
 import { logEvent } from "../audit/index.js";
 import { getCurrentShift } from "../facility/shift/current.js";
-import { resolveEntityPath } from "../metrics/hierarchy.js";
+import { resolveEntityPath } from "@rw/domain/services/metrics/hierarchy";
 
 // ============================================================================
 // Types

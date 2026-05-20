@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import prisma from "../../../database/client.js";
 import type { Prisma } from "../../../database/generated/client.js";
 import { publishMetricValueChange } from "../../../rpc/metrics-bus.js";
-import { resolveEntityPath } from "../../metrics/hierarchy.js";
 import { updateTimeBased } from "../../metrics/recalc.js";
 
 type TransactionClient = Prisma.TransactionClient;
@@ -110,34 +109,100 @@ async function getStationSiteId(stationId: string): Promise<string | null> {
   return station?.siteId ?? null;
 }
 
+/**
+ * Snapshot of the station fields needed to publish live metric events.
+ * Returned from {@link loadStationMetricContext}; consumed by the
+ * `publishStation*MetricEvent` family. Allows the underlying DB read
+ * to share a connection (e.g. the cycle-complete transaction) instead
+ * of each publish helper checking out its own.
+ */
+export interface StationMetricContext {
+  stationId: string;
+  siteId: string;
+  name: string;
+  path: string;
+}
+
+/**
+ * Load the station-side context (siteId, name, hierarchical path) used
+ * by every live publishStation* event. Accepts a transaction client so
+ * the DB reads can ride inside an existing transaction.
+ */
+export async function loadStationMetricContext(
+  client: TransactionClient | typeof prisma,
+  stationId: string,
+): Promise<StationMetricContext | null> {
+  const stationRows = await client.$queryRaw<Array<{ siteId: string; name: string; workcenterId: string | null }>>`
+    SELECT "siteId"::text, name, "workcenterId"::text
+    FROM "Station" WHERE id = ${stationId}::uuid
+  `;
+  const station = stationRows[0];
+  if (!station) return null;
+
+  const sitePath = `site.${station.siteId}`;
+  let path: string;
+  if (!station.workcenterId) {
+    path = `${sitePath}.station.${stationId}`;
+  } else {
+    const chainRows = await client.$queryRaw<Array<{ id: string; depth: number }>>`
+      WITH RECURSIVE chain AS (
+        SELECT id, "parentId", 0 AS depth FROM "Workcenter" WHERE id = ${station.workcenterId}::uuid
+        UNION ALL
+        SELECT w.id, w."parentId", c.depth + 1
+        FROM "Workcenter" w JOIN chain c ON w.id = c."parentId"
+      )
+      SELECT id::text, depth FROM chain ORDER BY depth DESC
+    `;
+    const wcSegments = chainRows.map((r) => `workcenter.${r.id}`).join(".");
+    path = `${sitePath}.${wcSegments}.station.${stationId}`;
+  }
+
+  return { stationId, siteId: station.siteId, name: station.name, path };
+}
+
+function publishStationStatusMetricEvent(
+  ctx: StationMetricContext,
+  status: "FAST" | "SLOW" | "UP" | "DOWN",
+  observedAt: Date,
+): void {
+  publishMetricValueChange({
+    siteId: ctx.siteId,
+    entityType: "STATION",
+    entityId: ctx.stationId,
+    metricKey: "status",
+    sourceType: "live",
+    value: status,
+    observedAt,
+    entityName: ctx.name,
+    path: ctx.path,
+  });
+}
+
 async function publishStationStatusMetric(
   stationId: string,
   status: "FAST" | "SLOW" | "UP" | "DOWN",
   observedAt: Date,
 ): Promise<void> {
-  const station = await prisma.station.findUnique({
-    where: { id: stationId },
-    select: {
-      siteId: true,
-      name: true,
-    },
-  });
+  const ctx = await loadStationMetricContext(prisma, stationId);
+  if (!ctx) return;
+  publishStationStatusMetricEvent(ctx, status, observedAt);
+}
 
-  if (!station) {
-    return;
-  }
-
-  const path = await resolveEntityPath("STATION", stationId, station.siteId);
+function publishStationStatusReasonMetricEvent(
+  ctx: StationMetricContext,
+  statusReasonId: string | null,
+  observedAt: Date,
+): void {
   publishMetricValueChange({
-    siteId: station.siteId,
+    siteId: ctx.siteId,
     entityType: "STATION",
-    entityId: stationId,
-    metricKey: "status",
+    entityId: ctx.stationId,
+    metricKey: "statusReason",
     sourceType: "live",
-    value: status,
+    value: statusReasonId,
     observedAt,
-    entityName: station.name,
-    path,
+    entityName: ctx.name,
+    path: ctx.path,
   });
 }
 
@@ -146,29 +211,26 @@ async function publishStationStatusReasonMetric(
   statusReasonId: string | null,
   observedAt: Date,
 ): Promise<void> {
-  const station = await prisma.station.findUnique({
-    where: { id: stationId },
-    select: {
-      siteId: true,
-      name: true,
-    },
-  });
+  const ctx = await loadStationMetricContext(prisma, stationId);
+  if (!ctx) return;
+  publishStationStatusReasonMetricEvent(ctx, statusReasonId, observedAt);
+}
 
-  if (!station) {
-    return;
-  }
-
-  const path = await resolveEntityPath("STATION", stationId, station.siteId);
+function publishStationCurrentJobMetricEvent(
+  ctx: StationMetricContext,
+  jobName: string | null,
+  observedAt: Date,
+): void {
   publishMetricValueChange({
-    siteId: station.siteId,
+    siteId: ctx.siteId,
     entityType: "STATION",
-    entityId: stationId,
-    metricKey: "statusReason",
+    entityId: ctx.stationId,
+    metricKey: "currentJob",
     sourceType: "live",
-    value: statusReasonId,
+    value: jobName,
     observedAt,
-    entityName: station.name,
-    path,
+    entityName: ctx.name,
+    path: ctx.path,
   });
 }
 
@@ -177,34 +239,31 @@ async function publishStationCurrentJobMetric(
   jobName: string | null,
   observedAt: Date,
 ): Promise<void> {
-  const station = await prisma.station.findUnique({
-    where: { id: stationId },
-    select: {
-      siteId: true,
-      name: true,
-    },
-  });
-
-  if (!station) {
-    return;
-  }
-
-  const path = await resolveEntityPath("STATION", stationId, station.siteId);
-  publishMetricValueChange({
-    siteId: station.siteId,
-    entityType: "STATION",
-    entityId: stationId,
-    metricKey: "currentJob",
-    sourceType: "live",
-    value: jobName,
-    observedAt,
-    entityName: station.name,
-    path,
-  });
+  const ctx = await loadStationMetricContext(prisma, stationId);
+  if (!ctx) return;
+  publishStationCurrentJobMetricEvent(ctx, jobName, observedAt);
 }
 
 function roundToTenth(value: number): number {
   return Math.round(value * 10) / 10;
+}
+
+function publishStationLastCycleMetricEvent(
+  ctx: StationMetricContext,
+  cycleSeconds: number | null,
+  observedAt: Date,
+): void {
+  publishMetricValueChange({
+    siteId: ctx.siteId,
+    entityType: "STATION",
+    entityId: ctx.stationId,
+    metricKey: "lastCycleSeconds",
+    sourceType: "live",
+    value: cycleSeconds == null ? null : roundToTenth(cycleSeconds),
+    observedAt,
+    entityName: ctx.name,
+    path: ctx.path,
+  });
 }
 
 async function publishStationLastCycleMetric(
@@ -212,29 +271,26 @@ async function publishStationLastCycleMetric(
   cycleSeconds: number | null,
   observedAt: Date,
 ): Promise<void> {
-  const station = await prisma.station.findUnique({
-    where: { id: stationId },
-    select: {
-      siteId: true,
-      name: true,
-    },
-  });
+  const ctx = await loadStationMetricContext(prisma, stationId);
+  if (!ctx) return;
+  publishStationLastCycleMetricEvent(ctx, cycleSeconds, observedAt);
+}
 
-  if (!station) {
-    return;
-  }
-
-  const path = await resolveEntityPath("STATION", stationId, station.siteId);
+function publishStationStandardCycleMetricEvent(
+  ctx: StationMetricContext,
+  standardCycleSeconds: number | null,
+  observedAt: Date,
+): void {
   publishMetricValueChange({
-    siteId: station.siteId,
+    siteId: ctx.siteId,
     entityType: "STATION",
-    entityId: stationId,
-    metricKey: "lastCycleSeconds",
+    entityId: ctx.stationId,
+    metricKey: "standardCycleSeconds",
     sourceType: "live",
-    value: cycleSeconds == null ? null : roundToTenth(cycleSeconds),
+    value: standardCycleSeconds == null ? null : roundToTenth(standardCycleSeconds),
     observedAt,
-    entityName: station.name,
-    path,
+    entityName: ctx.name,
+    path: ctx.path,
   });
 }
 
@@ -243,30 +299,9 @@ async function publishStationStandardCycleMetric(
   standardCycleSeconds: number | null,
   observedAt: Date,
 ): Promise<void> {
-  const station = await prisma.station.findUnique({
-    where: { id: stationId },
-    select: {
-      siteId: true,
-      name: true,
-    },
-  });
-
-  if (!station) {
-    return;
-  }
-
-  const path = await resolveEntityPath("STATION", stationId, station.siteId);
-  publishMetricValueChange({
-    siteId: station.siteId,
-    entityType: "STATION",
-    entityId: stationId,
-    metricKey: "standardCycleSeconds",
-    sourceType: "live",
-    value: standardCycleSeconds == null ? null : roundToTenth(standardCycleSeconds),
-    observedAt,
-    entityName: station.name,
-    path,
-  });
+  const ctx = await loadStationMetricContext(prisma, stationId);
+  if (!ctx) return;
+  publishStationStandardCycleMetricEvent(ctx, standardCycleSeconds, observedAt);
 }
 
 export function publishCurrentShiftMetric(
@@ -530,6 +565,11 @@ export {
   publishStationCurrentJobMetric,
   publishStationLastCycleMetric,
   publishStationStandardCycleMetric,
+  publishStationStatusMetricEvent,
+  publishStationStatusReasonMetricEvent,
+  publishStationCurrentJobMetricEvent,
+  publishStationLastCycleMetricEvent,
+  publishStationStandardCycleMetricEvent,
 };
 
 // ── Split ────────────────────────────────────────────────────────

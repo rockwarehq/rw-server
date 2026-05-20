@@ -1,6 +1,6 @@
-import { createProcessorRpcClient } from "@rockwarehq/rpc-client";
+import { createProcessorRpcClient } from "./processor-rpc-client.js";
 
-import type { StationEventsRpcClient } from "./station-event-cache.ts";
+import type { StationEventsRpcClient } from "./station-event-cache.js";
 
 export function createStationEventsRpcClient(args: {
   baseUrl: string;
@@ -9,7 +9,7 @@ export function createStationEventsRpcClient(args: {
   const client = createProcessorRpcClient({
     baseUrl: args.baseUrl,
     getSecret: () => args.authToken,
-  }) as unknown as {
+  }) as {
     station: {
       listEventsForProcessor(input?: { stationId?: string }): Promise<{
         events: Array<{
@@ -53,7 +53,7 @@ export function createStationEventsRpcClient(args: {
   return {
     listEventsForProcessor(input) {
       return client.station.listEventsForProcessor(input) as Promise<{
-        events: import("./types.ts").StationEventDefinition[];
+        events: import("./types.js").StationEventDefinition[];
       }>;
     },
     getTagSnapshotsForProcessor(input) {

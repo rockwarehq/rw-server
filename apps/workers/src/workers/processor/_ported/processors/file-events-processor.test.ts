@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, test } from "node:test";
 
-import type { Metrics, ParsedEvent, ProcessorContext } from "../pipeline/types.ts";
-import { createFileEventsProcessor } from "./file-events-processor.ts";
+import type { Metrics, ParsedEvent, ProcessorContext } from "../pipeline/types.js";
+import { createFileEventsProcessor } from "./file-events-processor.js";
 
 function createEvent(id: string, topic = "topic/test"): ParsedEvent {
   const now = Date.now();

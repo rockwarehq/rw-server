@@ -9,7 +9,6 @@ export * as compute from "./compute.js";
 export * as rollup from "./rollup.js";
 export * as recalc from "./recalc.js";
 export * as archive from "./archive.js";
-export * as query from "./query.js";
 
 // ── Per-pipeline cache ───────────────────────────────────────────
 
@@ -30,10 +29,6 @@ export {
 // ── Archival ─────────────────────────────────────────────────────
 
 export { archiveOldBuckets } from "./archive.js";
-
-// ── Query ────────────────────────────────────────────────────────
-
-export { getBuckets, type GetBucketsInput, type EntitySubscription, type BucketRow } from "./query.js";
 
 // ── Micro-batching ───────────────────────────────────────────────
 

@@ -5,7 +5,7 @@ import type {
   Metrics,
   ParsedEvent,
   ProcessorRuntimeEntry,
-} from "./types.ts";
+} from "./types.js";
 
 export function createDispatcher(args: {
   entries: ProcessorRuntimeEntry[];

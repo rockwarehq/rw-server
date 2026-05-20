@@ -1,11 +1,11 @@
-import type { TagValueSnapshot } from "./types.ts";
+import type { TagValueSnapshot } from "./types.js";
 import type {
   StationEventConditionOperator,
   StationEventTrigger,
   StationEventTriggerClause,
   StationEventTriggerCondition,
   StationEventTriggerGroup,
-} from "./types.ts";
+} from "./types.js";
 
 function toNumber(value: unknown): number | null {
   if (value === null || value === undefined) {

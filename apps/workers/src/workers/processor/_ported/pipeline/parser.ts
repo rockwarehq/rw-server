@@ -1,6 +1,6 @@
 import { Result } from "better-result";
 
-import { ParseError, type JsonObject, type ParseResult, type TopicMetadata } from "./types.ts";
+import { ParseError, type JsonObject, type ParseResult, type TopicMetadata } from "./types.js";
 
 let eventCounter = 0;
 

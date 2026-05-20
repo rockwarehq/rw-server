@@ -1,8 +1,8 @@
 import prisma from "../../database/client.js";
 import { formatStationLogons } from "../employee/logon.js";
-import { MetricsContext } from "./context.js";
-import { resolveEntityName, resolveEntityPath } from "./hierarchy.js";
-import { rowToSnapshot, type BucketSnapshot } from "./sync.js";
+import { MetricsContext } from "@rw/domain/services/metrics/context";
+import { resolveEntityName, resolveEntityPath } from "@rw/domain/services/metrics/hierarchy";
+import { rowToSnapshot, type BucketSnapshot } from "@rw/domain/services/metrics/sync";
 
 export type BucketEntityType = "STATION" | "WORKCENTER" | "SITE" | "JOB";
 export type BucketGranularity = "MINUTE" | "HOUR" | "SHIFT" | "DAY";

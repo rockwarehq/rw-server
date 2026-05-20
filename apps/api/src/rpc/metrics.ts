@@ -2,11 +2,11 @@ import { ORPCError, eventIterator } from "@orpc/server";
 import * as z from "zod";
 import prisma from "../database/client.js";
 import { Principal } from "../services/auth/index.js";
-import { METRIC_CATALOG_REGISTRY } from "../services/metric-catalog/index.js";
-import { MetricsContext } from "../services/metrics/context.js";
+import { METRIC_CATALOG_REGISTRY } from "@rw/domain/services/metric-catalog/index";
+import { MetricsContext } from "@rw/domain/services/metrics/context";
 import * as query from "../services/metrics/query.js";
-import { getShiftForEntity } from "../services/metrics/shift.js";
-import { rowToSnapshot } from "../services/metrics/sync.js";
+import { getShiftForEntity } from "@rw/domain/services/metrics/shift";
+import { rowToSnapshot } from "@rw/domain/services/metrics/sync";
 import { userOrDisplayRequired } from "./middleware.js";
 import { subscribeMetricChanges, subscribeMetricValueChanges, type MetricValueEvent } from "./metrics-bus.js";
 

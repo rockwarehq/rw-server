@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { parseMessage } from "./parser.ts";
+import { parseMessage } from "./parser.js";
 
 function parse(topic: string, payload: string) {
   return parseMessage({

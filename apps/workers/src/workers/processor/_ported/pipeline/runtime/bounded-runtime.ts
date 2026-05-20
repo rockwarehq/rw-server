@@ -7,7 +7,7 @@ import type {
   ProcessorRuntime,
   ProcessorRuntimeConfig,
   RuntimeSubmitResult,
-} from "../types.ts";
+} from "../types.js";
 
 class BoundedDeque<T> {
   private readonly buffer: Array<T | undefined>;

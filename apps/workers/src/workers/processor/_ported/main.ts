@@ -1,21 +1,23 @@
 import mqtt from "mqtt";
-import { Pool } from "pg";
 
-import { loadConfig } from "./config.ts";
-import { startMetricsServer } from "./observability/metrics-server.ts";
-import { createDispatcher } from "./pipeline/dispatcher.ts";
-import { createMetrics, startMetricsReporter } from "./pipeline/metrics.ts";
-import { parseMessage } from "./pipeline/parser.ts";
-import { createPointsSplitEnricher } from "./pipeline/preprocessors/points-split-enricher.ts";
-import type { EventPreprocessor, Logger } from "./pipeline/types.ts";
-import { createProcessorRuntimeEntries } from "./processors/index.ts";
-import { createStationEventsProcessor } from "./processors/station-events-processor.ts";
-import { startStationEventsCacheRefreshServer } from "./station-events/cache-refresh-server.ts";
-import { createPointSnapshotPreprocessor } from "./station-events/point-snapshot-preprocessor.ts";
-import { createStationEventsRpcClient } from "./station-events/rpc-client.ts";
-import { StationEventCache } from "./station-events/station-event-cache.ts";
-import { TagSnapshotCache } from "./station-events/tag-snapshot-cache.ts";
-import { hydrateMissingTagSnapshots } from "./station-events/tag-snapshot-loader.ts";
+import { createPrismaClient, type PrismaClient } from "@rw/db";
+
+import { loadConfig } from "./config.js";
+import { startMetricsServer } from "./observability/metrics-server.js";
+import { createPgQueryClient } from "./pg-query-client.js";
+import { createDispatcher } from "./pipeline/dispatcher.js";
+import { createMetrics, startMetricsReporter } from "./pipeline/metrics.js";
+import { parseMessage } from "./pipeline/parser.js";
+import { createPointsSplitEnricher } from "./pipeline/preprocessors/points-split-enricher.js";
+import type { EventPreprocessor, Logger } from "./pipeline/types.js";
+import { createProcessorRuntimeEntries } from "./processors/index.js";
+import { createStationEventsProcessor } from "./processors/station-events-processor.js";
+import { startStationEventsCacheRefreshServer } from "./station-events/cache-refresh-server.js";
+import { createPointSnapshotPreprocessor } from "./station-events/point-snapshot-preprocessor.js";
+import { createStationEventsRpcClient } from "./station-events/rpc-client.js";
+import { StationEventCache } from "./station-events/station-event-cache.js";
+import { TagSnapshotCache } from "./station-events/tag-snapshot-cache.js";
+import { hydrateMissingTagSnapshots } from "./station-events/tag-snapshot-loader.js";
 
 function createLogger(): Logger {
   return {
@@ -40,18 +42,35 @@ function endClient(client: mqtt.MqttClient): Promise<void> {
   });
 }
 
+interface ListenerHandle {
+  logger: Logger;
+  prisma: PrismaClient;
+  dispatcher: Awaited<ReturnType<typeof createDispatcher>>;
+  mqttClient: mqtt.MqttClient;
+  metrics: ReturnType<typeof createMetrics>;
+  metricsServer: Awaited<ReturnType<typeof startMetricsServer>>;
+  stationEventsRefreshServer: Awaited<ReturnType<typeof startStationEventsCacheRefreshServer>>;
+  stopMetricsReporter: () => void;
+  shutdownDrainTimeoutMs: number;
+}
+
+let handle: ListenerHandle | undefined;
+let stopping = false;
+
 export async function startListener(): Promise<void> {
+  if (handle) {
+    return;
+  }
+
   const config = loadConfig();
   const logger = createLogger();
   const metrics = createMetrics();
+  const prisma = createPrismaClient("processor");
   const preprocessors: EventPreprocessor[] = [];
-  let pointsEnrichmentPool: Pool | undefined;
-  let stationEventsRefreshServer: Awaited<ReturnType<typeof startStationEventsCacheRefreshServer>> =
-    null;
   let stationEventCache: StationEventCache | undefined;
   let stationEventsProcessor: ReturnType<typeof createStationEventsProcessor> | undefined;
 
-  stationEventsRefreshServer = await startStationEventsCacheRefreshServer({
+  const stationEventsRefreshServer = await startStationEventsCacheRefreshServer({
     config: config.stationEvents.cacheRefresh,
     logger,
     onRefresh: async (body) => {
@@ -122,12 +141,9 @@ export async function startListener(): Promise<void> {
   }
 
   if (config.pointsSplitEnrich.enabled) {
-    pointsEnrichmentPool = new Pool({
-      connectionString: config.dbEvents.connectionString,
-    });
     preprocessors.push(
       createPointsSplitEnricher({
-        queryClient: pointsEnrichmentPool,
+        queryClient: createPgQueryClient(prisma),
         mode: config.pointsSplitEnrich.mode,
         logger,
       }),
@@ -144,6 +160,7 @@ export async function startListener(): Promise<void> {
     config,
     metrics,
     logger,
+    prisma,
     stationEventsProcessor,
   });
 
@@ -158,58 +175,13 @@ export async function startListener(): Promise<void> {
     intervalMs: config.metricsIntervalMs,
   });
 
-  const client = mqtt.connect(config.mqtt.brokerUrl, {
+  const mqttClient = mqtt.connect(config.mqtt.brokerUrl, {
     username: config.mqtt.username,
     password: config.mqtt.password,
   });
 
-  let intakeClosed = false;
-  let shuttingDown = false;
-
-  const shutdown = async (signal: string): Promise<void> => {
-    if (shuttingDown) {
-      return;
-    }
-
-    shuttingDown = true;
-    intakeClosed = true;
-
-    logger.info("shutdown requested", { signal });
-
-    await dispatcher.shutdown({ drainTimeoutMs: config.shutdownDrainTimeoutMs });
-    if (pointsEnrichmentPool) {
-      await pointsEnrichmentPool.end();
-    }
-    if (stationEventsRefreshServer) {
-      await stationEventsRefreshServer.close();
-    }
-    await endClient(client);
-    metrics.setServiceUp(0);
-    if (metricsServer) {
-      await metricsServer.close();
-    }
-    stopMetricsReporter();
-
-    logger.info("shutdown complete");
-  };
-
-  client.on("connect", () => {
-    logger.info("connected to mqtt broker", { brokerUrl: config.mqtt.brokerUrl });
-    client.subscribe(config.mqtt.topic, (error) => {
-      if (error) {
-        logger.error("failed to subscribe", {
-          topic: config.mqtt.topic,
-          error: error.message,
-        });
-        return;
-      }
-
-      logger.info("subscribed", { topic: config.mqtt.topic });
-    });
-  });
-
-  client.on("message", (topic, raw) => {
-    if (intakeClosed) {
+  mqttClient.on("message", (topic, raw) => {
+    if (stopping) {
       return;
     }
 
@@ -237,37 +209,84 @@ export async function startListener(): Promise<void> {
     });
   });
 
-  client.on("error", (error: Error) => {
+  mqttClient.on("error", (error: Error) => {
     logger.error("mqtt client error", { error: error.message });
   });
 
-  client.on("close", () => {
+  mqttClient.on("close", () => {
     logger.info("mqtt connection closed");
   });
 
-  client.on("offline", () => {
+  mqttClient.on("offline", () => {
     logger.warn("mqtt client offline");
   });
 
-  client.on("reconnect", () => {
+  mqttClient.on("reconnect", () => {
     logger.info("mqtt reconnecting");
   });
 
   await new Promise<void>((resolve, reject) => {
-    const onSignal = async (signal: string) => {
-      try {
-        await shutdown(signal);
-        resolve();
-      } catch (error) {
-        reject(error);
-      }
-    };
+    const onConnect = () => {
+      logger.info("connected to mqtt broker", { brokerUrl: config.mqtt.brokerUrl });
+      mqttClient.subscribe(config.mqtt.topic, (error) => {
+        mqttClient.off("error", onError);
+        if (error) {
+          logger.error("failed to subscribe", {
+            topic: config.mqtt.topic,
+            error: error.message,
+          });
+          reject(error);
+          return;
+        }
 
-    process.once("SIGINT", () => {
-      void onSignal("SIGINT");
-    });
-    process.once("SIGTERM", () => {
-      void onSignal("SIGTERM");
-    });
+        logger.info("subscribed", { topic: config.mqtt.topic });
+        resolve();
+      });
+    };
+    const onError = (error: Error) => {
+      mqttClient.off("connect", onConnect);
+      reject(error);
+    };
+    mqttClient.once("connect", onConnect);
+    mqttClient.once("error", onError);
   });
+
+  handle = {
+    logger,
+    prisma,
+    dispatcher,
+    mqttClient,
+    metrics,
+    metricsServer,
+    stationEventsRefreshServer,
+    stopMetricsReporter,
+    shutdownDrainTimeoutMs: config.shutdownDrainTimeoutMs,
+  };
+}
+
+export async function stopListener(): Promise<void> {
+  if (!handle || stopping) {
+    return;
+  }
+
+  stopping = true;
+  const h = handle;
+  handle = undefined;
+
+  h.logger.info("shutdown requested");
+
+  await h.dispatcher.shutdown({ drainTimeoutMs: h.shutdownDrainTimeoutMs });
+  if (h.stationEventsRefreshServer) {
+    await h.stationEventsRefreshServer.close();
+  }
+  await endClient(h.mqttClient);
+  h.metrics.setServiceUp(0);
+  if (h.metricsServer) {
+    await h.metricsServer.close();
+  }
+  h.stopMetricsReporter();
+  await h.prisma.$disconnect();
+
+  h.logger.info("shutdown complete");
+  stopping = false;
 }

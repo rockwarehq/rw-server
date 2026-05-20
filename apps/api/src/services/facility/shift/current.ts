@@ -7,7 +7,7 @@
 //   3. No active shift — business date derived from site timezone
 
 import prisma from "../../../database/client.js";
-import { getLocalCalendarDate } from "../../metrics/bucket.js";
+import { getLocalCalendarDate } from "@rw/domain/services/metrics/bucket";
 
 export interface CurrentShiftResult {
   businessDate: string; // ISO date e.g. "2026-03-19"

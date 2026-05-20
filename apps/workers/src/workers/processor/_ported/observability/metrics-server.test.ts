@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { createMetrics } from "../pipeline/metrics.ts";
-import { startMetricsServer } from "./metrics-server.ts";
+import { createMetrics } from "../pipeline/metrics.js";
+import { startMetricsServer } from "./metrics-server.js";
 
 const testLogger = {
   debug() {},

@@ -188,7 +188,11 @@ export async function stopDirtyBucketConsumer(): Promise<void> {
 // if Redis dirty set is empty"); optimize by making each phase cheaper
 // instead. See CLAUDE.md > Metrics pipeline invariants.
 async function combinedTick(): Promise<void> {
-  if (tickRunning) return;
+  if (tickRunning) {
+    const ageMs = tickStartedAt !== null ? Date.now() - tickStartedAt : 0;
+    console.log(`[metrics:tick] skipped (previous still running, ${ageMs}ms)`);
+    return;
+  }
   tickRunning = true;
   tickStartedAt = Date.now();
 

@@ -1,6 +1,6 @@
-import type { Logger } from "../pipeline/types.ts";
-import type { StationEventsRpcClient } from "./station-event-cache.ts";
-import type { TagSnapshotCache } from "./tag-snapshot-cache.ts";
+import type { Logger } from "../pipeline/types.js";
+import type { StationEventsRpcClient } from "./station-event-cache.js";
+import type { TagSnapshotCache } from "./tag-snapshot-cache.js";
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return new Promise((resolve, reject) => {

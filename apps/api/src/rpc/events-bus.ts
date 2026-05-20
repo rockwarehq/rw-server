@@ -1,2 +1,2 @@
-// Re-export from the shared runtime package.
-export * from "@rw/runtime/events-bus";
+// Re-export from @rw/domain so callers don't change path.
+export * from "@rw/domain/rpc/events-bus";

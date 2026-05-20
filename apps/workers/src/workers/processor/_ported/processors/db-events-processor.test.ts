@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import type { Metrics, ParsedEvent, ProcessorContext } from "../pipeline/types.ts";
-import { createDbEventsProcessor } from "./db-events-processor.ts";
+import type { Metrics, ParsedEvent, ProcessorContext } from "../pipeline/types.js";
+import { createDbEventsProcessor } from "./db-events-processor.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {

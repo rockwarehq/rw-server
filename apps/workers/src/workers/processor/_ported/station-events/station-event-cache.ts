@@ -1,11 +1,11 @@
-import type { Logger } from "../pipeline/types.ts";
+import type { Logger } from "../pipeline/types.js";
 import type {
   ProcessorTagSnapshotResponse,
   StationEventAction,
   StationEventDefinition,
   StationEventTrigger,
   StationEventTriggerClause,
-} from "./types.ts";
+} from "./types.js";
 
 const TAG_REFERENCE_PATTERNS = [
   /\{\{\s*tagValues\.([a-zA-Z0-9:_-]+)\.(?:value|previousValue)\s*\}\}/g,

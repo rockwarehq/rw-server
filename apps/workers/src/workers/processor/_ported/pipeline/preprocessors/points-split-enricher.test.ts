@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import type { ParsedEvent } from "../types.ts";
-import { createPointsSplitEnricher } from "./points-split-enricher.ts";
+import type { ParsedEvent } from "../types.js";
+import { createPointsSplitEnricher } from "./points-split-enricher.js";
 
 function createPointsEvent(): ParsedEvent {
   const now = Date.now();

@@ -2,6 +2,15 @@ primary_region = 'iad'
 
 [build]
 
+# Applies pending Prisma migrations in a temporary machine before the main
+# release rolls out. Reads DATABASE_URL_MIGRATION (direct, port 5432) — set
+# via fly secrets. Failure here aborts the deploy. Idempotent: a deploy with
+# no pending migrations is a fast no-op. Both api and workers run this so
+# either app can be deployed in any order without coupling schema drift to
+# deploy ordering.
+[deploy]
+release_command = 'pnpm -w db:migrate'
+
 # Three process groups — scale independently with:
 #   fly scale count -a <tenant>-workers rollups=1 processor=1 processor_consumer=2
 [processes]

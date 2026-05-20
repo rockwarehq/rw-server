@@ -1,0 +1,33 @@
+{
+  "name": "@rw/domain",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./queues/*": "./dist/queues/*.js",
+    "./services/metrics/*": "./dist/services/metrics/*.js",
+    "./services/cycle/*": "./dist/services/cycle/*.js",
+    "./services/inventory/*": "./dist/services/inventory/*.js",
+    "./services/facility/*": "./dist/services/facility/*.js",
+    "./services/processor/*": "./dist/services/processor/*.js",
+    "./services/order/*": "./dist/services/order/*.js",
+    "./services/metric-catalog/*": "./dist/services/metric-catalog/*.js",
+    "./lib/*": "./dist/lib/*.js",
+    "./rpc/*": "./dist/rpc/*.js"
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@orpc/server": "^1.14.0",
+    "@rw/db": "workspace:*",
+    "@rw/runtime": "workspace:*",
+    "bullmq": "^5.66.5",
+    "ioredis": "^5.10.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.8",
+    "typescript": "~6.0.2"
+  }
+}

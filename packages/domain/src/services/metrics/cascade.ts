@@ -11,7 +11,10 @@
 
 import crypto from "node:crypto";
 import prisma from "../../database/client.js";
+import type { Prisma } from "../../database/generated/client.js";
 import { onBucketsChanged, rowToSnapshot, type BucketChange } from "./sync.js";
+
+type TransactionClient = Prisma.TransactionClient;
 
 /**
  * Deterministic entityId for JOB-entity metric buckets.
@@ -102,6 +105,7 @@ function emitRows(rows: BucketRow[]): void {
  * SHIFT/DAY are handled by the 5s combined tick.
  */
 export async function incrementHourCounts(
+  client: TransactionClient | typeof prisma,
   stationId: string,
   _siteId: string,
   timestamp: Date,
@@ -110,7 +114,7 @@ export async function incrementHourCounts(
   idealSeconds: number,
   totalCycleSeconds: number,
 ): Promise<void> {
-  const rows = await prisma.$queryRaw<BucketRow[]>`
+  const rows = await client.$queryRaw<BucketRow[]>`
     UPDATE "MetricBucket" mb
     SET "totalCycles" = mb."totalCycles" + ${cycles}::int,
         "totalItems" = mb."totalItems" + ${items}::int,

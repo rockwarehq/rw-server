@@ -4,13 +4,19 @@ import { Prisma } from "../../database/generated/client.js";
 import { inventory } from "../inventory/index.js";
 import { allocateInventory } from "../order/allocation.js";
 import {
-  publishStationLastCycleMetric,
-  publishStationStatusMetric,
-  publishStationStatusReasonMetric,
+  loadStationMetricContext,
+  publishStationLastCycleMetricEvent,
+  publishStationStatusMetricEvent,
+  publishStationStatusReasonMetricEvent,
   transitionToUp,
+  type StationMetricContext,
   type TransitionToUpOptions,
 } from "../facility/station/state.js";
-import { scheduleDetection } from "../facility/station/state-detection.js";
+import {
+  enqueueDetection,
+  prepareDetection,
+  type PreparedDetection,
+} from "../facility/station/state-detection.js";
 import { batchedMetricsUpdate } from "../metrics/batcher.js";
 import { incrementHourCounts } from "../metrics/cascade.js";
 import { trackReplayedCycle } from "./replay.js";
@@ -31,7 +37,7 @@ export interface StartCycleInput {
   replayed?: boolean;
 }
 
-/** Result from all strategy functions — unified so allocation can run once in complete(). */
+/** Result from all strategy functions — unified so post-commit publishes can share one connection. */
 interface StrategyResult {
   cycle: { id: string; start: Date; end: Date | null };
   items: Array<{ id: string; productId: string }>;
@@ -39,6 +45,10 @@ interface StrategyResult {
   /** Status written on the new state-log row ("UP" or "SLOW"), or null when
    * the strategy did not write a state transition (replayed paths). */
   newStatus: "UP" | "SLOW" | null;
+  /** Loaded inside the tx so post-commit publishes don't check out their own connections. */
+  stationCtx: StationMetricContext | null;
+  /** Detection plan computed inside the tx; BullMQ enqueue happens post-commit. */
+  detectionPrepared: PreparedDetection | null;
 }
 
 /**
@@ -56,7 +66,11 @@ interface StrategyResult {
  * with `end = null`. The new cycle's `start` = timestamp. Inventory items
  * are deferred until this cycle is eventually closed by a future call.
  *
- * All writes happen in a single transaction.
+ * All DB work happens in a single transaction — including allocation,
+ * detection-prep reads, station-context load, and the HOUR-bucket count
+ * increment — so each cycle completion checks out exactly one connection.
+ * Redis publishes and BullMQ enqueues run only after the tx commits, so a
+ * rollback never leaks observable side effects.
  */
 export async function complete(input: StartCycleInput) {
   const { stationId, timestamp, jobId, keepOpen = false, replayed = false } = input;
@@ -141,24 +155,35 @@ export async function complete(input: StartCycleInput) {
     toolBlobs: setup.toolBlobIds.length > 0 ? { connect: setup.toolBlobIds.map((id) => ({ id })) } : undefined,
   };
 
-  // ── Execute strategy (transaction) ──
-  const { cycle, items, closedEntry, newStatus } = replayed
+  // ── Execute strategy (single transaction handles ALL DB writes) ──
+  const idealCycleIncrement = standardCycleSeconds != null ? Math.round(standardCycleSeconds) : 0;
+
+  const result = replayed
     ? keepOpen
       ? await completeOpenCloseReplay(stationId, siteId, timestamp, jobId, blobConnects)
       : await completeImmediateReplay(stationId, siteId, timestamp, jobId, blobConnects)
     : keepOpen
-      ? await completeOpenClose(stationId, siteId, timestamp, jobId, blobConnects, slowThresholdSeconds)
-      : await completeImmediate(stationId, siteId, timestamp, jobId, blobConnects, slowThresholdSeconds);
+      ? await completeOpenClose(
+          stationId,
+          siteId,
+          timestamp,
+          jobId,
+          blobConnects,
+          idealCycleIncrement,
+          slowThresholdSeconds,
+        )
+      : await completeImmediate(
+          stationId,
+          siteId,
+          timestamp,
+          jobId,
+          blobConnects,
+          idealCycleIncrement,
+          slowThresholdSeconds,
+        );
+  const { cycle, items, closedEntry, newStatus, stationCtx, detectionPrepared } = result;
   const t2 = Date.now();
 
-  // ── Post-transaction: allocation (all paths, fire-and-forget) ──
-  if (items.length > 0) {
-    Promise.all(
-      items.map(({ id, productId }) =>
-        allocateInventory(prisma as unknown as Prisma.TransactionClient, siteId, productId, id),
-      ),
-    ).catch((err) => console.error(`[cycle] allocation failed for station ${stationId}:`, err));
-  }
   // Material-shift flush is NOT triggered per cycle. The 60s minute tick
   // (`runMetricBucketEnsureTick`) plus the shift-change worker plus the
   // server startup sweep cover it with bounded ≤60s staleness.
@@ -175,37 +200,41 @@ export async function complete(input: StartCycleInput) {
     return { data: cycle };
   }
 
-  // Schedule slow/downtime detection timers (fire-and-forget, after transaction)
-  scheduleDetection(stationId, jobId).catch((err) => {
-    console.error(`[station-detection] Failed to schedule detection for station ${stationId}:`, err);
-  });
+  // ── Post-commit side effects: Redis pub/sub + BullMQ only, no DB connections ──
 
-  // Publish live status so any DOWN→UP recovery (or UP→UP / UP→SLOW) flips
-  // immediately on connected clients. Fire-and-forget; failure here must not
-  // block the cycle response.
-  if (newStatus) {
-    publishStationStatusMetric(stationId, newStatus, timestamp).catch((err) => {
-      console.error(`[cycle] publishStationStatusMetric failed for station ${stationId}:`, err);
-    });
-    // A new state-log row opened on cycle complete always has no reason, so
-    // push null to clear any prior reason that applied to the closed DOWN row.
-    publishStationStatusReasonMetric(stationId, null, timestamp).catch((err) => {
-      console.error(`[cycle] publishStationStatusReasonMetric failed for station ${stationId}:`, err);
+  const cycleEnd = cycle.end ?? timestamp;
+  const cycleDurationSeconds = Math.max(0, (cycleEnd.getTime() - cycle.start.getTime()) / 1000);
+
+  if (detectionPrepared) {
+    enqueueDetection(detectionPrepared).catch((err) => {
+      console.error(`[station-detection] Failed to schedule detection for station ${stationId}:`, err);
     });
   }
 
-  // HOUR-only count increment — fast single UPDATE on one row.
-  // SHIFT/DAY/duration/parent/job rollups are deferred to 5s combined tick.
-  const cycleEnd = cycle.end ?? timestamp;
-  const cycleDurationSeconds = Math.max(0, (cycleEnd.getTime() - cycle.start.getTime()) / 1000);
-  const idealCycleIncrement = standardCycleSeconds != null ? Math.round(standardCycleSeconds) : 0;
-  const totalCycleIncrement = Math.round(cycleDurationSeconds);
+  if (stationCtx) {
+    if (newStatus) {
+      // Publish live status so any DOWN→UP recovery (or UP→UP / UP→SLOW) flips
+      // immediately on connected clients.
+      try {
+        publishStationStatusMetricEvent(stationCtx, newStatus, timestamp);
+      } catch (err) {
+        console.error(`[cycle] publishStationStatusMetric failed for station ${stationId}:`, err);
+      }
+      // A new state-log row opened on cycle complete always has no reason, so
+      // push null to clear any prior reason that applied to the closed DOWN row.
+      try {
+        publishStationStatusReasonMetricEvent(stationCtx, null, timestamp);
+      } catch (err) {
+        console.error(`[cycle] publishStationStatusReasonMetric failed for station ${stationId}:`, err);
+      }
+    }
 
-  publishStationLastCycleMetric(stationId, cycleDurationSeconds, cycleEnd).catch((err) => {
-    console.error(`[cycle] publishStationLastCycleMetric failed for station ${stationId}:`, err);
-  });
-
-  await incrementHourCounts(stationId, siteId, cycleEnd, 1, items.length, idealCycleIncrement, totalCycleIncrement);
+    try {
+      publishStationLastCycleMetricEvent(stationCtx, cycleDurationSeconds, cycleEnd);
+    } catch (err) {
+      console.error(`[cycle] publishStationLastCycleMetric failed for station ${stationId}:`, err);
+    }
+  }
 
   batchedMetricsUpdate({
     stationId,
@@ -220,7 +249,7 @@ export async function complete(input: StartCycleInput) {
 
   const t3 = Date.now();
   console.log(
-    `[cycle:timing] station=${stationId} setup=${t1 - t0}ms transaction=${t2 - t1}ms hour=${t3 - t2}ms total=${t3 - t0}ms`,
+    `[cycle:timing] station=${stationId} setup=${t1 - t0}ms transaction=${t2 - t1}ms post=${t3 - t2}ms total=${t3 - t0}ms`,
   );
 
   return { data: cycle };
@@ -228,7 +257,10 @@ export async function complete(input: StartCycleInput) {
 
 // ── Strategy: immediate (default) ────────────────────────────────
 // Insert a fully complete cycle with start + end. Inventory items
-// are created immediately on the new cycle.
+// are created immediately on the new cycle. All DB work — cycle row,
+// state-log transition, inventory items, order allocation, detection
+// reads, station-context load, HOUR bucket count increment — runs in
+// one transaction.
 
 async function completeImmediate(
   stationId: string,
@@ -236,6 +268,7 @@ async function completeImmediate(
   timestamp: Date,
   jobId: string,
   blobConnects: BlobConnects,
+  idealCycleIncrement: number,
   slowThresholdSeconds?: number,
 ): Promise<StrategyResult> {
   return prisma.$transaction(async (tx) => {
@@ -337,7 +370,27 @@ async function completeImmediate(
 
     const items = await inventory.createFromCycle(tx, cycle.id, jobId);
 
-    return { cycle, items, closedEntry, newStatus: isSlow ? ("SLOW" as const) : ("UP" as const) };
+    // Order allocation — was previously fire-and-forget on the global prisma
+    // client, now runs serially inside the tx so the whole completion is one
+    // connection checkout. Failure rolls the cycle back, matching the new
+    // atomicity contract.
+    for (const { id, productId } of items) {
+      await allocateInventory(tx, siteId, productId, id);
+    }
+
+    const newStatus = isSlow ? ("SLOW" as const) : ("UP" as const);
+
+    // Live-publish & detection-schedule data — read inside the tx so the
+    // post-commit fire-and-forget block holds no DB connection.
+    const stationCtx = await loadStationMetricContext(tx, stationId);
+    const detectionPrepared = await prepareDetection(tx, stationId, jobId);
+
+    // HOUR-only count increment — fast single UPDATE on one row.
+    // SHIFT/DAY/duration/parent/job rollups are deferred to 5s combined tick.
+    const totalCycleIncrement = Math.round(Math.max(0, cycleDurationSeconds));
+    await incrementHourCounts(tx, stationId, siteId, timestamp, 1, items.length, idealCycleIncrement, totalCycleIncrement);
+
+    return { cycle, items, closedEntry, newStatus, stationCtx, detectionPrepared };
   });
 }
 
@@ -349,6 +402,7 @@ async function completeOpenClose(
   timestamp: Date,
   jobId: string,
   blobConnects: BlobConnects,
+  idealCycleIncrement: number,
   slowThresholdSeconds?: number,
 ): Promise<StrategyResult> {
   return prisma.$transaction(async (tx) => {
@@ -407,8 +461,22 @@ async function completeOpenClose(
       },
     });
 
+    // Order allocation — moved inside the tx; see completeImmediate.
+    for (const { id, productId } of items) {
+      await allocateInventory(tx, siteId, productId, id);
+    }
+
+    const stationCtx = await loadStationMetricContext(tx, stationId);
+    const detectionPrepared = await prepareDetection(tx, stationId, jobId);
+
+    // Match the pre-refactor open/close call: HOUR increment was driven off
+    // the NEW open cycle whose start = end = timestamp, so totalCycleSeconds
+    // contribution per call is 0 on this path. Duration KPIs come from
+    // batchDurationRollup on the 5s combined tick, not this per-cycle bump.
+    await incrementHourCounts(tx, stationId, siteId, timestamp, 1, items.length, idealCycleIncrement, 0);
+
     const newStatus = entry.status === "SLOW" ? ("SLOW" as const) : ("UP" as const);
-    return { cycle: newCycle, items, closedEntry, newStatus };
+    return { cycle: newCycle, items, closedEntry, newStatus, stationCtx, detectionPrepared };
   });
 }
 
@@ -477,7 +545,13 @@ async function completeImmediateReplay(
 
     const items = await inventory.createFromCycle(tx, cycle.id, jobId);
 
-    return { cycle, items, closedEntry: null, newStatus: null };
+    // Order allocation — replayed cycles allocate too; replay path otherwise
+    // skips state transitions, detection, and metrics.
+    for (const { id, productId } of items) {
+      await allocateInventory(tx, siteId, productId, id);
+    }
+
+    return { cycle, items, closedEntry: null, newStatus: null, stationCtx: null, detectionPrepared: null };
   });
 }
 
@@ -538,7 +612,11 @@ async function completeOpenCloseReplay(
       },
     });
 
-    return { cycle: newCycle, items, closedEntry: null, newStatus: null };
+    for (const { id, productId } of items) {
+      await allocateInventory(tx, siteId, productId, id);
+    }
+
+    return { cycle: newCycle, items, closedEntry: null, newStatus: null, stationCtx: null, detectionPrepared: null };
   });
 }
 

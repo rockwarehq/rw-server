@@ -1,7 +1,7 @@
-import type { EventPreprocessor } from "../pipeline/types.ts";
-import { extractPointReadings } from "./point-reading.ts";
-import type { TagSnapshotCache } from "./tag-snapshot-cache.ts";
-import type { TagValueSnapshot } from "./types.ts";
+import type { EventPreprocessor } from "../pipeline/types.js";
+import { extractPointReadings } from "./point-reading.js";
+import type { TagSnapshotCache } from "./tag-snapshot-cache.js";
+import type { TagValueSnapshot } from "./types.js";
 
 export function createPointSnapshotPreprocessor(args: {
   tagSnapshotCache: TagSnapshotCache;

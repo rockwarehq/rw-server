@@ -1,4 +1,4 @@
-import type { ParsedEvent, Processor, ProcessorContext } from "../pipeline/types.ts";
+import type { ParsedEvent, Processor, ProcessorContext } from "../pipeline/types.js";
 
 interface DbEventsProcessorConfig {
   table: string;

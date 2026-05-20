@@ -1,6 +1,6 @@
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from "prom-client";
 
-import type { Logger, Metrics, MetricsSnapshot } from "./types.ts";
+import type { Logger, Metrics, MetricsSnapshot } from "./types.js";
 
 interface ProcessorMetricsInternal {
   submitted: number;

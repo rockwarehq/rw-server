@@ -1,6 +1,6 @@
 import prisma from "../../database/client.js";
-import { updateDispositionBadItems } from "../metrics/recalc.js";
-import { deductScrap } from "../order/allocation.js";
+import { updateDispositionBadItems } from "@rw/domain/services/metrics/recalc";
+import { deductScrap } from "@rw/domain/services/order/allocation";
 
 export interface CreateDispositionLogInput {
   siteId: string;

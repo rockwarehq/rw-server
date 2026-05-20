@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { evaluateConditionOp, evaluateTrigger } from "./trigger-evaluator.ts";
-import type { StationEventTrigger } from "./types.ts";
+import { evaluateConditionOp, evaluateTrigger } from "./trigger-evaluator.js";
+import type { StationEventTrigger } from "./types.js";
 
 describe("trigger evaluator", () => {
   test("supports threshold crossing operators", () => {

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { createMetrics } from "../metrics.ts";
-import type { ParsedEvent, Processor } from "../types.ts";
-import { createBoundedRuntime } from "./bounded-runtime.ts";
+import { createMetrics } from "../metrics.js";
+import type { ParsedEvent, Processor } from "../types.js";
+import { createBoundedRuntime } from "./bounded-runtime.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {

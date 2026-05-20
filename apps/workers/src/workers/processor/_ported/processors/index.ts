@@ -1,7 +1,6 @@
-import { Pool } from "pg";
-
-import type { AppConfig } from "../config.ts";
-import { createBoundedRuntime } from "../pipeline/runtime/bounded-runtime.ts";
+import type { AppConfig } from "../config.js";
+import { createPgQueryClient, type PgQueryClient } from "../pg-query-client.js";
+import { createBoundedRuntime } from "../pipeline/runtime/bounded-runtime.js";
 import type {
   Logger,
   Metrics,
@@ -9,12 +8,14 @@ import type {
   ProcessorRuntime,
   ProcessorRuntimeConfig,
   ProcessorRuntimeEntry,
-} from "../pipeline/types.ts";
-import { consoleProcessor } from "./console-processor.ts";
-import { createDbEventsProcessor } from "./db-events-processor.ts";
-import { createFileEventsProcessor } from "./file-events-processor.ts";
-import { createHttpEventsProcessor } from "./http-events-processor.ts";
-import { createUniqueTopicsProcessor } from "./unique-topics-processor.ts";
+} from "../pipeline/types.js";
+import { consoleProcessor } from "./console-processor.js";
+import { createDbEventsProcessor } from "./db-events-processor.js";
+import { createFileEventsProcessor } from "./file-events-processor.js";
+import { createHttpEventsProcessor } from "./http-events-processor.js";
+import { createUniqueTopicsProcessor } from "./unique-topics-processor.js";
+
+import type { PrismaClient } from "@rw/db";
 
 function mergeRuntimeConfig(
   base: ProcessorRuntimeConfig,
@@ -60,6 +61,7 @@ export function createProcessorRuntimeEntries(args: {
   config: AppConfig;
   metrics: Metrics;
   logger: Logger;
+  prisma: PrismaClient;
   stationEventsProcessor?: Processor;
 }): ProcessorRuntimeEntry[] {
   const common = {
@@ -110,26 +112,18 @@ export function createProcessorRuntimeEntries(args: {
   }
 
   if (args.config.dbEvents.enabled) {
-    const pool = new Pool({
-      connectionString: args.config.dbEvents.connectionString,
-    });
+    const queryClient: PgQueryClient = createPgQueryClient(args.prisma);
 
-    let dbEventsProcessor: ReturnType<typeof createDbEventsProcessor>;
-    try {
-      dbEventsProcessor = createDbEventsProcessor({
-        config: {
-          table: args.config.dbEvents.table,
-          insertTimeoutMs: args.config.dbEvents.insertTimeoutMs,
-          batchWindowMs: args.config.dbEvents.batchWindowMs,
-          batchMaxRows: args.config.dbEvents.batchMaxRows,
-        },
-        queryClient: pool,
-        logger: args.logger,
-      });
-    } catch (error) {
-      void pool.end();
-      throw error;
-    }
+    const dbEventsProcessor = createDbEventsProcessor({
+      config: {
+        table: args.config.dbEvents.table,
+        insertTimeoutMs: args.config.dbEvents.insertTimeoutMs,
+        batchWindowMs: args.config.dbEvents.batchWindowMs,
+        batchMaxRows: args.config.dbEvents.batchMaxRows,
+      },
+      queryClient,
+      logger: args.logger,
+    });
 
     const dbEventsRuntime = createBoundedRuntime({
       processor: dbEventsProcessor,
@@ -144,7 +138,6 @@ export function createProcessorRuntimeEntries(args: {
         logger: args.logger,
         shutdownHook: async () => {
           await dbEventsProcessor.flushPending();
-          await pool.end();
         },
       }),
     });

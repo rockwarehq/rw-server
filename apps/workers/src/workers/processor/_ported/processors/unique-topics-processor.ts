@@ -1,4 +1,4 @@
-import type { Logger, ParsedEvent, Processor } from "../pipeline/types.ts";
+import type { Logger, ParsedEvent, Processor } from "../pipeline/types.js";
 
 export function createUniqueTopicsProcessor(args: { logger: Logger }): Processor {
   const topics = new Set<string>();

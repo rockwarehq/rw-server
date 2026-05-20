@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { StationEventCache } from "./station-event-cache.ts";
-import type { StationEventDefinition } from "./types.ts";
+import { StationEventCache } from "./station-event-cache.js";
+import type { StationEventDefinition } from "./types.js";
 
 const testLogger = {
   debug() {},

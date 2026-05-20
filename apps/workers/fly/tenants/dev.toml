@@ -1,7 +1,52 @@
-app = 'rw-dev-workers'
+app = 'dev-processor'
 
+# Reusing the existing (suspended) dev-processor fly app to keep DNS/secrets
+# in place during testing. Rename to 'rw-dev-workers' (or anything else)
+# later — fly will auto-create the new app on first deploy.
+#
+# Fly secrets (set via flyctl secrets set -a dev-processor):
+# - DATABASE_URL           (pooled, port 6432) — processor + processor-consumer
+# - DATABASE_URL_ROLLUPS   (direct,  port 5432) — rollups only; long CTE queries
+#                           bypass pgbouncer to avoid tx-mode connection-hold
+# - DATABASE_URL_MIGRATION (direct,  port 5432) — used by [deploy] release_command
+#                           (can be the same value as DATABASE_URL_ROLLUPS)
+# - REDIS_URL
+# - PROCESSOR_SHARED_SECRET (must match rw-dev-api's value)
+# - MQTT_PASSWORD (broker URL + username are non-sensitive, in [env] below)
 [_meta]
-required_secrets = ['DATABASE_URL', 'REDIS_URL', 'MQTT_BROKER_URL', 'MQTT_USERNAME', 'MQTT_PASSWORD', 'PROCESSOR_SHARED_SECRET']
+required_secrets = [
+  'DATABASE_URL',
+  'DATABASE_URL_ROLLUPS',
+  'DATABASE_URL_MIGRATION',
+  'REDIS_URL',
+  'PROCESSOR_SHARED_SECRET',
+  'MQTT_PASSWORD',
+]
 
 [env]
 LOG_LEVEL = 'debug'
+
+# processor → api RPC (triggerEvent / listEventsForProcessor / getTagSnapshots)
+# Use fly's private DNS to skip the public proxy. NO trailing /rpc — the
+# client wrapper appends /rpc itself (see apps/workers/src/workers/processor).
+STATION_EVENTS_ENABLED = 'true'
+STATION_EVENTS_URL = 'http://rw-dev-api.internal:3000'
+
+# MQTT ingest (processor mode). Broker URL and username are non-sensitive
+# (hostname + service-account name); only MQTT_PASSWORD is a fly secret.
+MQTT_BROKER_URL = 'mqtts://dev-mqtt.rockware.io:443'
+MQTT_USERNAME = 'gateway'
+# Subscribe to all MQTT topics. TOML strings need no escaping for '#'
+# (unlike dotenv, which treats it as a comment marker).
+MQTT_TOPIC = '#'
+
+# Downstream processors disabled for first deploy — flip on per-tenant once
+# the basic cycle pipeline is verified end-to-end.
+DB_EVENTS_ENABLED = 'false'
+WORKSPACE_HTTP_EVENTS_ENABLED = 'false'
+POINTS_SPLIT_ENRICH_ENABLED = 'false'
+
+# Cache-refresh server defaults to port 9465 which collides with the
+# healthz host server. Disable for first deploy; if/when we enable it set
+# STATION_EVENTS_CACHE_REFRESH_PORT=9468 and expose 9468 in [[services]].
+STATION_EVENTS_CACHE_REFRESH_ENABLED = 'false'

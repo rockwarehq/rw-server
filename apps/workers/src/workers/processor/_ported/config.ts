@@ -1,4 +1,4 @@
-import type { OverflowPolicy, ProcessorRuntimeConfig } from "./pipeline/types.ts";
+import type { OverflowPolicy, ProcessorRuntimeConfig } from "./pipeline/types.js";
 
 export interface AppConfig {
   consoleEvents: {

@@ -66,7 +66,7 @@ function appPaths(app: "api" | "workers"): { base: string; tenantsDir: string; o
     base: resolve(appDir, "fly/base.toml"),
     tenantsDir: resolve(appDir, "fly/tenants"),
     out: resolve(appDir, "fly.generated.toml"),
-    dockerfile: resolve(appDir, "Dockerfile"),
+    dockerfile: resolve(ROOT_DIR, "Dockerfile"),
   };
 }
 
@@ -175,11 +175,12 @@ function ensureCertificate(appName: string, domain: string): void {
   }
 }
 
-function deploy(outPath: string, dockerfile: string): void {
+function deploy(outPath: string, dockerfile: string, target: "api" | "workers"): void {
   console.log("\nDeploying to Fly.io...\n");
-  execSync(`flyctl deploy --local-only -c ${outPath} --dockerfile ${dockerfile} ${ROOT_DIR}`, {
-    stdio: "inherit",
-  });
+  execSync(
+    `flyctl deploy --local-only -c ${outPath} --dockerfile ${dockerfile} --build-target ${target} ${ROOT_DIR}`,
+    { stdio: "inherit" },
+  );
 }
 
 function getFlagValue(args: string[], name: string): string | undefined {
@@ -233,7 +234,7 @@ function main(): void {
   }
 
   const { dockerfile } = appPaths(app);
-  deploy(outPath, dockerfile);
+  deploy(outPath, dockerfile, app);
   console.log("\nDeployment complete!");
 }
 

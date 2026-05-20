@@ -1,6 +1,6 @@
-import { createProcessorRpcClient } from "@rockwarehq/rpc-client";
+import { createProcessorRpcClient } from "../station-events/processor-rpc-client.js";
 
-import type { Logger, ParsedEvent, Processor } from "../pipeline/types.ts";
+import type { Logger, ParsedEvent, Processor } from "../pipeline/types.js";
 
 interface HttpEventsProcessorConfig {
   eventsUrl: string;
@@ -166,7 +166,11 @@ function createRpcIngestClient(config: HttpEventsProcessorConfig): RpcIngestClie
   const client = createProcessorRpcClient({
     baseUrl: config.eventsUrl,
     getSecret: () => config.authToken,
-  });
+  }) as {
+    events: {
+      ingest(input: { events: PointValueIngestEvent[] }): Promise<unknown>;
+    };
+  };
 
   return {
     ingest(input) {

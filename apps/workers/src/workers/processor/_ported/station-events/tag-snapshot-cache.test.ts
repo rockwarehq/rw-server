@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { TagSnapshotCache } from "./tag-snapshot-cache.ts";
+import { TagSnapshotCache } from "./tag-snapshot-cache.js";
 
 describe("TagSnapshotCache", () => {
   test("stores snapshot for new key using input previousValue", () => {
