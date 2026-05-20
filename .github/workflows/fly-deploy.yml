@@ -1,0 +1,73 @@
+# Deploy api and/or workers to fly for a given tenant.
+#
+# Migrations: NOT handled here. Each fly app's [deploy] release_command in
+# its base.toml runs `pnpm -w db:migrate` in a temporary fly machine before
+# main rollout, using DATABASE_URL_MIGRATION from fly secrets. So the only
+# secret this workflow needs is FLY_API_TOKEN.
+#
+# Trigger: manual (workflow_dispatch). Pick the app and tenant in the UI.
+
+name: Deploy to Fly.io
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: 'Tenant'
+        required: true
+        type: choice
+        options:
+          - dev
+        default: dev
+      app:
+        description: 'App to deploy'
+        required: true
+        type: choice
+        options:
+          - api
+          - workers
+          - both
+        default: both
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize deploys per (tenant, app) without cancelling an in-flight one.
+  group: deploy-${{ inputs.tenant }}-${{ inputs.app }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Fly CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy api
+        if: inputs.app == 'api' || inputs.app == 'both'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: pnpm fly:deploy --app api ${{ inputs.tenant }}
+
+      - name: Deploy workers
+        if: inputs.app == 'workers' || inputs.app == 'both'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: pnpm fly:deploy --app workers ${{ inputs.tenant }}
