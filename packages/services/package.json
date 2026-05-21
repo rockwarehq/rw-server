@@ -4,8 +4,12 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./audit/*": "./dist/audit/*.js",
+    "./auth/*": "./dist/auth/*.js",
     "./config": "./dist/config.js",
     "./cycle/*": "./dist/cycle/*.js",
+    "./email/*": "./dist/email/*.js",
+    "./iam/*": "./dist/iam/*.js",
     "./facility/*": "./dist/facility/*.js",
     "./inventory/*": "./dist/inventory/*.js",
     "./lib/*": "./dist/lib/*.js",
@@ -25,6 +29,7 @@
     "@rw/db": "workspace:*",
     "@rw/runtime": "workspace:*",
     "bullmq": "^5.66.5",
+    "fast-jwt": "^6.1.0",
     "ioredis": "^5.10.1",
     "zod": "^4.3.6"
   },

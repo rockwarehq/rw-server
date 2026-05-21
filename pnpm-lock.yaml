@@ -276,6 +276,9 @@ importers:
       bullmq:
         specifier: ^5.66.5
         version: 5.76.10
+      fast-jwt:
+        specifier: ^6.1.0
+        version: 6.2.4
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
