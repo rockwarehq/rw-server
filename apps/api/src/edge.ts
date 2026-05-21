@@ -9,7 +9,7 @@ import { gatewayMqttConfig } from "./config.js";
 async function validateGatewayToken(request: FastifyRequest, reply: FastifyReply) {
   const authHeader = request.headers.authorization;
 
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+  if (!authHeader?.startsWith("Bearer ")) {
     reply.status(401).send({ error: "Missing or invalid authorization header" });
     return null;
   }
