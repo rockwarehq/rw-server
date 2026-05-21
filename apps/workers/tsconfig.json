@@ -9,7 +9,7 @@
   "exclude": ["src/workers/processor/_ported/**/*.test.ts"],
   "references": [
     { "path": "../../packages/db" },
-    { "path": "../../packages/domain" },
+    { "path": "../../packages/services" },
     { "path": "../../packages/runtime" }
   ]
 }

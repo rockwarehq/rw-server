@@ -1,3 +1,3 @@
-// This file has moved to @rw/domain/services/facility/shift/materialize
+// This file has moved to @rw/services/services/facility/shift/materialize
 // Re-export for backward compatibility
-export { materializeShiftInstances, type MaterializeResult } from "@rw/domain/services/facility/shift/materialize";
+export { materializeShiftInstances, type MaterializeResult } from "@rw/services/facility/shift/materialize";

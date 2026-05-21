@@ -11,7 +11,7 @@
  */
 
 import prisma from "@rw/db";
-import { complete } from "@rw/domain/services/cycle/cycle";
+import { complete } from "@rw/services/cycle/cycle";
 
 const INTERVAL_MS = parseInt(process.env.DEV_CYCLE_SIMULATOR_INTERVAL_MS || "", 10) || 10_000;
 

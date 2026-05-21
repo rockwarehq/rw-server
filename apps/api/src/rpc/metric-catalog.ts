@@ -6,7 +6,7 @@ import {
   METRIC_CATALOG_GRANULARITIES,
   METRIC_CATALOG_VALUE_TYPES,
   listMetrics,
-} from "@rw/domain/services/metric-catalog/index";
+} from "@rw/services/metric-catalog/index";
 import { Principal } from "../services/auth/index.js";
 import { userOrDisplayRequired } from "./middleware.js";
 

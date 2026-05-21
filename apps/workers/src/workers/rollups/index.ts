@@ -12,19 +12,19 @@
 
 import { createPrismaClient } from "@rw/db";
 import { initEventsBridge } from "@rw/runtime/events-bus";
-import { initMetricsBridge } from "@rw/domain/rpc/metrics-bus";
+import { initMetricsBridge } from "@rw/services/rpc/metrics-bus";
 import {
   startMetricBucketEnsure,
   stopMetricBucketEnsure,
   scheduleNextEnsureTick,
-} from "@rw/domain/queues/background-workers";
+} from "@rw/services/queues/background-workers";
 import {
   initMetricBucketQueues,
   registerMetricBucketWorkers,
   stopMetricBucketQueues,
-} from "@rw/domain/queues/metric-buckets";
-import { initShiftChangeQueue, registerShiftChangeWorker, stopShiftChangeQueue } from "@rw/domain/queues/shift-change";
-import { startDirtyBucketConsumer, stopDirtyBucketConsumer } from "@rw/domain/services/metrics/batcher";
+} from "@rw/services/queues/metric-buckets";
+import { initShiftChangeQueue, registerShiftChangeWorker, stopShiftChangeQueue } from "@rw/services/queues/shift-change";
+import { startDirtyBucketConsumer, stopDirtyBucketConsumer } from "@rw/services/metrics/batcher";
 
 let cleanupBridge: (() => Promise<void>) | null = null;
 let cleanupMetricsBridge: (() => Promise<void>) | null = null;

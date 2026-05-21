@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
-import { publishMetricValueChange } from "../../../rpc/metrics-bus.js";
+import { publishMetricValueChange } from "../../rpc/metrics-bus.js";
 import { updateTimeBased } from "../../metrics/recalc.js";
 
 type TransactionClient = Prisma.TransactionClient;

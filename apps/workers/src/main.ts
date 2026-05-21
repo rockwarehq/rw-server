@@ -60,7 +60,7 @@ async function main(): Promise<void> {
   }
 
   // Initialize Prisma with this worker's role BEFORE dynamic-importing the
-  // worker module. The worker imports @rw/domain transitively, which calls
+  // worker module. The worker imports @rw/services transitively, which calls
   // createPrismaClient("api") at module-eval. The first call wins on pool
   // sizing, so we have to win the race here with the actual role.
   createPrismaClient(name);

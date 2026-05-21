@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { stationActionConfig } from "../../../../config.js";
+import { stationActionConfig } from "../../../config.js";
 import type { StationActionDefinition } from "./types.js";
 
 interface WebhookSendInput {

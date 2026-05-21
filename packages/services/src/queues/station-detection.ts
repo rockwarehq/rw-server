@@ -1,5 +1,5 @@
 import { Queue, Worker } from "bullmq";
-import { transitionToSlow, transitionToDown } from "../services/facility/station/state.js";
+import { transitionToSlow, transitionToDown } from "../facility/station/state.js";
 import { bullmqConfig } from "../config.js";
 
 // ── Queue names ──────────────────────────────────────────────────

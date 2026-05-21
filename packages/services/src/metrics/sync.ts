@@ -1,4 +1,4 @@
-import { publishBucketMetricValueChanges, publishMetricChange } from "../../rpc/metrics-bus.js";
+import { publishBucketMetricValueChanges, publishMetricChange } from "../rpc/metrics-bus.js";
 
 // ── Bucket change notification ───────────────────────────────────
 // Called whenever MetricBucket rows are mutated. Receives a batch of

@@ -3,7 +3,7 @@ import type { Prisma } from "@rw/db";
 import {
   scheduleDetection as enqueueDetectionJob,
   cancelDetection as dequeueDetection,
-} from "../../../queues/station-detection.js";
+} from "../../queues/station-detection.js";
 
 type TransactionClient = Prisma.TransactionClient;
 

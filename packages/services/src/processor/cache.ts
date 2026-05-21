@@ -1,4 +1,4 @@
-import { processorConfig } from "../../config.js";
+import { processorConfig } from "../config.js";
 
 export type StationEventMutationOperation = "create" | "update" | "toggle" | "delete";
 

@@ -1,4 +1,4 @@
-// Subset of inventory exported from @rw/domain.
+// Subset of inventory exported from @rw/services.
 // The api still owns material, product, disposition, etc.
 
 export * as inventory from "./inventory.js";

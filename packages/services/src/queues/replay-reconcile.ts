@@ -1,6 +1,6 @@
 import { Worker } from "bullmq";
 import { bullmqConfig } from "../config.js";
-import { reconcileReplay, REPLAY_RECONCILE_QUEUE } from "../services/cycle/replay.js";
+import { reconcileReplay, REPLAY_RECONCILE_QUEUE } from "../cycle/replay.js";
 
 let worker: Worker | null = null;
 
