@@ -1,5 +1,5 @@
 {
-  "name": "@rw/runtime",
+  "name": "@rw/infra",
   "version": "0.0.0",
   "private": true,
   "type": "module",

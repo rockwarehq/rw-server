@@ -1,4 +1,4 @@
-import { getAppBaseUrl } from "@rw/runtime/email";
+import { getAppBaseUrl } from "@rw/infra/email";
 
 interface InviteEmailParams {
   recipientEmail: string;
