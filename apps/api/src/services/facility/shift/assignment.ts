@@ -1,5 +1,5 @@
 import prisma from "@rw/db";
-import { reconcileShiftInstances } from "@rw/domain/services/facility/shift/materialize";
+import { reconcileShiftInstances } from "@rw/services/facility/shift/materialize";
 
 export interface CreateShiftAssignmentInput {
   patternId: string;

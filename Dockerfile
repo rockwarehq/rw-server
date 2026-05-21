@@ -20,7 +20,7 @@ RUN corepack enable && corepack prepare pnpm@10.28.0 --activate
 FROM base AS deps
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json tsconfig.json .npmrc ./
 COPY packages/db/package.json packages/db/
-COPY packages/domain/package.json packages/domain/
+COPY packages/services/package.json packages/services/
 COPY packages/runtime/package.json packages/runtime/
 COPY apps/api/package.json apps/api/
 COPY apps/workers/package.json apps/workers/
@@ -50,7 +50,7 @@ FROM base AS prod-deps-api
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
 COPY apps/api/package.json apps/api/
 COPY packages/db/package.json packages/db/
-COPY packages/domain/package.json packages/domain/
+COPY packages/services/package.json packages/services/
 COPY packages/runtime/package.json packages/runtime/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --prod --filter '@rw/api...'
@@ -63,7 +63,7 @@ FROM base AS prod-deps-workers
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
 COPY apps/workers/package.json apps/workers/
 COPY packages/db/package.json packages/db/
-COPY packages/domain/package.json packages/domain/
+COPY packages/services/package.json packages/services/
 COPY packages/runtime/package.json packages/runtime/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --prod --filter '@rw/workers...'
@@ -78,7 +78,7 @@ ENV NODE_ENV=production
 COPY --from=prod-deps-api /repo/node_modules ./node_modules
 COPY --from=prod-deps-api /repo/apps/api/node_modules apps/api/node_modules
 COPY --from=prod-deps-api /repo/packages/db/node_modules packages/db/node_modules
-COPY --from=prod-deps-api /repo/packages/domain/node_modules packages/domain/node_modules
+COPY --from=prod-deps-api /repo/packages/services/node_modules packages/services/node_modules
 COPY --from=prod-deps-api /repo/packages/runtime/node_modules packages/runtime/node_modules
 
 COPY --from=build /repo/packages/db/dist packages/db/dist
@@ -87,8 +87,8 @@ COPY --from=build /repo/packages/db/schema packages/db/schema
 COPY --from=build /repo/packages/db/migrations packages/db/migrations
 COPY --from=build /repo/packages/db/prisma.config.ts packages/db/
 COPY --from=build /repo/packages/db/package.json packages/db/
-COPY --from=build /repo/packages/domain/dist packages/domain/dist
-COPY --from=build /repo/packages/domain/package.json packages/domain/
+COPY --from=build /repo/packages/services/dist packages/services/dist
+COPY --from=build /repo/packages/services/package.json packages/services/
 COPY --from=build /repo/packages/runtime/dist packages/runtime/dist
 COPY --from=build /repo/packages/runtime/package.json packages/runtime/
 COPY --from=build /repo/apps/api/dist apps/api/dist
@@ -112,7 +112,7 @@ ENV NODE_ENV=production
 COPY --from=prod-deps-workers /repo/node_modules ./node_modules
 COPY --from=prod-deps-workers /repo/apps/workers/node_modules apps/workers/node_modules
 COPY --from=prod-deps-workers /repo/packages/db/node_modules packages/db/node_modules
-COPY --from=prod-deps-workers /repo/packages/domain/node_modules packages/domain/node_modules
+COPY --from=prod-deps-workers /repo/packages/services/node_modules packages/services/node_modules
 COPY --from=prod-deps-workers /repo/packages/runtime/node_modules packages/runtime/node_modules
 
 COPY --from=build /repo/packages/db/dist packages/db/dist
@@ -123,8 +123,8 @@ COPY --from=build /repo/packages/db/schema packages/db/schema
 COPY --from=build /repo/packages/db/migrations packages/db/migrations
 COPY --from=build /repo/packages/db/prisma.config.ts packages/db/
 COPY --from=build /repo/packages/db/package.json packages/db/
-COPY --from=build /repo/packages/domain/dist packages/domain/dist
-COPY --from=build /repo/packages/domain/package.json packages/domain/
+COPY --from=build /repo/packages/services/dist packages/services/dist
+COPY --from=build /repo/packages/services/package.json packages/services/
 COPY --from=build /repo/packages/runtime/dist packages/runtime/dist
 COPY --from=build /repo/packages/runtime/package.json packages/runtime/
 COPY --from=build /repo/apps/workers/dist apps/workers/dist

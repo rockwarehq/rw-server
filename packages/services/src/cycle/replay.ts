@@ -24,7 +24,7 @@ import prisma from "@rw/db";
 import { recalcAll } from "../metrics/recalc.js";
 import { scheduleDetection } from "../facility/station/state-detection.js";
 import { MetricsContext } from "../metrics/context.js";
-import { bullmqConfig } from "../../config.js";
+import { bullmqConfig } from "../config.js";
 
 // ── Constants ───────────────────────────────────────────────────
 

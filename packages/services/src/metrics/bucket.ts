@@ -15,7 +15,7 @@ import {
   getLocalMidnightUTC,
   getTimezoneOffsetMs,
 } from "./shift.js";
-import { scheduleNextShiftBuckets } from "../../queues/metric-buckets.js";
+import { scheduleNextShiftBuckets } from "../queues/metric-buckets.js";
 import { onBucketsChanged, ZERO_SNAPSHOT, type BucketChange } from "./sync.js";
 import { resolveEntityPath, resolveEntityName } from "./hierarchy.js";
 import { MetricsContext } from "./context.js";

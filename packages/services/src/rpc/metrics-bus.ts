@@ -1,7 +1,7 @@
 import { EventPublisher } from "@orpc/server";
 import { Redis } from "ioredis";
-import { METRIC_CATALOG_REGISTRY } from "../services/metric-catalog/index.js";
-import type { BucketChange } from "../services/metrics/sync.js";
+import { METRIC_CATALOG_REGISTRY } from "../metric-catalog/index.js";
+import type { BucketChange } from "../metrics/sync.js";
 
 export type MetricChangeEvent = BucketChange;
 

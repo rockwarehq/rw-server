@@ -1,4 +1,4 @@
-// Config values used by @rw/domain. Mirrors the subset of apps/api/src/config.ts
+// Config values used by @rw/services. Mirrors the subset of apps/api/src/config.ts
 // that the moved files reference.
 
 export { bullmqConfig } from "@rw/runtime/bullmq-config";

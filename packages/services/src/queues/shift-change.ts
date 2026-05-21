@@ -1,7 +1,7 @@
 import { Queue, Worker } from "bullmq";
 import { bullmqConfig } from "../config.js";
-import { publishCurrentShiftForStations } from "../services/facility/shift/resolve-current.js";
-import { flushAllExpiredShiftUsage } from "../services/inventory/material-shift-flush.js";
+import { publishCurrentShiftForStations } from "../facility/shift/resolve-current.js";
+import { flushAllExpiredShiftUsage } from "../inventory/material-shift-flush.js";
 
 const SHIFT_CHANGE_QUEUE = "shift-change";
 

@@ -8,4 +8,4 @@ export {
   reconcileShiftInstances,
   type MaterializeResult,
   type ReconcileResult,
-} from "@rw/domain/services/facility/shift/materialize";
+} from "@rw/services/facility/shift/materialize";

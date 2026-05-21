@@ -1,8 +1,8 @@
 import { Queue, Worker } from "bullmq";
 import { bullmqConfig } from "../config.js";
-import { ensureBuckets } from "../services/metrics/bucket.js";
-import { getShiftForEntity } from "../services/metrics/shift.js";
-import { MetricsContext } from "../services/metrics/context.js";
+import { ensureBuckets } from "../metrics/bucket.js";
+import { getShiftForEntity } from "../metrics/shift.js";
+import { MetricsContext } from "../metrics/context.js";
 
 // ── Queue names ──────────────────────────────────────────────────
 
