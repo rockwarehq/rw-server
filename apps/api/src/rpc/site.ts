@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
-import { site } from "../services/facility/index.js";
+import { site } from "@rw/services/facility/index";
 import { Principal } from "../services/auth/index.js";
 import { getAccessibleSites, hasPermission } from "@rw/services/iam/index";
 

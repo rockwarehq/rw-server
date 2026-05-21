@@ -2,7 +2,7 @@ import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
 import { publishMetricValueChange } from "../../rpc/metrics-bus.js";
 import { logEvent } from "@rw/services/audit/index";
-import { getCurrentShift } from "../facility/shift/current.js";
+import { getCurrentShift } from "@rw/services/facility/shift/current";
 import { resolveEntityPath } from "@rw/services/metrics/hierarchy";
 
 // ============================================================================
