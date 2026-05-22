@@ -142,8 +142,9 @@ export const COUNT_KPI_KEYS: ReadonlyArray<keyof CountKPIs> = [
 /**
  * When provided, restricts computation to a specific job on the station.
  *
- * - Cycles are filtered to those created while the job was active
- *   (by matching the jobBlobId snapshot)
+ * - Cycles are filtered to those belonging to this job (by Job.id, matched
+ *   through JobBlob.jobId). Cycles under any blob version of the same job
+ *   are counted — re-blobbing a job mid-session does not drop its cycles.
  * - State log durations are clipped to the job's active period within
  *   the bucket window
  * - The job's snapshotted standardCycle is used directly for
@@ -180,8 +181,8 @@ export interface JobFilter {
  * summed by state (UP/DOWN) and reason (planned/unplanned).
  *
  * When `jobFilter` is provided, the computation is scoped to that job:
- * cycles are filtered by jobBlobId, and state log durations are clipped
- * to the job's active period within the bucket window.
+ * cycles are filtered by Job.id (across any blob version), and state log
+ * durations are clipped to the job's active period within the bucket window.
  *
  * @param stationId - The station to compute for
  * @param bucketStart - Start of the time window (inclusive)
@@ -213,7 +214,7 @@ export async function computeBucketFromEvents(
   const [cycleTally, badItems] = await Promise.all([
     queryAndTallyCycles(stationId, bucketStart, bucketEnd, bucketStartMs, bucketEndMs, jobFilter),
     // badItems is driven by ItemDispositionLog.quantity, not cycle status.
-    queryDispositionBadItems(stationId, bucketStart, bucketEnd),
+    queryDispositionBadItems(stationId, bucketStart, bucketEnd, jobFilter),
   ]);
 
   // ── 2. Tally duration-based KPIs from state logs ───────────
@@ -395,8 +396,43 @@ function resolveItemsPerCycle(cycleTally: CycleTally): number {
  *
  * Uses the direct stationId FK and the (stationId, createdAt) index.
  * The log's createdAt determines which hour bucket it falls into.
+ *
+ * When a jobFilter is provided, dispositions are attributed to the job via
+ * two paths, in order of preference:
+ *   1. ItemDispositionLog.cycleId → Cycle → JobBlob → jobId
+ *      (used when the disposition was tied to a specific cycle)
+ *   2. ItemDispositionLog.jobProductBlobId → JobProductBlob → JobProduct.jobId
+ *      (fallback for cycle-less dispositions — manual scrap entries snapshot
+ *      the active JobProduct, which carries the jobId)
+ * Dispositions where neither path resolves to a job are excluded from JOB
+ * buckets (they still appear at the station level).
  */
-async function queryDispositionBadItems(stationId: string, bucketStart: Date, bucketEnd: Date): Promise<number> {
+async function queryDispositionBadItems(
+  stationId: string,
+  bucketStart: Date,
+  bucketEnd: Date,
+  jobFilter?: JobFilter,
+): Promise<number> {
+  if (jobFilter) {
+    const rows = await prisma.$queryRaw<Array<{ sum: bigint | null }>>`
+      SELECT COALESCE(SUM(idl."quantity"), 0) AS "sum"
+      FROM "ItemDispositionLog" idl
+      WHERE idl."stationId" = ${stationId}::uuid
+        AND idl."createdAt" >= ${bucketStart}
+        AND idl."createdAt" < ${bucketEnd}
+        AND idl."deletedAt" IS NULL
+        AND COALESCE(
+          (SELECT jb."jobId" FROM "Cycle" c
+             JOIN "JobBlob" jb ON jb.id = c."jobBlobId"
+             WHERE c.id = idl."cycleId"),
+          (SELECT jp."jobId" FROM "JobProductBlob" jpb
+             JOIN "JobProduct" jp ON jp.id = jpb."jobProductId"
+             WHERE jpb.id = idl."jobProductBlobId")
+        ) = ${jobFilter.jobId}::uuid
+    `;
+    return Number(rows[0]?.sum ?? 0);
+  }
+
   const rows = await prisma.$queryRaw<Array<{ sum: bigint | null }>>`
     SELECT COALESCE(SUM("quantity"), 0) AS "sum"
     FROM "ItemDispositionLog"
@@ -420,9 +456,11 @@ interface CycleTally {
 /**
  * Query cycles ending in the bucket window and tally count-based KPIs.
  *
- * When a jobFilter is provided, only cycles with a matching jobBlobId
- * are included. The job's snapshotted standardCycle is used for
- * idealCycleSeconds instead of reading from each cycle's blob.
+ * When a jobFilter is provided, only cycles whose JobBlob belongs to
+ * `jobFilter.jobId` are included (matching by Job.id, not blob version,
+ * so cycles under any blob of the same job are counted). The job's
+ * snapshotted standardCycle is used for idealCycleSeconds instead of
+ * reading from each cycle's blob.
  */
 async function queryAndTallyCycles(
   stationId: string,
@@ -448,13 +486,13 @@ async function queryAndTallyCycles(
         SELECT c."id", c."start", c."end", c."cycleStatus",
                jb."standardCycle"::float8 AS "standardCycle"
         FROM "Cycle" c
-        LEFT JOIN "JobBlob" jb ON jb."id" = c."jobBlobId"
+        JOIN "JobBlob" jb ON jb."id" = c."jobBlobId"
         WHERE c."stationId" = ${stationId}::uuid
           AND c."end" IS NOT NULL
           AND c."end" >= ${bucketStart}
           AND c."end" < ${bucketEnd}
           AND c."deletedAt" IS NULL
-          AND c."jobBlobId" = ${jobFilter.jobBlobId}::uuid
+          AND jb."jobId" = ${jobFilter.jobId}::uuid
       `
     : await prisma.$queryRaw<
         Array<{
