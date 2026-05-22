@@ -213,18 +213,51 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
         )
       ORDER BY sa."rotationStartDate" DESC NULLS LAST LIMIT 1
     ),
-    -- Count cycles for this job in this hour
+    -- Count cycles for this job in this hour.
+    -- Match by Job.id (via JobBlob.jobId), not by the snapshotted jobBlobId,
+    -- so cycles produced under any blob version of the same job are counted.
+    -- Re-blobbing a job mid-shift creates a new JobBlob; without this, cycles
+    -- under newer blob versions are silently dropped from the JOB bucket.
     cycle_stats AS (
       SELECT
         COUNT(*)::int AS total_cycles,
         COALESCE(SUM((SELECT COUNT(*)::int FROM "InventoryItem" ii WHERE ii."cycleId" = c.id)), 0)::int AS total_items,
         COALESCE(SUM(CASE WHEN jm.std_cycle > 0 THEN ROUND(jm.std_cycle)::int ELSE 0 END), 0)::int AS ideal_cycle_seconds,
         COALESCE(SUM(EXTRACT(EPOCH FROM (c."end" - c.start))::int), 0)::int AS total_cycle_seconds
-      FROM "Cycle" c, params p, job_meta jm
+      FROM "Cycle" c
+      JOIN "JobBlob" jbc ON jbc.id = c."jobBlobId"
+      CROSS JOIN params p
+      CROSS JOIN job_meta jm
       WHERE c."stationId" = p.station_id
-        AND c."jobBlobId" = jm."jobBlobId"
+        AND jbc."jobId" = jm."jobId"
         AND c."end" IS NOT NULL
         AND c."end" >= p.hour_start AND c."end" < p.hour_end
+    ),
+    -- Sum dispositioned items for this job in this hour.
+    -- Attribute via two paths, in order of preference:
+    --   1. ItemDispositionLog.cycleId → Cycle → JobBlob.jobId
+    --      (used when the disposition was tied to a specific cycle)
+    --   2. ItemDispositionLog.jobProductBlobId → JobProductBlob → JobProduct.jobId
+    --      (fallback for cycle-less dispositions — manual scrap entries
+    --      snapshot the active JobProduct, which carries the jobId)
+    -- Dispositions where neither path resolves to a job are excluded from
+    -- JOB bucket totals (they still appear at the station level).
+    disposition_stats AS (
+      SELECT COALESCE(SUM(idl."quantity")::int, 0) AS bad_items
+      FROM "ItemDispositionLog" idl
+      CROSS JOIN params p
+      CROSS JOIN job_meta jm
+      WHERE idl."stationId" = p.station_id
+        AND idl."deletedAt" IS NULL
+        AND idl."createdAt" >= p.hour_start AND idl."createdAt" < p.hour_end
+        AND COALESCE(
+          (SELECT jbd."jobId" FROM "Cycle" cd
+             JOIN "JobBlob" jbd ON jbd.id = cd."jobBlobId"
+             WHERE cd.id = idl."cycleId"),
+          (SELECT jp."jobId" FROM "JobProductBlob" jpb
+             JOIN "JobProduct" jp ON jp.id = jpb."jobProductId"
+             WHERE jpb.id = idl."jobProductBlobId")
+        ) = jm."jobId"
     ),
     -- Narrow state rows to those overlapping the current hour.
     -- UNION splits so closed entries seek (stationId, endTime) and open
@@ -294,7 +327,7 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
       SELECT
         gen_random_uuid(), p.site_id, 'JOB'::"BucketEntityType", jd.job_entity_id, 'HOUR'::"BucketGranularity", p.hour_start, p.duration_seconds,
         jd.job_name, 'Hour', jd.job_path,
-        cs.total_cycles, 0, cs.total_items, 0,
+        cs.total_cycles, 0, cs.total_items, ds.bad_items,
         cs.ideal_cycle_seconds, cs.total_cycle_seconds,
         jd.run_seconds, jd.down_seconds, jd.planned_down_seconds, jd.unplanned_down_seconds,
         jd.expected_cycles, jd.expected_cycles * jd.items_per_cycle,
@@ -303,11 +336,12 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
         jd."jobId", jd.job_name,
         si.shift_id, si."businessDate", si."shiftName",
         NOW(), NOW()
-      FROM job_derived jd, cycle_stats cs, params p
+      FROM job_derived jd, cycle_stats cs, disposition_stats ds, params p
       LEFT JOIN shift_info si ON true
       WHERE jd."jobId" IS NOT NULL
       ON CONFLICT ("entityType", "entityId", granularity, "startTime") DO UPDATE SET
         "totalCycles" = EXCLUDED."totalCycles", "totalItems" = EXCLUDED."totalItems",
+        "badItems" = EXCLUDED."badItems",
         "idealCycleSeconds" = EXCLUDED."idealCycleSeconds", "totalCycleSeconds" = EXCLUDED."totalCycleSeconds",
         "runSeconds" = EXCLUDED."runSeconds", "downSeconds" = EXCLUDED."downSeconds",
         "plannedDownSeconds" = EXCLUDED."plannedDownSeconds", "unplannedDownSeconds" = EXCLUDED."unplannedDownSeconds",
