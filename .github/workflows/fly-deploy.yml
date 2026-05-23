@@ -18,6 +18,8 @@ on:
         type: choice
         options:
           - dev
+          - sim
+          - dixie
         default: dev
       app:
         description: 'App to deploy'
