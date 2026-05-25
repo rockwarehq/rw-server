@@ -149,33 +149,45 @@ export async function incrementHourCounts(
  * clipped to the job's active period within the hour.
  */
 export async function cascadeJobRollup(stationId: string, siteId: string, timestamp: Date): Promise<void> {
+  // Resolve the STATION HOUR bucket containing this tick's timestamp up front so
+  // its window can be passed into the main query as bound parameters.
+  // JOB HOUR must align with STATION HOUR (they share shift-boundary partial
+  // hours), otherwise JOB SHIFT sums would miss the minutes that land in a
+  // pre-shift wall-clock bucket.
+  //
+  // Why resolve here instead of a `target_bucket` CTE: when hour_start/hour_end
+  // came from a CTE, the planner could not estimate the selectivity of
+  // `Cycle."end" >= hour_start AND < hour_end`, so cycle_stats (below) scanned
+  // every cycle the job had ever produced via Cycle_jobBlobId_idx and filtered
+  // down. Passing the bounds as parameters lets the planner use
+  // Cycle_stationId_end_idx and read only the hour's rows.
+  const bucket = await prisma.$queryRaw<
+    Array<{ hour_start: Date; hour_end: Date; duration_seconds: number }>
+  >`
+    SELECT "startTime" AS hour_start,
+           "startTime" + "durationSeconds" * INTERVAL '1 second' AS hour_end,
+           "durationSeconds" AS duration_seconds
+    FROM "MetricBucket"
+    WHERE "entityType" = 'STATION'::"BucketEntityType"
+      AND "entityId" = ${stationId}::uuid
+      AND granularity = 'HOUR'::"BucketGranularity"
+      AND "startTime" <= ${timestamp}::timestamptz
+      AND "startTime" + "durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
+    LIMIT 1
+  `;
+  if (bucket.length === 0) return;
+  const { hour_start: hourStart, hour_end: hourEnd, duration_seconds: durationSeconds } = bucket[0];
+
   const rows = await prisma.$queryRaw<BucketRow[]>`
     WITH
-    -- Resolve the STATION HOUR bucket containing this tick's timestamp.
-    -- JOB HOUR must align with STATION HOUR (they share shift-boundary
-    -- partial hours), otherwise JOB SHIFT sums would miss the minutes
-    -- that land in a pre-shift wall-clock bucket.
-    target_bucket AS (
-      SELECT "startTime" AS hour_start,
-             "startTime" + "durationSeconds" * INTERVAL '1 second' AS hour_end,
-             "durationSeconds" AS duration_seconds
-      FROM "MetricBucket"
-      WHERE "entityType" = 'STATION'::"BucketEntityType"
-        AND "entityId" = ${stationId}::uuid
-        AND granularity = 'HOUR'::"BucketGranularity"
-        AND "startTime" <= ${timestamp}::timestamptz
-        AND "startTime" + "durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
-      LIMIT 1
-    ),
     params AS (
       SELECT
         ${stationId}::uuid AS station_id,
         ${siteId}::uuid AS site_id,
-        tb.hour_start,
-        tb.hour_end,
-        tb.duration_seconds,
+        ${hourStart}::timestamptz AS hour_start,
+        ${hourEnd}::timestamptz AS hour_end,
+        ${durationSeconds}::int AS duration_seconds,
         NOW() AS v_now
-      FROM target_bucket tb
     ),
     active_job AS (
       SELECT sjl."jobId", sjl."jobBlobId", sjl."startTime" AS job_start,
@@ -226,12 +238,15 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
         COALESCE(SUM(EXTRACT(EPOCH FROM (c."end" - c.start))::int), 0)::int AS total_cycle_seconds
       FROM "Cycle" c
       JOIN "JobBlob" jbc ON jbc.id = c."jobBlobId"
-      CROSS JOIN params p
       CROSS JOIN job_meta jm
-      WHERE c."stationId" = p.station_id
+      -- Filter by station + end-range using bound parameters (not params-CTE
+      -- columns, which are materialized and opaque to the planner) so the
+      -- planner can estimate the range and use Cycle_stationId_end_idx instead
+      -- of scanning the job's entire cycle history via Cycle_jobBlobId_idx.
+      WHERE c."stationId" = ${stationId}::uuid
         AND jbc."jobId" = jm."jobId"
         AND c."end" IS NOT NULL
-        AND c."end" >= p.hour_start AND c."end" < p.hour_end
+        AND c."end" >= ${hourStart}::timestamptz AND c."end" < ${hourEnd}::timestamptz
     ),
     -- Sum dispositioned items for this job in this hour.
     -- Attribute via two paths, in order of preference:
