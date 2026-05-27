@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Quality checks: typecheck/build + lint + unit tests ─────────
+  # Integration tests that need real Postgres + Redis are intentionally
+  # deferred for now (no service containers / migrations wired up yet).
+  quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # prisma.config.ts supplies a placeholder connection string, so codegen
+      # runs without a live database.
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      - name: Build (typecheck)
+        run: pnpm build
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Unit tests
+        run: pnpm test

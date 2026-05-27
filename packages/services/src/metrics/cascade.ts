@@ -161,9 +161,7 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
   // every cycle the job had ever produced via Cycle_jobBlobId_idx and filtered
   // down. Passing the bounds as parameters lets the planner use
   // Cycle_stationId_end_idx and read only the hour's rows.
-  const bucket = await prisma.$queryRaw<
-    Array<{ hour_start: Date; hour_end: Date; duration_seconds: number }>
-  >`
+  const bucket = await prisma.$queryRaw<Array<{ hour_start: Date; hour_end: Date; duration_seconds: number }>>`
     SELECT "startTime" AS hour_start,
            "startTime" + "durationSeconds" * INTERVAL '1 second' AS hour_end,
            "durationSeconds" AS duration_seconds

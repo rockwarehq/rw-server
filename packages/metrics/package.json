@@ -1,0 +1,32 @@
+{
+  "name": "@rockwarehq/metrics",
+  "version": "0.1.0",
+  "description": "Shared KPI types, constants, and OEE calculation functions for Rockware",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "pnpm build"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rockwarehq/rw-server.git",
+    "directory": "packages/metrics"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  }
+}
