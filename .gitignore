@@ -20,3 +20,7 @@ coverage/
 # Fly generated configs
 fly.generated.toml
 apps/*/fly.generated.toml
+
+# Trigger framework mock store (file-backed dev store)
+.triggers-mock.json
+apps/*/.triggers-mock.json
