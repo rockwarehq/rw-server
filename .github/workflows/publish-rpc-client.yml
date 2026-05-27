@@ -1,0 +1,81 @@
+name: Publish RPC Client
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (skip actual publish)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+          registry-url: "https://npm.pkg.github.com"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      - name: Build workspace packages (for type references)
+        run: pnpm build
+
+      - name: Build RPC client
+        run: pnpm build
+        working-directory: packages/rpc-client
+
+      - name: Display version to publish
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "Publishing @rockwarehq/rpc-client@${VERSION}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        working-directory: packages/rpc-client
+
+      - name: Publish to GitHub Packages
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "Dry run enabled - running npm publish --dry-run"
+            pnpm publish --no-git-checks --dry-run
+          else
+            pnpm publish --no-git-checks
+          fi
+        working-directory: packages/rpc-client
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "### Dry Run Complete" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Would have published \`@rockwarehq/rpc-client@${{ steps.version.outputs.version }}\` to GitHub Packages." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Published Successfully" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Published \`@rockwarehq/rpc-client@${{ steps.version.outputs.version }}\` to GitHub Packages." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Install with:" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+            echo "npm install @rockwarehq/rpc-client@${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi

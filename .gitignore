@@ -10,6 +10,9 @@ dist/
 packages/db/src/generated/
 **/generated/prisma/
 
+# API client generated code (regenerated from openapi.json)
+packages/api-client/src/generated/
+
 # Build artifacts
 *.tsbuildinfo
 coverage/

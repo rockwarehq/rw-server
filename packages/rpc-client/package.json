@@ -1,0 +1,39 @@
+{
+  "name": "@rockwarehq/rpc-client",
+  "version": "0.15.2",
+  "description": "oRPC client for Rockware API",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown && node ./scripts/postbuild.mjs",
+    "prepublishOnly": "pnpm build"
+  },
+  "dependencies": {
+    "@orpc/client": "^1.14.0",
+    "@orpc/server": "^1.14.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@rw/api": "workspace:*",
+    "tsdown": "^0.14.2",
+    "typescript": "~6.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rockwarehq/rw-server.git",
+    "directory": "packages/rpc-client"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  }
+}
