@@ -1,9 +1,9 @@
 // =============================================================================
-// TRIGGER FRAMEWORK — CONTRACT TYPES
+// AUTOMATION FRAMEWORK — CONTRACT TYPES
 // -----------------------------------------------------------------------------
-// Ported from the eventdrivenarch-simple reference. Pure contract/domain types
-// shared between the framework, its API surface, and (eventually) a UI. Schema
-// *data* is served at runtime via the catalog; these types describe the shapes.
+// Pure contract/domain types shared between the framework, its API surface, and
+// (eventually) a UI. Schema *data* is served at runtime via the catalog; these
+// types describe the shapes.
 // =============================================================================
 
 import type { RuleGroupType } from "./query-builder-types.js";
@@ -47,7 +47,7 @@ export interface SchemaProperty {
    * The stored value is the source's id (or `string[]` of ids when `multi: true`); the editor uses
    * `RefRegistry.list(source)` to populate a picker showing `label` and storing `id`. Resolution
    * back to the full object at action-run time is the handler's responsibility today — see
-   * `RefSource` in @rw/triggers and the README's "Ref data sources" section.
+   * `RefSource` in @rw/automations and the README's "Ref data sources" section.
    */
   ref?: RefAnnotation;
 }
@@ -70,13 +70,14 @@ export interface ActionInputSchema {
 // VERSIONED SCHEMAS
 // -----------------------------------------------------------------------------
 // Each event type / action type carries a `latest` pointer and a `versions` map.
-// Stored triggers pin the exact version they were authored against:
-//   - `Trigger.eventVersion` + `TriggerAction.version` are the pins.
+// Stored automations pin the exact version they were authored against:
+//   - `Automation.eventVersion` + `AutomationAction.version` are the pins.
 //   - `AppEvent.version` is set at raise time (defaults to the event's `latest`).
-// Authoring a NEW trigger uses `latest` for both. Dispatch resolution: STRICT for
-// action handler lookup (must match a registered version), LENIENT for event
-// version (conditions evaluate against the actual raised payload regardless of
-// the trigger's pinned event version — silent mismatches surface in run history).
+// Authoring a NEW automation uses `latest` for both. Dispatch resolution:
+// STRICT for action handler lookup (must match a registered version), LENIENT
+// for event version (conditions evaluate against the actual raised payload
+// regardless of the automation's pinned event version — silent mismatches
+// surface in run history).
 // =============================================================================
 
 /** One version's payload shape for an event type. */
@@ -103,7 +104,7 @@ export interface ActionSchemaVersion {
 export interface ActionSchema {
   type: string;
   displayName: string;
-  /** Version key the editor uses when authoring a new trigger. Must be a key in `versions`. */
+  /** Version key the editor uses when authoring a new automation. Must be a key in `versions`. */
   latest: string;
   /** All known versions of this action's input shape, keyed by version. */
   versions: Record<string, ActionSchemaVersion>;
@@ -117,11 +118,11 @@ export interface TemplateVariable {
 }
 
 /**
- * A trigger's action: a registered action `type` + version pin + its inputs. Inputs are an
+ * An automation's action: a registered action `type` + version pin + its inputs. Inputs are an
  * open record so any action's shape can be carried without a per-action type — validation is
  * derived from the version-specific inputSchema (see schema-to-zod.ts).
  */
-export interface TriggerAction {
+export interface AutomationAction {
   type: string;
   /** Action schema version this input was authored against; strict-resolved to a handler at dispatch. */
   version: string;
@@ -129,20 +130,20 @@ export interface TriggerAction {
 }
 
 /**
- * A trigger: tied to a single event (pinned to a version), a condition predicate, and one or
+ * An automation: tied to a single event (pinned to a version), a condition predicate, and one or
  * more actions (each pinned to its own version). Actions run sequentially when conditions match;
  * if action N throws, actions N+1… don't run for that event (the throw aborts the dispatch loop
- * for the trigger).
+ * for the automation).
  */
-export interface Trigger {
+export interface Automation {
   id: string;
   label: string;
   enabled: boolean;
   event: EventType;
-  /** Event schema version this trigger was authored against. Informational at dispatch; used for editor + audit. */
+  /** Event schema version this automation was authored against. Informational at dispatch; used for editor + audit. */
   eventVersion: string;
   conditions: RuleGroupType;
-  actions: TriggerAction[];
+  actions: AutomationAction[];
 }
 
 /**

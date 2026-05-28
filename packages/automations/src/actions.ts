@@ -1,8 +1,8 @@
-import type { ActionInputSchema, Trigger } from "./types.js";
+import type { ActionInputSchema, Automation } from "./types.js";
 
 /** Everything an action handler receives when it runs. */
 export interface ActionContext {
-  trigger: Trigger;
+  automation: Automation;
   eventId: string;
 }
 
@@ -14,8 +14,8 @@ export interface ActionVersion {
 
 /**
  * SEAM C — a runnable action with one or more versions. Each entry in `versions` is a
- * self-contained `(inputSchema, run)` pair; stored triggers pin a specific version via
- * `TriggerAction.version`, and dispatch resolves the handler with a strict `(type, version)` lookup.
+ * self-contained `(inputSchema, run)` pair; stored automations pin a specific version via
+ * `AutomationAction.version`, and dispatch resolves the handler with a strict `(type, version)` lookup.
  *
  * Register actions (sendAlert, createForm, sendEmail, …) in the consuming app's composition root.
  * Adding a new version of an existing action = add a `versions[<v>]` entry; the framework keeps
@@ -25,7 +25,7 @@ export interface ActionHandler {
   type: string;
   /** Editor-facing label, mirrored onto the derived `ActionSchema` for the catalog. */
   displayName: string;
-  /** Version key used when authoring a NEW trigger. Must be a key in `versions`. */
+  /** Version key used when authoring a NEW automation. Must be a key in `versions`. */
   latest: string;
   /** All known versions of this action's behavior, keyed by version. */
   versions: Record<string, ActionVersion>;

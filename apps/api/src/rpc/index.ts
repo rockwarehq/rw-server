@@ -24,7 +24,7 @@ import * as customer from "./customer.js";
 import * as order from "./order.js";
 import * as siteAndonRules from "./site-andon-rules.js";
 import * as workspace from "./workspace.js";
-import * as triggers from "./triggers.js";
+import * as automations from "./automations.js";
 
 export const router = {
   events: {
@@ -336,13 +336,13 @@ export const router = {
     reorder: order.reorder,
     nextNumber: order.nextNumber,
   },
-  triggers: {
-    getCatalog: triggers.getCatalog,
-    listRefOptions: triggers.listRefOptions,
-    list: triggers.listTriggers,
-    create: triggers.createTrigger,
-    update: triggers.updateTrigger,
-    delete: triggers.deleteTrigger,
+  automations: {
+    getCatalog: automations.getCatalog,
+    listRefOptions: automations.listRefOptions,
+    list: automations.listAutomations,
+    create: automations.createAutomation,
+    update: automations.updateAutomation,
+    delete: automations.deleteAutomation,
   },
 };
 

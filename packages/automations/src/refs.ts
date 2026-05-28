@@ -2,7 +2,7 @@
  * Ref data sources — the picker half of the "store an ID, render a label" pattern.
  *
  * An action input field declares `ref: { source: "users", multi: true }` on its `SchemaProperty`.
- * The editor calls `RefRegistry.list("users", ctx)` to populate a dropdown; the trigger stores the
+ * The editor calls `RefRegistry.list("users", ctx)` to populate a dropdown; the automation stores the
  * picked ids verbatim. At action-run time the **handler** today does its own id → object expansion;
  * a framework-level `resolve(ids)` step may be added later without changing this seam (see README
  * "Ref data sources").

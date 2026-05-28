@@ -23,6 +23,9 @@ model Workspace {
 
   // RBAC
   roles Role[]
+
+  // Automation framework (see schema/automation.prisma + packages/automations/)
+  automations Automation[]
 }
 
 /// Membership: links a User to a Workspace and owns that user's role assignments.

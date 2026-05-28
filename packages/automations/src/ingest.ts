@@ -1,8 +1,8 @@
-import type { TriggerEngine } from "./engine.js";
+import type { AutomationEngine } from "./engine.js";
 import type { AppEvent } from "./types.js";
 
 /**
- * SEAM B — how events get from the edge into the engine. Returns the ids of triggers that fired.
+ * SEAM B — how events get from the edge into the engine. Returns the ids of automations that fired.
  *
  * Today: synchronous — the caller awaits dispatch inline, fine for low-volume business events.
  * A high-volume source would implement this same interface backed by a bounded queue +
@@ -13,7 +13,7 @@ export interface IngestRuntime {
 }
 
 /** Evaluate inline, on the calling request/worker. */
-export function createSyncIngestRuntime(engine: TriggerEngine): IngestRuntime {
+export function createSyncIngestRuntime(engine: AutomationEngine): IngestRuntime {
   return {
     submit(event) {
       return engine.dispatch(event);

@@ -1,7 +1,7 @@
-// @rw/triggers — a domain-agnostic event → condition → action engine.
+// @rw/automations — a domain-agnostic event → condition → action engine.
 //
 // The consuming app supplies its domain (event/action schemas, fact builders, action handlers, and
-// a store) and calls `createTriggerFramework(config)`. Everything below the seams — condition
+// a store) and calls `createAutomationFramework(config)`. Everything below the seams — condition
 // evaluation, ingestion, validation, interpolation — is fixed and reusable.
 
 export {
@@ -14,12 +14,12 @@ export {
 } from "./actions.js";
 export { buildCatalog } from "./catalog.js";
 export { type ContextBuilder, statelessContextBuilder } from "./context.js";
-export { createTriggerEngine, type EngineDeps, type TriggerEngine } from "./engine.js";
+export { createAutomationEngine, type EngineDeps, type AutomationEngine } from "./engine.js";
 export {
-  createTriggerFramework,
+  createAutomationFramework,
   type FireOptions,
-  type TriggerFramework,
-  type TriggerFrameworkConfig,
+  type AutomationFramework,
+  type AutomationFrameworkConfig,
 } from "./framework.js";
 export { createSyncIngestRuntime, type IngestRuntime } from "./ingest.js";
 export { interpolateInputs, type VariableContext } from "./interpolate.js";
@@ -33,7 +33,7 @@ export {
   type RefSource,
 } from "./refs.js";
 export { actionInputsToZod, formatZodError, payloadToZod } from "./schema-to-zod.js";
-export type { TriggerStore } from "./store.js";
+export type { AutomationStore } from "./store.js";
 export type {
   ActionInputSchema,
   ActionSchema,
@@ -48,7 +48,7 @@ export type {
   RefAnnotation,
   SchemaProperty,
   TemplateVariable,
-  Trigger,
-  TriggerAction,
+  Automation,
+  AutomationAction,
 } from "./types.js";
 export { createValidators, type Validators } from "./validate.js";

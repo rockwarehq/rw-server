@@ -1,11 +1,11 @@
-import { type ContextBuilder, type EventSchema, statelessContextBuilder } from "@rw/triggers";
+import { type ContextBuilder, type EventSchema, statelessContextBuilder } from "@rw/automations";
 
 /**
  * `job.changed` — fires when a job assignment changes at a station.
  *
  * The event's schema (versioned) and its context builder live together so they can't drift: a
  * future change to a `payload.X` shape adds a new entry to `versions` while keeping older versions
- * around for triggers that pin to them. The builder is shared across versions today; if a future
+ * around for automations that pin to them. The builder is shared across versions today; if a future
  * version needs payload-shape-specific facts, the builder can become a `Record<version, ContextBuilder>`.
  */
 export const schema: EventSchema = {

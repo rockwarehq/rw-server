@@ -1,4 +1,4 @@
-import { type ActionHandler, type ActionRegistry, type ActionSchema, createActionRegistry } from "@rw/triggers";
+import { type ActionHandler, type ActionRegistry, type ActionSchema, createActionRegistry } from "@rw/automations";
 import * as sendAlert from "./send-alert.js";
 
 /**

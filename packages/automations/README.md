@@ -1,13 +1,13 @@
-# @rw/triggers
+# @rw/automations
 
-A small, domain-agnostic, event-driven trigger engine: an **event** comes in, its
+A small, domain-agnostic, event-driven automation engine: an **event** comes in, its
 **conditions** are evaluated, and if they match, its **actions** run. Deliberately flat and
 stateless — one event → one condition group → one or more actions run sequentially in a single
 pass.
 
 This package is the reusable **engine**. It contains no domain data (no concrete event types,
 no actions). The consuming app supplies its domain — event/action schemas, fact builders, action
-handlers, and a store — and calls `createTriggerFramework(config)`. The evaluation core never
+handlers, and a store — and calls `createAutomationFramework(config)`. The evaluation core never
 changes; everything that *does* vary is reached through a **seam**.
 
 ## What "seam" means here
@@ -25,20 +25,20 @@ what makes the swap safe; the decision living *outside* the engine is what makes
 | --- | --- | --- |
 | A — event → facts | `ContextBuilder` | how an event is turned into the fact map conditions read |
 | B — event delivery | `IngestRuntime` | how events get into the engine (sync now; a queue later) |
-| C — what an action does | `ActionHandler` / `ActionRegistry` | the effect a matched trigger runs |
-| Definition storage | `TriggerStore` | where trigger definitions live (file mock, Prisma, …) |
+| C — what an action does | `ActionHandler` / `ActionRegistry` | the effect a matched automation runs |
+| Definition storage | `AutomationStore` | where automation definitions live (file mock, Prisma, …) |
 
 ## Consuming it
 
 Supply your domain in one config object. This is the app's composition root:
 
 ```ts
-import { createTriggerFramework } from "@rw/triggers";
+import { createAutomationFramework } from "@rw/automations";
 
-const fw = createTriggerFramework({
+const fw = createAutomationFramework({
   eventSchemas: EVENT_SCHEMAS,      // your domain
   actionSchemas: ACTION_SCHEMAS,    // your domain
-  store,                            // your TriggerStore impl
+  store,                            // your AutomationStore impl
   contextBuilders,                  // Record<eventType, ContextBuilder> — must cover every event schema
   actions,                          // ActionRegistry of your handlers
 });
@@ -55,7 +55,7 @@ wire → assemble → author → fire), see [`WALKTHROUGH.md`](./WALKTHROUGH.md)
 Schemas and handlers are versioned. Every `EventSchema` and `ActionSchema` carries a `latest`
 pointer and a `versions` map. Each `ActionHandler` carries `versions: Record<string, ActionVersion>`
 where `ActionVersion = { inputSchema, run }` — schema and behavior for one version live together
-and can't drift. Old versions stay in the map as long as any trigger pins them.
+and can't drift. Old versions stay in the map as long as any automation pins them.
 
 ```ts
 // Action module — one file, all versions inside.
@@ -73,7 +73,7 @@ export const handler: ActionHandler = {
 };
 ```
 
-Stored triggers pin to versions:
+Stored automations pin to versions:
 
 ```ts
 {
@@ -88,33 +88,33 @@ Stored triggers pin to versions:
 **Resolution rules:**
 
 - **Action handler lookup is STRICT** — `actions.get(type, version)` must match a registered
-  version exactly. A trigger pinned to an unknown version throws at dispatch with the failing
+  version exactly. An automation pinned to an unknown version throws at dispatch with the failing
   `type@version` named.
 - **Event version at dispatch is LENIENT** — conditions evaluate against whatever payload was
   raised (`AppEvent.version` is set by the caller via `fire(type, payload, { version })` or
-  defaults to the event's `latest`). The trigger's `eventVersion` is informational/audit; it does
-  not gate which events the trigger sees. If a v1 trigger's condition references a field that
+  defaults to the event's `latest`). The automation's `eventVersion` is informational/audit; it does
+  not gate which events the automation sees. If a v1 automation's condition references a field that
   exists in the raised payload, it matches; if it references a renamed/removed field, the
   condition silently fails (run history will surface this in the future).
 - **Latest defaults** — `fire(type, payload)` uses the event's `latest` when no version is given.
-  The editor uses each schema's `latest` when authoring a new trigger; existing triggers keep their
+  The editor uses each schema's `latest` when authoring a new automation; existing automations keep their
   pinned versions until upgraded.
 
-**Startup validation** — `createTriggerFramework` throws on any of:
+**Startup validation** — `createAutomationFramework` throws on any of:
 
 - A schema's `latest` doesn't appear in its `versions` map.
 - An action schema declares a version that has no corresponding registered handler version.
 - A `ref.source` is referenced by a schema (any version) but isn't on the `RefRegistry`.
 - An event type lacks a `ContextBuilder`.
 
-**You carry old handler versions forever** (or until you migrate every trigger pinned to them).
+**You carry old handler versions forever** (or until you migrate every automation pinned to them).
 That's the real cost of versioning; the framework's plumbing is just the mechanism. Set a sunset
 policy for old versions early — without one, the codebase accumulates a handler graveyard.
 
 ## Ref data sources
 
 An action input can be **a reference to something stored elsewhere** — a user, a Slack channel, a
-team. The editor renders a picker (showing a human label, storing a stable id); the trigger stores
+team. The editor renders a picker (showing a human label, storing a stable id); the automation stores
 ids only. Declare it on the `SchemaProperty`:
 
 ```ts
@@ -129,7 +129,7 @@ recipientUserIds: {
 The app provides a `RefSource` for `"users"` and registers it on a `RefRegistry`:
 
 ```ts
-import { createRefRegistry, type RefSource } from "@rw/triggers";
+import { createRefRegistry, type RefSource } from "@rw/automations";
 
 const usersRefSource: RefSource = {
   key: "users",
@@ -140,10 +140,10 @@ const usersRefSource: RefSource = {
 
 const refs = createRefRegistry().register(usersRefSource);
 
-const fw = createTriggerFramework({ /* … */ refs });
+const fw = createAutomationFramework({ /* … */ refs });
 ```
 
-`createTriggerFramework` validates at boot: every `ref.source` declared in any action schema must
+`createAutomationFramework` validates at boot: every `ref.source` declared in any action schema must
 be registered, else construction throws.
 
 Two call sites today:
@@ -165,11 +165,11 @@ Two call sites today:
 `Error` when something is wrong — invalid payload, unknown event/action type, missing context
 builder for a declared event type, missing action handler, missing required action input. On
 success they return data, not a discriminated union. RPC layers convert thrown errors into HTTP
-responses at the boundary (see `apps/api/src/rpc/triggers.ts` for the `BAD_REQUEST` mapping);
+responses at the boundary (see `apps/api/src/rpc/automations.ts` for the `BAD_REQUEST` mapping);
 in-process callers `try`/`catch` if they want graceful handling.
 
 The one path that *isn't* an error and *isn't* a throw: dispatching an event whose type has no
-registered triggers. That's a legitimate empty result — `fire()` returns `{ eventId, matched: [] }`.
+registered automations. That's a legitimate empty result — `fire()` returns `{ eventId, matched: [] }`.
 
 ## Raising an event
 
@@ -177,7 +177,7 @@ Events are raised **in-process** — there is no HTTP endpoint. Wherever the app
 worth reacting to, call `fire(type, payload, opts?)`. It validates the payload against the chosen
 event version's schema, builds the event (generates `id` + `ts`, stamps `version`), runs it through
 the engine, and returns `{ eventId, matched }`. It throws on a bad payload, an unknown event type,
-an unknown version, or any matched trigger whose action is misconfigured.
+an unknown version, or any matched automation whose action is misconfigured.
 
 ```ts
 try {
@@ -192,15 +192,15 @@ try {
   await fw.fire("job.changed", payload, { version: "1" });
 
   // eventId → generated id (for tracing)
-  // matched → ids of triggers whose conditions matched, e.g. ["trg_seed"]
+  // matched → ids of automations whose conditions matched, e.g. ["atm_seed"]
 } catch (err) {
   // bad payload, unknown event type/version, or misconfigured action (missing handler / missing input)
   log.warn(`fire failed: ${(err as Error).message}`);
 }
 ```
 
-`matched` means "every action of every matched trigger ran" — `fire()` only returns successfully
-if all matched triggers' actions completed in sequence. A misconfigured action (no handler
+`matched` means "every action of every matched automation ran" — `fire()` only returns successfully
+if all matched automations' actions completed in sequence. A misconfigured action (no handler
 registered, or a required input is empty) throws *during* dispatch, which aborts the loop; the
 caller never gets `matched`. Actions that already ran before the throw produced their side effects;
 those side effects don't roll back.
@@ -215,10 +215,10 @@ await fw.ingest.submit({ id: "evt_1", type: "job.changed", ts: new Date().toISOS
 
 ## How an event flows
 
-Triggers are **indexed by event type up front**: on boot, and again after every
-create/update/delete, the enabled triggers are grouped by event type and one condition engine is
-built per type (`engine.reload()`). So at runtime "find the triggers for this event" is a lookup;
-evaluation only decides which of that type's triggers *match*.
+Automations are **indexed by event type up front**: on boot, and again after every
+create/update/delete, the enabled automations are grouped by event type and one condition engine is
+built per type (`engine.reload()`). So at runtime "find the automations for this event" is a lookup;
+evaluation only decides which of that type's automations *match*.
 
 ```
 (1) fire(type, payload, opts?)
@@ -227,8 +227,8 @@ evaluation only decides which of that type's triggers *match*.
 (4) build the event { id, type, version, ts, payload }                         (framework.ts)
 (5) look up the condition engine for this type ──none──▶ done (matched: [])   (engine.ts)
 (6) build facts from the event (event ─▶ flat fact map)             SEAM A     (context.ts)
-(7) evaluate conditions ─▶ the set of matched triggers                         (json-rules-engine)
-(8) for each matched trigger, for each action (in order):                       SEAM C
+(7) evaluate conditions ─▶ the set of matched automations                         (json-rules-engine)
+(8) for each matched automation, for each action (in order):                       SEAM C
        actions.get(action.type, action.version) ──✗──▶ throw Error              (engine.ts /
        interpolate {{...}}, check required inputs, run it                        actions.ts /
        any failure here throws and aborts the loop                               interpolate.ts)
@@ -236,18 +236,18 @@ evaluation only decides which of that type's triggers *match*.
 ```
 
 Validation runs on the **event entry** in `fire()` and (via `validateActionInputs`) on the
-**trigger write path** in the app. It does **not** run inside the engine: the runtime re-checks
-only input *presence* (`missingRequired`), trusting that the event and trigger were validated on
+**automation write path** in the app. It does **not** run inside the engine: the runtime re-checks
+only input *presence* (`missingRequired`), trusting that the event and automation were validated on
 the way in.
 
 A concrete, value-by-value trace of one event lives in the consuming app's
-[`WALKTHROUGH.md`](../../apps/api/src/triggers/WALKTHROUGH.md).
+[`WALKTHROUGH.md`](../../apps/api/src/automations/WALKTHROUGH.md).
 
 ## Files
 
 | File | What it does |
 | --- | --- |
-| `types.ts` | Pure contract/domain types shared everywhere (`Trigger`, `AppEvent`, schemas, `Catalog`, `RefAnnotation`). No logic. |
+| `types.ts` | Pure contract/domain types shared everywhere (`Automation`, `AppEvent`, schemas, `Catalog`, `RefAnnotation`). No logic. |
 | `query-builder-types.ts` | Minimal vendored subset of react-querybuilder's tree types (`RuleGroupType` / `RuleType`), so the server reads conditions without depending on the React library. |
 | `qb-to-engine.ts` | Converts the query-builder condition tree into json-rules-engine conditions; defines the operator map (`=` → `equal`, `contains` → `stringContains`, …). |
 | `schema-to-zod.ts` | Derives Zod validators from catalog schemas, so validation falls out of the same declaration the editor uses. |
@@ -256,9 +256,9 @@ A concrete, value-by-value trace of one event lives in the consuming app's
 | `context.ts` | **Seam A.** `ContextBuilder` interface + the stateless builder that flattens an event into the fact map. |
 | `actions.ts` | **Seam C.** `ActionHandler` interface, `ActionRegistry`, and the required-input check. |
 | `ingest.ts` | **Seam B.** `IngestRuntime` interface + `SyncIngestRuntime` (evaluates inline on the calling request). |
-| `store.ts` | `TriggerStore` interface (the definition-storage seam). Implementations live in the consuming app. |
+| `store.ts` | `AutomationStore` interface (the definition-storage seam). Implementations live in the consuming app. |
 | `refs.ts` | `RefSource` / `RefRegistry` — picker data sources for ref-typed action inputs. App provides the sources; the framework exposes `listRefOptions` over them. |
 | `catalog.ts` | `buildCatalog(schemas, …)` — builds the editor catalog (fields, variables, operators) a UI renders from. |
-| `engine.ts` | The evaluation core. Indexes enabled triggers per event type, builds a json-rules-engine per type, then `dispatch()` turns an event into facts, evaluates conditions, and runs the action of each matched trigger. |
-| `framework.ts` | `createTriggerFramework(config)` — assembles the engine, ingestion, validators, and `fire()` from an app's domain config. |
+| `engine.ts` | The evaluation core. Indexes enabled automations per event type, builds a json-rules-engine per type, then `dispatch()` turns an event into facts, evaluates conditions, and runs the action of each matched automation. |
+| `framework.ts` | `createAutomationFramework(config)` — assembles the engine, ingestion, validators, and `fire()` from an app's domain config. |
 | `index.ts` | Public barrel. |

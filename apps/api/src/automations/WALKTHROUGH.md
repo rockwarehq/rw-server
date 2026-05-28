@@ -1,26 +1,26 @@
 # End-to-end trace
 
 A concrete, value-by-value walk of **one event** through the framework, using the
-seed trigger. Read alongside the flow diagram in
-[`@rw/triggers`](../../../../packages/triggers/README.md#how-an-event-flows) — that shows the
+seed automation. Read alongside the flow diagram in
+[`@rw/automations`](../../../../packages/automations/README.md#how-an-event-flows) — that shows the
 shape, this shows the actual data at each step.
 
 > **Where the files live.** The engine steps (validation, dispatch, fact-building, condition
-> evaluation, action execution) run in the **`@rw/triggers`** package. Only the *domain* pieces —
-> the seed trigger (`store.ts`), the event modules (`events/<type>.ts` — schema + context builder),
+> evaluation, action execution) run in the **`@rw/automations`** package. Only the *domain* pieces —
+> the seed automation (`store.ts`), the event modules (`events/<type>.ts` — schema + context builder),
 > the action modules (`actions/<type>.ts` — schema + handler), the ref sources (`refs.ts`), and the
 > composition root (`index.ts`) — live in this app folder. File references below note the package
 > where relevant.
 
-## Given: the seed trigger (already loaded)
+## Given: the seed automation (already loaded)
 
-`store.ts` seeds one trigger, and at boot `engine.reload()` grouped it under
+`store.ts` seeds one automation, and at boot `engine.reload()` grouped it under
 `job.changed` and compiled its condition into a json-rules rule whose event carries the
-trigger id (`event: { type: "trg_seed" }`):
+automation id (`event: { type: "atm_seed" }`):
 
 ```ts
 {
-  id: "trg_seed",
+  id: "atm_seed",
   label: "Alert on job change at S-1",
   enabled: true,
   event: "job.changed",
@@ -49,27 +49,27 @@ trigger id (`event: { type: "trg_seed" }`):
 }
 ```
 
-> **Version pins.** Each `TriggerAction.version` is strict-matched against the action handler's
+> **Version pins.** Each `AutomationAction.version` is strict-matched against the action handler's
 > registered versions at dispatch time. `eventVersion` is informational at dispatch (conditions
 > evaluate against whatever payload was raised); the editor uses it to render the right form when
-> the trigger is opened for editing. See the package
-> [README → "Versioning"](../../../../packages/triggers/README.md#versioning).
+> the automation is opened for editing. See the package
+> [README → "Versioning"](../../../../packages/automations/README.md#versioning).
 
 > **Recipients are stored as user ids, not emails.** `sendAlert.recipientUserIds` declares
 > `ref: { source: "users" }` on its schema property (see `actions/send-alert.ts`); the editor renders a picker
 > populated by `RefRegistry.list("users")` and stores the picked ids. The handler resolves the ids
 > to `User` objects at run time using `getUserById` from `refs.ts`. See the package
-> [README → "Ref data sources"](../../../../packages/triggers/README.md#ref-data-sources) for the
+> [README → "Ref data sources"](../../../../packages/automations/README.md#ref-data-sources) for the
 > framework side of this.
 
-> **Note — triggers are held in memory; updating one needs a reload.** Two in-memory
-> stores back this: the trigger *definitions* in the mock `TriggerStore` (`store.ts`, this app,
+> **Note — automations are held in memory; updating one needs a reload.** Two in-memory
+> stores back this: the automation *definitions* in the mock `AutomationStore` (`store.ts`, this app,
 > file-backed for now, `@rw/db` later) and the *compiled* condition engines
-> (`this.engines`, `engine.ts` in @rw/triggers) built from them. Neither picks up changes on its
+> (`this.engines`, `engine.ts` in @rw/automations) built from them. Neither picks up changes on its
 > own — a create/update/delete must call `engine.reload()` to rebuild the engines from the
-> store. The RPC handlers (`rpc/triggers.ts`) do this after every mutation; a write
+> store. The RPC handlers (`rpc/automations.ts`) do this after every mutation; a write
 > that bypasses them leaves evaluation running against the old rules until the next
-> reload, and a disabled trigger is only dropped from the engines on that reload.
+> reload, and a disabled automation is only dropped from the engines on that reload.
 
 ## When: we raise an event
 
@@ -83,9 +83,9 @@ const { eventId, matched } = await fw.fire("job.changed", {
 
 ## The trace
 
-### 1. `fire()` resolves the version + validates the payload — `framework.ts` (@rw/triggers)
+### 1. `fire()` resolves the version + validates the payload — `framework.ts` (@rw/automations)
 - The caller didn't pass `opts.version`, so the framework uses the event's `latest` ("1").
-- Calls `validateEventPayload("job.changed", "1", payload)` (`validate.ts`, @rw/triggers).
+- Calls `validateEventPayload("job.changed", "1", payload)` (`validate.ts`, @rw/automations).
 - Looks up `EVENT_SCHEMAS["job.changed"].versions["1"]` (aggregated from `events/job-changed.ts` by `events/index.ts`) — found.
 - Runs the cached zod validator (built once per `(type, version)`) → **ok**, returns the normalized value:
   ```ts
@@ -94,7 +94,7 @@ const { eventId, matched } = await fw.fire("job.changed", {
 If it were invalid, `validateEventPayload` would `throw new Error(...)` here and `fire()` would
 propagate the throw — no event built, the engine never touched.
 
-### 2. `fire()` builds the event — `framework.ts` (@rw/triggers)
+### 2. `fire()` builds the event — `framework.ts` (@rw/automations)
 Wraps the normalized payload in an `AppEvent` envelope (generates `id`, stamps `version` + `ts`):
 ```ts
 {
@@ -106,16 +106,16 @@ Wraps the normalized payload in an `AppEvent` envelope (generates `id`, stamps `
 }
 ```
 
-### 3. `ingest.submit(event)` — `ingest.ts`, @rw/triggers (SEAM B)
+### 3. `ingest.submit(event)` — `ingest.ts`, @rw/automations (SEAM B)
 `SyncIngestRuntime` forwards straight to `engine.dispatch(event, notify)`. (Swap this
 seam for a queue later; the engine call is unchanged.)
 
-### 4. `dispatch()` routes — `engine.ts` (@rw/triggers)
-- `this.engines.get("job.changed")` → the condition engine holding this type's triggers.
+### 4. `dispatch()` routes — `engine.ts` (@rw/automations)
+- `this.engines.get("job.changed")` → the condition engine holding this type's automations.
   (No engine for the type → `return []`, and `fire()` resolves to `{ eventId, matched: [] }` —
   legitimately empty, not an error.)
 
-### 5. `dispatch()` builds facts — `context.ts`, @rw/triggers (SEAM A)
+### 5. `dispatch()` builds facts — `context.ts`, @rw/automations (SEAM A)
 `statelessContextBuilder.build(event)` flattens the event into the fact map:
 ```ts
 {
@@ -126,50 +126,50 @@ seam for a queue later; the engine call is unchanged.)
 }
 ```
 
-### 6. `engine.run(facts)` evaluates conditions — `engine.ts` (@rw/triggers) → json-rules-engine
+### 6. `engine.run(facts)` evaluates conditions — `engine.ts` (@rw/automations) → json-rules-engine
 The seed rule's condition is `{ all: [{ fact: "event.payload.station", operator: "equal", value: "S-1" }] }`.
 The fact `"event.payload.station"` is `"S-1"` → **passes**. `results` comes back with one
-entry carrying `event: { type: "trg_seed" }`.
+entry carrying `event: { type: "atm_seed" }`.
 
-### 7. `dispatch()` maps the result back to a trigger — `engine.ts` (@rw/triggers)
-- `triggerId = "trg_seed"`.
-- `store.get("trg_seed")` → the full trigger (re-fetched because the rule only carried the id).
-- `matched.push("trg_seed")`.
-- `await runActions(trigger, event)` → step 8 (iterates `trigger.actions` in order; this seed trigger has exactly one).
+### 7. `dispatch()` maps the result back to an automation — `engine.ts` (@rw/automations)
+- `automationId = "atm_seed"`.
+- `store.get("atm_seed")` → the full automation (re-fetched because the rule only carried the id).
+- `matched.push("atm_seed")`.
+- `await runActions(automation, event)` → step 8 (iterates `automation.actions` in order; this seed automation has exactly one).
 
-### 8. `runActions()` executes each action — `engine.ts`, @rw/triggers (SEAM C)
-The loop iterates `trigger.actions` in order. The seed has **two** actions, so the loop runs twice.
+### 8. `runActions()` executes each action — `engine.ts`, @rw/automations (SEAM C)
+The loop iterates `automation.actions` in order. The seed has **two** actions, so the loop runs twice.
 
 **Action #0 (supervisor alert):**
 1. `actions.get("sendAlert", "1")` → the v1 `ActionVersion` (`{ inputSchema, run }`) from the `handler` exported by `actions/send-alert.ts` (this app). Lookup is STRICT — an unknown version would throw with the failing `sendAlert@<version>` named.
-2. `interpolateInputs(action.inputs, { event })` (`interpolate.ts`, @rw/triggers) resolves the `{{...}}`. User-id arrays don't contain templates, so they pass through untouched:
+2. `interpolateInputs(action.inputs, { event })` (`interpolate.ts`, @rw/automations) resolves the `{{...}}`. User-id arrays don't contain templates, so they pass through untouched:
    ```ts
    {
      text: "Job changed from J-100 to J-200 at S-1",
      recipientUserIds: ["u_supervisor"],
    }
    ```
-3. `missingRequired(inputs, versioned.inputSchema)` — looked up via `actions.get("sendAlert", "1")`, which returns the v1 `{ inputSchema, run }` pair. v1 requires `["text","recipientUserIds"]`; both present → `null` (ok). (If either were missing, `runActions` would throw and abort the dispatch loop. The throw names the action index + `type@version` — e.g. `action #0 ("sendAlert@1"): missing required input "recipientUserIds"` — so you can tell which action of which trigger failed.)
-4. `await versioned.run(inputs, { trigger, eventId: "a1b2c3d4" })`:
+3. `missingRequired(inputs, versioned.inputSchema)` — looked up via `actions.get("sendAlert", "1")`, which returns the v1 `{ inputSchema, run }` pair. v1 requires `["text","recipientUserIds"]`; both present → `null` (ok). (If either were missing, `runActions` would throw and abort the dispatch loop. The throw names the action index + `type@version` — e.g. `action #0 ("sendAlert@1"): missing required input "recipientUserIds"` — so you can tell which action of which automation failed.)
+4. `await versioned.run(inputs, { automation, eventId: "a1b2c3d4" })`:
    - Inside the handler, each id is resolved via `getUserById("u_supervisor")` → `{ id, name: "Sam Supervisor", email: "supervisor@example.com" }`. Unknown ids are skipped with a `console.warn` and don't appear in the log line.
-   - logs: `[triggers] ALERT (Alert on job change at S-1): Job changed from J-100 to J-200 at S-1 -> Sam Supervisor <supervisor@example.com>`
+   - logs: `[automations] ALERT (Alert on job change at S-1): Job changed from J-100 to J-200 at S-1 -> Sam Supervisor <supervisor@example.com>`
 
 **Action #1 (shift-lead alert):**
 The same handler is resolved (both actions are `sendAlert` here), with different inputs interpolated from this action's template:
    ```ts
    { text: "FYI: shift lead notified of change at S-1", recipientUserIds: ["u_shift_lead"] }
    ```
-- After handler-side id resolution, logs: `[triggers] ALERT (Alert on job change at S-1): FYI: shift lead notified of change at S-1 -> Riley Shift-Lead <shift-lead@example.com>`
+- After handler-side id resolution, logs: `[automations] ALERT (Alert on job change at S-1): FYI: shift lead notified of change at S-1 -> Riley Shift-Lead <shift-lead@example.com>`
 
-The loop then exits (no more actions on this trigger) and `dispatch` moves on to any other matched triggers.
+The loop then exits (no more actions on this automation) and `dispatch` moves on to any other matched automations.
 
 ### 9. Unwind — back to the caller
 ```
 runActions resolves
-  └─ dispatch loop ends → returns ["trg_seed"]
+  └─ dispatch loop ends → returns ["atm_seed"]
        └─ ingest.submit resolves
             └─ fire() returns:
-               { eventId: "a1b2c3d4", matched: ["trg_seed"] }
+               { eventId: "a1b2c3d4", matched: ["atm_seed"] }
 ```
 
 The action's `console.log` line is the only effect observable from outside — there is no
@@ -189,15 +189,15 @@ parameter to `dispatch` / `runActions` when needed.)
 - **Unknown event type** — `fire("foo.bar", {})`. Step 1's catalog lookup misses;
   `validateEventPayload` throws `Error("unknown event type: foo.bar")`.
 
-## Misconfigured-but-matching trigger
+## Misconfigured-but-matching automation
 
-If the seed trigger's conditions matched but one of its actions were broken (e.g. an `"sendSms"`
+If the seed automation's conditions matched but one of its actions were broken (e.g. an `"sendSms"`
 action with no registered handler, or a required input left empty), step 8 **throws** at that
-action — `runActions` raises an error naming the trigger label, id, action index, and action type
+action — `runActions` raises an error naming the automation label, id, action index, and action type
 — which propagates out of `dispatch` and out of `fire()`. `matched.push(...)` happens before
 `runActions` is called, but `fire()` never returns the array; the caller sees the throw.
 
-Any **earlier** actions on the same trigger already ran (and their side effects, like a logged
-ALERT, persist). Subsequent actions on the trigger don't run, and if a *later* matched trigger had
+Any **earlier** actions on the same automation already ran (and their side effects, like a logged
+ALERT, persist). Subsequent actions on the automation don't run, and if a *later* matched automation had
 its own actions to run for the same event, those don't run either — the throw aborts the whole
 dispatch loop. The next call to `fire()` starts fresh.

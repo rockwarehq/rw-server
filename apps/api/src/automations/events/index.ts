@@ -1,4 +1,4 @@
-import type { ContextBuilder, EventSchema, EventType } from "@rw/triggers";
+import type { ContextBuilder, EventSchema, EventType } from "@rw/automations";
 import * as jobChanged from "./job-changed.js";
 
 /**

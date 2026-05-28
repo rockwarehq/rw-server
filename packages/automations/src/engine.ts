@@ -3,53 +3,53 @@ import { type ActionRegistry, missingRequired } from "./actions.js";
 import type { ContextBuilder } from "./context.js";
 import { interpolateInputs } from "./interpolate.js";
 import { qbToEngineConditions } from "./qb-to-engine.js";
-import type { TriggerStore } from "./store.js";
-import type { AppEvent, EventType, Trigger } from "./types.js";
+import type { AutomationStore } from "./store.js";
+import type { AppEvent, Automation, EventType } from "./types.js";
 
 export interface EngineDeps {
-  store: TriggerStore;
+  store: AutomationStore;
   /** Per-event-type fact builders. Must cover every event type the framework will see. */
   contextBuilders: Record<EventType, ContextBuilder>;
   actions: ActionRegistry;
 }
 
 /**
- * Evaluates triggers and runs their actions. The evaluation core (json-rules-engine + condition
+ * Evaluates automations and runs their actions. The evaluation core (json-rules-engine + condition
  * translation) is shared by every event type; the engine is pluggable in two places:
- *   - SEAM A: how an event becomes facts        -> ContextBuilder (per event type)
- *   - SEAM C: what a matched trigger's action does -> ActionRegistry
+ *   - SEAM A: how an event becomes facts             -> ContextBuilder (per event type)
+ *   - SEAM C: what a matched automation's action does -> ActionRegistry
  *
- * Conditions are indexed per event type, so a trigger only runs against events of its own type.
+ * Conditions are indexed per event type, so an automation only runs against events of its own type.
  */
-export interface TriggerEngine {
-  /** Rebuild the per-event-type rule engines from the current enabled triggers. */
+export interface AutomationEngine {
+  /** Rebuild the per-event-type rule engines from the current enabled automations. */
   reload(): void;
-  /** Run all conditions for this event's type; fire the action of each matching trigger. */
+  /** Run all conditions for this event's type; fire the action of each matching automation. */
   dispatch(event: AppEvent): Promise<string[]>;
 }
 
-export function createTriggerEngine(deps: EngineDeps): TriggerEngine {
+export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
   // Compiled engines, one per event type. Rebuilt by reload().
   let engines = new Map<EventType, Engine>();
 
   /**
-   * Run every action on the trigger, in order. Throws on a missing handler version or missing
+   * Run every action on the automation, in order. Throws on a missing handler version or missing
    * required input — these are misconfigurations and abort the dispatch loop loudly. Actions that
    * ran before a throw have already produced their side effects; subsequent actions don't run.
    *
    * Handler resolution is STRICT on `(type, version)`. Event-version dispatch is lenient: the
-   * trigger fires against whatever payload arrived (caller decided the event version at fire-time
-   * via FireOptions.version or it defaulted to latest).
+   * automation fires against whatever payload arrived (caller decided the event version at
+   * fire-time via FireOptions.version or it defaulted to latest).
    */
-  async function runActions(trigger: Trigger, event: AppEvent): Promise<void> {
-    for (const [idx, action] of trigger.actions.entries()) {
+  async function runActions(automation: Automation, event: AppEvent): Promise<void> {
+    for (const [idx, action] of automation.actions.entries()) {
       const versioned = deps.actions.get(action.type, action.version);
       if (!versioned) {
         const knownVersions = deps.actions.latest(action.type)
           ? ` (registered versions of "${action.type}" don't include "${action.version}")`
           : "";
         throw new Error(
-          `trigger "${trigger.label}" (${trigger.id}) action #${idx} ("${action.type}@${action.version}"): no handler registered${knownVersions}`,
+          `automation "${automation.label}" (${automation.id}) action #${idx} ("${action.type}@${action.version}"): no handler registered${knownVersions}`,
         );
       }
 
@@ -57,27 +57,27 @@ export function createTriggerEngine(deps: EngineDeps): TriggerEngine {
       const missing = missingRequired(inputs, versioned.inputSchema);
       if (missing) {
         throw new Error(
-          `trigger "${trigger.label}" (${trigger.id}) action #${idx} ("${action.type}@${action.version}"): missing required input "${missing}"`,
+          `automation "${automation.label}" (${automation.id}) action #${idx} ("${action.type}@${action.version}"): missing required input "${missing}"`,
         );
       }
 
-      await versioned.run(inputs, { trigger, eventId: event.id });
+      await versioned.run(inputs, { automation, eventId: event.id });
     }
   }
 
   return {
     reload(): void {
-      const byType = new Map<EventType, Trigger[]>();
-      for (const t of deps.store.list()) {
-        if (!t.enabled) continue;
-        const list = byType.get(t.event) ?? [];
-        list.push(t);
-        byType.set(t.event, list);
+      const byType = new Map<EventType, Automation[]>();
+      for (const a of deps.store.list()) {
+        if (!a.enabled) continue;
+        const list = byType.get(a.event) ?? [];
+        list.push(a);
+        byType.set(a.event, list);
       }
 
       engines = new Map();
-      for (const [type, triggers] of byType) {
-        engines.set(type, buildEngine(triggers));
+      for (const [type, automations] of byType) {
+        engines.set(type, buildEngine(automations));
       }
     },
 
@@ -92,19 +92,19 @@ export function createTriggerEngine(deps: EngineDeps): TriggerEngine {
 
       const matched: string[] = [];
       for (const r of results) {
-        const triggerId = r.event?.type;
-        const trigger = triggerId ? deps.store.get(triggerId) : undefined;
-        if (!trigger) continue;
-        matched.push(trigger.id);
-        await runActions(trigger, event);
+        const automationId = r.event?.type;
+        const automation = automationId ? deps.store.get(automationId) : undefined;
+        if (!automation) continue;
+        matched.push(automation.id);
+        await runActions(automation, event);
       }
       return matched;
     },
   };
 }
 
-/** Build a json-rules-engine instance for one event type's triggers. */
-function buildEngine(triggers: Trigger[]): Engine {
+/** Build a json-rules-engine instance for one event type's automations. */
+function buildEngine(automations: Automation[]): Engine {
   const engine = new Engine([], { allowUndefinedFacts: true });
 
   // String operators that the query builder exposes but json-rules-engine lacks.
@@ -123,10 +123,10 @@ function buildEngine(triggers: Trigger[]): Engine {
   // NOTE: transition operators for telemetry (increments_up, changes_to, …) would be registered
   // here too, comparing current vs previous values placed in the fact map by a ContextBuilder.
 
-  for (const t of triggers) {
+  for (const a of automations) {
     engine.addRule({
-      conditions: qbToEngineConditions(t.conditions) as never,
-      event: { type: t.id },
+      conditions: qbToEngineConditions(a.conditions) as never,
+      event: { type: a.id },
       priority: 10,
     });
   }

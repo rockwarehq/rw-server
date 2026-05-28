@@ -16,6 +16,6 @@
     { "path": "../../packages/db" },
     { "path": "../../packages/services" },
     { "path": "../../packages/runtime" },
-    { "path": "../../packages/triggers" }
+    { "path": "../../packages/automations" }
   ]
 }

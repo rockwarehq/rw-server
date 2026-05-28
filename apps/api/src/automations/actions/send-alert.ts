@@ -1,4 +1,4 @@
-import type { ActionHandler } from "@rw/triggers";
+import type { ActionHandler } from "@rw/automations";
 import { getUserById } from "../refs.js";
 
 /**
@@ -6,11 +6,11 @@ import { getUserById } from "../refs.js";
  *
  * Per-version `inputSchema` + `run` live together so they can't disagree. Stored input is user
  * ids; the handler resolves them to `User` objects at run time (no framework hydration today,
- * see @rw/triggers README "Ref data sources").
+ * see @rw/automations README "Ref data sources").
  *
  * Add a new version (e.g. switch from a flat `recipientUserIds` to a structured
- * `{ to: [ids], cc: [ids] }`) by adding a `"2"` entry; v1 triggers keep running against the v1
- * handler. Bump `latest` when the editor should default to the new version for new triggers.
+ * `{ to: [ids], cc: [ids] }`) by adding a `"2"` entry; v1 automations keep running against the v1
+ * handler. Bump `latest` when the editor should default to the new version for new automations.
  *
  * Replace this with a real `sendEmail` handler by writing a sibling module and adding it to
  * `actions/index.ts`.
@@ -48,11 +48,11 @@ export const handler: ActionHandler = {
         for (const id of ids) {
           const user = getUserById(id);
           if (user) recipients.push(`${user.name} <${user.email}>`);
-          else console.warn(`[triggers] sendAlert: unknown user id "${id}" — skipped`);
+          else console.warn(`[automations] sendAlert: unknown user id "${id}" — skipped`);
         }
 
         console.log(
-          `[triggers] ALERT (${ctx.trigger.label}): ${text} -> ${recipients.join(", ") || "(no recipients)"}`,
+          `[automations] ALERT (${ctx.automation.label}): ${text} -> ${recipients.join(", ") || "(no recipients)"}`,
         );
       },
     },

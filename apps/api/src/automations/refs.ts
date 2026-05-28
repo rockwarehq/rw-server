@@ -1,4 +1,4 @@
-import type { RefSource } from "@rw/triggers";
+import type { RefSource } from "@rw/automations";
 
 /**
  * MOCK users fixture + ref source. Stand-in for a real users table; swap `usersRefSource.list` for
@@ -7,7 +7,7 @@ import type { RefSource } from "@rw/triggers";
  * Two call sites:
  *   - `usersRefSource.list(ctx)` — feeds the editor's recipient picker over the RPC layer.
  *   - `getUserById(id)` — used by action handlers to expand stored ids → User at run time
- *     (no framework hydration today, see @rw/triggers README "Ref data sources").
+ *     (no framework hydration today, see @rw/automations README "Ref data sources").
  */
 
 export interface User {

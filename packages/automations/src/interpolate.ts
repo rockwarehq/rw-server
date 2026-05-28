@@ -2,7 +2,7 @@ import type { AppEvent } from "./types.js";
 
 /**
  * Resolves `{{...}}` template variables in action inputs at fire time.
- *   - `event.payload.x`, `event.type`, `event.id`, `event.ts` -> the triggering event
+ *   - `event.payload.x`, `event.type`, `event.id`, `event.ts` -> the raised event
  *   - `sys.timestamp` -> now (ISO)
  * Add a new source by adding a case in `resolveToken`.
  */

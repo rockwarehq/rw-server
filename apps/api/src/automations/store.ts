@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { Trigger, TriggerStore } from "@rw/triggers";
+import type { Automation, AutomationStore } from "@rw/automations";
 import { nanoid } from "nanoid";
 
-const seedTrigger: Trigger = {
-  id: "trg_seed",
+const seedAutomation: Automation = {
+  id: "atm_seed",
   label: "Alert on job change at S-1",
   enabled: true,
   event: "job.changed",
@@ -39,11 +39,11 @@ const seedTrigger: Trigger = {
 
 /**
  * Backfill missing fields when loading older mock files.
- *   - Pre-multi-action: `action: TriggerAction` → `actions: TriggerAction[]`
+ *   - Pre-multi-action: `action: AutomationAction` → `actions: AutomationAction[]`
  *   - Pre-versioning: missing `eventVersion` defaults to "1"; each action missing `version`
  *     defaults to "1". (Safe baseline — every existing schema launched at v1.)
  */
-function migrateLegacy(raw: Record<string, unknown>): Trigger {
+function migrateLegacy(raw: Record<string, unknown>): Automation {
   const stage1 = Array.isArray(raw.actions)
     ? raw
     : raw.action
@@ -59,22 +59,22 @@ function migrateLegacy(raw: Record<string, unknown>): Trigger {
     ...stage1,
     eventVersion: typeof stage1.eventVersion === "string" ? stage1.eventVersion : "1",
     actions,
-  } as unknown as Trigger;
+  } as unknown as Automation;
 }
 
 /**
- * MOCK, file-backed implementation of @rw/triggers' `TriggerStore`. Persists triggers to a JSON
+ * MOCK, file-backed implementation of @rw/automations' `AutomationStore`. Persists automations to a JSON
  * file so they survive restarts in development. Stand-in for a real database — swap it for a
  * @rw/db-backed implementation later; nothing else in the app changes.
  *
  * Remember the store only persists *definitions*: after any upsert/remove the caller must call
- * `engine.reload()` (see the `TriggerStore` doc in @rw/triggers). The oRPC handlers do this today.
+ * `engine.reload()` (see the `AutomationStore` doc in @rw/automations). The oRPC handlers do this today.
  *
- * File location: the `filePath` arg, else $TRIGGERS_MOCK_FILE, else ./.triggers-mock.json (cwd).
+ * File location: the `filePath` arg, else $AUTOMATIONS_MOCK_FILE, else ./.automations-mock.json (cwd).
  */
-export function createFileTriggerStore(filePath?: string): TriggerStore {
-  const path = resolve(filePath ?? process.env.TRIGGERS_MOCK_FILE ?? ".triggers-mock.json");
-  const triggers = new Map<string, Trigger>();
+export function createFileAutomationStore(filePath?: string): AutomationStore {
+  const path = resolve(filePath ?? process.env.AUTOMATIONS_MOCK_FILE ?? ".automations-mock.json");
+  const automations = new Map<string, Automation>();
 
   load();
 
@@ -84,35 +84,35 @@ export function createFileTriggerStore(filePath?: string): TriggerStore {
         const raw = JSON.parse(readFileSync(path, "utf8")) as Array<Record<string, unknown>>;
         for (const item of raw) {
           const t = migrateLegacy(item);
-          triggers.set(t.id, t);
+          automations.set(t.id, t);
         }
         return;
       } catch {
         // Corrupt/unreadable file — fall through and reseed.
       }
     }
-    triggers.set(seedTrigger.id, seedTrigger);
+    automations.set(seedAutomation.id, seedAutomation);
     save();
   }
 
   function save(): void {
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify([...triggers.values()], null, 2));
+    writeFileSync(path, JSON.stringify([...automations.values()], null, 2));
   }
 
   return {
-    list: () => [...triggers.values()],
-    get: (id) => triggers.get(id),
+    list: () => [...automations.values()],
+    get: (id) => automations.get(id),
     upsert: (t) => {
-      triggers.set(t.id, t);
+      automations.set(t.id, t);
       save();
       return t;
     },
     remove: (id) => {
-      const ok = triggers.delete(id);
+      const ok = automations.delete(id);
       if (ok) save();
       return ok;
     },
-    newId: () => `trg_${nanoid(8)}`,
+    newId: () => `atm_${nanoid(8)}`,
   };
 }

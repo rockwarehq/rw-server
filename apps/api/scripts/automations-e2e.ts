@@ -1,16 +1,16 @@
 /**
- * End-to-end smoke test for the trigger framework against the MOCK store.
+ * End-to-end smoke test for the automation framework against the MOCK store.
  *
  * Drives the real framework (no mocks of internals) over an isolated temp store file and asserts
- * the full event → trigger → condition → action path.
- * Run: `pnpm --filter @rw/api exec tsx scripts/triggers-e2e.ts`
+ * the full event → automation → condition → action path.
+ * Run: `pnpm --filter @rw/api exec tsx scripts/automations-e2e.ts`
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createActionRegistry, createTriggerFramework, statelessContextBuilder, type TriggerStore } from "@rw/triggers";
-import { createAppTriggerFramework } from "../src/triggers/index.js";
-import { createFileTriggerStore } from "../src/triggers/store.js";
+import { createActionRegistry, createAutomationFramework, statelessContextBuilder, type AutomationStore } from "@rw/automations";
+import { createAppAutomationFramework } from "../src/automations/index.js";
+import { createFileAutomationStore } from "../src/automations/store.js";
 
 let passed = 0;
 let failed = 0;
@@ -36,20 +36,20 @@ async function assertThrows(fn: () => Promise<unknown>): Promise<Error | null> {
 }
 
 async function main(): Promise<void> {
-  // Isolated store so we never touch the dev .triggers-mock.json. Seeds trg_seed on first load.
-  const dir = mkdtempSync(join(tmpdir(), "triggers-e2e-"));
-  const storePath = join(dir, "triggers.json");
-  const store = createFileTriggerStore(storePath);
-  const fw = createAppTriggerFramework({ store });
+  // Isolated store so we never touch the dev .automations-mock.json. Seeds atm_seed on first load.
+  const dir = mkdtempSync(join(tmpdir(), "automations-e2e-"));
+  const storePath = join(dir, "automations.json");
+  const store = createFileAutomationStore(storePath);
+  const fw = createAppAutomationFramework({ store });
 
   // ---------------------------------------------------------------------------
-  // Seed trigger has TWO actions (supervisor alert + shift-lead alert). Test verifies BOTH ran.
-  console.log("\n1. Happy path — seed trigger matches (station S-1), both actions fire");
+  // Seed automation has TWO actions (supervisor alert + shift-lead alert). Test verifies BOTH ran.
+  console.log("\n1. Happy path — seed automation matches (station S-1), both actions fire");
   const alerts: string[] = [];
   const realLog = console.log;
   console.log = (...args: unknown[]) => {
     const msg = args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
-    if (msg.startsWith("[triggers] ALERT")) alerts.push(msg);
+    if (msg.startsWith("[automations] ALERT")) alerts.push(msg);
     else realLog(...(args as Parameters<typeof realLog>));
   };
   let r1: { eventId: string; matched: string[] };
@@ -59,9 +59,9 @@ async function main(): Promise<void> {
     console.log = realLog;
   }
   check("eventId generated", typeof r1.eventId === "string" && r1.eventId.length > 0, r1.eventId);
-  check("matched = [trg_seed]", JSON.stringify(r1.matched) === '["trg_seed"]', r1.matched);
+  check("matched = [atm_seed]", JSON.stringify(r1.matched) === '["atm_seed"]', r1.matched);
   check("both actions ran (two ALERT lines)", alerts.length === 2, alerts);
-  // Recipients are stored as user ids in the trigger; the handler resolves them to name <email> at
+  // Recipients are stored as user ids in the automation; the handler resolves them to name <email> at
   // run time. The log lines should contain the resolved email, not the raw id.
   check("supervisor alert ran first", alerts[0]?.includes("supervisor@example.com") === true, alerts[0]);
   check("supervisor alert names the user", alerts[0]?.includes("Sam Supervisor") === true, alerts[0]);
@@ -87,7 +87,7 @@ async function main(): Promise<void> {
   check("error mentions unknown event type", e4 !== null && /unknown event type/i.test(e4.message), e4?.message);
 
   // ---------------------------------------------------------------------------
-  console.log("\n5. Authoring — create a new trigger, reload, it fires");
+  console.log("\n5. Authoring — create a new automation, reload, it fires");
   const created = store.upsert({
     id: store.newId(),
     label: "Alert at S-9",
@@ -99,30 +99,30 @@ async function main(): Promise<void> {
       { type: "sendAlert", version: "1", inputs: { text: "hit {{event.payload.station}}", recipientUserIds: ["u_ops"] } },
     ],
   });
-  check("upsert returned the trigger", created.label === "Alert at S-9");
-  // Before reload the engine still runs the old rule set — the new trigger is invisible.
+  check("upsert returned the automation", created.label === "Alert at S-9");
+  // Before reload the engine still runs the old rule set — the new automation is invisible.
   const beforeReload = await fw.fire("job.changed", { station: "S-9" });
   check("does NOT fire before reload()", beforeReload.matched.length === 0, beforeReload.matched);
-  // Reload rebuilds the compiled engines from the store (what rpc/triggers.ts does after a write).
+  // Reload rebuilds the compiled engines from the store (what rpc/automations.ts does after a write).
   fw.engine.reload();
   const afterReload = await fw.fire("job.changed", { station: "S-9" });
   check("fires after reload()", afterReload.matched.includes(created.id), afterReload.matched);
 
   // ---------------------------------------------------------------------------
-  console.log("\n6. Disable — disabled trigger drops out on reload");
+  console.log("\n6. Disable — disabled automation drops out on reload");
   store.upsert({ ...created, enabled: false });
   fw.engine.reload();
   const afterDisable = await fw.fire("job.changed", { station: "S-9" });
-  check("disabled trigger no longer matches", afterDisable.matched.length === 0, afterDisable.matched);
+  check("disabled automation no longer matches", afterDisable.matched.length === 0, afterDisable.matched);
 
   // ---------------------------------------------------------------------------
   console.log("\n7. Persistence — store survives a reopen (mock file round-trip)");
-  const reopened = createFileTriggerStore(storePath);
-  check("seed trigger persisted", reopened.get("trg_seed") !== undefined);
-  check("authored trigger persisted", reopened.get(created.id) !== undefined);
+  const reopened = createFileAutomationStore(storePath);
+  check("seed automation persisted", reopened.get("atm_seed") !== undefined);
+  check("authored automation persisted", reopened.get(created.id) !== undefined);
 
   // ---------------------------------------------------------------------------
-  console.log("\n8. Misconfigured action — fire() throws when matched trigger has no handler");
+  console.log("\n8. Misconfigured action — fire() throws when matched automation has no handler");
   store.upsert({
     id: store.newId(),
     label: "Broken action",
@@ -159,7 +159,7 @@ async function main(): Promise<void> {
 
   // ---------------------------------------------------------------------------
   console.log("\n9. Construction validation — missing builder for declared event type throws");
-  const emptyStore: TriggerStore = {
+  const emptyStore: AutomationStore = {
     list: () => [],
     get: () => undefined,
     upsert: (t) => t,
@@ -169,7 +169,7 @@ async function main(): Promise<void> {
   let threw = false;
   let errMsg = "";
   try {
-    createTriggerFramework({
+    createAutomationFramework({
       eventSchemas: {
         foo: { type: "foo", displayName: "Foo", latest: "1", versions: { "1": { payload: {} } } },
         bar: { type: "bar", displayName: "Bar", latest: "1", versions: { "1": { payload: {} } } },
@@ -191,7 +191,7 @@ async function main(): Promise<void> {
   let threwLatest = false;
   let latestMsg = "";
   try {
-    createTriggerFramework({
+    createAutomationFramework({
       eventSchemas: {
         foo: { type: "foo", displayName: "Foo", latest: "99", versions: { "1": { payload: {} } } }, // "99" missing
       },

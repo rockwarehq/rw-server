@@ -16,7 +16,7 @@ import type {
  *
  * Version-aware: both the event and the action are looked up by `(type, version)`. Caller may pass
  * `undefined` for either version to mean "use the schema's `latest`" — useful for authoring new
- * triggers, where the editor doesn't know which version to pick yet.
+ * automations, where the editor doesn't know which version to pick yet.
  */
 
 /** Condition-builder fields for one event payload shape: event.type + each payload field. */

@@ -1,7 +1,7 @@
 import { ORPCError } from "@orpc/server";
-import type { TriggerAction } from "@rw/triggers";
+import type { AutomationAction } from "@rw/automations";
 import * as z from "zod";
-import { getTriggerFramework } from "../triggers/index.js";
+import { getAutomationFramework } from "../automations/index.js";
 import { publicProcedure } from "./middleware.js";
 
 // NOTE: uses `publicProcedure` (no auth) because the framework is backed by a MOCK store today.
@@ -21,18 +21,18 @@ const actionSchema = z.object({
   inputs: z.record(z.string(), z.unknown()),
 });
 
-/** A trigger has one or more actions, run sequentially when conditions match. */
+/** An automation has one or more actions, run sequentially when conditions match. */
 const actionsSchema = z.array(actionSchema).min(1);
 
 /**
  * Validate every action's inputs (against the chosen version's inputSchema) and return the
- * normalized `TriggerAction[]`. If a client omits `version`, the action's `latest` is filled in.
+ * normalized `AutomationAction[]`. If a client omits `version`, the action's `latest` is filled in.
  * Throws on the first bad action.
  */
 function validateActions(
-  fw: ReturnType<typeof getTriggerFramework>,
+  fw: ReturnType<typeof getAutomationFramework>,
   actions: z.infer<typeof actionsSchema>,
-): TriggerAction[] {
+): AutomationAction[] {
   return actions.map((a, idx) => {
     const schema = fw.actionSchemas[a.type];
     if (!schema) {
@@ -67,7 +67,7 @@ export const getCatalog = publicProcedure
     }),
   )
   .handler(async ({ input }) =>
-    getTriggerFramework().catalog(input.eventType, input.actionType, input.eventVersion, input.actionVersion),
+    getAutomationFramework().catalog(input.eventType, input.actionType, input.eventVersion, input.actionVersion),
   );
 
 /**
@@ -80,21 +80,21 @@ export const listRefOptions = publicProcedure
   .input(z.object({ source: z.string().min(1) }))
   .handler(async ({ input }) => {
     try {
-      return await getTriggerFramework().listRefOptions(input.source);
+      return await getAutomationFramework().listRefOptions(input.source);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new ORPCError("BAD_REQUEST", { message: msg });
     }
   });
 
-export const listTriggers = publicProcedure.handler(async () => getTriggerFramework().store.list());
+export const listAutomations = publicProcedure.handler(async () => getAutomationFramework().store.list());
 
-export const createTrigger = publicProcedure
+export const createAutomation = publicProcedure
   .input(
     z.object({
       label: z.string().min(1),
       enabled: z.boolean().optional(),
-      // Trigger pins to a specific event schema version (defaults to event's `latest`).
+      // Automation pins to a specific event schema version (defaults to event's `latest`).
       event: z.string().min(1).default("job.changed"),
       eventVersion: z.string().min(1).optional(),
       conditions: conditionsSchema,
@@ -102,7 +102,7 @@ export const createTrigger = publicProcedure
     }),
   )
   .handler(async ({ input }) => {
-    const fw = getTriggerFramework();
+    const fw = getAutomationFramework();
     const eventSchema = fw.eventSchemas[input.event];
     if (!eventSchema) throw new ORPCError("BAD_REQUEST", { message: `unknown event type: "${input.event}"` });
     const eventVersion = input.eventVersion ?? eventSchema.latest;
@@ -113,7 +113,7 @@ export const createTrigger = publicProcedure
     }
     const actions = validateActions(fw, input.actions);
 
-    const trigger = fw.store.upsert({
+    const automation = fw.store.upsert({
       id: fw.store.newId(),
       label: input.label,
       enabled: input.enabled ?? true,
@@ -123,10 +123,10 @@ export const createTrigger = publicProcedure
       actions,
     });
     fw.engine.reload();
-    return trigger;
+    return automation;
   });
 
-export const updateTrigger = publicProcedure
+export const updateAutomation = publicProcedure
   .input(
     z.object({
       id: z.string(),
@@ -138,9 +138,9 @@ export const updateTrigger = publicProcedure
     }),
   )
   .handler(async ({ input }) => {
-    const fw = getTriggerFramework();
+    const fw = getAutomationFramework();
     const existing = fw.store.get(input.id);
-    if (!existing) throw new ORPCError("NOT_FOUND", { message: "trigger not found" });
+    if (!existing) throw new ORPCError("NOT_FOUND", { message: "automation not found" });
 
     let eventVersion = existing.eventVersion;
     if (input.eventVersion) {
@@ -167,9 +167,9 @@ export const updateTrigger = publicProcedure
     return updated;
   });
 
-export const deleteTrigger = publicProcedure.input(z.object({ id: z.string() })).handler(async ({ input }) => {
-  const fw = getTriggerFramework();
-  if (!fw.store.remove(input.id)) throw new ORPCError("NOT_FOUND", { message: "trigger not found" });
+export const deleteAutomation = publicProcedure.input(z.object({ id: z.string() })).handler(async ({ input }) => {
+  const fw = getAutomationFramework();
+  if (!fw.store.remove(input.id)) throw new ORPCError("NOT_FOUND", { message: "automation not found" });
   fw.engine.reload();
   return { ok: true };
 });

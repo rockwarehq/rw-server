@@ -2,10 +2,10 @@ import { nanoid } from "nanoid";
 import type { ActionRegistry } from "./actions.js";
 import { buildCatalog } from "./catalog.js";
 import type { ContextBuilder } from "./context.js";
-import { createTriggerEngine, type TriggerEngine } from "./engine.js";
+import { createAutomationEngine, type AutomationEngine } from "./engine.js";
 import { createSyncIngestRuntime, type IngestRuntime } from "./ingest.js";
 import { createRefRegistry, type RefContext, type RefOption, type RefRegistry } from "./refs.js";
-import type { TriggerStore } from "./store.js";
+import type { AutomationStore } from "./store.js";
 import type { ActionSchema, AppEvent, Catalog, EventSchema, EventType } from "./types.js";
 import { createValidators } from "./validate.js";
 
@@ -13,13 +13,13 @@ import { createValidators } from "./validate.js";
  * Everything the engine needs from the consuming app. The app supplies its domain (schemas,
  * fact builders, action handlers, store); the engine supplies the evaluation machinery.
  */
-export interface TriggerFrameworkConfig {
+export interface AutomationFrameworkConfig {
   /** Event types the app understands, keyed by type. */
   eventSchemas: Record<EventType, EventSchema>;
   /** Actions the app understands, keyed by type. */
   actionSchemas: Record<string, ActionSchema>;
-  /** Where trigger definitions live. */
-  store: TriggerStore;
+  /** Where automation definitions live. */
+  store: AutomationStore;
   /** Per-event-type fact builders (SEAM A). Must include every key in `eventSchemas`. */
   contextBuilders: Record<EventType, ContextBuilder>;
   /** Registered action handlers (SEAM C). */
@@ -37,9 +37,9 @@ export interface FireOptions {
   version?: string;
 }
 
-export interface TriggerFramework {
-  store: TriggerStore;
-  engine: TriggerEngine;
+export interface AutomationFramework {
+  store: AutomationStore;
+  engine: AutomationEngine;
   ingest: IngestRuntime;
   /** The event schemas the framework was configured with (read-only — for RPC layers resolving `latest`). */
   eventSchemas: Record<EventType, EventSchema>;
@@ -72,13 +72,13 @@ export interface TriggerFramework {
 
 /**
  * Assemble the framework from an app's domain config. Wires the engine, ingestion, validators, and
- * `fire()` together and indexes the current triggers (`engine.reload()`).
+ * `fire()` together and indexes the current automations (`engine.reload()`).
  *
  * Startup validation throws if any declared schema is inconsistent: missing context builder, missing
  * ref source, `latest` pointing at an absent version, or an action version declared in the schema
  * with no registered handler.
  */
-export function createTriggerFramework(config: TriggerFrameworkConfig): TriggerFramework {
+export function createAutomationFramework(config: AutomationFrameworkConfig): AutomationFramework {
   const { store, eventSchemas, actionSchemas, contextBuilders } = config;
   const refs = config.refs ?? createRefRegistry();
   const validators = createValidators(eventSchemas, actionSchemas);
@@ -125,7 +125,7 @@ export function createTriggerFramework(config: TriggerFrameworkConfig): TriggerF
     }
   }
 
-  const engine = createTriggerEngine({ store, contextBuilders, actions: config.actions });
+  const engine = createAutomationEngine({ store, contextBuilders, actions: config.actions });
   engine.reload();
   const ingest = createSyncIngestRuntime(engine);
 
