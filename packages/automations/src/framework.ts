@@ -1,4 +1,4 @@
-import { nanoid } from "nanoid";
+import { randomUUID } from "node:crypto";
 import type { ActionRegistry } from "./actions.js";
 import { buildCatalog } from "./catalog.js";
 import type { ContextBuilder } from "./context.js";
@@ -157,7 +157,9 @@ export function createAutomationFramework(config: AutomationFrameworkConfig): Au
       const version = opts?.version ?? eventSchema.latest;
       const normalized = validators.validateEventPayload(type, version, payload);
       const event: AppEvent = {
-        id: nanoid(8),
+        // UUID v4 — DB stores eventId as `@db.Uuid`, and a stable id format helps downstream
+        // tracing (logs, audit rows, external systems) all line up.
+        id: randomUUID(),
         type,
         version,
         ts: new Date().toISOString(),

@@ -8,34 +8,27 @@ import { nanoid } from "nanoid";
  * Initial load fills an in-memory `Map` so `list()` / `get()` stay synchronous (the engine's hot
  * path expects sync reads). Writes go to Postgres AND update the cache in lockstep.
  *
- * Workspace-scoped: each call to `createDbAutomationStore(workspaceId)` returns a store that only
- * sees rows in that workspace. The app keeps one store per workspace; see
- * apps/api/src/automations/index.ts for the workspace-scoped framework cache.
+ * Workspace dimension: the DB row carries no workspaceId today — automations are global. The
+ * factory still takes a workspaceId so the in-memory `Automation.workspaceId` field can be
+ * synthesized for handlers that read `ctx.automation.workspaceId` (e.g. user lookups). When multi-
+ * tenant scoping returns, this is where the WHERE clause gets added back.
  *
- * MULTI-INSTANCE CAVEAT: another instance writing to the same workspace won't refresh THIS
- * instance's cache. Plan documented in @rw/automations' `store.ts` — Redis pub/sub on the
- * automation id to broadcast reloads. Single-instance is fine for now.
+ * MULTI-INSTANCE CAVEAT: another instance writing won't refresh THIS instance's cache. Plan
+ * documented in @rw/automations' `store.ts` — Redis pub/sub broadcast. Single-instance for now.
  */
 export async function createDbAutomationStore(workspaceId: string): Promise<AutomationStore> {
-  // Initial load. The engine wants a sync list, so we hydrate once at construction.
-  const rows = await prisma.automation.findMany({ where: { workspaceId } });
-  const cache = new Map<string, Automation>(rows.map((r) => [r.id, rowToAutomation(r)]));
+  const rows = await prisma.automation.findMany();
+  const cache = new Map<string, Automation>(rows.map((r) => [r.id, rowToAutomation(r, workspaceId)]));
 
   return {
     list: () => [...cache.values()],
     get: (id) => cache.get(id),
 
     async upsert(automation) {
-      if (automation.workspaceId !== workspaceId) {
-        throw new Error(
-          `automation.workspaceId mismatch: store is scoped to "${workspaceId}", got "${automation.workspaceId}"`,
-        );
-      }
       const row = await prisma.automation.upsert({
         where: { id: automation.id },
         create: {
           id: automation.id,
-          workspaceId,
           label: automation.label,
           enabled: automation.enabled,
           event: automation.event,
@@ -57,7 +50,7 @@ export async function createDbAutomationStore(workspaceId: string): Promise<Auto
           actions: automation.actions as unknown as Parameters<typeof prisma.automation.upsert>[0]["update"]["actions"],
         },
       });
-      const out = rowToAutomation(row);
+      const out = rowToAutomation(row, workspaceId);
       cache.set(out.id, out);
       return out;
     },
@@ -67,7 +60,7 @@ export async function createDbAutomationStore(workspaceId: string): Promise<Auto
       // the caller the same thing it'd see if it had just done a get() first.
       if (!cache.has(id)) return false;
       try {
-        await prisma.automation.delete({ where: { id, workspaceId } });
+        await prisma.automation.delete({ where: { id } });
       } catch {
         // Row was already gone (race) — proceed to clear cache below.
       }
@@ -79,20 +72,25 @@ export async function createDbAutomationStore(workspaceId: string): Promise<Auto
   };
 }
 
-/** Turn a Prisma row into the in-memory `Automation` the engine expects. */
-function rowToAutomation(row: {
-  id: string;
-  workspaceId: string;
-  label: string;
-  enabled: boolean;
-  event: string;
-  eventVersion: string;
-  conditions: unknown;
-  actions: unknown;
-}): Automation {
+/**
+ * Turn a Prisma row into the in-memory `Automation` the engine expects. `workspaceId` is stamped
+ * from the store factory's argument — it isn't a DB column today.
+ */
+function rowToAutomation(
+  row: {
+    id: string;
+    label: string;
+    enabled: boolean;
+    event: string;
+    eventVersion: string;
+    conditions: unknown;
+    actions: unknown;
+  },
+  workspaceId: string,
+): Automation {
   return {
     id: row.id,
-    workspaceId: row.workspaceId,
+    workspaceId,
     label: row.label,
     enabled: row.enabled,
     event: row.event,

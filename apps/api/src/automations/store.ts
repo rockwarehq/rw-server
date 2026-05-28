@@ -15,27 +15,30 @@ const seedAutomation: Automation = {
   eventVersion: "1",
   conditions: {
     combinator: "and",
-    rules: [{ field: "event.payload.station", operator: "=", value: "S-1" }],
+    // stationId is now a picker field (ref: { source: "stations" }) — the stored value is a
+    // station id (e.g. "s_1"), matched against the same id field in the event payload.
+    rules: [{ field: "event.payload.stationId", operator: "=", value: "s_1" }],
   },
   // Two actions; both fire (in order) whenever the conditions match. Recipients are stored as
-  // user ids — the editor picker resolves them to names + emails via `RefRegistry.list("users")`,
-  // and the handler resolves them back to emails at run time (see actions/send-alert.ts / refs.ts).
-  // Each action pins to a specific version of its handler; dispatch is strict on (type, version).
+  // employee ids — the editor picker resolves them to names via `RefRegistry.list("employees")`,
+  // and the handler resolves them back to display names at run time (email resolution is deferred,
+  // see actions/send-alert.ts TODO). Each action pins to a specific version of its handler;
+  // dispatch is strict on (type, version).
   actions: [
     {
       type: "sendAlert",
       version: "1",
       inputs: {
-        text: "Job changed from {{event.payload.previousJob}} to {{event.payload.currentJob}} at {{event.payload.station}}",
-        recipientUserIds: ["u_supervisor"],
+        text: "Job changed from {{event.payload.previousJobId}} to {{event.payload.currentJobId}} at {{event.payload.stationId}}",
+        recipientEmployeeIds: ["e_supervisor"],
       },
     },
     {
       type: "sendAlert",
       version: "1",
       inputs: {
-        text: "FYI: shift lead notified of change at {{event.payload.station}}",
-        recipientUserIds: ["u_shift_lead"],
+        text: "FYI: shift lead notified of change at {{event.payload.stationId}}",
+        recipientEmployeeIds: ["e_shift_lead"],
       },
     },
   ],

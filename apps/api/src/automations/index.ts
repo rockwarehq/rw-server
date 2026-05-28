@@ -6,10 +6,18 @@ import {
 } from "@rw/automations";
 import { createDbAutomationStore } from "@rw/services/automation/store";
 import { createDbRunRecorder } from "@rw/services/automation/recorder";
-import { createDbUsersRefSource } from "@rw/services/automation/users-ref-source";
+import { createEmployeesAutomationRef } from "@rw/services/employee/automation-ref";
+import { createJobsAutomationRef } from "@rw/services/job/automation-ref";
+import { createStationsAutomationRef } from "@rw/services/facility/station/automation-ref";
+import { createWorkcentersAutomationRef } from "@rw/services/facility/workcenter/automation-ref";
 import { ACTION_SCHEMAS, buildActionRegistry } from "./actions/index.js";
 import { buildContextBuilders, EVENT_SCHEMAS } from "./events/index.js";
-import { usersRefSource as fileUsersRefSource } from "./refs.js";
+import {
+  employeesRefSource as fileEmployeesRefSource,
+  jobsRefSource as fileJobsRefSource,
+  stationsRefSource as fileStationsRefSource,
+  workCentersRefSource as fileWorkCentersRefSource,
+} from "./refs/index.js";
 import { createFileAutomationStore } from "./store.js";
 
 export interface CreateAppAutomationFrameworkOptions {
@@ -36,9 +44,13 @@ export async function createAppAutomationFramework(
   let recorder: Parameters<typeof createAutomationFramework>[0]["recorder"];
 
   if (opts.store) {
-    // File-mock path: caller supplied the store; users come from the in-memory fixture; no audit.
+    // File-mock path: caller supplied the store; refs come from in-memory fixtures; no audit.
     store = opts.store;
-    refs = createRefRegistry().register(fileUsersRefSource);
+    refs = createRefRegistry()
+      .register(fileEmployeesRefSource)
+      .register(fileWorkCentersRefSource)
+      .register(fileStationsRefSource)
+      .register(fileJobsRefSource);
     recorder = undefined;
   } else {
     if (!opts.workspaceId) {
@@ -48,7 +60,11 @@ export async function createAppAutomationFramework(
     }
     const workspaceId = opts.workspaceId;
     store = await createDbAutomationStore(workspaceId);
-    refs = createRefRegistry().register(createDbUsersRefSource(workspaceId));
+    refs = createRefRegistry()
+      .register(createEmployeesAutomationRef(workspaceId))
+      .register(createWorkcentersAutomationRef(workspaceId))
+      .register(createStationsAutomationRef(workspaceId))
+      .register(createJobsAutomationRef(workspaceId));
     recorder = createDbRunRecorder(workspaceId);
   }
 

@@ -54,31 +54,30 @@ async function main(): Promise<void> {
   };
   let r1: { eventId: string; matched: string[] };
   try {
-    r1 = await fw.fire("job.changed", { previousJob: "J-100", currentJob: "J-200", station: "S-1" });
+    r1 = await fw.fire("job.changed", { previousJobId: "j_100", currentJobId: "j_200", stationId: "s_1" });
   } finally {
     console.log = realLog;
   }
   check("eventId generated", typeof r1.eventId === "string" && r1.eventId.length > 0, r1.eventId);
   check("matched = [atm_seed]", JSON.stringify(r1.matched) === '["atm_seed"]', r1.matched);
   check("both actions ran (two ALERT lines)", alerts.length === 2, alerts);
-  // Recipients are stored as user ids in the automation; the handler resolves them to name <email> at
-  // run time. The log lines should contain the resolved email, not the raw id.
-  check("supervisor alert ran first", alerts[0]?.includes("supervisor@example.com") === true, alerts[0]);
-  check("supervisor alert names the user", alerts[0]?.includes("Sam Supervisor") === true, alerts[0]);
-  check("shift-lead alert ran second", alerts[1]?.includes("shift-lead@example.com") === true, alerts[1]);
-  check("shift-lead alert names the user", alerts[1]?.includes("Riley Shift-Lead") === true, alerts[1]);
-  check("no raw user ids leaked into the alert text", alerts.every((a) => !a.includes("u_supervisor") && !a.includes("u_shift_lead")), alerts);
+  // Recipients are stored as employee ids; the handler resolves them to display names at run time
+  // (email resolution is deferred — see send-alert.ts TODO). Log lines should contain the resolved
+  // name, not the raw id.
+  check("supervisor alert ran first", alerts[0]?.includes("Sam Supervisor") === true, alerts[0]);
+  check("shift-lead alert ran second", alerts[1]?.includes("Riley Shift-Lead") === true, alerts[1]);
+  check("no raw employee ids leaked into the alert text", alerts.every((a) => !a.includes("e_supervisor") && !a.includes("e_shift_lead")), alerts);
 
   // ---------------------------------------------------------------------------
-  console.log("\n2. Condition mismatch — valid event, nobody cares (station S-2)");
-  const r2 = await fw.fire("job.changed", { previousJob: "J-100", currentJob: "J-200", station: "S-2" });
+  console.log("\n2. Condition mismatch — valid event, nobody cares (stationId s_2)");
+  const r2 = await fw.fire("job.changed", { previousJobId: "j_100", currentJobId: "j_200", stationId: "s_2" });
   check("matched = []", JSON.stringify(r2.matched) === "[]", r2.matched);
 
   // ---------------------------------------------------------------------------
-  console.log("\n3. Invalid payload — wrong type (station is a number) — throws");
-  const e3 = await assertThrows(() => fw.fire("job.changed", { station: 123 } as never));
+  console.log("\n3. Invalid payload — wrong type (stationId is a number) — throws");
+  const e3 = await assertThrows(() => fw.fire("job.changed", { stationId: 123 } as never));
   check("threw on invalid payload", e3 !== null);
-  check("error mentions station", e3 !== null && /station/i.test(e3.message), e3?.message);
+  check("error mentions stationId", e3 !== null && /stationId/i.test(e3.message), e3?.message);
 
   // ---------------------------------------------------------------------------
   console.log("\n4. Unknown event type — throws");
@@ -91,29 +90,29 @@ async function main(): Promise<void> {
   const created = await store.upsert({
     id: store.newId(),
     workspaceId: "dev",
-    label: "Alert at S-9",
+    label: "Alert at s_9",
     enabled: true,
     event: "job.changed",
     eventVersion: "1",
-    conditions: { combinator: "and", rules: [{ field: "event.payload.station", operator: "=", value: "S-9" }] },
+    conditions: { combinator: "and", rules: [{ field: "event.payload.stationId", operator: "=", value: "s_9" }] },
     actions: [
-      { type: "sendAlert", version: "1", inputs: { text: "hit {{event.payload.station}}", recipientUserIds: ["u_ops"] } },
+      { type: "sendAlert", version: "1", inputs: { text: "hit {{event.payload.stationId}}", recipientEmployeeIds: ["e_ops"] } },
     ],
   });
-  check("upsert returned the automation", created.label === "Alert at S-9");
+  check("upsert returned the automation", created.label === "Alert at s_9");
   // Before reload the engine still runs the old rule set — the new automation is invisible.
-  const beforeReload = await fw.fire("job.changed", { station: "S-9" });
+  const beforeReload = await fw.fire("job.changed", { stationId: "s_9" });
   check("does NOT fire before reload()", beforeReload.matched.length === 0, beforeReload.matched);
   // Reload rebuilds the compiled engines from the store (what rpc/automations.ts does after a write).
   fw.engine.reload();
-  const afterReload = await fw.fire("job.changed", { station: "S-9" });
+  const afterReload = await fw.fire("job.changed", { stationId: "s_9" });
   check("fires after reload()", afterReload.matched.includes(created.id), afterReload.matched);
 
   // ---------------------------------------------------------------------------
   console.log("\n6. Disable — disabled automation drops out on reload");
   await store.upsert({ ...created, enabled: false });
   fw.engine.reload();
-  const afterDisable = await fw.fire("job.changed", { station: "S-9" });
+  const afterDisable = await fw.fire("job.changed", { stationId: "s_9" });
   check("disabled automation no longer matches", afterDisable.matched.length === 0, afterDisable.matched);
 
   // ---------------------------------------------------------------------------
@@ -131,11 +130,11 @@ async function main(): Promise<void> {
     enabled: true,
     event: "job.changed",
     eventVersion: "1",
-    conditions: { combinator: "and", rules: [{ field: "event.payload.station", operator: "=", value: "S-7" }] },
+    conditions: { combinator: "and", rules: [{ field: "event.payload.stationId", operator: "=", value: "s_7" }] },
     actions: [{ type: "sendSms", version: "1", inputs: {} }], // no registered handler for sendSms
   });
   fw.engine.reload();
-  const e8 = await assertThrows(() => fw.fire("job.changed", { station: "S-7" }));
+  const e8 = await assertThrows(() => fw.fire("job.changed", { stationId: "s_7" }));
   check("fire() threw", e8 !== null);
   check("error names the missing handler 'sendSms'", e8 !== null && /sendSms/.test(e8.message), e8?.message);
 
@@ -148,11 +147,11 @@ async function main(): Promise<void> {
     enabled: true,
     event: "job.changed",
     eventVersion: "1",
-    conditions: { combinator: "and", rules: [{ field: "event.payload.station", operator: "=", value: "S-99" }] },
-    actions: [{ type: "sendAlert", version: "999", inputs: { text: "x", recipientUserIds: ["u_ops"] } }], // v999 not registered
+    conditions: { combinator: "and", rules: [{ field: "event.payload.stationId", operator: "=", value: "s_99" }] },
+    actions: [{ type: "sendAlert", version: "999", inputs: { text: "x", recipientEmployeeIds: ["e_ops"] } }], // v999 not registered
   });
   fw.engine.reload();
-  const e8b = await assertThrows(() => fw.fire("job.changed", { station: "S-99" }));
+  const e8b = await assertThrows(() => fw.fire("job.changed", { stationId: "s_99" }));
   check("fire() threw on bad version", e8b !== null);
   check(
     "error names the missing version 'sendAlert@999'",
@@ -211,11 +210,11 @@ async function main(): Promise<void> {
   check('error names latest="99"', /99/.test(latestMsg), latestMsg);
 
   // ---------------------------------------------------------------------------
-  console.log("\n10. Ref picker — listRefOptions returns the registered users fixture");
-  const options = await fw.listRefOptions("users");
-  check("got 3 user options", options.length === 3, options.length);
-  check("supervisor option has id + label", options.some((o) => o.id === "u_supervisor" && o.label === "Sam Supervisor"), options);
-  check("ops option has email in meta", options.find((o) => o.id === "u_ops")?.meta?.email === "ops@example.com", options);
+  console.log("\n10. Ref picker — listRefOptions returns the registered employees fixture");
+  const options = await fw.listRefOptions("employees");
+  check("got 3 employee options", options.length === 3, options.length);
+  check("supervisor option has id + label", options.some((o) => o.id === "e_supervisor" && o.label === "Sam Supervisor"), options);
+  check("ops option has id + label", options.some((o) => o.id === "e_ops" && o.label === "Ops Pager"), options);
   const eRef = await assertThrows(() => fw.listRefOptions("nonsense"));
   check("unknown source throws", eRef !== null && /unknown ref source/i.test(eRef.message), eRef?.message);
 
@@ -224,20 +223,42 @@ async function main(): Promise<void> {
   const catalog = fw.catalog("job.changed", "sendAlert");
   check("catalog reports event version", catalog.eventVersion === "1", catalog.eventVersion);
   check("catalog reports action version (latest)", catalog.actionVersion === "1", catalog.actionVersion);
-  const recipientsProp = catalog.action.versions[catalog.actionVersion]?.inputSchema.properties.recipientUserIds;
-  check("recipientUserIds has ref annotation", recipientsProp?.ref?.source === "users", recipientsProp?.ref);
-  check("recipientUserIds is multi", recipientsProp?.ref?.multi === true, recipientsProp?.ref);
+  const recipientsProp = catalog.action.versions[catalog.actionVersion]?.inputSchema.properties.recipientEmployeeIds;
+  check("recipientEmployeeIds has ref annotation", recipientsProp?.ref?.source === "employees", recipientsProp?.ref);
+  check("recipientEmployeeIds is multi", recipientsProp?.ref?.multi === true, recipientsProp?.ref);
+
+  // ---------------------------------------------------------------------------
+  console.log("\n11b. Catalog surfaces ref metadata on EVENT payload facts (condition-side picker)");
+  const stationFact = catalog.facts.find((f) => f.id === "event.payload.stationId");
+  check("stationId fact exists", stationFact !== undefined, stationFact);
+  check("stationId fact carries ref.source = 'stations'", stationFact?.ref?.source === "stations", stationFact?.ref);
+  const jobFact = catalog.facts.find((f) => f.id === "event.payload.currentJobId");
+  check("currentJobId fact carries ref.source = 'jobs'", jobFact?.ref?.source === "jobs", jobFact?.ref);
+  const wcFact = catalog.facts.find((f) => f.id === "event.payload.workCenterId");
+  check("workCenterId fact carries ref.source = 'workCenters'", wcFact?.ref?.source === "workCenters", wcFact?.ref);
+  const deptFact = catalog.facts.find((f) => f.id === "event.payload.department");
+  check("department fact has NO ref (free-text)", deptFact?.ref === undefined, deptFact?.ref);
+
+  // ---------------------------------------------------------------------------
+  console.log("\n11c. listRefOptions works for each registered source (the picker RPC)");
+  const stations = await fw.listRefOptions("stations");
+  check("stations source returns 3 options", stations.length === 3, stations.length);
+  check("stations options have id + label", stations.every((o) => typeof o.id === "string" && typeof o.label === "string"), stations);
+  const jobs = await fw.listRefOptions("jobs");
+  check("jobs source returns 3 options", jobs.length === 3, jobs.length);
+  const wcs = await fw.listRefOptions("workCenters");
+  check("workCenters source returns 3 options", wcs.length === 3, wcs.length);
 
   // ---------------------------------------------------------------------------
   console.log("\n12. AppEvent carries version (latest by default)");
-  const r12 = await fw.fire("job.changed", { previousJob: "J-1", currentJob: "J-2", station: "S-2" });
+  const r12 = await fw.fire("job.changed", { previousJobId: "j_1", currentJobId: "j_2", stationId: "s_2" });
   check("fire returned eventId", typeof r12.eventId === "string");
   // No matched assertion needed — point is that fire didn't throw and accepted the latest-default path.
   // Validation that the version flows through is implicit: an unknown event version would have thrown.
 
   // ---------------------------------------------------------------------------
   console.log("\n13. fire() with explicit version respects the choice");
-  const e13 = await assertThrows(() => fw.fire("job.changed", { station: "S-1" }, { version: "999" }));
+  const e13 = await assertThrows(() => fw.fire("job.changed", { stationId: "s_1" }, { version: "999" }));
   check("threw on explicit unknown event version", e13 !== null);
   check("error names the unknown version", e13 !== null && /999/.test(e13.message), e13?.message);
 

@@ -33,6 +33,13 @@ export interface FactDef {
   label: string;
   type: "string" | "number" | "boolean";
   enumValues?: string[];
+  /**
+   * Same shape, same registry, same RPC as action-input refs (see `SchemaProperty.ref`). When set,
+   * the querybuilder should render a `RefRegistry.list(source)` picker as the value editor for this
+   * field — stored value is the picked id (or `string[]` of ids when `multi: true`), matching how
+   * action input refs are stored.
+   */
+  ref?: RefAnnotation;
 }
 
 /** A JSON-schema-ish property used by the event + action schemas. */
@@ -137,7 +144,12 @@ export interface AutomationAction {
  */
 export interface Automation {
   id: string;
-  /** Workspace that owns this automation. Handlers see it via `ctx.automation.workspaceId`. */
+  /**
+   * Workspace this automation runs under. Not stored on the DB row today — synthesized by the
+   * store at load time from its construction-time workspaceId, so handlers can read
+   * `ctx.automation.workspaceId` (e.g. to scope a user lookup). Will move back onto the DB row
+   * when multi-tenant scoping returns; the in-memory contract stays the same.
+   */
   workspaceId: string;
   label: string;
   enabled: boolean;

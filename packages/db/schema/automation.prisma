@@ -2,11 +2,21 @@
 //   - Automation         — the user-authored row (event + conditions + ordered actions)
 //   - AutomationRun       — one row per fw.fire() call (audit + run history)
 //   - AutomationActionRun — one row per action attempt within a run
-
+/*
+  All valid fires        ──► AutomationRun       ("event was raised")
+    │
+    └─ filtered to: same event type + enabled + conditions truthy
+       │
+       └────────────────► AutomationRunMatch     ("automation said yes")
+          │
+          └─ filtered to: each action in that automation's actions[]
+             │
+             └─────────► AutomationActionRun    ("an action was attempted")
+*/
 
 model Automation {
   id      String  @id @default(uuid()) @db.Uuid
-  label   String
+  label   String  @unique
   enabled Boolean @default(true)
 
   /// Event type this automation listens to (e.g. "job.changed"). Matches an `EventSchema.type`
@@ -24,13 +34,8 @@ model Automation {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  workspaceId String    @db.Uuid
-  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-
-  @@unique([workspaceId, label])
-  @@index([workspaceId])
-  // Hot path on engine.reload(): "list enabled automations for this workspace + event type."
-  @@index([workspaceId, enabled, event])
+  // Hot path on engine.reload(): "list enabled automations for this event type."
+  @@index([enabled, event])
 }
 
 /// One row per fw.fire() call
@@ -39,16 +44,16 @@ model AutomationRun {
 
   workspaceId String @db.Uuid
 
-  /// AppEvent.type / .version / .id (the nanoid generated inside fire()).
+  /// AppEvent.type / .version / .id (UUID generated inside fire()).
   eventType    String
   eventVersion String
-  eventId      String
+  eventId      String @db.Uuid
   /// AppEvent.payload as raised (post-zod validation, pre-dispatch).
   payload      Json
 
-  /// Automation ids that matched conditions (their actions were attempted, in dispatch order).
-  /// Empty when no automations matched — still a valid run, not an error.
-  matched String[] @default([])
+  /// Automations that matched conditions for this run, in dispatch order. Empty join when no
+  /// automations matched — still a valid run, not an error.
+  matches AutomationRunMatch[]
 
   status AutomationRunStatus
   /// Error message when status = FAILED (the throw that aborted dispatch).
@@ -91,6 +96,19 @@ model AutomationActionRun {
   @@index([automationId])
   // Useful for "how many sendAlert@1 actions ran / failed today" without scanning the whole table.
   @@index([actionType])
+}
+
+/// Join: one row per (run, automation) where the automation's conditions matched. 
+model AutomationRunMatch {
+  id           String        @id @default(uuid()) @db.Uuid
+  runId        String        @db.Uuid
+  run          AutomationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  automationId String        @db.Uuid
+  /// Order this automation was reached in the dispatch loop (0-based).
+  matchIdx     Int
+
+  @@unique([runId, automationId])
+  @@index([automationId])
 }
 
 enum AutomationRunStatus {

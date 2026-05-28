@@ -19,17 +19,23 @@ import type {
  * automations, where the editor doesn't know which version to pick yet.
  */
 
-/** Condition-builder fields for one event payload shape: event.type + each payload field. */
+/**
+ * Condition-builder fields for one event payload shape: `event.type` + each payload field. A field
+ * declared with `ref: { source }` carries that annotation through to the FactDef so the editor can
+ * render a picker (same registry as action-input refs).
+ */
 function factsFor(payload: EventSchemaVersion["payload"]): FactDef[] {
   return [
     { id: "event.type", label: "Event Type", type: "string" },
-    ...Object.entries(payload).map(
-      ([key, prop]): FactDef => ({
+    ...Object.entries(payload).map(([key, prop]): FactDef => {
+      const fact: FactDef = {
         id: `event.payload.${key}`,
         label: prop.title,
         type: "string",
-      }),
-    ),
+      };
+      if (prop.ref) fact.ref = prop.ref;
+      return fact;
+    }),
   ];
 }
 

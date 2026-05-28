@@ -6,7 +6,10 @@ import prisma from "@rw/db";
  * `fire()` call:
  *   - `startRun(event)` → `AutomationRun` row (status set later by `finishRun`).
  *   - `recordAction(...)` → one `AutomationActionRun` row per action attempt.
- *   - `finishRun(runId, ...)` → updates the run row with final status + finishedAt.
+ *   - `finishRun(runId, ...)` → updates the run row with final status + finishedAt AND fans
+ *     `matched` out into one `AutomationRunMatch` row per matched automation. Both writes happen
+ *     in a single transaction so we don't end up with the run finalized but missing matches (or
+ *     vice versa) on a partial failure.
  *
  * Workspace-scoped: each invocation pins to a workspaceId; the framework wires one recorder per
  * workspace alongside the store + ref source.
@@ -19,13 +22,13 @@ export function createDbRunRecorder(workspaceId: string): RunRecorder {
           workspaceId,
           eventType: event.type,
           eventVersion: event.version,
+          // AppEvent.id is a UUID v4 generated inside fire(); column is `@db.Uuid`.
           eventId: event.id,
           // JSON column; Prisma stores the payload as-raised (after zod validation, pre-dispatch).
           payload: event.payload as unknown as Parameters<typeof prisma.automationRun.create>[0]["data"]["payload"],
           // status set on finishRun; the schema requires it, so we open with SUCCESS as a placeholder
-          // — finishRun always overwrites it (even when SUCCESS, the matched + finishedAt are filled in).
+          // — finishRun always overwrites it with the actual outcome.
           status: "SUCCESS",
-          matched: [],
         },
       });
       return row.id;
@@ -48,15 +51,19 @@ export function createDbRunRecorder(workspaceId: string): RunRecorder {
     },
 
     async finishRun(runId, { matched, status, error }) {
-      await prisma.automationRun.update({
-        where: { id: runId },
-        data: {
-          matched,
-          status,
-          error,
-          finishedAt: new Date(),
-        },
-      });
+      // Atomic: update the run row's terminal state AND write one match row per matched automation.
+      // Order preserved via matchIdx so consumers can reconstruct dispatch order.
+      await prisma.$transaction([
+        ...matched.map((automationId, matchIdx) =>
+          prisma.automationRunMatch.create({
+            data: { runId, automationId, matchIdx },
+          }),
+        ),
+        prisma.automationRun.update({
+          where: { id: runId },
+          data: { status, error, finishedAt: new Date() },
+        }),
+      ]);
     },
   };
 }
