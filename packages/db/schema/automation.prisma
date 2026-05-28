@@ -1,18 +1,9 @@
-// Automation framework persistence.
-//
-// Backs @rw/automations' AutomationStore interface (today the app uses createFileAutomationStore;
-// switch to a createDbAutomationStore against these models when ready). The framework itself is
-// unchanged — only the storage seam moves. See packages/automations/README.md for the framework
-// and packages/automations/README.md#versioning for how `eventVersion` and per-action `version`
-// are used (pins are informational for events / strict for action handlers).
-//
 // Three models:
 //   - Automation         — the user-authored row (event + conditions + ordered actions)
 //   - AutomationRun       — one row per fw.fire() call (audit + run history)
 //   - AutomationActionRun — one row per action attempt within a run
 
-/// User-defined automation. When EVENT happens in this workspace and CONDITIONS match,
-/// run ACTIONS in order. Each row replaces what the file-backed mock store keeps today.
+
 model Automation {
   id      String  @id @default(uuid()) @db.Uuid
   label   String
@@ -21,19 +12,13 @@ model Automation {
   /// Event type this automation listens to (e.g. "job.changed"). Matches an `EventSchema.type`
   /// declared in apps/api/src/automations/events/.
   event String
-
-  /// Event schema version this automation was authored against. Informational at dispatch
-  /// (conditions evaluate against whatever payload was raised) but used by the editor to
-  /// render the correct form when the automation is opened for editing.
   eventVersion String
 
   /// react-querybuilder condition tree (RuleGroupType from @rw/automations). Evaluated by
   /// json-rules-engine after the ContextBuilder flattens the event into facts.
   conditions Json
 
-  /// Ordered AutomationAction[] = [{ type, version, inputs }, ...]. Each fires in sequence when
-  /// conditions match. If action N throws, actions N+1… are skipped and any downstream matched
-  /// automations don't run either (the throw aborts dispatch for this event).
+  /// Each fires in sequence when conditions match.
   actions Json
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
@@ -48,10 +33,7 @@ model Automation {
   @@index([workspaceId, enabled, event])
 }
 
-/// One row per fw.fire() call. Records the raised AppEvent and the overall outcome of dispatch.
-/// Audit-style — `workspaceId` is a plain column (no FK / cascade) so history outlives a
-/// workspace delete if you want it to; switch to a relation if cascade-on-workspace-delete is
-/// preferred. Same posture as AuditLog.
+/// One row per fw.fire() call
 model AutomationRun {
   id String @id @default(uuid()) @db.Uuid
 
@@ -84,19 +66,13 @@ model AutomationRun {
   @@index([workspaceId, status])
 }
 
-/// One row per action attempt within an AutomationRun. Records the exact (automation, actionIdx,
-/// type, version) attempted and how it ended. A handler that throws mid-dispatch produces a
-/// FAILED row; subsequent actions on the same automation or on later matched automations
-/// produce SKIPPED rows.
+/// One row per action attempt within an AutomationRun.
 model AutomationActionRun {
   id String @id @default(uuid()) @db.Uuid
 
   runId String        @db.Uuid
   run   AutomationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
 
-  /// Automation this action belonged to. Plain column (no FK) so deleting / re-authoring an
-  /// automation doesn't lose its history; the automation this row points at may already be gone
-  /// or changed.
   automationId String @db.Uuid
 
   /// Index within the automation's actions[] array at the time the run was attempted.
@@ -125,6 +101,5 @@ enum AutomationRunStatus {
 enum AutomationActionRunStatus {
   SUCCESS
   FAILED
-  /// A prior action in this run threw, so this action was not attempted.
   SKIPPED
 }
