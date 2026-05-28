@@ -12,20 +12,22 @@ const seedTrigger: Trigger = {
     combinator: "and",
     rules: [{ field: "event.payload.station", operator: "=", value: "S-1" }],
   },
-  // Two actions; both fire (in order) whenever the conditions match.
+  // Two actions; both fire (in order) whenever the conditions match. Recipients are stored as
+  // user ids — the editor picker resolves them to names + emails via `RefRegistry.list("users")`,
+  // and the handler resolves them back to emails at run time (see actions.ts / refs.ts).
   actions: [
     {
       type: "sendAlert",
       inputs: {
         text: "Job changed from {{event.payload.previousJob}} to {{event.payload.currentJob}} at {{event.payload.station}}",
-        emails: ["supervisor@example.com"],
+        recipientUserIds: ["u_supervisor"],
       },
     },
     {
       type: "sendAlert",
       inputs: {
         text: "FYI: shift lead notified of change at {{event.payload.station}}",
-        emails: ["shift-lead@example.com"],
+        recipientUserIds: ["u_shift_lead"],
       },
     },
   ],

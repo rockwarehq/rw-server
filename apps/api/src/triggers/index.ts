@@ -1,6 +1,7 @@
-import { createTriggerFramework, type TriggerFramework, type TriggerStore } from "@rw/triggers";
-import { ACTION_SCHEMAS, EVENT_SCHEMAS } from "./catalog.js";
-import { buildActionRegistry, buildContextBuilders } from "./registry.js";
+import { createRefRegistry, createTriggerFramework, type TriggerFramework, type TriggerStore } from "@rw/triggers";
+import { ACTION_SCHEMAS, buildActionRegistry } from "./actions/index.js";
+import { buildContextBuilders, EVENT_SCHEMAS } from "./events/index.js";
+import { usersRefSource } from "./refs.js";
 import { createFileTriggerStore } from "./store.js";
 
 export interface CreateAppTriggerFrameworkOptions {
@@ -14,6 +15,8 @@ export function createAppTriggerFramework(opts: CreateAppTriggerFrameworkOptions
     store: opts.store ?? createFileTriggerStore(),
     contextBuilders: buildContextBuilders(),
     actions: buildActionRegistry(),
+    // Picker data sources for ref-typed action inputs. Add more sources here as actions grow
+    refs: createRefRegistry().register(usersRefSource),
   });
 }
 

@@ -45,10 +45,58 @@ const fw = createTriggerFramework({
 ```
 
 The returned framework exposes `store`, `engine`, `ingest`, `catalog()`,
-`validateActionInputs()`, and `fire()`.
+`validateActionInputs()`, `listRefOptions()`, and `fire()`.
 
 For a step-by-step guide that builds this config from scratch (declare schemas → write a handler →
 wire → assemble → author → fire), see [`WALKTHROUGH.md`](./WALKTHROUGH.md).
+
+## Ref data sources
+
+An action input can be **a reference to something stored elsewhere** — a user, a Slack channel, a
+team. The editor renders a picker (showing a human label, storing a stable id); the trigger stores
+ids only. Declare it on the `SchemaProperty`:
+
+```ts
+recipientUserIds: {
+  type: "array",
+  items: { type: "string" },
+  title: "Recipients",
+  ref: { source: "users", multi: true },
+},
+```
+
+The app provides a `RefSource` for `"users"` and registers it on a `RefRegistry`:
+
+```ts
+import { createRefRegistry, type RefSource } from "@rw/triggers";
+
+const usersRefSource: RefSource = {
+  key: "users",
+  async list(_ctx) {
+    return (await db.users.findMany()).map((u) => ({ id: u.id, label: u.name }));
+  },
+};
+
+const refs = createRefRegistry().register(usersRefSource);
+
+const fw = createTriggerFramework({ /* … */ refs });
+```
+
+`createTriggerFramework` validates at boot: every `ref.source` declared in any action schema must
+be registered, else construction throws.
+
+Two call sites today:
+
+1. **Editor / RPC** — the UI calls a thin RPC procedure that delegates to `fw.listRefOptions(source, ctx)`
+   to populate a picker. `ctx` carries whatever the source needs (workspace id, search filter, etc.).
+2. **Action handler at run time** — the handler receives the stored ids on `inputs.recipientUserIds`
+   and looks them up itself (e.g. `db.users.findMany({ where: { id: { in: ids } } })`). The framework
+   does **not** auto-hydrate ids → objects today.
+
+> **Why not auto-hydrate?** A framework-level `resolve(ids)` step would move the lookup out of every
+> handler and centralize stale-id policy, at the cost of one more piece of framework plumbing and
+> less per-action flexibility. Skipping it for now keeps the framework minimal; `RefSource` can grow
+> a `resolve` method later without disturbing picker-side code or stored data (which is always ids).
 
 ## Error model
 
@@ -132,7 +180,7 @@ A concrete, value-by-value trace of one event lives in the consuming app's
 
 | File | What it does |
 | --- | --- |
-| `types.ts` | Pure contract/domain types shared everywhere (`Trigger`, `AppEvent`, schemas, `Catalog`, notifications). No logic. |
+| `types.ts` | Pure contract/domain types shared everywhere (`Trigger`, `AppEvent`, schemas, `Catalog`, `RefAnnotation`). No logic. |
 | `query-builder-types.ts` | Minimal vendored subset of react-querybuilder's tree types (`RuleGroupType` / `RuleType`), so the server reads conditions without depending on the React library. |
 | `qb-to-engine.ts` | Converts the query-builder condition tree into json-rules-engine conditions; defines the operator map (`=` → `equal`, `contains` → `stringContains`, …). |
 | `schema-to-zod.ts` | Derives Zod validators from catalog schemas, so validation falls out of the same declaration the editor uses. |
@@ -142,6 +190,7 @@ A concrete, value-by-value trace of one event lives in the consuming app's
 | `actions.ts` | **Seam C.** `ActionHandler` interface, `ActionRegistry`, and the required-input check. |
 | `ingest.ts` | **Seam B.** `IngestRuntime` interface + `SyncIngestRuntime` (evaluates inline on the calling request). |
 | `store.ts` | `TriggerStore` interface (the definition-storage seam). Implementations live in the consuming app. |
+| `refs.ts` | `RefSource` / `RefRegistry` — picker data sources for ref-typed action inputs. App provides the sources; the framework exposes `listRefOptions` over them. |
 | `catalog.ts` | `buildCatalog(schemas, …)` — builds the editor catalog (fields, variables, operators) a UI renders from. |
 | `engine.ts` | The evaluation core. Indexes enabled triggers per event type, builds a json-rules-engine per type, then `dispatch()` turns an event into facts, evaluates conditions, and runs the action of each matched trigger. |
 | `framework.ts` | `createTriggerFramework(config)` — assembles the engine, ingestion, validators, and `fire()` from an app's domain config. |

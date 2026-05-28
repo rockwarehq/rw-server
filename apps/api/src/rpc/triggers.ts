@@ -42,6 +42,23 @@ export const getCatalog = publicProcedure
   .input(z.object({ eventType: z.string().min(1), actionType: z.string().min(1) }))
   .handler(async ({ input }) => getTriggerFramework().catalog(input.eventType, input.actionType));
 
+/**
+ * Picker options for a ref-typed action input. The editor calls this to populate a dropdown for
+ * any `SchemaProperty` declaring `ref: { source }`. Throws BAD_REQUEST if the source isn't
+ * registered (which means it isn't referenced by any current schema either — startup validation
+ * would have caught that — so this is really a defense against typo'd client calls).
+ */
+export const listRefOptions = publicProcedure
+  .input(z.object({ source: z.string().min(1) }))
+  .handler(async ({ input }) => {
+    try {
+      return await getTriggerFramework().listRefOptions(input.source);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new ORPCError("BAD_REQUEST", { message: msg });
+    }
+  });
+
 export const listTriggers = publicProcedure.handler(async () => getTriggerFramework().store.list());
 
 export const createTrigger = publicProcedure

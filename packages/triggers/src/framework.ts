@@ -4,6 +4,7 @@ import { buildCatalog } from "./catalog.js";
 import type { ContextBuilder } from "./context.js";
 import { createTriggerEngine, type TriggerEngine } from "./engine.js";
 import { createSyncIngestRuntime, type IngestRuntime } from "./ingest.js";
+import { createRefRegistry, type RefContext, type RefOption, type RefRegistry } from "./refs.js";
 import type { TriggerStore } from "./store.js";
 import type { ActionSchema, AppEvent, Catalog, EventSchema, EventType } from "./types.js";
 import { createValidators } from "./validate.js";
@@ -23,6 +24,11 @@ export interface TriggerFrameworkConfig {
   contextBuilders: Record<EventType, ContextBuilder>;
   /** Registered action handlers (SEAM C). */
   actions: ActionRegistry;
+  /**
+   * Optional ref-data-source registry. Only required if any action input schema declares
+   * `ref: { source: ... }`. Startup validation throws if a declared source isn't registered.
+   */
+  refs?: RefRegistry;
 }
 
 export interface TriggerFramework {
@@ -33,6 +39,11 @@ export interface TriggerFramework {
   catalog(eventType: EventType, actionType: string): Catalog;
   /** Validate action inputs against the configured action schemas. Throws on invalid; returns the normalized inputs on success. */
   validateActionInputs(actionType: string, inputs: unknown): Record<string, unknown>;
+  /**
+   * Picker-options endpoint for the editor UI. Resolves `source` against the configured
+   * `RefRegistry` and calls its `list(ctx)`. Throws if `source` isn't registered.
+   */
+  listRefOptions(source: string, ctx?: RefContext): Promise<RefOption[]>;
   /**
    * Validate a payload against its event type's schema, then build + submit the event. The
    * in-process entry point for raising events. Throws on invalid payload, unknown event type, or
@@ -48,6 +59,7 @@ export interface TriggerFramework {
  */
 export function createTriggerFramework(config: TriggerFrameworkConfig): TriggerFramework {
   const { store, eventSchemas, actionSchemas, contextBuilders } = config;
+  const refs = config.refs ?? createRefRegistry();
   const validators = createValidators(eventSchemas, actionSchemas);
 
   // Fail fast: every declared event type must have a fact builder. Catches typos and missed
@@ -55,6 +67,16 @@ export function createTriggerFramework(config: TriggerFrameworkConfig): TriggerF
   for (const type of Object.keys(eventSchemas)) {
     if (!contextBuilders[type]) {
       throw new Error(`no context builder registered for event type "${type}"`);
+    }
+  }
+
+  // every `ref.source` declared in any action input schema must be registered. Catches
+  // a missing RefSource at boot instead of when an editor opens a picker.
+  for (const action of Object.values(actionSchemas)) {
+    for (const [key, prop] of Object.entries(action.inputSchema.properties)) {
+      if (prop.ref && !refs.get(prop.ref.source)) {
+        throw new Error(`action "${action.type}" input "${key}" references unknown ref source "${prop.ref.source}"`);
+      }
     }
   }
 
@@ -68,6 +90,11 @@ export function createTriggerFramework(config: TriggerFrameworkConfig): TriggerF
     ingest,
     catalog: (eventType, actionType) => buildCatalog(eventSchemas, actionSchemas, eventType, actionType),
     validateActionInputs: validators.validateActionInputs,
+    async listRefOptions(source, ctx = {}) {
+      const ref = refs.get(source);
+      if (!ref) throw new Error(`unknown ref source: ${source}`);
+      return ref.list(ctx);
+    },
     async fire(type, payload) {
       const normalized = validators.validateEventPayload(type, payload);
       const event: AppEvent = { id: nanoid(8), type, ts: new Date().toISOString(), payload: normalized };

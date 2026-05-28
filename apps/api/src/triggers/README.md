@@ -15,10 +15,12 @@ them into the engine.
 ```
 @rw/triggers (package)            apps/api/src/triggers (this folder)
 ─────────────────────             ───────────────────────────────────
-engine, ingestion, validation,    EVENT_SCHEMAS / ACTION_SCHEMAS  (catalog.ts)
-interpolation, catalog builder,   sendAlert handler              (actions.ts)
-seam interfaces, fire()           event→builder / handler wiring (registry.ts)
-                                  seed + file-backed store mock  (store.ts)
+engine, ingestion, validation,    events/        one module per event type
+interpolation, catalog builder,                  (schema + ContextBuilder colocated)
+seam interfaces, fire()           actions/       one module per action type
+                                                 (schema + ActionHandler colocated)
+                                  refs.ts        RefSource + getXById helpers
+                                  store.ts       seed + file-backed store mock
    createTriggerFramework(cfg) ◀──── createAppTriggerFramework() (index.ts)
 ```
 
@@ -27,13 +29,15 @@ imports app code. That boundary is what keeps the engine reusable.
 
 ## Files
 
-| File | What it does |
+| File / folder | What it does |
 | --- | --- |
-| `catalog.ts` | This app's event + action **schemas** (`EVENT_SCHEMAS`, `ACTION_SCHEMAS`) and the editor defaults. The single source of truth the engine validates against and the UI renders from. |
-| `actions.ts` | The `sendAlert` **handler** (Seam C) — the example effect (logs the alert). A real `sendEmail`/`createForm` handler would look like this. |
-| `registry.ts` | Maps each event type to its `ContextBuilder` and registers the action handlers. The one place to edit when adding an event or action type. |
+| `events/<type>.ts` | One file per event type. Exports `schema: EventSchema` + `contextBuilder: ContextBuilder` — colocated so they can't drift. (e.g. `events/job-changed.ts`.) |
+| `events/index.ts` | Aggregator. Collects every event module into `EVENT_SCHEMAS` + `buildContextBuilders()`. Add a new event = drop a file in `events/`, add one import line here. |
+| `actions/<type>.ts` | One file per action type. Exports `schema: ActionSchema` + `handler: ActionHandler` — colocated, handler reuses `schema.type` and `schema.inputSchema` directly. (e.g. `actions/send-alert.ts`.) |
+| `actions/index.ts` | Aggregator. Collects every action module into `ACTION_SCHEMAS` + `buildActionRegistry()`. Add a new action = drop a file in `actions/`, add one import line here. |
+| `refs.ts` | `RefSource` implementations + `getXById` helpers. Today: in-memory users fixture (mock for a future `@rw/db` users table). One file per source as this grows. |
 | `store.ts` | A MOCK file-backed `TriggerStore` (persists triggers to JSON for dev) + the seed trigger. Swap for a `@rw/db`-backed store later; nothing else changes. |
-| `index.ts` | Composition root — `createAppTriggerFramework()` feeds the above into `@rw/triggers`' `createTriggerFramework()`, and `getTriggerFramework()` is the shared singleton the oRPC layer uses. |
+| `index.ts` | Composition root — `createAppTriggerFramework()` feeds the aggregators into `@rw/triggers`' `createTriggerFramework()`, and `getTriggerFramework()` is the shared singleton the oRPC layer uses. |
 
 ## Raising an event
 
@@ -62,12 +66,15 @@ error model and the `ingest.submit` escape hatch.
 
 ## Adding things
 
-- **New action** → add its schema to `ACTION_SCHEMAS` (`catalog.ts`), write an `ActionHandler`
-  (`actions.ts`), register it in `registry.ts`. Validation and the editor form derive
-  automatically.
-- **New event type** → add its schema to `EVENT_SCHEMAS` (`catalog.ts`); register a
-  `ContextBuilder` for it in `registry.ts` if it needs more than its raw payload as facts
-  (otherwise it uses the default stateless builder).
+- **New action** → create `actions/<type>.ts` exporting `schema` + `handler`, then add one import
+  line to `actions/index.ts`. Schema and handler live in the same module so they can't disagree.
+  Validation and the editor form derive automatically.
+- **New event type** → create `events/<type>.ts` exporting `schema` + `contextBuilder`, then add
+  one import line to `events/index.ts`. Use `statelessContextBuilder` from `@rw/triggers` unless
+  the event needs joined data.
+- **New ref data source** (picker for an action input) → add a `RefSource` to `refs.ts` and chain
+  `.register(...)` in `index.ts`. Annotate the relevant action input's `SchemaProperty` with
+  `ref: { source: "<key>" }`.
 
 ## Trace
 

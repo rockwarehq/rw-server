@@ -7,9 +7,10 @@ shape, this shows the actual data at each step.
 
 > **Where the files live.** The engine steps (validation, dispatch, fact-building, condition
 > evaluation, action execution) run in the **`@rw/triggers`** package. Only the *domain* pieces —
-> the seed trigger (`store.ts`), the schemas (`catalog.ts`), the `sendAlert` handler (`actions.ts`),
-> and the wiring (`registry.ts` / `index.ts`) — live in this app folder. File references below note
-> the package where relevant.
+> the seed trigger (`store.ts`), the event modules (`events/<type>.ts` — schema + context builder),
+> the action modules (`actions/<type>.ts` — schema + handler), the ref sources (`refs.ts`), and the
+> composition root (`index.ts`) — live in this app folder. File references below note the package
+> where relevant.
 
 ## Given: the seed trigger (already loaded)
 
@@ -31,19 +32,26 @@ trigger id (`event: { type: "trg_seed" }`):
       type: "sendAlert",
       inputs: {
         text: "Job changed from {{event.payload.previousJob}} to {{event.payload.currentJob}} at {{event.payload.station}}",
-        emails: ["supervisor@example.com"],
+        recipientUserIds: ["u_supervisor"],
       },
     },
     {
       type: "sendAlert",
       inputs: {
         text: "FYI: shift lead notified of change at {{event.payload.station}}",
-        emails: ["shift-lead@example.com"],
+        recipientUserIds: ["u_shift_lead"],
       },
     },
   ],
 }
 ```
+
+> **Recipients are stored as user ids, not emails.** `sendAlert.recipientUserIds` declares
+> `ref: { source: "users" }` on its schema property (see `actions/send-alert.ts`); the editor renders a picker
+> populated by `RefRegistry.list("users")` and stores the picked ids. The handler resolves the ids
+> to `User` objects at run time using `getUserById` from `refs.ts`. See the package
+> [README → "Ref data sources"](../../../../packages/triggers/README.md#ref-data-sources) for the
+> framework side of this.
 
 > **Note — triggers are held in memory; updating one needs a reload.** Two in-memory
 > stores back this: the trigger *definitions* in the mock `TriggerStore` (`store.ts`, this app,
@@ -68,7 +76,7 @@ const { eventId, matched } = await fw.fire("job.changed", {
 
 ### 1. `fire()` validates the payload — `framework.ts` (@rw/triggers)
 Calls `validateEventPayload("job.changed", payload)` (`validate.ts`, @rw/triggers):
-- looks up `EVENT_SCHEMAS["job.changed"]` (`catalog.ts`) — found.
+- looks up `EVENT_SCHEMAS["job.changed"]` (aggregated from `events/job-changed.ts` by `events/index.ts`) — found.
 - runs the cached zod validator → **ok**, returns the normalized value:
   ```ts
   { previousJob: "J-100", currentJob: "J-200", station: "S-1" }
@@ -122,24 +130,25 @@ entry carrying `event: { type: "trg_seed" }`.
 The loop iterates `trigger.actions` in order. The seed has **two** actions, so the loop runs twice.
 
 **Action #0 (supervisor alert):**
-1. `actions.get("sendAlert")` → `sendAlertHandler` (`actions.ts`, this app).
-2. `interpolateInputs(action.inputs, { event })` (`interpolate.ts`, @rw/triggers) resolves the `{{...}}`:
+1. `actions.get("sendAlert")` → `handler` exported from `actions/send-alert.ts` (this app).
+2. `interpolateInputs(action.inputs, { event })` (`interpolate.ts`, @rw/triggers) resolves the `{{...}}`. User-id arrays don't contain templates, so they pass through untouched:
    ```ts
    {
      text: "Job changed from J-100 to J-200 at S-1",
-     emails: ["supervisor@example.com"],
+     recipientUserIds: ["u_supervisor"],
    }
    ```
-3. `missingRequired(inputs, handler.inputSchema)` — `sendAlert` requires `["text","emails"]`; both present → `null` (ok). (If either were missing, `runActions` would throw and abort the dispatch loop. The throw names the action index + type — e.g. `action #0 ("sendAlert"): missing required input "emails"` — so you can tell which action of which trigger failed.)
+3. `missingRequired(inputs, handler.inputSchema)` — `sendAlert` requires `["text","recipientUserIds"]`; both present → `null` (ok). (If either were missing, `runActions` would throw and abort the dispatch loop. The throw names the action index + type — e.g. `action #0 ("sendAlert"): missing required input "recipientUserIds"` — so you can tell which action of which trigger failed.)
 4. `await handler.run(inputs, { trigger, eventId: "a1b2c3d4" })`:
-   - logs: `[triggers] ALERT (Alert on job change at S-1): Job changed from J-100 to J-200 at S-1 -> supervisor@example.com`
+   - Inside the handler, each id is resolved via `getUserById("u_supervisor")` → `{ id, name: "Sam Supervisor", email: "supervisor@example.com" }`. Unknown ids are skipped with a `console.warn` and don't appear in the log line.
+   - logs: `[triggers] ALERT (Alert on job change at S-1): Job changed from J-100 to J-200 at S-1 -> Sam Supervisor <supervisor@example.com>`
 
 **Action #1 (shift-lead alert):**
 The same handler is resolved (both actions are `sendAlert` here), with different inputs interpolated from this action's template:
    ```ts
-   { text: "FYI: shift lead notified of change at S-1", emails: ["shift-lead@example.com"] }
+   { text: "FYI: shift lead notified of change at S-1", recipientUserIds: ["u_shift_lead"] }
    ```
-- logs: `[triggers] ALERT (Alert on job change at S-1): FYI: shift lead notified of change at S-1 -> shift-lead@example.com`
+- After handler-side id resolution, logs: `[triggers] ALERT (Alert on job change at S-1): FYI: shift lead notified of change at S-1 -> Riley Shift-Lead <shift-lead@example.com>`
 
 The loop then exits (no more actions on this trigger) and `dispatch` moves on to any other matched triggers.
 

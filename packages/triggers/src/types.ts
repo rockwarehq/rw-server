@@ -40,6 +40,22 @@ export interface SchemaProperty {
   description?: string;
   enum?: string[];
   items?: { type: "string" };
+  /**
+   * Marks this property as a reference to an external data source (users, channels, teams, …).
+   * The stored value is the source's id (or `string[]` of ids when `multi: true`); the editor uses
+   * `RefRegistry.list(source)` to populate a picker showing `label` and storing `id`. Resolution
+   * back to the full object at action-run time is the handler's responsibility today — see
+   * `RefSource` in @rw/triggers and the README's "Ref data sources" section.
+   */
+  ref?: RefAnnotation;
+}
+
+/** Describes a picker-style reference field; sits on a SchemaProperty. */
+export interface RefAnnotation {
+  /** Key registered in the RefRegistry (e.g. "users", "slackChannels"). */
+  source: string;
+  /** True for multi-select (`type: "array"`); false/omitted for single-select (`type: "string"`). */
+  multi?: boolean;
 }
 
 /** JSON-schema-ish description of an action's inputs: required keys + their properties. */

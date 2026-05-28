@@ -338,6 +338,7 @@ export const router = {
   },
   triggers: {
     getCatalog: triggers.getCatalog,
+    listRefOptions: triggers.listRefOptions,
     list: triggers.listTriggers,
     create: triggers.createTrigger,
     update: triggers.updateTrigger,

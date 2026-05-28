@@ -61,8 +61,13 @@ async function main(): Promise<void> {
   check("eventId generated", typeof r1.eventId === "string" && r1.eventId.length > 0, r1.eventId);
   check("matched = [trg_seed]", JSON.stringify(r1.matched) === '["trg_seed"]', r1.matched);
   check("both actions ran (two ALERT lines)", alerts.length === 2, alerts);
+  // Recipients are stored as user ids in the trigger; the handler resolves them to name <email> at
+  // run time. The log lines should contain the resolved email, not the raw id.
   check("supervisor alert ran first", alerts[0]?.includes("supervisor@example.com") === true, alerts[0]);
+  check("supervisor alert names the user", alerts[0]?.includes("Sam Supervisor") === true, alerts[0]);
   check("shift-lead alert ran second", alerts[1]?.includes("shift-lead@example.com") === true, alerts[1]);
+  check("shift-lead alert names the user", alerts[1]?.includes("Riley Shift-Lead") === true, alerts[1]);
+  check("no raw user ids leaked into the alert text", alerts.every((a) => !a.includes("u_supervisor") && !a.includes("u_shift_lead")), alerts);
 
   // ---------------------------------------------------------------------------
   console.log("\n2. Condition mismatch — valid event, nobody cares (station S-2)");
@@ -89,7 +94,7 @@ async function main(): Promise<void> {
     enabled: true,
     event: "job.changed",
     conditions: { combinator: "and", rules: [{ field: "event.payload.station", operator: "=", value: "S-9" }] },
-    actions: [{ type: "sendAlert", inputs: { text: "hit {{event.payload.station}}", emails: ["ops@example.com"] } }],
+    actions: [{ type: "sendAlert", inputs: { text: "hit {{event.payload.station}}", recipientUserIds: ["u_ops"] } }],
   });
   check("upsert returned the trigger", created.label === "Alert at S-9");
   // Before reload the engine still runs the old rule set — the new trigger is invisible.
@@ -156,6 +161,22 @@ async function main(): Promise<void> {
   }
   check("threw at construction", threw);
   check('error names the missing type "bar"', /bar/.test(errMsg), errMsg);
+
+  // ---------------------------------------------------------------------------
+  console.log("\n10. Ref picker — listRefOptions returns the registered users fixture");
+  const options = await fw.listRefOptions("users");
+  check("got 3 user options", options.length === 3, options.length);
+  check("supervisor option has id + label", options.some((o) => o.id === "u_supervisor" && o.label === "Sam Supervisor"), options);
+  check("ops option has email in meta", options.find((o) => o.id === "u_ops")?.meta?.email === "ops@example.com", options);
+  const eRef = await assertThrows(() => fw.listRefOptions("nonsense"));
+  check("unknown source throws", eRef !== null && /unknown ref source/i.test(eRef.message), eRef?.message);
+
+  // ---------------------------------------------------------------------------
+  console.log("\n11. Catalog surfaces ref metadata on action input properties");
+  const catalog = fw.catalog("job.changed", "sendAlert");
+  const recipientsProp = catalog.action.inputSchema.properties.recipientUserIds;
+  check("recipientUserIds has ref annotation", recipientsProp?.ref?.source === "users", recipientsProp?.ref);
+  check("recipientUserIds is multi", recipientsProp?.ref?.multi === true, recipientsProp?.ref);
 
   // ---------------------------------------------------------------------------
   rmSync(dir, { recursive: true, force: true });

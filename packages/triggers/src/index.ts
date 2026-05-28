@@ -19,6 +19,13 @@ export { createSyncIngestRuntime, type IngestRuntime } from "./ingest.js";
 export { interpolateInputs, type VariableContext } from "./interpolate.js";
 export { type EngineCondition, OPERATOR_MAP, QB_OPERATORS, qbToEngineConditions } from "./qb-to-engine.js";
 export type { RuleGroupType, RuleType } from "./query-builder-types.js";
+export {
+  createRefRegistry,
+  type RefContext,
+  type RefOption,
+  type RefRegistry,
+  type RefSource,
+} from "./refs.js";
 export { actionInputsToZod, formatZodError, payloadToZod } from "./schema-to-zod.js";
 export type { TriggerStore } from "./store.js";
 export type {
@@ -30,6 +37,7 @@ export type {
   EventType,
   FactDef,
   FactMap,
+  RefAnnotation,
   SchemaProperty,
   TemplateVariable,
   Trigger,
