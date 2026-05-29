@@ -5,7 +5,14 @@ import { jobEntityId } from "../../metrics/cascade.js";
 import { publishStationCurrentJobMetric, publishStationStandardCycleMetric } from "./state.js";
 
 type ChangeJobResult =
-  | { data: { stationId: string; previousJobId: string | null; newJobId: string | null } }
+  | {
+      data: {
+        stationId: string;
+        previousJobId: string | null;
+        newJobId: string | null;
+        workCenterId: string | null;
+      };
+    }
   | { error: string; code: string };
 
 /**
@@ -58,6 +65,7 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
         id: true,
         siteId: true,
         currentJobId: true,
+        workcenterId: true,
       },
     });
 
@@ -161,6 +169,7 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
       stationId,
       previousJobId,
       newJobId,
+      workCenterId: station.workcenterId,
     },
   };
 }

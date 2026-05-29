@@ -4,6 +4,7 @@ import { authRequired, processorRequired, userOrDisplayRequired } from "./middle
 import { Principal } from "../services/auth/index.js";
 import { station, workcenter } from "@rw/services/facility/index";
 import { getAccessibleSites, hasPermission } from "@rw/services/iam/index";
+import { getAutomationFramework } from "../automations/index.js";
 
 // ============================================================================
 // Input Schemas
@@ -904,6 +905,24 @@ export const changeJob = userOrDisplayRequired.input(changeJobInputSchema).handl
     }
     throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
   }
+
+  // Fire the `job.changed` automation event. Fire-and-forget so a misconfigured automation can
+  // never fail a committed job change — mirrors the side-effect pattern inside `changeJob`.
+  getAutomationFramework()
+    .then((fw) =>
+      // Coerce nulls to undefined: payload fields are optional strings (a cleared job or a
+      // station with no work center has no id), and the schema validator rejects explicit null.
+      fw.fire("job.changed", {
+        previousJobId: result.data.previousJobId ?? undefined,
+        currentJobId: result.data.newJobId ?? undefined,
+        stationId: result.data.stationId,
+        workCenterId: result.data.workCenterId ?? undefined,
+      }),
+    )
+    .catch((err) => {
+      console.error(`[changeJob] failed to fire job.changed automation for station ${result.data.stationId}:`, err);
+    });
+
   return result.data;
 });
 

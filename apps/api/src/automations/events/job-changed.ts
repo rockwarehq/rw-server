@@ -12,15 +12,12 @@ export const schema: EventSchema = {
       payload: {
         // Picker-typed payload fields: the condition builder renders a `RefRegistry.list(source)`
         // dropdown instead of a plain input. Stored value is the picked id — same `ref: { source }`
-        // shape as action-input refs (see SchemaProperty.ref in @rw/automations).
+        // shape as action-input refs (see SchemaProperty.ref in @rw/automations). These four are
+        // exactly what `station.changeJob` provides at the change site (jobs.ts).
         previousJobId: { type: "string", title: "Previous Job", ref: { source: "jobs" } },
         currentJobId: { type: "string", title: "Current Job", ref: { source: "jobs" } },
         stationId: { type: "string", title: "Station", ref: { source: "stations" } },
         workCenterId: { type: "string", title: "Work Center", ref: { source: "workCenters" } },
-        // Free-text payload fields (no ref → querybuilder renders a plain input).
-        department: { type: "string", title: "Department" },
-        businessDate: { type: "string", title: "Business Date" },
-        shift: { type: "string", title: "Shift" },
       },
     },
   },
