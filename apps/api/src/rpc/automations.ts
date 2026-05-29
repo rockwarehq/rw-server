@@ -73,17 +73,15 @@ export const getCatalog = authRequired
  * registered (startup validation would have caught a schema-side typo — this is defense against
  * typo'd client calls).
  */
-export const listRefOptions = authRequired
-  .input(z.object({ source: z.string().min(1) }))
-  .handler(async ({ input }) => {
-    const fw = await getAutomationFramework();
-    try {
-      return await fw.listRefOptions(input.source);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new ORPCError("BAD_REQUEST", { message: msg });
-    }
-  });
+export const listRefOptions = authRequired.input(z.object({ source: z.string().min(1) })).handler(async ({ input }) => {
+  const fw = await getAutomationFramework();
+  try {
+    return await fw.listRefOptions(input.source);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new ORPCError("BAD_REQUEST", { message: msg });
+  }
+});
 
 export const listAutomations = authRequired.handler(async () => {
   const fw = await getAutomationFramework();
