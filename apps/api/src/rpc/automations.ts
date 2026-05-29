@@ -99,7 +99,9 @@ export const createAutomation = authRequired
       event: z.string().min(1).default("job.changed"),
       eventVersion: z.string().min(1).optional(),
       conditions: conditionsSchema,
-      actions: actionsSchema,
+      // Allow creating a stub with no actions yet — the UI creates an empty
+      // automation and the user configures actions afterward in the editor.
+      actions: z.array(actionSchema).default([]),
     }),
   )
   .handler(async ({ input }) => {

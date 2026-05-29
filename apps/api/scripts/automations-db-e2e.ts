@@ -3,7 +3,7 @@
  *
  * Drives the real DB-backed framework (store + audit recorder + DB ref sources — no mocks) and
  * asserts the full event → automation → condition → action → audit path against Postgres. Seeds a
- * dedicated test workspace (employees, a station/work-center/job for the ref pickers), runs the
+ * dedicated test workspace (users, a station/work-center/job for the ref pickers), runs the
  * assertions, then tears the workspace + audit rows back down so re-runs start clean.
  *
  * Requires a reachable database (`DATABASE_URL`). Run:
@@ -31,12 +31,12 @@ const WC_ID = "a51c0000-0000-4000-8000-000000000002";
 const STATION_ID = "a51c0000-0000-4000-8000-000000000003";
 const JOB_ID = "a51c0000-0000-4000-8000-000000000004";
 const JOBBLOB_ID = "a51c0000-0000-4000-8000-000000000005";
-const EMP = [
-  { id: "e3b00000-0000-4000-8000-000000000001", firstName: "Sam", lastName: "Supervisor" },
-  { id: "e3b00000-0000-4000-8000-000000000002", firstName: "Riley", lastName: "Shift-Lead" },
-  { id: "e3b00000-0000-4000-8000-000000000003", firstName: "Ops", lastName: "Pager" },
+const USR = [
+  { id: "5e700000-0000-4000-8000-000000000001", email: "sam.supervisor@e2e.test" },
+  { id: "5e700000-0000-4000-8000-000000000002", email: "riley.shiftlead@e2e.test" },
+  { id: "5e700000-0000-4000-8000-000000000003", email: "ops.pager@e2e.test" },
 ];
-const [EMP_SUP, EMP_LEAD, EMP_OPS] = EMP;
+const [USR_SUP, USR_LEAD, USR_OPS] = USR;
 const AUTO_MAIN_ID = "a017a000-0000-4000-8000-000000000001";
 const AUTO_AUTHOR_ID = "a017a000-0000-4000-8000-000000000002";
 const AUTO_BROKEN_ID = "a017a000-0000-4000-8000-000000000003";
@@ -117,20 +117,13 @@ async function setup(): Promise<{ workspaceId: string }> {
   });
   await prisma.job.update({ where: { id: JOB_ID }, data: { currentBlobId: JOBBLOB_ID } });
 
-  // Employees + a current version each (the picker/handler read the name off the current version).
-  for (const e of EMP) {
-    await prisma.employee.upsert({
-      where: { id: e.id },
-      create: { id: e.id, workspaceId, status: "ACTIVE" },
-      update: {},
+  // Users (recipients are picked as users — only User carries an email).
+  for (const u of USR) {
+    await prisma.user.upsert({
+      where: { id: u.id },
+      create: { id: u.id, email: u.email, status: "ACTIVE" },
+      update: { email: u.email },
     });
-    let version = await prisma.employeeVersion.findFirst({ where: { employeeId: e.id } });
-    if (!version) {
-      version = await prisma.employeeVersion.create({
-        data: { employeeId: e.id, version: 1, firstName: e.firstName, lastName: e.lastName },
-      });
-      await prisma.employee.update({ where: { id: e.id }, data: { versionId: version.id } });
-    }
   }
 
   return { workspaceId };
@@ -161,14 +154,16 @@ async function teardown(workspaceId: string): Promise<void> {
   await prisma.job.updateMany({ where: { id: JOB_ID }, data: { currentBlobId: null } });
   await prisma.jobBlob.deleteMany({ where: { id: JOBBLOB_ID } });
   await prisma.job.deleteMany({ where: { id: JOB_ID } });
-  // Workspace delete cascades site (→ station, workcenter) + employees (→ versions).
+  // Workspace delete cascades site (→ station, workcenter). Users are global (no workspace FK), so
+  // drop the seeded ones explicitly.
+  await prisma.user.deleteMany({ where: { id: { in: USR.map((u) => u.id) } } });
   await prisma.workspace.deleteMany({ where: { id: workspaceId } });
 }
 
 async function main(): Promise<void> {
   console.log("─── Setup: dedicated test workspace + seed data ──────────────────────");
   const { workspaceId } = await setup();
-  console.log(`  workspace=${workspaceId}  employees=${EMP.length}  station/workcenter/job seeded`);
+  console.log(`  workspace=${workspaceId}  users=${USR.length}  station/workcenter/job seeded`);
 
   // Pre-clean any residue from a prior crashed run BEFORE building the framework, so the store's
   // initial load doesn't pick up stale test automations.
@@ -201,13 +196,13 @@ async function main(): Promise<void> {
           version: "1",
           inputs: {
             text: "Job changed from {{event.payload.previousJobId}} to {{event.payload.currentJobId}} at {{event.payload.stationId}}",
-            recipientEmployeeIds: [EMP_SUP.id],
+            recipientUserIds: [USR_SUP.id],
           },
         },
         {
           type: "sendAlert",
           version: "1",
-          inputs: { text: "FYI: shift lead notified of change at {{event.payload.stationId}}", recipientEmployeeIds: [EMP_LEAD.id] },
+          inputs: { text: "FYI: shift lead notified of change at {{event.payload.stationId}}", recipientUserIds: [USR_LEAD.id] },
         },
       ],
     });
@@ -221,11 +216,11 @@ async function main(): Promise<void> {
     check("eventId generated", typeof r1.eventId === "string" && r1.eventId.length > 0, r1.eventId);
     check("our automation matched", r1.matched.includes(AUTO_MAIN_ID), r1.matched);
     check("both actions ran (2 ALERT lines)", ourAlerts.length === 2, ourAlerts);
-    check("supervisor alert ran first (resolved name)", ourAlerts[0]?.includes("Sam Supervisor") === true, ourAlerts[0]);
-    check("shift-lead alert ran second (resolved name)", ourAlerts[1]?.includes("Riley Shift-Lead") === true, ourAlerts[1]);
+    check("supervisor alert ran first (resolved email)", ourAlerts[0]?.includes(USR_SUP.email) === true, ourAlerts[0]);
+    check("shift-lead alert ran second (resolved email)", ourAlerts[1]?.includes(USR_LEAD.email) === true, ourAlerts[1]);
     check(
-      "no raw employee ids leaked into the alert text",
-      ourAlerts.every((a) => !a.includes(EMP_SUP.id) && !a.includes(EMP_LEAD.id)),
+      "no raw user ids leaked into the alert text",
+      ourAlerts.every((a) => !a.includes(USR_SUP.id) && !a.includes(USR_LEAD.id)),
       ourAlerts,
     );
 
@@ -268,7 +263,7 @@ async function main(): Promise<void> {
       id: AUTO_AUTHOR_ID,
       label: AUTHOR_LABEL,
       value: "s_9",
-      actions: [{ type: "sendAlert", version: "1", inputs: { text: "hit {{event.payload.stationId}}", recipientEmployeeIds: [EMP_OPS.id] } }],
+      actions: [{ type: "sendAlert", version: "1", inputs: { text: "hit {{event.payload.stationId}}", recipientUserIds: [USR_OPS.id] } }],
     });
     check("upsert returned the automation", created.label === AUTHOR_LABEL);
     const beforeReload = await fw.fire("job.changed", { stationId: "s_9" });
@@ -319,7 +314,7 @@ async function main(): Promise<void> {
       id: AUTO_BADVER_ID,
       label: "E2E: bad version pin (sendAlert@999)",
       value: "s_99",
-      actions: [{ type: "sendAlert", version: "999", inputs: { text: "x", recipientEmployeeIds: [EMP_OPS.id] } }],
+      actions: [{ type: "sendAlert", version: "999", inputs: { text: "x", recipientUserIds: [USR_OPS.id] } }],
     });
     fw.engine.reload();
     const e9b = await assertThrows(() => fw.fire("job.changed", { stationId: "s_99" }));
@@ -365,9 +360,9 @@ async function main(): Promise<void> {
 
     // -------------------------------------------------------------------------
     console.log("\n11. Ref pickers — each DB-backed source returns the seeded rows");
-    const employees = await fw.listRefOptions("employees");
-    check("employees picker includes the supervisor", employees.some((o) => o.id === EMP_SUP.id && o.label === "Sam Supervisor"), employees);
-    check("employees picker includes the ops pager", employees.some((o) => o.id === EMP_OPS.id && o.label === "Ops Pager"), employees);
+    const users = await fw.listRefOptions("users");
+    check("users picker includes the supervisor", users.some((o) => o.id === USR_SUP.id && o.label === USR_SUP.email), users);
+    check("users picker includes the ops pager", users.some((o) => o.id === USR_OPS.id && o.label === USR_OPS.email), users);
     const stations = await fw.listRefOptions("stations");
     check("stations picker includes the seeded station", stations.some((o) => o.label === "E2E Station"), stations);
     const jobs = await fw.listRefOptions("jobs");
@@ -382,9 +377,9 @@ async function main(): Promise<void> {
     const catalog = fw.catalog("job.changed", "sendAlert");
     check("catalog reports event version", catalog.eventVersion === "1", catalog.eventVersion);
     check("catalog reports action version (latest)", catalog.actionVersion === "1", catalog.actionVersion);
-    const recipientsProp = catalog.action.versions[catalog.actionVersion]?.inputSchema.properties.recipientEmployeeIds;
-    check("recipientEmployeeIds has ref source 'employees'", recipientsProp?.ref?.source === "employees", recipientsProp?.ref);
-    check("recipientEmployeeIds is multi", recipientsProp?.ref?.multi === true, recipientsProp?.ref);
+    const recipientsProp = catalog.action.versions[catalog.actionVersion]?.inputSchema.properties.recipientUserIds;
+    check("recipientUserIds has ref source 'users'", recipientsProp?.ref?.source === "users", recipientsProp?.ref);
+    check("recipientUserIds is multi", recipientsProp?.ref?.multi === true, recipientsProp?.ref);
     const stationFact = catalog.facts.find((f) => f.id === "event.payload.stationId");
     check("stationId fact carries ref.source = 'stations'", stationFact?.ref?.source === "stations", stationFact?.ref);
     const jobFact = catalog.facts.find((f) => f.id === "event.payload.currentJobId");

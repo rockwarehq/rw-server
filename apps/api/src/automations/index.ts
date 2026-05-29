@@ -1,10 +1,10 @@
 import { type AutomationFramework, createAutomationFramework, createRefRegistry } from "@rw/automations";
 import { createDbRunRecorder } from "@rw/services/automation/recorder";
 import { createDbAutomationStore } from "@rw/services/automation/store";
-import { employeesAutomationRef } from "@rw/services/employee/automation-ref";
 import { stationsAutomationRef } from "@rw/services/facility/station/automation-ref";
 import { workCentersAutomationRef } from "@rw/services/facility/workcenter/automation-ref";
 import { jobsAutomationRef } from "@rw/services/job/automation-ref";
+import { usersAutomationRef } from "@rw/services/user/automation-ref";
 import { ACTION_SCHEMAS, buildActionRegistry } from "./actions/index.js";
 import { buildContextBuilders, EVENT_SCHEMAS } from "./events/index.js";
 
@@ -13,12 +13,12 @@ import { buildContextBuilders, EVENT_SCHEMAS } from "./events/index.js";
  * Automations are global — there's no workspace scoping. Wires:
  *   - `createDbAutomationStore` — automation definitions in Postgres.
  *   - the audit recorder — writes `AutomationRun` + `AutomationActionRun` rows on every fire.
- *   - the DB-backed ref sources — pickers list every employee / job / station / work center.
+ *   - the DB-backed ref sources — pickers list every user / job / station / work center.
  */
 export async function createAppAutomationFramework(): Promise<AutomationFramework> {
   const store = await createDbAutomationStore();
   const refs = createRefRegistry()
-    .register(employeesAutomationRef)
+    .register(usersAutomationRef)
     .register(workCentersAutomationRef)
     .register(stationsAutomationRef)
     .register(jobsAutomationRef);

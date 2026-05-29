@@ -25,7 +25,8 @@
     "./processor/*": "./dist/processor/*.js",
     "./queues/*": "./dist/queues/*.js",
     "./rpc/*": "./dist/rpc/*.js",
-    "./types/*": "./dist/types/*.js"
+    "./types/*": "./dist/types/*.js",
+    "./user/*": "./dist/user/*.js"
   },
   "scripts": {
     "build": "tsc -b"
