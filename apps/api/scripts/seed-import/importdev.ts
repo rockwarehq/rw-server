@@ -1,9 +1,9 @@
 import "dotenv/config";
 import { createInterface } from "node:readline/promises";
 import bcrypt from "bcrypt";
-import prisma from "../../src/client.js";
-import { findSystemRole } from "../../../src/iam/roles.js";
-import { seedSystemRoles } from "../systemRoles.js";
+import prisma from "@rw/db";
+import { findSystemRole } from "@rw/services/iam/roles";
+import { seedSystemRoles } from "./systemRoles.js";
 import config from "./config.js";
 import { IdMap, setDataFile, setDevSeed } from "./utils.js";
 import { importProcessTypes } from "./importProcessTypes.js";
@@ -20,9 +20,9 @@ import { importStatusCategories } from "./importStatusCategories.js";
 import { importStatusReasons } from "./importStatusReasons.js";
 import { importItemDispositions } from "./importItemDispositions.js";
 import { importItemDispositionReasons } from "./importItemDispositionReasons.js";
-import { driverRegistry } from "../../../src/services/device/driver/registry.js";
-import * as datasourceSvc from "../../../src/services/device/datasource/index.js";
-import * as gatewaySvc from "../../../src/services/device/gateway/index.js";
+import { driverRegistry } from "../../src/services/device/driver/registry.js";
+import * as datasourceSvc from "../../src/services/device/datasource/index.js";
+import * as gatewaySvc from "@rw/services/device/gateway/index";
 
 const SALT_ROUNDS = 10;
 
@@ -382,7 +382,7 @@ async function main() {
   // Apply schema and migrations to the clean database
   console.log("  Running Prisma migrations...");
   const { execSync } = await import("node:child_process");
-  execSync("pnpm exec prisma migrate deploy", { stdio: "inherit" });
+  execSync("pnpm --filter @rw/db exec prisma migrate deploy", { stdio: "inherit" });
   console.log();
 
 

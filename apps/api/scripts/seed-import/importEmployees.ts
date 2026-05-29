@@ -1,5 +1,5 @@
-import type { PrismaClient } from "../../src/index.js";
-import { hashPassword, comparePassword } from "../../../src/services/auth/session.js";
+import type { PrismaClient } from "@rw/db";
+import { hashPassword, comparePassword } from "../../src/services/auth/session.js";
 import {
   type IdMap,
   readData,

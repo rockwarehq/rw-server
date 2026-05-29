@@ -1,4 +1,4 @@
-import type { PrismaClient } from "../../src/index.js";
+import type { PrismaClient } from "@rw/db";
 import {
   type IdMap,
   readData,
@@ -12,23 +12,24 @@ import {
 
 interface SqlServerRow {
   name: string;
+  isActive: string;
 }
 
 // ---------------------------------------------------------------------------
 // Importer
 // ---------------------------------------------------------------------------
 
-export async function importItemDispositions(
+export async function importStatusCategories(
   prisma: PrismaClient,
   idMap: IdMap,
   siteId: string,
 ): Promise<void> {
-  const log = logger("ItemDisposition");
+  const log = logger("StatusCategory");
 
-  const rows = await readData<SqlServerRow>("ItemDisposition");
+  const rows = await readData<SqlServerRow>("StatusCategory");
 
   if (rows.length === 0) {
-    log.warn("No ItemDisposition data found in sqlLegacyData.txt — skipping");
+    log.warn("No StatusCategory data found in sqlLegacyData.txt — skipping");
     return;
   }
 
@@ -38,7 +39,7 @@ export async function importItemDispositions(
     rows,
     async (row) => {
       // Use findFirst + create/update pattern for safety
-      const existing = await prisma.itemDisposition.findFirst({
+      const existing = await prisma.statusCategory.findFirst({
         where: { siteId, name: { equals: row.name, mode: "insensitive" } },
       });
 
@@ -46,7 +47,7 @@ export async function importItemDispositions(
       if (existing) {
         record = existing;
       } else {
-        record = await prisma.itemDisposition.create({
+        record = await prisma.statusCategory.create({
           data: {
             name: row.name,
             siteId,
@@ -54,10 +55,10 @@ export async function importItemDispositions(
         });
       }
 
-      // Store mapping by name for downstream importers (ItemDispositionReason)
-      idMap.set("itemDisposition", row.name, record.id);
+      // Store mapping by name for downstream importers (StatusReason)
+      idMap.set("statusCategory", row.name, record.id);
     },
-    { label: "item dispositions" },
+    { label: "status categories" },
   );
 
   log.summary(result);

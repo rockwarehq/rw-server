@@ -1,7 +1,7 @@
-import prisma from "../src/client.js";
-import type { RoleScope } from "../src/index.js";
-import { ACTIONS, ALL_PERMISSIONS, RESOURCES } from "../../src/iam/permissions.js";
-import type { Permission } from "../../src/iam/permissions.js";
+import prisma from "@rw/db";
+import type { RoleScope } from "@rw/db";
+import { ACTIONS, ALL_PERMISSIONS, RESOURCES } from "@rw/services/iam/permissions";
+import type { Permission } from "@rw/services/iam/permissions";
 
 const all = (resource: (typeof RESOURCES)[number]): Permission[] =>
   ACTIONS.map((action) => `${resource}:${action}` as Permission);

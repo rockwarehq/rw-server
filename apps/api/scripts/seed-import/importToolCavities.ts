@@ -1,4 +1,4 @@
-import type { PrismaClient } from "../../src/index.js";
+import type { PrismaClient } from "@rw/db";
 import {
   type IdMap,
   readData,

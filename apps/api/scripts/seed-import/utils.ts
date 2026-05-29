@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import config from "./config.js";
-import { WeightUnit } from "../../src/index.js";
+import { WeightUnit } from "@rw/db";
 
 // ---------------------------------------------------------------------------
 // Blob versioning convention for importers
@@ -56,7 +56,7 @@ async function loadDataFile(): Promise<Record<string, Record<string, string>[]>>
   const cached = dataCache.get(activeDataFile);
   if (cached) return cached;
 
-  const filePath = new URL(`../data/${activeDataFile}`, import.meta.url);
+  const filePath = new URL(`./data/${activeDataFile}`, import.meta.url);
   const raw = await fs.readFile(filePath, "utf-8");
 
   const parsed = parseFixedWidthSections(raw);

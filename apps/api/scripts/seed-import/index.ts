@@ -1,5 +1,5 @@
 import "dotenv/config";
-import prisma from "../../src/client.js";
+import prisma from "@rw/db";
 import config from "./config.js";
 import { IdMap } from "./utils.js";
 import { importProcessTypes } from "./importProcessTypes.js";
@@ -46,7 +46,7 @@ async function main() {
   if (!site) {
     console.error(
       `Site "${config.siteName}" in workspace "${config.workspaceName}" not found.\n` +
-        `Update prisma/seed/import/config.ts with the correct values.`,
+        `Update apps/api/scripts/seed-import/config.ts with the correct values.`,
     );
     process.exit(1);
   }
