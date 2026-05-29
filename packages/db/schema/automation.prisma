@@ -117,4 +117,6 @@ enum AutomationActionRunStatus {
   SUCCESS
   FAILED
   SKIPPED
+  /// Deferred to the ActionScheduler; the real outcome is recorded later as its own run.
+  SCHEDULED
 }
