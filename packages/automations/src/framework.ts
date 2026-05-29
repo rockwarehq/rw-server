@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { ActionRegistry } from "./actions.js";
 import { buildCatalog } from "./catalog.js";
 import type { ContextBuilder } from "./context.js";
@@ -154,8 +153,10 @@ export function createAutomationFramework(config: AutomationFrameworkConfig): Au
       const normalized = validators.validateEventPayload(type, version, payload);
       const event: AppEvent = {
         // UUID v4 — DB stores eventId as `@db.Uuid`, and a stable id format helps downstream
-        // tracing (logs, audit rows, external systems) all line up.
-        id: randomUUID(),
+        // tracing (logs, audit rows, external systems) all line up. Uses the Web Crypto global
+        // (`globalThis.crypto`) so the package stays isomorphic — works in Node 20+ and browsers
+        // without a `node:crypto` import.
+        id: globalThis.crypto.randomUUID(),
         type,
         version,
         ts: new Date().toISOString(),
