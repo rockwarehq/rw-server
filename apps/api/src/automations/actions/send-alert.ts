@@ -1,14 +1,16 @@
 import type { ActionHandler } from "@rw/automations";
+import { sendAlertEmail } from "@rw/services/email/index";
 import { getUserById } from "@rw/services/user/automation-ref";
 
 /**
- * `sendAlert` — logs an alert text and the resolved emails of one or more picked users.
+ * `sendAlert` — emails an alert message to one or more picked users.
  *
  * Recipients are users because only `User` carries an email (employees don't — see
  * `@rw/services/user/automation-ref`). Per-version `inputSchema` + `run` live together so they
  * can't disagree. Stored input is user ids; the handler resolves them to emails at run time via
  * `@rw/services/user/automation-ref` (no framework hydration today, see @rw/automations README
- * "Ref data sources").
+ * "Ref data sources"). The message `text` arrives already interpolated by the engine
+ * (`{{event.payload.*}}` resolved); the subject is the firing event's name.
  *
  * Add a new version (e.g. switch from a flat `recipientUserIds` to a structured
  * `{ to: [ids], cc: [ids] }`) by adding a `"2"` entry; v1 automations keep running against the v1
@@ -26,7 +28,7 @@ export const handler: ActionHandler = {
           text: {
             type: "string",
             title: "Alert Text",
-            description: "Message to log. Supports {{event.payload.*}} variables.",
+            description: "Message body to email. Supports {{event.payload.*}} variables.",
           },
           recipientUserIds: {
             type: "array",
@@ -51,9 +53,15 @@ export const handler: ActionHandler = {
           else console.warn(`[automations] sendAlert: unknown user id "${id}" — skipped`);
         }
 
-        console.log(
-          `[automations] ALERT (${ctx.automation.label}): ${text} -> ${recipients.join(", ") || "(no recipients)"}`,
-        );
+        if (recipients.length === 0) {
+          console.warn(`[automations] sendAlert (${ctx.automation.label}): no recipients resolved — skipped`);
+          return;
+        }
+
+        const result = await sendAlertEmail({ to: recipients, subject: ctx.automation.event, message: text });
+        if (!result.success) {
+          throw new Error(`sendAlert email failed: ${result.error}`);
+        }
       },
     },
   },
