@@ -2,7 +2,8 @@
 //
 // The consuming app supplies its domain (event/action schemas, fact builders, action handlers, and
 // a store) and calls `createAutomationFramework(config)`. Everything below the seams — condition
-// evaluation, ingestion, validation, interpolation — is fixed and reusable.
+// evaluation, dispatch, validation, interpolation — is fixed and reusable, and intentionally kept
+// off this public barrel (it is reachable only through the framework instance).
 
 export {
   type ActionContext,
@@ -10,27 +11,21 @@ export {
   type ActionRegistry,
   type ActionVersion,
   createActionRegistry,
-  missingRequired,
 } from "./actions.js";
-export { buildCatalog } from "./catalog.js";
 export { type ContextBuilder, statelessContextBuilder } from "./context.js";
-export { createAutomationEngine, type EngineDeps, type AutomationEngine } from "./engine.js";
+export type { AutomationEngine } from "./engine.js";
 export {
   createAutomationFramework,
   type FireOptions,
   type AutomationFramework,
   type AutomationFrameworkConfig,
 } from "./framework.js";
-export { createSyncIngestRuntime, type IngestRuntime } from "./ingest.js";
-export { interpolateInputs, type VariableContext } from "./interpolate.js";
-export { type EngineCondition, OPERATOR_MAP, QB_OPERATORS, qbToEngineConditions } from "./qb-to-engine.js";
 export type { RuleGroupType, RuleType } from "./query-builder-types.js";
-export {
-  type FinishRunInput,
-  noopRunRecorder,
-  type RecordActionInput,
-  type RunRecorder,
-  type StartRunInput,
+export type {
+  FinishRunInput,
+  RecordActionInput,
+  RunRecorder,
+  StartRunInput,
 } from "./recorder.js";
 export {
   createRefRegistry,
@@ -39,7 +34,6 @@ export {
   type RefRegistry,
   type RefSource,
 } from "./refs.js";
-export { actionInputsToZod, formatZodError, payloadToZod } from "./schema-to-zod.js";
 export type { AutomationStore } from "./store.js";
 export type {
   ActionInputSchema,
@@ -58,4 +52,3 @@ export type {
   Automation,
   AutomationAction,
 } from "./types.js";
-export { createValidators, type Validators } from "./validate.js";

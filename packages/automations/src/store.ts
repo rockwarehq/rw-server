@@ -24,6 +24,6 @@ export interface AutomationStore {
   upsert(automation: Automation): Promise<Automation>;
   /** Delete by id. Returns true if a row was removed, false if it didn't exist. */
   remove(id: string): Promise<boolean>;
-  /** Mint a new id (e.g. `atm_<nanoid>`). Synchronous — no I/O. */
+  /** Mint a new id (e.g. a UUID). Synchronous — no I/O. */
   newId(): string;
 }

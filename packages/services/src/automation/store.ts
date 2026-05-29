@@ -1,6 +1,6 @@
+import { randomUUID } from "node:crypto";
 import type { Automation, AutomationAction, AutomationStore, RuleGroupType } from "@rw/automations";
 import prisma from "@rw/db";
-import { nanoid } from "nanoid";
 
 /**
  * Prisma-backed implementation of @rw/automations' `AutomationStore`.
@@ -68,7 +68,9 @@ export async function createDbAutomationStore(workspaceId: string): Promise<Auto
       return true;
     },
 
-    newId: () => `atm_${nanoid(8)}`,
+    // `Automation.id` is `@db.Uuid` (as are the audit `automationId` / `eventId` columns), so ids
+    // must be UUIDs — same format `fire()` uses for event ids.
+    newId: () => randomUUID(),
   };
 }
 

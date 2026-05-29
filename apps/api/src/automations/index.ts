@@ -1,72 +1,28 @@
-import {
-  type AutomationFramework,
-  type AutomationStore,
-  createAutomationFramework,
-  createRefRegistry,
-} from "@rw/automations";
-import { createDbAutomationStore } from "@rw/services/automation/store";
+import { type AutomationFramework, createAutomationFramework, createRefRegistry } from "@rw/automations";
 import { createDbRunRecorder } from "@rw/services/automation/recorder";
+import { createDbAutomationStore } from "@rw/services/automation/store";
 import { createEmployeesAutomationRef } from "@rw/services/employee/automation-ref";
-import { createJobsAutomationRef } from "@rw/services/job/automation-ref";
 import { createStationsAutomationRef } from "@rw/services/facility/station/automation-ref";
 import { createWorkcentersAutomationRef } from "@rw/services/facility/workcenter/automation-ref";
+import { createJobsAutomationRef } from "@rw/services/job/automation-ref";
 import { ACTION_SCHEMAS, buildActionRegistry } from "./actions/index.js";
 import { buildContextBuilders, EVENT_SCHEMAS } from "./events/index.js";
-import {
-  employeesRefSource as fileEmployeesRefSource,
-  jobsRefSource as fileJobsRefSource,
-  stationsRefSource as fileStationsRefSource,
-  workCentersRefSource as fileWorkCentersRefSource,
-} from "./refs/index.js";
-import { createFileAutomationStore } from "./store.js";
-
-export interface CreateAppAutomationFrameworkOptions {
-  /** Pass a store explicitly to bypass the DB (the file-backed mock used by e2e does this). */
-  store?: AutomationStore;
-  /** Workspace this framework operates against. Required when omitting `store` (DB-backed mode). */
-  workspaceId?: string;
-}
 
 /**
- * Build an automation framework wired with this app's events + actions + refs.
- *
- *   - DB-backed (default): pass `workspaceId`. Wires `createDbAutomationStore`, the audit recorder
- *     (writes AutomationRun + AutomationActionRun rows on every fire), and the DB-backed users ref
- *     source (picker lists workspace members).
- *   - File-mock: pass `store` (typically `createFileAutomationStore(path)`). Uses the in-memory
- *     users fixture from `./refs.js` and no audit recorder. The e2e test uses this branch.
+ * Build a DB-backed automation framework wired with this app's events + actions + refs for one
+ * workspace. Wires:
+ *   - `createDbAutomationStore` — automation definitions in Postgres.
+ *   - the audit recorder — writes `AutomationRun` + `AutomationActionRun` rows on every fire.
+ *   - the DB-backed ref sources — pickers list the workspace's employees / jobs / stations /
+ *     work centers.
  */
-export async function createAppAutomationFramework(
-  opts: CreateAppAutomationFrameworkOptions = {},
-): Promise<AutomationFramework> {
-  let store: AutomationStore;
-  let refs: ReturnType<typeof createRefRegistry>;
-  let recorder: Parameters<typeof createAutomationFramework>[0]["recorder"];
-
-  if (opts.store) {
-    // File-mock path: caller supplied the store; refs come from in-memory fixtures; no audit.
-    store = opts.store;
-    refs = createRefRegistry()
-      .register(fileEmployeesRefSource)
-      .register(fileWorkCentersRefSource)
-      .register(fileStationsRefSource)
-      .register(fileJobsRefSource);
-    recorder = undefined;
-  } else {
-    if (!opts.workspaceId) {
-      throw new Error(
-        "createAppAutomationFramework: `workspaceId` is required when no `store` is provided (DB-backed mode)",
-      );
-    }
-    const workspaceId = opts.workspaceId;
-    store = await createDbAutomationStore(workspaceId);
-    refs = createRefRegistry()
-      .register(createEmployeesAutomationRef(workspaceId))
-      .register(createWorkcentersAutomationRef(workspaceId))
-      .register(createStationsAutomationRef(workspaceId))
-      .register(createJobsAutomationRef(workspaceId));
-    recorder = createDbRunRecorder(workspaceId);
-  }
+export async function createAppAutomationFramework(workspaceId: string): Promise<AutomationFramework> {
+  const store = await createDbAutomationStore(workspaceId);
+  const refs = createRefRegistry()
+    .register(createEmployeesAutomationRef(workspaceId))
+    .register(createWorkcentersAutomationRef(workspaceId))
+    .register(createStationsAutomationRef(workspaceId))
+    .register(createJobsAutomationRef(workspaceId));
 
   return createAutomationFramework({
     eventSchemas: EVENT_SCHEMAS,
@@ -75,7 +31,7 @@ export async function createAppAutomationFramework(
     contextBuilders: buildContextBuilders(),
     actions: buildActionRegistry(),
     refs,
-    recorder,
+    recorder: createDbRunRecorder(workspaceId),
   });
 }
 
@@ -95,7 +51,7 @@ export async function getAutomationFramework(workspaceId: string): Promise<Autom
   if (inflight) return inflight;
 
   const promise = (async () => {
-    const fw = await createAppAutomationFramework({ workspaceId });
+    const fw = await createAppAutomationFramework(workspaceId);
     cache.set(workspaceId, fw);
     pending.delete(workspaceId);
     return fw;
@@ -103,8 +59,6 @@ export async function getAutomationFramework(workspaceId: string): Promise<Autom
   pending.set(workspaceId, promise);
   return promise;
 }
-
-export { createFileAutomationStore };
 
 export type {
   AppEvent,

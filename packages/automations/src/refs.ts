@@ -12,10 +12,7 @@
  *   - `RefRegistry` — collection of sources, looked up by `key`. Lives on the framework.
  */
 
-/**
- * Whatever the source needs to scope its query: workspace id, auth context, search filter, etc.
- * Threaded through from the RPC call site. Sources cast/narrow as needed.
- */
+/** Per-call scope a source may need (workspace, search filter, …). Empty today; sources narrow as needed. */
 export type RefContext = Record<string, unknown>;
 
 /** One option in a picker — a stable id to store + a label to render. */

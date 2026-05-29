@@ -4,7 +4,7 @@ import type { ActionSchema, EventSchema, EventType } from "./types.js";
 
 /** Validates inputs/payloads against the schemas it's given. Throws on failure; returns the normalized value on success. */
 export interface Validators {
-  /** Validate a trigger's action inputs against a specific schema version. Throws on unknown (type, version) or schema mismatch. */
+  /** Validate an automation's action inputs against a specific schema version. Throws on unknown (type, version) or schema mismatch. */
   validateActionInputs(actionType: string, version: string, inputs: unknown): Record<string, unknown>;
   /** Validate an event payload against a specific schema version. Throws on unknown (type, version) or schema mismatch. */
   validateEventPayload(eventType: EventType, version: string, payload: unknown): Record<string, unknown>;

@@ -3,7 +3,6 @@ import type { ActionRegistry } from "./actions.js";
 import { buildCatalog } from "./catalog.js";
 import type { ContextBuilder } from "./context.js";
 import { createAutomationEngine, type AutomationEngine } from "./engine.js";
-import { createSyncIngestRuntime, type IngestRuntime } from "./ingest.js";
 import type { RunRecorder } from "./recorder.js";
 import { createRefRegistry, type RefContext, type RefOption, type RefRegistry } from "./refs.js";
 import type { AutomationStore } from "./store.js";
@@ -43,7 +42,6 @@ export interface FireOptions {
 export interface AutomationFramework {
   store: AutomationStore;
   engine: AutomationEngine;
-  ingest: IngestRuntime;
   /** The event schemas the framework was configured with (read-only — for RPC layers resolving `latest`). */
   eventSchemas: Record<EventType, EventSchema>;
   /** The action schemas the framework was configured with (read-only — for RPC layers resolving `latest`). */
@@ -74,7 +72,7 @@ export interface AutomationFramework {
 }
 
 /**
- * Assemble the framework from an app's domain config. Wires the engine, ingestion, validators, and
+ * Assemble the framework from an app's domain config. Wires the engine, validators, and
  * `fire()` together and indexes the current automations (`engine.reload()`).
  *
  * Startup validation throws if any declared schema is inconsistent: missing context builder, missing
@@ -135,12 +133,10 @@ export function createAutomationFramework(config: AutomationFrameworkConfig): Au
     recorder: config.recorder,
   });
   engine.reload();
-  const ingest = createSyncIngestRuntime(engine);
 
   return {
     store,
     engine,
-    ingest,
     eventSchemas,
     actionSchemas,
     catalog: (eventType, actionType, eventVersion, actionVersion) =>
@@ -165,7 +161,7 @@ export function createAutomationFramework(config: AutomationFrameworkConfig): Au
         ts: new Date().toISOString(),
         payload: normalized,
       };
-      const matched = await ingest.submit(event);
+      const matched = await engine.dispatch(event);
       return { eventId: event.id, matched };
     },
   };

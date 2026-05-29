@@ -1,98 +1,60 @@
-# Automations — app composition root
+# Automations (this app)
 
-This folder is **this app's domain + wiring** for the automation framework. The reusable engine
-(event → conditions → action, the seams, validation, interpolation) lives in the
-[`@rw/automations`](../../../../packages/automations/README.md) package — start there for the seam model,
-the `fire()` contract, and how an event flows through the engine (and its
-[`WALKTHROUGH.md`](../../../../packages/automations/WALKTHROUGH.md) for wiring the engine into a new app).
-
-Everything here is what makes the engine *this app's*: the concrete event/action **schemas**, the
-**handlers** that do real work, the **fact builders**, the **store**, and the call that assembles
-them into the engine.
-
-## The split
+This app's domain + wiring for the automation engine. The reusable engine lives in
+[`@rw/automations`](../../../../packages/automations/README.md); this folder supplies the concrete
+**event/action schemas**, the **handlers** that do the work, the **fact builders**, and the
+composition root that assembles them.
 
 ```
-@rw/automations (package)            apps/api/src/automations (this folder)
-─────────────────────             ───────────────────────────────────
-engine, ingestion, validation,    events/        one module per event type
-interpolation, catalog builder,                  (schema + ContextBuilder colocated)
-seam interfaces, fire()           actions/       one module per action type
-                                                 (schema + ActionHandler colocated)
-                                  refs.ts        RefSource + getXById helpers
-                                  store.ts       seed + file-backed store mock
-   createAutomationFramework(cfg) ◀──── createAppAutomationFramework() (index.ts)
+events/<type>.ts    one event:  schema (versioned) + contextBuilder
+actions/<type>.ts   one action: handler with all versions inside
+index.ts            composition root — createAppAutomationFramework(workspaceId)
 ```
 
-The dependency only points one way: this folder imports from `@rw/automations`; the package never
-imports app code. That boundary is what keeps the engine reusable.
+The DB-backed seams (store, audit recorder, ref sources for the pickers) live in `@rw/services` and
+are wired in by `index.ts`.
 
-## Files
+## How to use
 
-| File / folder | What it does |
-| --- | --- |
-| `events/<type>.ts` | One file per event type. Exports `schema: EventSchema` (versioned — `latest` + `versions` map) + `contextBuilder: ContextBuilder`. (e.g. `events/job-changed.ts`.) |
-| `events/index.ts` | Aggregator. Collects every event module into `EVENT_SCHEMAS` + `buildContextBuilders()`. Add a new event = drop a file in `events/`, add one import line here. |
-| `actions/<type>.ts` | One file per action type. Exports `handler: ActionHandler` with all versions inside (`latest` + `versions: { "1": { inputSchema, run }, ... }`) — schema and behavior per version live in the same object. (e.g. `actions/send-alert.ts`.) |
-| `actions/index.ts` | Aggregator. Derives `ACTION_SCHEMAS` (catalog view, no `run`) from each handler and builds the versioned `ActionRegistry`. Add a new action = drop a file in `actions/`, add one import line here. |
-| `refs.ts` | `RefSource` implementations + `getXById` helpers. Today: in-memory users fixture (mock for a future `@rw/db` users table). One file per source as this grows. |
-| `store.ts` | A MOCK file-backed `AutomationStore` (persists automations to JSON for dev) + the seed automation. Swap for a `@rw/db`-backed store later; nothing else changes. |
-| `index.ts` | Composition root — `createAppAutomationFramework()` feeds the aggregators into `@rw/automations`' `createAutomationFramework()`, and `getAutomationFramework()` is the shared singleton the oRPC layer uses. |
-
-## Raising an event
-
-In-process only — no HTTP endpoint. Get the shared framework and call `fire(type, payload)`. It
-throws on a bad payload, an unknown event type, or any misconfigured matched action:
+Get the per-workspace framework and `fire()` an event in-process:
 
 ```ts
 import { getAutomationFramework } from "./automations/index.js";
 
-// e.g. inside the code path that persists a job change
-const fw = getAutomationFramework();
-try {
-  const { eventId, matched } = await fw.fire("job.changed", {
-    previousJob: "J-100",
-    currentJob: "J-200",
-    station: "S-1",
-  });
-  // eventId → generated event id (for tracing); matched → matched automation ids
-} catch (err) {
-  log.warn(`fire failed: ${(err as Error).message}`);
-}
+const fw = await getAutomationFramework(workspaceId);
+const { eventId, matched } = await fw.fire("job.changed", {
+  previousJobId: "j_100",
+  currentJobId: "j_200",
+  stationId: "s_1",
+});
 ```
 
-See [`@rw/automations`](../../../../packages/automations/README.md#error-model) for the framework-wide
-error model and the `ingest.submit` escape hatch.
+`fire()` throws on a bad payload, unknown event type, or a misconfigured matched action — wrap it if
+you want graceful handling.
 
 ## Adding things
 
-- **New action** → create `actions/<type>.ts` exporting one `handler: ActionHandler` with `latest`
-  + `versions` inside, then add one import line to `actions/index.ts`. Each version pairs
-  `inputSchema` + `run` in the same object — they can't drift. The catalog view (no `run`) is
-  derived automatically.
-- **New version of an existing action** → add a `"2"` entry to that action's `versions` map (with
-  its own `inputSchema` + `run`); keep `"1"` in place as long as any automation pins it. Bump `latest`
-  when the editor should default to `"2"` for new automations.
-- **New event type** → create `events/<type>.ts` exporting `schema` (versioned) + `contextBuilder`,
-  then add one import line to `events/index.ts`. Use `statelessContextBuilder` from `@rw/automations`
-  unless the event needs joined data.
-- **New version of an event** → add a `"2"` entry to the event's `versions` map. Existing automations
-  keep their `eventVersion` pin; `fire(type, payload)` defaults to the new `latest` (use
-  `{ version: "1" }` to raise as the old shape during transitions).
-- **New ref data source** (picker for an action input) → add a `RefSource` to `refs.ts` and chain
-  `.register(...)` in `index.ts`. Annotate the relevant action input's `SchemaProperty` with
-  `ref: { source: "<key>" }`.
+- **New action** → add `actions/<type>.ts`, then one import line in `actions/index.ts`.
+- **New event** → add `events/<type>.ts` (use `statelessContextBuilder` unless it needs joined data),
+  then one import line in `events/index.ts`.
+- **New version** → add a `"2"` entry to that action/event's `versions` map; keep `"1"` while any
+  automation pins it.
+- **New ref picker** → add a `RefSource` under `@rw/services` and `.register(...)` it in `index.ts`.
 
-## Trace
+## Notes
 
-For a concrete, value-by-value trace of one event (the seed automation) through every step, see
-[`WALKTHROUGH.md`](./WALKTHROUGH.md).
+- **Just-in-time, no queue.** Events fire synchronously in-process — no broker, no background worker.
+  `fire()` runs the matched automations' actions in order and returns when they're done.
+- **In-memory + reload.** Automations are cached in memory; every create/update/delete must call
+  `engine.reload()` (the RPC handlers do this). A write that bypasses them runs against stale rules.
+- **Horizontal scaling — not implemented.** The cache is per-instance, so a config upsert/delete only
+  refreshes the instance that handled it. Scaling the API to multiple instances needs Redis pub/sub to
+  notify the others to reload. Single-instance until that lands.
 
 ## Test
 
-An end-to-end smoke test against the mock store lives at
-[`apps/api/scripts/automations-e2e.ts`](../../scripts/automations-e2e.ts):
+End-to-end against the real DB (needs `DATABASE_URL`):
 
 ```bash
-pnpm --filter @rw/api exec tsx scripts/automations-e2e.ts
+pnpm --filter @rw/api exec tsx scripts/automations-db-e2e.ts
 ```

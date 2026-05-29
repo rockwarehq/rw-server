@@ -6,10 +6,10 @@ import type { AppEvent } from "./types.js";
  *      engine threads through subsequent calls. Anything the recorder needs to write is up to it
  *      (a DB row, a log line, nothing); the engine doesn't care.
  *   2. `recordAction(...)` — after each action attempt (success or failure).
- *   3. `finishRun(runId, ...)` — when dispatch settles, with the matched-trigger list and the
+ *   3. `finishRun(runId, ...)` — when dispatch settles, with the matched-automation list and the
  *      terminal status. Called even on failure (the error is passed alongside).
  *
- * `noopRunRecorder` is the default — useful for the file-backed mock store and tests. App-side
+ * `noopRunRecorder` is the default — useful for tests or when audit is not wired. App-side
  * implementations (e.g. `createDbRunRecorder` in `@rw/services/automation`) write to Postgres.
  */
 export interface RunRecorder {
