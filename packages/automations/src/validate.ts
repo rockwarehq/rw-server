@@ -14,11 +14,8 @@ export interface Validators {
  * Builds validators bound to a set of catalog schemas. Schemas are passed in (not imported) so the
  * engine stays domain-agnostic: the consuming app owns its `EVENT_SCHEMAS` / `ACTION_SCHEMAS`.
  *
- * Each derived Zod validator is built once and cached per (type, version) — schemas are static for
- * the process' lifetime, so repeated validation is cheap.
- *
- * Validators throw on any failure rather than returning a discriminated union — see the README's
- * "Error model" section.
+ * Each derived Zod validator is built once and cached per (type, version) 
+ * Validators throw on any failure
  */
 export function createValidators(
   eventSchemas: Record<EventType, EventSchema>,

@@ -10,13 +10,9 @@ import type {
 } from "./types.js";
 
 /**
- * Builds the editor catalog (fields, template variables, operators) that a UI renders from. Pure
- * function over the schemas it's handed — the consuming app owns the concrete `EVENT_SCHEMAS` /
- * `ACTION_SCHEMAS` and their defaults.
+ * Builds the editor catalog (fields, template variables, operators) that a UI renders from. 
  *
- * Version-aware: both the event and the action are looked up by `(type, version)`. Caller may pass
- * `undefined` for either version to mean "use the schema's `latest`" — useful for authoring new
- * automations, where the editor doesn't know which version to pick yet.
+ * Version-aware: both the event and the action are looked up by `(type, version)`
  */
 
 /**
@@ -60,11 +56,6 @@ function variablesFor(schema: EventSchema, payload: EventSchemaVersion["payload"
   ];
 }
 
-/**
- * Build the editor catalog for one (event type, event version) + (action type, action version),
- * from the given schema sets. `eventVersion` / `actionVersion` may be omitted to use each schema's
- * `latest`.
- */
 export function buildCatalog(
   eventSchemas: Record<EventType, EventSchema>,
   actionSchemas: Record<string, ActionSchema>,

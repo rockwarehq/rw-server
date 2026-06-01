@@ -12,16 +12,12 @@ export interface EngineDeps {
   /** Per-event-type fact builders. Must cover every event type the framework will see. */
   contextBuilders: Record<EventType, ContextBuilder>;
   actions: ActionRegistry;
-  /** Audit sink. Optional — defaults to `noopRunRecorder` when omitted. */
   recorder?: RunRecorder;
 }
 
 /**
  * Evaluates automations and runs their actions. The evaluation core (json-rules-engine + condition
- * translation) is shared by every event type; the engine is pluggable in three places:
- *   - SEAM A: how an event becomes facts              -> ContextBuilder (per event type)
- *   - SEAM C: what a matched automation's action does  -> ActionRegistry
- *   - Audit:  per-run + per-action persistence        -> RunRecorder
+ * translation) is shared by every event type; 
  *
  * Conditions are indexed per event type, so an automation only runs against events of its own type.
  */
@@ -37,14 +33,7 @@ export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
   let engines = new Map<EventType, Engine>();
   const recorder: RunRecorder = deps.recorder ?? noopRunRecorder;
 
-  /**
-   * Run every action on the automation, in order. Throws on a missing handler version or missing
-   * required input — these are misconfigurations and abort the dispatch loop loudly. Actions that
-   * ran before a throw have already produced their side effects; subsequent actions don't run.
-   *
-   * Each attempt (success or failure) is recorded via `recorder.recordAction`; on failure we record
-   * FAILED then rethrow so the outer `dispatch` can finalize the run.
-   */
+
   async function runActions(automation: Automation, event: AppEvent, runId: string): Promise<void> {
     for (const [idx, action] of automation.actions.entries()) {
       const startedAt = new Date().toISOString();
@@ -115,8 +104,6 @@ export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
     async dispatch(event: AppEvent): Promise<string[]> {
       const engine = engines.get(event.type);
       if (!engine) {
-        // No automations registered for this event type — open + immediately close a run so the
-        // audit log reflects every fire(), even when nothing matched.
         const runId = await recorder.startRun({ event });
         await recorder.finishRun(runId, { matched: [], status: "SUCCESS" });
         return [];
@@ -166,8 +153,6 @@ function buildEngine(automations: Automation[]): Engine {
     "stringEndsWith",
     (a: unknown, b: unknown) => typeof a === "string" && typeof b === "string" && a.endsWith(b),
   );
-  // NOTE: transition operators for telemetry (increments_up, changes_to, …) would be registered
-  // here too, comparing current vs previous values placed in the fact map by a ContextBuilder.
 
   for (const a of automations) {
     engine.addRule({

@@ -13,12 +13,11 @@ function toActionSchema(h: ActionHandler): ActionSchema {
   };
 }
 
-/** Every action the app understands, keyed by type. Each entry carries `latest` + `versions`. */
+/** Every action the app understands */
 export const ACTION_SCHEMAS: Record<string, ActionSchema> = Object.fromEntries(
   modules.map((m) => [m.handler.type, toActionSchema(m.handler)]),
 );
 
-/** Registered action handlers (SEAM C). One per action module. */
 export function buildActionRegistry(): ActionRegistry {
   const reg = createActionRegistry();
   for (const m of modules) reg.register(m.handler);

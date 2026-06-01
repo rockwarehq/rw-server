@@ -1,9 +1,7 @@
 // @rw/automations — a domain-agnostic event → condition → action engine.
 //
 // The consuming app supplies its domain (event/action schemas, fact builders, action handlers, and
-// a store) and calls `createAutomationFramework(config)`. Everything below the seams — condition
-// evaluation, dispatch, validation, interpolation — is fixed and reusable, and intentionally kept
-// off this public barrel (it is reachable only through the framework instance).
+// a store) and calls `createAutomationFramework(config)`. 
 
 export {
   type ActionContext,

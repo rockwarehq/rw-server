@@ -1,7 +1,7 @@
 import type { AppEvent, FactMap } from "./types.js";
 
 /**
- * SEAM A — turns an event into the flat fact map conditions are evaluated against. The only builder
+ * turns an event into the flat fact map conditions are evaluated against. The only builder
  * today is stateless (flattens the event's own payload); an app can supply a custom builder that also
  * pulls in external state (e.g. other values from a cache) without changing anything downstream.
  */
