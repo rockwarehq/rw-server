@@ -1,0 +1,17 @@
+{
+  "name": "@rw/livestore",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node dist/main.js",
+    "dev": "tsx watch src/main.ts"
+  },
+  "dependencies": {
+    "@nats-io/jetstream": "^3.4.0",
+    "@nats-io/kv": "^3.4.0",
+    "@nats-io/nats-core": "^3.4.0",
+    "@nats-io/transport-node": "^3.4.0"
+  }
+}

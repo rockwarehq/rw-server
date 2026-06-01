@@ -1,7 +1,7 @@
 # rw-server-new (working name — will replace `rw-server`)
 
 Monorepo consolidating `rw-server` and `rw-processor` into one workspace with
-two deployables per tenant:
+three deployables per tenant:
 
 - **`apps/api`** — Fastify/oRPC HTTP server plus in-process BullMQ workers
   (stale-gateway-check, replay-reconcile, station-detect, dev-cycle-simulator).
@@ -16,6 +16,9 @@ two deployables per tenant:
     integrated — see `apps/workers/src/workers/processor/index.ts`).
   - `processor-consumer` — station-event-execution (was
     `rw-server/src/cycle-worker.ts`).
+- **`apps/livestore`** — lightweight LiveStore service placeholder. Today it
+  only exposes an internal `/healthz` endpoint while the app surface is being
+  defined.
 
 The two worker modes that read from BullMQ (`rollups`, `processor-consumer`)
 import their worker registrations from `@rw/api/...` — no source duplication,
@@ -37,8 +40,9 @@ rw-server-new/
 ├── pnpm-workspace.yaml
 ├── tsconfig.base.json + tsconfig.json (root project references)
 ├── apps/
-│   ├── api/      (Dockerfile + fly/base.toml + fly/tenants/{sim,dixie,dev}.toml)
-│   └── workers/  (Dockerfile + fly/base.toml + fly/tenants/{sim,dixie,dev}.toml)
+│   ├── api/        (Dockerfile + fly/base.toml + fly/tenants/{sim,dixie,dev}.toml)
+│   ├── workers/    (Dockerfile + fly/base.toml + fly/tenants/{sim,dixie,dev}.toml)
+│   └── livestore/  (Dockerfile + fly/base.toml + fly/tenants/{sim,dixie,dev}.toml)
 ├── packages/
 │   ├── db/       (schema + migrations + generated client)
 │   └── runtime/  (shared runtime)
@@ -57,22 +61,24 @@ pnpm db:migrate:dev                     # prisma migrate dev
 pnpm db:seed
 pnpm fly:generate --app api sim         # write apps/api/fly.generated.toml
 pnpm fly:deploy   --app workers dixie   # validate secrets, deploy workers
+pnpm fly:deploy   --app livestore dev   # deploy livestore
 ```
 
 ## Deployment
 
-Each tenant has **two fly apps** — one for `api`, one for `workers`. App
+Each tenant has **three fly apps** — one for `api`, one for `workers`, and one for `livestore`. App
 names come from the `app = '...'` line in each tenant toml. Tenant configs
 live at `apps/api/fly/tenants/<tenant>.toml` and
-`apps/workers/fly/tenants/<tenant>.toml`.
+`apps/workers/fly/tenants/<tenant>.toml`, and
+`apps/livestore/fly/tenants/<tenant>.toml`.
 
 ### Tenant matrix
 
-| Tenant | api app | workers app | api domain | MQTT broker |
-|---|---|---|---|---|
-| dev | `rw-dev-api` | `dev-processor` ¹ | `dev-api.rockware.io` | `dev-mqtt.rockware.io` |
-| sim | `sim-api` | `sim-workers` | `sim-api.rockware.io` | `sim-mqtt.fly.dev` |
-| dixie | `dixie-api` | `dixie-workers` | `dixie-api.rockware.io` | `dixie-mqtt.fly.dev` |
+| Tenant | api app | workers app | livestore app | api domain | MQTT broker |
+|---|---|---|---|---|---|
+| dev | `rw-dev-api` | `dev-processor` ¹ | `rw-dev-livestore` | `dev-api.rockware.io` | `dev-mqtt.rockware.io` |
+| sim | `sim-api` | `sim-workers` | `sim-livestore` | `sim-api.rockware.io` | `sim-mqtt.fly.dev` |
+| dixie | `dixie-api` | `dixie-workers` | `dixie-livestore` | `dixie-api.rockware.io` | `dixie-mqtt.fly.dev` |
 
 ¹ Dev temporarily reuses the suspended `dev-processor` fly app (preserves
 existing DNS / secrets during cutover). Rename to `rw-dev-workers` when
@@ -80,7 +86,7 @@ convenient.
 
 ### Migrations run inside fly
 
-Both apps' `base.toml` declares:
+The `api` and `workers` apps' `base.toml` declares:
 
 ```toml
 [deploy]
@@ -95,9 +101,10 @@ step in CI or locally** — just `flyctl deploy`.
 ### First deploy for a new tenant
 
 ```sh
-# 1. Create both fly apps on the rockware org
+# 1. Create fly apps on the rockware org
 flyctl apps create <tenant>-api      --org rockware
 flyctl apps create <tenant>-workers  --org rockware
+flyctl apps create <tenant>-livestore --org rockware
 
 # 2. Set required secrets on each. Lists live in
 #    apps/{api,workers}/fly/tenants/<tenant>.toml under [_meta].required_secrets.
@@ -126,6 +133,7 @@ flyctl scale count -a <tenant>-workers rollups=1 processor=1 processor_consumer=
 # 4. Deploy api first (so workers/processor can reach api on boot)
 pnpm fly:deploy --app api      <tenant>
 pnpm fly:deploy --app workers  <tenant>
+pnpm fly:deploy --app livestore <tenant>
 ```
 
 ### Routine deploys
@@ -135,12 +143,14 @@ From your laptop (uses Docker + flyctl, pushes to fly's registry):
 ```sh
 pnpm fly:deploy --app api      <tenant>
 pnpm fly:deploy --app workers  <tenant>
+pnpm fly:deploy --app livestore <tenant>
 ```
 
-Or via GitHub Actions — workflow file at `.github/workflows/fly-deploy.yml`,
-trigger via the "Deploy to Fly.io" workflow → Run workflow → pick `tenant`
-and `app=both` (or `api`/`workers` to deploy one side only). Only repo
-secret needed: `FLY_API_TOKEN`.
+Or deploy api/workers via GitHub Actions — workflow file at
+`.github/workflows/fly-deploy.yml`, trigger via the "Deploy to Fly.io" workflow
+→ Run workflow → pick `tenant` and `app=both` (or `api`/`workers` to deploy one
+side only). LiveStore is not wired into this workflow yet. Only repo secret
+needed: `FLY_API_TOKEN`.
 
 ### Deploying API
 
@@ -185,6 +195,18 @@ flag). Each group is a separate machine — fly's `[processes]` section in
 - **Machine count**: set explicitly via `flyctl scale count` (no toml field).
   See "Recovering a stopped machine" if a process group drops to a stopped
   machine.
+
+### Deploying LiveStore
+
+`apps/livestore` is a standalone Fly app placeholder for LiveStore runtime
+work. It connects to NATS and initializes JetStream on startup.
+
+- **Port**: `9470`
+- **Health**: `GET /healthz` (process liveness)
+- **Readiness**: `GET /readyz` (NATS/JetStream connected)
+- **Public domain**: none
+- **Migrations**: none; this app does not run the Prisma release command
+- **NATS**: set `NATS_URL` (defaults to `nats://127.0.0.1:4222` for local dev)
 
 Per-group scaling examples:
 

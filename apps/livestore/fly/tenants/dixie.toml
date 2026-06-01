@@ -1,0 +1,4 @@
+app = 'dixie-livestore'
+
+[env]
+LOG_LEVEL = 'info'

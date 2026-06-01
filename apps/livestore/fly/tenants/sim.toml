@@ -1,0 +1,4 @@
+app = 'sim-livestore'
+
+[env]
+LOG_LEVEL = 'debug'
