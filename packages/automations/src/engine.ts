@@ -17,7 +17,7 @@ export interface EngineDeps {
 
 /**
  * Evaluates automations and runs their actions. The evaluation core (json-rules-engine + condition
- * translation) is shared by every event type; 
+ * translation) is shared by every event type;
  *
  * Conditions are indexed per event type, so an automation only runs against events of its own type.
  */
@@ -32,7 +32,6 @@ export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
   // Compiled engines, one per event type. Rebuilt by reload().
   let engines = new Map<EventType, Engine>();
   const recorder: RunRecorder = deps.recorder ?? noopRunRecorder;
-
 
   async function runActions(automation: Automation, event: AppEvent, runId: string): Promise<void> {
     for (const [idx, action] of automation.actions.entries()) {

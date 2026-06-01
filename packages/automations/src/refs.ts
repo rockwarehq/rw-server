@@ -6,7 +6,6 @@ export interface RefOption {
   meta?: Record<string, unknown>;
 }
 
-
 export interface RefSource {
   key: string;
   list(ctx: RefContext): Promise<RefOption[]>;

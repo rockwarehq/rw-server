@@ -69,7 +69,6 @@ export interface TemplateVariable {
   example: string;
 }
 
-
 export interface AutomationAction {
   type: string;
   version: string;

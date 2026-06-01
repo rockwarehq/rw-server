@@ -1,6 +1,5 @@
 import type { Automation } from "./types.js";
 
-
 export interface AutomationStore {
   list(): Automation[];
   get(id: string): Automation | undefined;

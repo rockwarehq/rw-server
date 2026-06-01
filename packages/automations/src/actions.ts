@@ -12,7 +12,6 @@ export interface ActionVersion {
   run(inputs: Record<string, unknown>, ctx: ActionContext): void | Promise<void>;
 }
 
-
 export interface ActionHandler {
   type: string;
   displayName: string;

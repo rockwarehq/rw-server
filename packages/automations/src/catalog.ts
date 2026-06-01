@@ -10,7 +10,7 @@ import type {
 } from "./types.js";
 
 /**
- * Builds the editor catalog (fields, template variables, operators) that a UI renders from. 
+ * Builds the editor catalog (fields, template variables, operators) that a UI renders from.
  *
  * Version-aware: both the event and the action are looked up by `(type, version)`
  */

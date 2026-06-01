@@ -10,7 +10,7 @@ import type { ActionInputSchema, SchemaProperty } from "./types.js";
 
 function propToZod(prop: SchemaProperty): z.ZodTypeAny {
   if (prop.type === "array") return z.array(z.string());
-  if (prop.enum && prop.enum.length) return z.enum(prop.enum as [string, ...string[]]);
+  if (prop.enum?.length) return z.enum(prop.enum as [string, ...string[]]);
   if (prop.type === "number") return z.number();
   return z.string();
 }
