@@ -1,13 +1,31 @@
 import "dotenv/config";
+import bcrypt from "bcrypt";
 import prisma from "@rw/db";
 import { findSystemRole } from "@rw/services/iam/roles";
-import bcrypt from "bcrypt";
-import { seedSystemRoles } from "./seed-import/systemRoles.js";
+import { seedSystemRoles } from "./seed-system-roles.js";
 
 const SALT_ROUNDS = 10;
 
+// Bootstrap a tenant database with the default workspace, RBAC system roles,
+// a Company Administrator user, and the default site + employee roles.
+//
+// Idempotent (all upserts), so it is safe to re-run. Reads ADMIN_EMAIL /
+// ADMIN_PASSWORD from the environment (Fly secrets in production); falls back
+// to insecure defaults for local use only.
+//
+// Run locally:   pnpm --filter @rw/api db:seed        (tsx src/seed.ts)
+// Run compiled:  node dist/seed.js                    (used by fly release_command)
 async function seed() {
   console.log("Starting database seed...");
+
+  // Skip if already bootstrapped. Lets the seed run unconditionally on every
+  // deploy (no SEED_ON_RELEASE flag needed) while staying a fast no-op once a
+  // tenant DB has been seeded — only an empty DB gets bootstrapped.
+  const existingUsers = await prisma.user.count();
+  if (existingUsers > 0) {
+    console.log(`Seed: ${existingUsers} user(s) already exist — already bootstrapped, skipping.`);
+    return;
+  }
 
   // Create default workspace
   const workspace = await prisma.workspace.upsert({
@@ -108,11 +126,10 @@ async function seed() {
     console.log(`Seeded ${defaultRoles.length} employee roles for site: ${site.name}`);
   }
 
+  // NOTE: never log adminPassword — in production this output goes to fly
+  // deploy logs. The operator already knows the password they set.
   console.log("\nSeed completed successfully!");
-  console.log(`\nAdmin credentials:`);
-  console.log(`  Email: ${adminEmail}`);
-  console.log(`  Password: ${adminPassword}`);
-  console.log(`\nYou can customize these by setting ADMIN_EMAIL and ADMIN_PASSWORD environment variables.`);
+  console.log(`Admin user: ${adminEmail}`);
 }
 
 seed()
