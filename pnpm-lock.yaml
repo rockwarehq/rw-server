@@ -156,6 +156,9 @@ importers:
       '@nats-io/transport-node':
         specifier: ^3.4.0
         version: 3.4.0
+      mqtt:
+        specifier: ^5.14.1
+        version: 5.15.1
 
   apps/workers:
     dependencies:

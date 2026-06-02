@@ -1,4 +1,7 @@
 import http from "node:http";
+import { ensureMqttIngestStream } from "./lib/jetstream.js";
+import { ensureHealthKvBucket } from "./lib/kv.js";
+import { isMqttReady, startMqttBridge, stopMqttBridge } from "./lib/mqtt.js";
 import { isNatsReady, startNats, stopNats } from "./lib/nats.js";
 
 process.env.TZ = "UTC";
@@ -19,10 +22,10 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === "GET" && req.url === "/readyz") {
-    const ready = !shuttingDown && isNatsReady();
+    const ready = !shuttingDown && isNatsReady() && isMqttReady();
     const status = ready ? 200 : 503;
     res.writeHead(status, { "content-type": "application/json" });
-    res.end(JSON.stringify({ ok: ready, nats: isNatsReady(), service: "livestore" }));
+    res.end(JSON.stringify({ ok: ready, mqtt: isMqttReady(), nats: isNatsReady(), service: "livestore" }));
     return;
   }
 
@@ -35,9 +38,15 @@ server.listen(port, host, () => {
 });
 
 function start(): void {
-  natsStart = startNats().catch((err) => {
-    console.error("[livestore] failed to connect to NATS:", err);
-  });
+  natsStart = startNats()
+    .then(async () => {
+      await ensureMqttIngestStream();
+      await ensureHealthKvBucket();
+      await startMqttBridge();
+    })
+    .catch((err) => {
+      console.error("[livestore] failed to start:", err);
+    });
 }
 
 function shutdown(): void {
@@ -49,6 +58,7 @@ function shutdown(): void {
       process.exit(1);
     }
     Promise.resolve(natsStart)
+      .then(() => stopMqttBridge())
       .then(() => stopNats())
       .then(() => process.exit(0))
       .catch((shutdownErr) => {
