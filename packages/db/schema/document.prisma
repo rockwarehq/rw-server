@@ -1,0 +1,69 @@
+enum DocumentKind {
+  FILE
+  FOLDER
+}
+
+enum DocumentStatus {
+  PENDING_UPLOAD
+  READY
+}
+
+enum DocumentTargetType {
+  SITE
+  WORKCENTER
+  STATION
+  JOB
+  TOOL
+  PRODUCT
+  MATERIAL
+}
+
+model Document {
+  id String @id @default(uuid()) @db.Uuid
+
+  kind        DocumentKind
+  status      DocumentStatus @default(READY)
+  name        String
+  description String?
+  labels      String[]       @default([])
+  attrs       Json           @default("{}")
+
+  filename    String?
+  contentType String?
+  size        Int?
+  storageKey  String? @unique
+
+  siteId String? @db.Uuid
+  site   Site?   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  parentId String?    @db.Uuid
+  parent   Document?  @relation("DocumentTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children Document[] @relation("DocumentTree")
+
+  links DocumentLink[]
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([siteId])
+  @@index([parentId])
+  @@index([kind, status])
+  @@index([labels(ops: ArrayOps)], type: Gin)
+  @@index([deletedAt])
+}
+
+model DocumentLink {
+  id String @id @default(uuid()) @db.Uuid
+
+  documentId String   @db.Uuid
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  targetType DocumentTargetType
+  targetId   String             @db.Uuid
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([documentId, targetType, targetId])
+  @@index([targetType, targetId])
+}

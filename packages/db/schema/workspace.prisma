@@ -87,6 +87,7 @@ model Site {
   toolLocations          ToolLocation[]
   dashboards             Dashboard[]
   displays               Display[]
+  documents              Document[]
   andonRules             SiteAndonRule[]
   stautsCategories       StatusCategory[]
   itemDispositions       ItemDisposition[]

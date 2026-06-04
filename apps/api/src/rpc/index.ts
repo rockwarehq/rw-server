@@ -9,6 +9,7 @@ import * as inventory from "./inventory.js";
 import * as job from "./job.js";
 import * as dashboard from "./dashboard.js";
 import * as display from "./display.js";
+import * as document from "./document.js";
 import * as processType from "./process-type.js";
 import * as statusCategory from "./status-category.js";
 import * as statusReason from "./status-reason.js";
@@ -202,6 +203,20 @@ export const router = {
     unassignDashboard: display.unassignDashboard,
     update: display.update,
     delete: display.remove,
+  },
+  document: {
+    createFolder: document.createFolder,
+    createUpload: document.createUpload,
+    completeUpload: document.completeUpload,
+    list: document.list,
+    get: document.get,
+    download: document.download,
+    update: document.update,
+    delete: document.remove,
+    link: document.link,
+    unlink: document.unlink,
+    listForTarget: document.listForTarget,
+    listForDisplayContext: document.listForDisplayContext,
   },
   processType: {
     create: processType.create,
