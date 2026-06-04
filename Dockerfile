@@ -93,6 +93,8 @@ COPY --from=build /repo/packages/runtime/dist packages/runtime/dist
 COPY --from=build /repo/packages/runtime/package.json packages/runtime/
 COPY --from=build /repo/apps/api/dist apps/api/dist
 COPY --from=build /repo/apps/api/package.json apps/api/
+# Driver manifests are read at runtime from `${cwd}/drivers` (cwd is /repo/apps/api).
+COPY --from=build /repo/apps/api/drivers apps/api/drivers
 
 # Workspace metadata so fly's [deploy] release_command can run
 # `pnpm -w db:migrate` (which resolves to `pnpm --filter @rw/db prisma:migrate`).
