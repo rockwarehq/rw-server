@@ -5,11 +5,18 @@ primary_region = 'iad'
 # Applies pending Prisma migrations in a temporary machine before the main
 # release rolls out. Reads DATABASE_URL_MIGRATION (direct, port 5432) — set
 # via fly secrets. Failure here aborts the deploy. Idempotent: a deploy with
-# no pending migrations is a fast no-op. Both api and workers run this so
+# no pending migrations is a fast no-op. Both api and workers run db:migrate so
 # either app can be deployed in any order without coupling schema drift to
 # deploy ordering.
+#
+# Seeding (api only — keep workers as migrate-only so two release machines
+# don't seed concurrently): after migrations, runs the compiled bootstrap seed
+# (default workspace, RBAC roles, admin user from ADMIN_EMAIL/ADMIN_PASSWORD,
+# default site). The seed self-guards — it skips when the DB already has users —
+# so it's safe to run on every deploy: it bootstraps an empty tenant DB on the
+# first deploy and is a fast no-op thereafter. A seed failure aborts the deploy.
 [deploy]
-release_command = 'pnpm -w db:migrate'
+release_command = "sh -c 'pnpm -w db:migrate && node dist/seed.js'"
 
 [processes]
 app = 'node dist/main.js'

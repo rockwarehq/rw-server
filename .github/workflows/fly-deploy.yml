@@ -20,6 +20,7 @@ on:
           - dev
           - sim
           - dixie
+          - bushhog
         default: dev
       app:
         description: 'App to deploy'

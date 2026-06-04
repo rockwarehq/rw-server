@@ -73,6 +73,7 @@ live at `apps/api/fly/tenants/<tenant>.toml` and
 | dev | `rw-dev-api` | `dev-processor` ¹ | `dev-api.rockware.io` | `dev-mqtt.rockware.io` |
 | sim | `sim-api` | `sim-workers` | `sim-api.rockware.io` | `sim-mqtt.fly.dev` |
 | dixie | `dixie-api` | `dixie-workers` | `dixie-api.rockware.io` | `dixie-mqtt.fly.dev` |
+| bushhog | `rw-bushhog-api` | `rw-bushhog-workers` | `bushhog-api.rockware.io` | `rw-bushhog-mqtt.fly.dev` |
 
 ¹ Dev temporarily reuses the suspended `dev-processor` fly app (preserves
 existing DNS / secrets during cutover). Rename to `rw-dev-workers` when
