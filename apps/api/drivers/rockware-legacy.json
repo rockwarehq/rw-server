@@ -1,0 +1,61 @@
+{
+  "name": "rockware-legacy",
+  "displayName": "Rockware Legacy",
+  "description": "Polls a SQL Server table for address/value pairs",
+  "version": "1.0.0",
+  "vendor": "Rockware",
+  "category": "database",
+  "status": "active",
+  "connectionSchema": {
+    "type": "object",
+    "properties": {
+      "connectionString": {
+        "type": "string",
+        "title": "Connection String",
+        "description": "SQL Server connection string",
+        "examples": ["Server=host;Database=db;User Id=user;Password=pass"]
+      },
+      "tableName": {
+        "type": "string",
+        "title": "Table Name",
+        "description": "Table to poll for address/value rows",
+        "examples": ["dbo.tblTag"]
+      },
+      "addressColumnName": {
+        "type": "string",
+        "title": "Address Column",
+        "description": "Column holding the address/tag name matched against each point's address",
+        "examples": ["tagName"]
+      },
+      "valueColumnName": {
+        "type": "string",
+        "title": "Value Column",
+        "description": "Column holding the value to read",
+        "examples": ["value"]
+      }
+    },
+    "required": ["connectionString", "tableName", "addressColumnName", "valueColumnName"]
+  },
+  "pointSchema": {
+    "type": "object",
+    "properties": {
+      "address": {
+        "type": "string",
+        "title": "Address",
+        "description": "Value in the address column that identifies this point"
+      },
+      "dataType": {
+        "type": "string",
+        "title": "Data Type",
+        "enum": ["string", "number", "integer", "boolean"],
+        "default": "string"
+      }
+    },
+    "required": ["address", "dataType"]
+  },
+  "capabilities": {
+    "read": true,
+    "write": false,
+    "subscribe": false
+  }
+}
