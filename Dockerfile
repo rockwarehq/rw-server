@@ -22,6 +22,7 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json tsconfig
 COPY packages/db/package.json packages/db/
 COPY packages/services/package.json packages/services/
 COPY packages/runtime/package.json packages/runtime/
+COPY packages/automations/package.json packages/automations/
 COPY apps/api/package.json apps/api/
 COPY apps/workers/package.json apps/workers/
 
@@ -52,6 +53,7 @@ COPY apps/api/package.json apps/api/
 COPY packages/db/package.json packages/db/
 COPY packages/services/package.json packages/services/
 COPY packages/runtime/package.json packages/runtime/
+COPY packages/automations/package.json packages/automations/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --prod --filter '@rw/api...'
 
@@ -65,6 +67,7 @@ COPY apps/workers/package.json apps/workers/
 COPY packages/db/package.json packages/db/
 COPY packages/services/package.json packages/services/
 COPY packages/runtime/package.json packages/runtime/
+COPY packages/automations/package.json packages/automations/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --prod --filter '@rw/workers...'
 
@@ -80,6 +83,7 @@ COPY --from=prod-deps-api /repo/apps/api/node_modules apps/api/node_modules
 COPY --from=prod-deps-api /repo/packages/db/node_modules packages/db/node_modules
 COPY --from=prod-deps-api /repo/packages/services/node_modules packages/services/node_modules
 COPY --from=prod-deps-api /repo/packages/runtime/node_modules packages/runtime/node_modules
+COPY --from=prod-deps-api /repo/packages/automations/node_modules packages/automations/node_modules
 
 COPY --from=build /repo/packages/db/dist packages/db/dist
 COPY --from=build /repo/packages/db/src/generated packages/db/src/generated
@@ -91,6 +95,8 @@ COPY --from=build /repo/packages/services/dist packages/services/dist
 COPY --from=build /repo/packages/services/package.json packages/services/
 COPY --from=build /repo/packages/runtime/dist packages/runtime/dist
 COPY --from=build /repo/packages/runtime/package.json packages/runtime/
+COPY --from=build /repo/packages/automations/dist packages/automations/dist
+COPY --from=build /repo/packages/automations/package.json packages/automations/
 COPY --from=build /repo/apps/api/dist apps/api/dist
 COPY --from=build /repo/apps/api/package.json apps/api/
 # Driver manifests are read at runtime from `${cwd}/drivers` (cwd is /repo/apps/api).
@@ -116,6 +122,7 @@ COPY --from=prod-deps-workers /repo/apps/workers/node_modules apps/workers/node_
 COPY --from=prod-deps-workers /repo/packages/db/node_modules packages/db/node_modules
 COPY --from=prod-deps-workers /repo/packages/services/node_modules packages/services/node_modules
 COPY --from=prod-deps-workers /repo/packages/runtime/node_modules packages/runtime/node_modules
+COPY --from=prod-deps-workers /repo/packages/automations/node_modules packages/automations/node_modules
 
 COPY --from=build /repo/packages/db/dist packages/db/dist
 COPY --from=build /repo/packages/db/src/generated packages/db/src/generated
@@ -129,6 +136,8 @@ COPY --from=build /repo/packages/services/dist packages/services/dist
 COPY --from=build /repo/packages/services/package.json packages/services/
 COPY --from=build /repo/packages/runtime/dist packages/runtime/dist
 COPY --from=build /repo/packages/runtime/package.json packages/runtime/
+COPY --from=build /repo/packages/automations/dist packages/automations/dist
+COPY --from=build /repo/packages/automations/package.json packages/automations/
 COPY --from=build /repo/apps/workers/dist apps/workers/dist
 COPY --from=build /repo/apps/workers/package.json apps/workers/
 
