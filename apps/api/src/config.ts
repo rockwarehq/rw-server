@@ -85,6 +85,29 @@ export const storageConfig = {
   maxFileSizeBytes: 5 * 1024 * 1024, // 5MB
   maxPicturesPerProduct: 10,
   allowedContentTypes: ["image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml"],
+  maxDocumentFileSizeBytes: parseInt(process.env.DOCUMENT_MAX_FILE_SIZE_BYTES || "", 10) || 50 * 1024 * 1024,
+  allowedDocumentContentTypes: process.env.DOCUMENT_ALLOWED_CONTENT_TYPES
+    ? process.env.DOCUMENT_ALLOWED_CONTENT_TYPES.split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    : [
+        "application/pdf",
+        "text/plain",
+        "text/markdown",
+        "text/csv",
+        "application/json",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/gif",
+        "image/svg+xml",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      ],
 
   // URL expiry
   presignedUrlExpirySeconds: 3600, // 1 hour

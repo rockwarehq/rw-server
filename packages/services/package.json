@@ -11,6 +11,7 @@
     "./cycle/*": "./dist/cycle/*.js",
     "./dashboard/*": "./dist/dashboard/*.js",
     "./device/*": "./dist/device/*.js",
+    "./document/*": "./dist/document/*.js",
     "./display/*": "./dist/display/*.js",
     "./email/*": "./dist/email/*.js",
     "./employee/*": "./dist/employee/*.js",
@@ -29,7 +30,8 @@
     "./user/*": "./dist/user/*.js"
   },
   "scripts": {
-    "build": "tsc -b"
+    "build": "tsc -b",
+    "test:document": "vitest run src/document/document.test.ts"
   },
   "dependencies": {
     "@orpc/server": "^1.14.0",
@@ -44,6 +46,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.10.8",
-    "typescript": "~6.0.2"
+    "typescript": "~6.0.2",
+    "vitest": "^4.0.14"
   }
 }
