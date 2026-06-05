@@ -155,10 +155,7 @@ export async function getPresignedUploadUrl(
   return getSignedUrl(client, command, { expiresIn });
 }
 
-export async function getPresignedDownloadUrl(
-  key: string,
-  options: PresignedDownloadUrlOptions = {},
-): Promise<string> {
+export async function getPresignedDownloadUrl(key: string, options: PresignedDownloadUrlOptions = {}): Promise<string> {
   const client = getClient();
   const command = new GetObjectCommand({
     Bucket: storageConfig.bucketName,
