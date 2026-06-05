@@ -63,6 +63,27 @@ const storageConfig = {
   presignedUrlExpirySeconds: 3600, // 1 hour
 };
 
+export interface PresignedDownloadUrlOptions {
+  disposition?: "inline" | "attachment";
+  filename?: string;
+  contentType?: string;
+  expiresIn?: number;
+}
+
+function sanitizeContentDispositionFilename(filename: string): string {
+  return filename
+    .replace(/[\r\n]/g, " ")
+    .replace(/["\\]/g, "_")
+    .trim();
+}
+
+function getContentDisposition(options: PresignedDownloadUrlOptions): string | undefined {
+  if (!options.disposition) return undefined;
+
+  const filename = options.filename ? sanitizeContentDispositionFilename(options.filename) : "";
+  return filename ? `${options.disposition}; filename="${filename}"` : options.disposition;
+}
+
 export function isStorageEnabled(): boolean {
   return storageConfig.enabled;
 }
@@ -136,14 +157,16 @@ export async function getPresignedUploadUrl(
 
 export async function getPresignedDownloadUrl(
   key: string,
-  expiresIn: number = storageConfig.presignedUrlExpirySeconds,
+  options: PresignedDownloadUrlOptions = {},
 ): Promise<string> {
   const client = getClient();
   const command = new GetObjectCommand({
     Bucket: storageConfig.bucketName,
     Key: key,
+    ResponseContentDisposition: getContentDisposition(options),
+    ResponseContentType: options.contentType,
   });
-  return getSignedUrl(client, command, { expiresIn });
+  return getSignedUrl(client, command, { expiresIn: options.expiresIn ?? storageConfig.presignedUrlExpirySeconds });
 }
 
 export async function objectExists(key: string): Promise<boolean> {

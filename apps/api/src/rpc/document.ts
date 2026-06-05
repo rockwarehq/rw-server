@@ -214,6 +214,21 @@ export const download = userOrDisplayRequired.input(documentIdInputSchema).handl
   return result.data;
 });
 
+export const open = userOrDisplayRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
+  if (context.iam.principal === Principal.DISPLAY) {
+    await assertDisplayCanAccessDocument(context, input.documentId);
+  } else {
+    const workspaceId = context.iam.workspaceId;
+    if (!workspaceId) {
+      throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
+    }
+  }
+
+  const result = await documents.getOpenUrl(input.documentId);
+  if ("error" in result) throwDocumentError(result);
+  return result.data;
+});
+
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const workspaceId = context.iam.workspaceId;
   if (!workspaceId) {

@@ -383,7 +383,7 @@ export async function getById(documentId: string, options: { includePending?: bo
   return { data: document };
 }
 
-export async function getDownloadUrl(documentId: string) {
+async function getDocumentFileUrl(documentId: string, disposition: "inline" | "attachment") {
   const document = await prisma.document.findUnique({ where: { id: documentId }, include: documentInclude });
 
   if (!document || document.deletedAt) {
@@ -391,7 +391,7 @@ export async function getDownloadUrl(documentId: string) {
   }
 
   if (document.kind !== "FILE") {
-    return { error: "Folders cannot be downloaded", code: "NOT_FILE" };
+    return { error: "Folders cannot be opened or downloaded", code: "NOT_FILE" };
   }
 
   if (document.status !== "READY") {
@@ -406,8 +406,20 @@ export async function getDownloadUrl(documentId: string) {
     return { error: "Storage is not configured", code: "STORAGE_NOT_CONFIGURED" };
   }
 
-  const url = await storage.getPresignedDownloadUrl(document.storageKey);
+  const url = await storage.getPresignedDownloadUrl(document.storageKey, {
+    disposition,
+    filename: document.filename ?? document.name,
+    contentType: document.contentType ?? undefined,
+  });
   return { data: { document, url } };
+}
+
+export async function getDownloadUrl(documentId: string) {
+  return getDocumentFileUrl(documentId, "attachment");
+}
+
+export async function getOpenUrl(documentId: string) {
+  return getDocumentFileUrl(documentId, "inline");
 }
 
 export async function update(documentId: string, input: UpdateDocumentInput) {

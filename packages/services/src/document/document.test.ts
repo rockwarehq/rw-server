@@ -126,7 +126,21 @@ describe("document service", () => {
     if ("error" in downloadResult) throw new Error(downloadResult.error);
 
     expect(downloadResult.data.url).toBe("https://storage.test/download");
-    expect(storageMock.getPresignedDownloadUrl).toHaveBeenCalledWith(storageKey);
+    expect(storageMock.getPresignedDownloadUrl).toHaveBeenCalledWith(storageKey, {
+      disposition: "attachment",
+      filename: "press-manual.md",
+      contentType: "text/markdown",
+    });
+
+    const openResult = await documents.getOpenUrl(uploadedDocument.id);
+    if ("error" in openResult) throw new Error(openResult.error);
+
+    expect(openResult.data.url).toBe("https://storage.test/download");
+    expect(storageMock.getPresignedDownloadUrl).toHaveBeenCalledWith(storageKey, {
+      disposition: "inline",
+      filename: "press-manual.md",
+      contentType: "text/markdown",
+    });
 
     const removeResult = await documents.remove(folderResult.data.id);
     if ("error" in removeResult) throw new Error(removeResult.error);

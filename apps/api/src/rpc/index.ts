@@ -210,6 +210,7 @@ export const router = {
     completeUpload: document.completeUpload,
     list: document.list,
     get: document.get,
+    open: document.open,
     download: document.download,
     update: document.update,
     delete: document.remove,
