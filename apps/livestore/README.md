@@ -12,17 +12,34 @@ NATS tag message -> TagResolver -> commitValue() -> in-memory current cache -> N
 - NATS with JetStream enabled
 - `apps/livestore/.env` present for local dev
 
+If you need a starting point:
+
+```sh
+cp apps/livestore/.env.example apps/livestore/.env
+```
+
 Optional env vars:
 
 - `NATS_URL`, defaults to `nats://localhost:4222`
+- `NATS_CLIENT_NAME`, defaults to `rw-livestore`
 - `PORT`, defaults to `30100`
 - `HOST`, defaults to `::`
 
 ## Start NATS
 
+Preferred local setup from the repo root:
+
+```sh
+docker compose up nats
+```
+
+One-off alternative:
+
 ```sh
 docker run --rm -p 4222:4222 nats:latest -js
 ```
+
+NATS monitoring is exposed at `http://localhost:8222` when using `compose.yml`.
 
 ## Prepare Database
 
@@ -99,8 +116,12 @@ pnpm --filter @rw/livestore fixture:publish -- --same
 
 ```sh
 curl http://localhost:30100/health
+curl http://localhost:30100/healthz
+curl http://localhost:30100/readyz
 curl http://localhost:30100/graph/nodes
 ```
+
+`/healthz` is process liveness. `/readyz` checks runtime readiness, including the NATS connection.
 
 Fetch one node by ID:
 

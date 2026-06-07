@@ -5,7 +5,7 @@ import "dotenv/config";
 import { createPrismaClient } from "@rw/db";
 import { onShutdown } from "@rw/runtime";
 
-import { connectNatsResources } from "./nats.js";
+import { connectNatsResources, stopNatsResources } from "./nats.js";
 import { GraphRuntime } from "./runtime.js";
 import { createLivestoreServer } from "./server.js";
 
@@ -19,7 +19,13 @@ async function main(): Promise<void> {
     error: (obj: Record<string, unknown>, msg?: string) => console.error(msg ?? "livestore", obj),
   };
 
-  const runtime = new GraphRuntime({ prisma, nc: nats.nc, kv: nats.kv, logger: runtimeLogger });
+  const runtime = new GraphRuntime({
+    prisma,
+    nc: nats.nc,
+    kv: nats.kv,
+    logger: runtimeLogger,
+    isNatsReady: nats.isReady,
+  });
   await runtime.start();
 
   const server = await createLivestoreServer(runtime);
@@ -31,7 +37,7 @@ async function main(): Promise<void> {
   onShutdown(async () => {
     runtime.stop();
     await server.close();
-    await nats.nc.drain();
+    await stopNatsResources();
     await prisma.$disconnect();
   });
 }

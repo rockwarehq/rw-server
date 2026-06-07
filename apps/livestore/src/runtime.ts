@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@rw/db";
-import type { KV, NatsConnection } from "nats";
+import type { KV } from "@nats-io/kv";
+import type { NatsConnection } from "@nats-io/nats-core";
 
 import { CvgStore } from "./cvg-store.js";
 import { GraphKernel } from "./kernel.js";
@@ -11,6 +12,7 @@ export interface GraphRuntimeOptions {
   nc: NatsConnection;
   kv: KV;
   logger: LivestoreLogger;
+  isNatsReady?: () => boolean;
 }
 
 export class GraphRuntime {
@@ -93,7 +95,7 @@ export class GraphRuntime {
   }
 
   isReady(): boolean {
-    return this.ready;
+    return this.ready && (this.options.isNatsReady?.() ?? true);
   }
 
   private markDependentsDirtyPlaceholder(propertyId: string): void {

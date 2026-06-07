@@ -1,0 +1,4 @@
+app = 'rw-dev-livestore'
+
+[env]
+LOG_LEVEL = 'debug'

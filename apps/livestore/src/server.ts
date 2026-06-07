@@ -24,6 +24,17 @@ export async function createLivestoreServer(runtime: GraphRuntime) {
     ...runtime.counts(),
   }));
 
+  server.get("/healthz", async () => ({ ok: true, service: "livestore" }));
+
+  server.get("/readyz", async (_request, reply) => {
+    const ready = runtime.isReady();
+    return reply.code(ready ? 200 : 503).send({
+      ok: ready,
+      service: "livestore",
+      ...runtime.counts(),
+    });
+  });
+
   server.get("/graph/nodes", async () => ({ data: runtime.listNodes() }));
 
   server.get<{ Params: { id: string } }>("/graph/nodes/:id", async (request, reply) => {

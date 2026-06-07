@@ -13,6 +13,7 @@ app = 'node dist/main.js'
 
 [env]
 NODE_ENV = 'production'
+HOST = '::'
 PORT = '30100'
 
 [http_service]
@@ -33,7 +34,7 @@ interval = '10s'
 timeout = '2s'
 grace_period = '10s'
 method = 'GET'
-path = '/health'
+path = '/readyz'
 
 [[vm]]
 memory = '512mb'

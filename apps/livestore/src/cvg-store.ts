@@ -1,10 +1,11 @@
-import { StringCodec, type KV } from "nats";
+import type { KV, KvWatchEntry } from "@nats-io/kv";
+import type { QueuedIterator } from "@nats-io/nats-core";
 
 import { parseValueEnvelope, type ValueEnvelope } from "./types.js";
 
 export const CVG_BUCKET = "cvg";
 
-const codec = StringCodec();
+const encoder = new TextEncoder();
 
 export function propertyKey(propertyId: string): string {
   return `prop.${propertyId}`;
@@ -20,10 +21,10 @@ export class CvgStore {
   }
 
   async put(propertyId: string, envelope: ValueEnvelope): Promise<void> {
-    await this.kv.put(propertyKey(propertyId), codec.encode(JSON.stringify(envelope)));
+    await this.kv.put(propertyKey(propertyId), encoder.encode(JSON.stringify(envelope)));
   }
 
-  async watch(propertyId: string) {
+  async watch(propertyId: string): Promise<QueuedIterator<KvWatchEntry>> {
     return this.kv.watch({ key: propertyKey(propertyId) });
   }
 }

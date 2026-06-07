@@ -1,4 +1,4 @@
-import { StringCodec, type NatsConnection, type Subscription } from "nats";
+import type { NatsConnection, Subscription } from "@nats-io/nats-core";
 
 import { deriveTagSubject } from "./subjects.js";
 import {
@@ -13,7 +13,7 @@ export interface CommitSink {
   commitValue(propertyId: string, envelope: ValueEnvelope, source: "tag"): Promise<void>;
 }
 
-const codec = StringCodec();
+const decoder = new TextDecoder();
 
 export class TagResolver {
   private readonly subscriptions = new Map<string, Subscription>();
@@ -78,7 +78,7 @@ export class TagResolver {
 
   private parseMessage(data: Uint8Array): ValueEnvelope | null {
     try {
-      return parseValueEnvelope(JSON.parse(codec.decode(data)));
+      return parseValueEnvelope(JSON.parse(decoder.decode(data)));
     } catch {
       return null;
     }

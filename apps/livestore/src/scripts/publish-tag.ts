@@ -4,12 +4,12 @@ import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { connect, StringCodec } from "nats";
+import { connect } from "@nats-io/transport-node";
 
 import { deriveTagSubject } from "../subjects.js";
 import { parseValueEnvelope, type ValueEnvelope } from "../types.js";
 
-const codec = StringCodec();
+const encoder = new TextEncoder();
 const statePath = join(tmpdir(), "rw-livestore-last-tag-envelope.json");
 
 const deviceId = process.env.GRAPH_DEVICE_ID ?? "press7-plc";
@@ -26,7 +26,7 @@ async function main(): Promise<void> {
   const subject = deriveTagSubject(deviceId, tagPath);
   const envelope = samePrevious ? await readLastEnvelope() : buildEnvelope();
 
-  nc.publish(subject, codec.encode(JSON.stringify(envelope)));
+  nc.publish(subject, encoder.encode(JSON.stringify(envelope)));
   await nc.drain();
   await writeLastEnvelope(envelope);
 
