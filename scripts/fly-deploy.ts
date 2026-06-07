@@ -3,12 +3,13 @@
  * monorepo.
  *
  * Usage:
- *   pnpm fly:generate --app api|workers <tenant>     # write fly.generated.toml
- *   pnpm fly:deploy   --app api|workers <tenant>     # generate + validate + deploy
+ *   pnpm fly:generate --app api|workers|livestore <tenant>     # write fly.generated.toml
+ *   pnpm fly:deploy   --app api|workers|livestore <tenant>     # generate + validate + deploy
  *
  * Tenant configs live at:
  *   apps/api/fly/base.toml      + apps/api/fly/tenants/<tenant>.toml
  *   apps/workers/fly/base.toml  + apps/workers/fly/tenants/<tenant>.toml
+ *   apps/livestore/fly/base.toml + apps/livestore/fly/tenants/<tenant>.toml
  *
  * Examples:
  *   pnpm fly:generate --app api sim
@@ -29,6 +30,7 @@ interface TenantMeta {
 
 type TomlValue = string | number | boolean | Date | TomlValue[] | { [key: string]: TomlValue };
 type TomlObject = { [key: string]: TomlValue };
+type DeployApp = "api" | "workers" | "livestore";
 
 function deepMerge(base: TomlObject, override: TomlObject): TomlObject {
   const result = { ...base };
@@ -54,7 +56,7 @@ function deepMerge(base: TomlObject, override: TomlObject): TomlObject {
   return result;
 }
 
-function appPaths(app: "api" | "workers"): { base: string; tenantsDir: string; out: string; dockerfile: string } {
+function appPaths(app: DeployApp): { base: string; tenantsDir: string; out: string; dockerfile: string } {
   const appDir = resolve(ROOT_DIR, "apps", app);
   return {
     base: resolve(appDir, "fly/base.toml"),
@@ -75,7 +77,7 @@ function loadConfig(path: string): TomlObject {
   return parse(readFileSync(path, "utf-8")) as TomlObject;
 }
 
-function generate(app: "api" | "workers", tenant: string): { config: TomlObject; meta: TenantMeta; outPath: string } {
+function generate(app: DeployApp, tenant: string): { config: TomlObject; meta: TenantMeta; outPath: string } {
   const { base, tenantsDir, out } = appPaths(app);
   const tenantPath = resolve(tenantsDir, `${tenant}.toml`);
 
@@ -169,7 +171,7 @@ function ensureCertificate(appName: string, domain: string): void {
   }
 }
 
-function deploy(outPath: string, dockerfile: string, target: "api" | "workers"): void {
+function deploy(outPath: string, dockerfile: string, target: DeployApp): void {
   console.log("\nDeploying to Fly.io...\n");
   execSync(`flyctl deploy --local-only -c ${outPath} --dockerfile ${dockerfile} --build-target ${target} ${ROOT_DIR}`, {
     stdio: "inherit",
@@ -186,8 +188,8 @@ function main(): void {
   const generateOnly = args.includes("--generate-only");
 
   const appArg = getFlagValue(args, "--app");
-  if (appArg !== "api" && appArg !== "workers") {
-    console.error(`Error: --app must be 'api' or 'workers', got: ${appArg ?? "(missing)"}`);
+  if (appArg !== "api" && appArg !== "workers" && appArg !== "livestore") {
+    console.error(`Error: --app must be 'api', 'workers', or 'livestore', got: ${appArg ?? "(missing)"}`);
     process.exit(1);
   }
   const app = appArg;
@@ -202,7 +204,7 @@ function main(): void {
   if (!tenant) {
     const { tenantsDir } = appPaths(app);
     const available = listTenants(tenantsDir);
-    console.error(`Usage: fly-deploy [--generate-only] --app api|workers <tenant>`);
+    console.error(`Usage: fly-deploy [--generate-only] --app api|workers|livestore <tenant>`);
     console.error(`Available tenants for app=${app}: ${available.join(", ") || "(none)"}`);
     process.exit(1);
   }

@@ -1,0 +1,53 @@
+model GraphNode {
+  id         String  @id @default(uuid()) @db.Uuid
+  name       String  @unique
+  kind       String?
+  entityType String?
+  entityId   String?
+  isDeleted  Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  properties GraphProperty[]
+
+  @@unique([entityType, entityId])
+  @@index([kind])
+  @@index([isDeleted])
+}
+
+model GraphProperty {
+  id           String  @id @default(uuid()) @db.Uuid
+  nodeId       String  @db.Uuid
+  name         String
+  resolverType String
+  resolver     Json
+  sampleRateMs Int?
+  isDeleted    Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  node     GraphNode   @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  edgesIn  GraphEdge[] @relation("ToProperty")
+  edgesOut GraphEdge[] @relation("FromProperty")
+
+  @@unique([nodeId, name])
+  @@index([resolverType])
+  @@index([isDeleted])
+}
+
+model GraphEdge {
+  id             String @id @default(uuid()) @db.Uuid
+  fromPropertyId String @db.Uuid
+  toPropertyId   String @db.Uuid
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  fromProperty GraphProperty @relation("FromProperty", fields: [fromPropertyId], references: [id], onDelete: Cascade)
+  toProperty   GraphProperty @relation("ToProperty", fields: [toPropertyId], references: [id], onDelete: Cascade)
+
+  @@unique([fromPropertyId, toPropertyId])
+  @@index([fromPropertyId])
+  @@index([toPropertyId])
+}
