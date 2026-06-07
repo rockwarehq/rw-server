@@ -29,8 +29,10 @@ import {
 } from "./cascade.js";
 import { classifyDbTimeout } from "@rw/db";
 
-/** Interval for the combined metrics tick (ms). */
-const COMBINED_TICK_MS = 5_000;
+/** Interval for the combined metrics tick (ms). Default 5s; raise (e.g. via the
+ *  COMBINED_TICK_MS env var / Fly secret on the workers app) to cut Redis pub/sub
+ *  bandwidth, since each tick re-publishes a full snapshot per active bucket. */
+const COMBINED_TICK_MS = Number.parseInt(process.env.COMBINED_TICK_MS ?? "", 10) || 5_000;
 
 /** Parallel station queries per tick phase.
  *  Single-process shares one event loop + DB pool with HTTP + cycle workers,
