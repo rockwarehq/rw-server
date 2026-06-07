@@ -21,6 +21,9 @@ processor_consumer = 'node dist/main.js --worker processor-consumer'
 [env]
 NODE_ENV = 'production'
 PORT = '9465'
+# Metrics combined-tick interval (ms), read by the `rollups` process only.
+# Default 5000; raise to reduce Redis pub/sub bandwidth at the cost of staler KPIs.
+# COMBINED_TICK_MS = '5000'
 
 # Internal-only healthcheck (no public HTTP).
 [[services]]
