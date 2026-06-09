@@ -184,6 +184,7 @@ COPY --from=build /repo/packages/db/package.json packages/db/
 COPY --from=build /repo/packages/runtime/dist packages/runtime/dist
 COPY --from=build /repo/packages/runtime/package.json packages/runtime/
 COPY --from=build /repo/apps/livestore/dist apps/livestore/dist
+COPY --from=build /repo/apps/livestore/playground apps/livestore/playground
 COPY --from=build /repo/apps/livestore/package.json apps/livestore/
 
 # Workspace metadata for `pnpm db:migrate` (run by fly's release_command).
