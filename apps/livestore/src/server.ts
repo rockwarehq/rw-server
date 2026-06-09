@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import websocket from "@fastify/websocket";
 import Fastify from "fastify";
 
@@ -36,6 +38,14 @@ export async function createLivestoreServer(runtime: GraphRuntime) {
   });
 
   server.get("/graph/nodes", async () => ({ data: runtime.listNodes() }));
+
+  server.get("/graph/catalog", async () => ({ data: runtime.listCatalog() }));
+
+  // Static demo UI for watching values roll up live (playground/index.html).
+  server.get("/playground", async (_request, reply) => {
+    const html = await readFile(new URL("../playground/index.html", import.meta.url), "utf8");
+    return reply.type("text/html").send(html);
+  });
 
   server.get<{ Params: { id: string } }>("/graph/nodes/:id", async (request, reply) => {
     const node = runtime.getNode(request.params.id);

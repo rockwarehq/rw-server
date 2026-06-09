@@ -3,9 +3,24 @@ import type { KV } from "@nats-io/kv";
 import type { NatsConnection } from "@nats-io/nats-core";
 
 import { CvgStore } from "./cvg-store.js";
+import { loadEntityCatalog, type EntityCatalogEntry } from "./entityCatalog.js";
 import { GraphKernel } from "./kernel.js";
+import { MetricResolver, type MetricSubscription } from "./metric-resolver.js";
+import { syncNodes } from "./node-sync.js";
+import { evaluateRollup } from "./rollup.js";
+import { buildRollupEdges } from "./rollup-index.js";
+import { Scheduler } from "./scheduler.js";
+import { deriveMetricSubject } from "./subjects.js";
 import { TagResolver } from "./tag-resolver.js";
-import { envelopesEqual, staleEnvelope, type CommitSource, type LivestoreLogger, type ValueEnvelope } from "./types.js";
+import {
+  envelopesEqual,
+  isMetricResolver,
+  isRollupResolverConfig,
+  staleEnvelope,
+  type CommitSource,
+  type LivestoreLogger,
+  type ValueEnvelope,
+} from "./types.js";
 
 export interface GraphRuntimeOptions {
   prisma: PrismaClient;
@@ -19,23 +34,72 @@ export class GraphRuntime {
   private readonly cvg: CvgStore;
   private readonly kernel: GraphKernel;
   private readonly tagResolver: TagResolver;
+  private readonly metricResolver: MetricResolver;
+  private readonly scheduler: Scheduler;
+  private catalog: Map<string, EntityCatalogEntry> = new Map();
   private ready = false;
 
   constructor(private readonly options: GraphRuntimeOptions) {
     this.cvg = new CvgStore(options.kv);
     this.kernel = new GraphKernel(options.prisma, this.cvg, options.logger);
     this.tagResolver = new TagResolver(options.nc, this, options.logger);
+    this.metricResolver = new MetricResolver(options.nc, this, options.logger);
+    this.scheduler = new Scheduler(
+      (id) => this.kernel.getDependents(id),
+      () => this.kernel.topoOrder(),
+      (id) => this.evaluate(id),
+      options.logger,
+    );
   }
 
   async start(): Promise<void> {
+    this.catalog = loadEntityCatalog(this.options.prisma);
+    this.options.logger.info({ kinds: [...this.catalog.keys()] }, "livestore entity catalog loaded");
+    if (process.env.LIVESTORE_SYNC_NODES_ON_BOOT !== "false") {
+      const result = await syncNodes(this.options.prisma);
+      this.options.logger.info({ ...result }, "livestore node sync complete");
+    }
     await this.kernel.load();
+
+    // Resolve rollup membership from the domain model and inject it into the DAG,
+    // then compute every rollup once against the seeded child values (§18.7).
+    const rollupEdges = await buildRollupEdges(this.options.prisma, this.kernel, this.options.logger);
+    this.kernel.applyRollupEdges(rollupEdges);
+
     this.tagResolver.start(this.kernel.listProperties());
+    this.metricResolver.start(this.buildMetricSubscriptions());
     this.ready = true;
+
+    const rollupIds = this.kernel
+      .listProperties()
+      .filter((property) => isRollupResolverConfig(property.resolver))
+      .map((property) => property.id);
+    if (rollupIds.length > 0) this.scheduler.markDirtyMany(rollupIds);
   }
 
   stop(): void {
     this.ready = false;
+    this.scheduler.stop();
     this.tagResolver.stop();
+    this.metricResolver.stop();
+  }
+
+  // One NATS subscription per metric leaf property, on the subject its
+  // (entityId, granularity, metricKey) maps to. entityId comes from the node.
+  private buildMetricSubscriptions(): MetricSubscription[] {
+    const entityIdByNode = new Map<string, string>();
+    for (const node of this.kernel.listNodes()) {
+      if (node.entityId) entityIdByNode.set(node.id, node.entityId);
+    }
+    const subs: MetricSubscription[] = [];
+    for (const property of this.kernel.listProperties()) {
+      if (!isMetricResolver(property.resolver)) continue;
+      const entityId = entityIdByNode.get(property.nodeId);
+      if (!entityId) continue;
+      const subject = deriveMetricSubject(entityId, property.resolver.granularity, property.resolver.metricKey);
+      subs.push({ subject, propertyId: property.id });
+    }
+    return subs;
   }
 
   async commitValue(propertyId: string, envelope: ValueEnvelope, source: CommitSource): Promise<void> {
@@ -51,9 +115,9 @@ export class GraphRuntime {
     const changed = !envelopesEqual(previous, envelope);
     if (changed) {
       await this.cvg.put(propertyId, envelope);
+      this.scheduler.markDirty(propertyId);
     }
 
-    this.markDependentsDirtyPlaceholder(propertyId);
     this.options.logger.info(
       {
         propertyId,
@@ -83,6 +147,10 @@ export class GraphRuntime {
     return this.kernel.listNodes();
   }
 
+  listCatalog(): EntityCatalogEntry[] {
+    return [...this.catalog.values()];
+  }
+
   getNode(nodeId: string) {
     return this.kernel.getNode(nodeId);
   }
@@ -91,6 +159,8 @@ export class GraphRuntime {
     return {
       ...this.kernel.counts(),
       tagSubscriptionCount: this.tagResolver.subscriptionCount(),
+      metricSubscriptionCount: this.metricResolver.subscriptionCount(),
+      catalogKindCount: this.catalog.size,
     };
   }
 
@@ -98,9 +168,17 @@ export class GraphRuntime {
     return this.ready && (this.options.isNatsReady?.() ?? true);
   }
 
-  private markDependentsDirtyPlaceholder(propertyId: string): void {
-    const dependentCount = this.kernel.getDependents(propertyId).length;
-    if (dependentCount === 0) return;
-    this.options.logger.info({ propertyId, dependentCount }, "livestore dirty propagation placeholder skipped");
+  // Recompute one property during a flush. Dispatches on resolver type; today only
+  // rollup is computed (tag/metric leaves get their values from subscriptions). The
+  // switch is where expr/window slot in later (§8.0).
+  private async evaluate(propertyId: string): Promise<void> {
+    const property = this.kernel.getProperty(propertyId);
+    if (!property) return;
+    if (isRollupResolverConfig(property.resolver)) {
+      const childIds = this.kernel.getDependencies(propertyId);
+      const children = childIds.map((id) => this.kernel.getCurrent(id) ?? staleEnvelope());
+      const envelope = evaluateRollup(property.resolver, children);
+      await this.commitValue(propertyId, envelope, "rollup");
+    }
   }
 }

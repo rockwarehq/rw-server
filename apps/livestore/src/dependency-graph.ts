@@ -4,6 +4,8 @@ import type { GraphEdgeRuntime, PropertyRuntime } from "./types.js";
 
 export class DependencyGraph {
   private graph = new graphlib.Graph({ directed: true, multigraph: false, compound: false });
+  // Topological order (inputs before outputs), cached on rebuild for the flush pass.
+  private topo: string[] = [];
 
   rebuild(properties: Iterable<PropertyRuntime>, edges: Iterable<GraphEdgeRuntime>): void {
     const graph = new graphlib.Graph({ directed: true, multigraph: false, compound: false });
@@ -18,6 +20,16 @@ export class DependencyGraph {
     }
 
     this.graph = graph;
+    try {
+      this.topo = graphlib.alg.topsort(graph);
+    } catch {
+      // Cycle: topsort throws. Fall back to node order; save-time cycle prevention is later work.
+      this.topo = graph.nodes();
+    }
+  }
+
+  topoOrder(): string[] {
+    return this.topo;
   }
 
   hasProperty(propertyId: string): boolean {

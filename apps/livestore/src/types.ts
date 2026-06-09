@@ -13,7 +13,35 @@ export interface TagResolverConfig {
   tagPath: string;
 }
 
-export type GraphResolver = TagResolverConfig | ({ type: string } & Record<string, unknown>);
+export type Aggregation = "sum" | "avg" | "count" | "min" | "max";
+
+// Structural rollup (spec §4.3/§18): aggregate childProperty across the parent
+// node's children of childKind, reached via the Prisma relation. Membership is
+// resolved from the domain model at boot (not persisted) — see rollup-index.ts.
+export interface RollupResolverConfig {
+  type: "rollup";
+  childKind: string;
+  relation: string;
+  childProperty: string;
+  aggregation: Aggregation;
+  weightBy?: string;
+}
+
+// metric resolver: mirror a worker-computed MetricBucket value for this node's
+// entity at a granularity. Push-fed over NATS by the metric mirror (§4.6). The
+// entity comes from the node binding; the subject is
+// metrics.<entityId>.<granularity>.<metricKey>.
+export interface MetricResolverConfig {
+  type: "metric";
+  granularity: string;
+  metricKey: string;
+}
+
+export type GraphResolver =
+  | TagResolverConfig
+  | RollupResolverConfig
+  | MetricResolverConfig
+  | ({ type: string } & Record<string, unknown>);
 
 export interface NodeRuntime {
   id: string;
@@ -48,7 +76,7 @@ export interface GraphSnapshotProperty extends Omit<PropertyRuntime, "current"> 
   current: ValueEnvelope;
 }
 
-export type CommitSource = "tag" | "entity" | "expr" | "window" | "rollup" | "manual";
+export type CommitSource = "tag" | "entity" | "expr" | "window" | "rollup" | "metric" | "manual";
 
 export interface LivestoreLogger {
   info: (obj: Record<string, unknown>, msg?: string) => void;
@@ -90,6 +118,30 @@ export function parseGraphResolver(value: unknown, resolverType: string): GraphR
 
 export function isTagResolverConfig(value: GraphResolver): value is TagResolverConfig {
   return value.type === "tag" && typeof value.deviceId === "string" && typeof value.tagPath === "string";
+}
+
+export function isRollupResolverConfig(value: GraphResolver): value is RollupResolverConfig {
+  return (
+    value.type === "rollup" &&
+    typeof (value as RollupResolverConfig).childKind === "string" &&
+    typeof (value as RollupResolverConfig).relation === "string" &&
+    typeof (value as RollupResolverConfig).childProperty === "string" &&
+    typeof (value as RollupResolverConfig).aggregation === "string"
+  );
+}
+
+export function isMetricResolver(value: GraphResolver): value is MetricResolverConfig {
+  return (
+    value.type === "metric" &&
+    typeof (value as MetricResolverConfig).granularity === "string" &&
+    typeof (value as MetricResolverConfig).metricKey === "string"
+  );
+}
+
+// Worst-of quality ordering (spec §8.6): good < stale < uncertain < bad.
+const QUALITY_RANK: Record<Quality, number> = { good: 0, stale: 1, uncertain: 2, bad: 3 };
+export function worse(a: Quality, b: Quality): Quality {
+  return QUALITY_RANK[a] >= QUALITY_RANK[b] ? a : b;
 }
 
 export function envelopesEqual(a: ValueEnvelope, b: ValueEnvelope): boolean {

@@ -8,7 +8,9 @@
     "start": "node dist/main.js",
     "dev": "tsx watch src/main.ts",
     "fixture:create": "tsx src/scripts/create-fixture.ts",
-    "fixture:publish": "tsx src/scripts/publish-tag.ts"
+    "fixture:publish": "tsx src/scripts/publish-tag.ts",
+    "sync:nodes": "tsx src/scripts/sync-nodes.ts",
+    "playground:simulate": "tsx src/scripts/simulate-metrics.ts"
   },
   "dependencies": {
     "@fastify/websocket": "^11.2.0",
