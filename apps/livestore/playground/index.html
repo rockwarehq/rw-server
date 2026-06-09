@@ -106,7 +106,8 @@
         if (wc) register(wc, document.getElementById("workcenter"), "wc");
         for (const s of stations) register(s, document.getElementById("stations"), "station");
 
-        const ws = new WebSocket(`ws://${location.host}/ws/graph`);
+        const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
+        const ws = new WebSocket(`${wsProto}//${location.host}/ws/graph`);
         ws.onopen = () => {
           statusEl.textContent = "live";
           statusEl.className = "status ok";
