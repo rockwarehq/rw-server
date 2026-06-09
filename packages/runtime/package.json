@@ -7,6 +7,7 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": "./dist/index.js",
+    "./graph-subjects": "./dist/graph-subjects.js",
     "./events-bus": "./dist/events-bus.js",
     "./bullmq-config": "./dist/bullmq-config.js",
     "./logger": "./dist/logger.js",
