@@ -12,6 +12,7 @@
 
 import { createPrismaClient } from "@rw/db";
 import { initEventsBridge } from "@rw/runtime/events-bus";
+import { startGraphNatsBridge } from "@rw/services/metrics/graph-nats-bridge";
 import { initMetricsBridge } from "@rw/services/rpc/metrics-bus";
 import {
   startMetricBucketEnsure,
@@ -32,6 +33,7 @@ import { startDirtyBucketConsumer, stopDirtyBucketConsumer } from "@rw/services/
 
 let cleanupBridge: (() => Promise<void>) | null = null;
 let cleanupMetricsBridge: (() => Promise<void>) | null = null;
+let cleanupGraphBridge: (() => Promise<void>) | null = null;
 
 export async function startRollups(): Promise<void> {
   createPrismaClient("rollups");
@@ -39,6 +41,9 @@ export async function startRollups(): Promise<void> {
   // Bridge metric-bus events to api over Redis so frontend SSE
   // (current-shift-recap, live KPIs) reflects rollup changes.
   cleanupMetricsBridge = await initMetricsBridge("publisher");
+  // Bridge station SHIFT bucket metrics to NATS so the livestore graph's metric
+  // resolvers ingest them and roll them up.
+  cleanupGraphBridge = await startGraphNatsBridge();
 
   await initMetricBucketQueues();
   await registerMetricBucketWorkers();
@@ -53,6 +58,7 @@ export async function startRollups(): Promise<void> {
 export async function stopRollups(): Promise<void> {
   await stopDirtyBucketConsumer();
   await Promise.all([stopMetricBucketEnsure(), stopMetricBucketQueues(), stopShiftChangeQueue()]);
+  if (cleanupGraphBridge) await cleanupGraphBridge();
   if (cleanupBridge) await cleanupBridge();
   if (cleanupMetricsBridge) await cleanupMetricsBridge();
   const { createPrismaClient: getClient } = await import("@rw/db");

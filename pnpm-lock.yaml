@@ -379,6 +379,12 @@ importers:
 
   packages/services:
     dependencies:
+      '@nats-io/nats-core':
+        specifier: ^3.4.0
+        version: 3.4.0
+      '@nats-io/transport-node':
+        specifier: ^3.4.0
+        version: 3.4.0
       '@orpc/server':
         specifier: ^1.14.0
         version: 1.14.3(@opentelemetry/api@1.9.1)(fastify@5.8.5)(ws@8.20.1)
