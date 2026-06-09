@@ -22,7 +22,8 @@
     "@rw/runtime": "workspace:*",
     "dotenv": "^17.2.3",
     "fastify": "^5.6.2",
-    "graphlib": "^2.1.8"
+    "graphlib": "^2.1.8",
+    "mathjs": "^15.2.0"
   },
   "devDependencies": {
     "@types/graphlib": "^2.1.12",

@@ -37,10 +37,19 @@ export interface MetricResolverConfig {
   metricKey: string;
 }
 
+// expr resolver (spec §7/§8.6): a mathjs expression over other properties,
+// referenced by sanitized symbols (p_<id>). Dependencies are the persisted
+// GraphEdges into this property.
+export interface ExprResolverConfig {
+  type: "expr";
+  expression: string;
+}
+
 export type GraphResolver =
   | TagResolverConfig
   | RollupResolverConfig
   | MetricResolverConfig
+  | ExprResolverConfig
   | ({ type: string } & Record<string, unknown>);
 
 export interface NodeRuntime {
@@ -128,6 +137,10 @@ export function isRollupResolverConfig(value: GraphResolver): value is RollupRes
     typeof (value as RollupResolverConfig).childProperty === "string" &&
     typeof (value as RollupResolverConfig).aggregation === "string"
   );
+}
+
+export function isExprResolverConfig(value: GraphResolver): value is ExprResolverConfig {
+  return value.type === "expr" && typeof (value as ExprResolverConfig).expression === "string";
 }
 
 export function isMetricResolver(value: GraphResolver): value is MetricResolverConfig {

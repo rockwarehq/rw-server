@@ -4,6 +4,7 @@ import type { NatsConnection } from "@nats-io/nats-core";
 
 import { CvgStore } from "./cvg-store.js";
 import { loadEntityCatalog, type EntityCatalogEntry } from "./entityCatalog.js";
+import { evaluateExpr } from "./expr.js";
 import { GraphKernel } from "./kernel.js";
 import { MetricResolver, type MetricSubscription } from "./metric-resolver.js";
 import { syncNodes } from "./node-sync.js";
@@ -14,6 +15,7 @@ import { deriveMetricSubject } from "./subjects.js";
 import { TagResolver } from "./tag-resolver.js";
 import {
   envelopesEqual,
+  isExprResolverConfig,
   isMetricResolver,
   isRollupResolverConfig,
   staleEnvelope,
@@ -70,11 +72,11 @@ export class GraphRuntime {
     this.metricResolver.start(this.buildMetricSubscriptions());
     this.ready = true;
 
-    const rollupIds = this.kernel
+    const computedIds = this.kernel
       .listProperties()
-      .filter((property) => isRollupResolverConfig(property.resolver))
+      .filter((property) => isRollupResolverConfig(property.resolver) || isExprResolverConfig(property.resolver))
       .map((property) => property.id);
-    if (rollupIds.length > 0) this.scheduler.markDirtyMany(rollupIds);
+    if (computedIds.length > 0) this.scheduler.markDirtyMany(computedIds);
   }
 
   stop(): void {
@@ -179,6 +181,12 @@ export class GraphRuntime {
       const children = childIds.map((id) => this.kernel.getCurrent(id) ?? staleEnvelope());
       const envelope = evaluateRollup(property.resolver, children);
       await this.commitValue(propertyId, envelope, "rollup");
+    } else if (isExprResolverConfig(property.resolver)) {
+      const deps = this.kernel
+        .getDependencies(propertyId)
+        .map((id) => ({ id, current: this.kernel.getCurrent(id) ?? staleEnvelope() }));
+      const envelope = evaluateExpr(property.resolver.expression, deps);
+      await this.commitValue(propertyId, envelope, "expr");
     }
   }
 }

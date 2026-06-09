@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@rw/db";
 
 import { DEFAULT_KINDS } from "./entityCatalog.js";
+import { symbolFor } from "./expr.js";
 
 interface EntityRow {
   id: string;
@@ -57,46 +58,89 @@ interface PropertySpec {
   resolver: Record<string, unknown>;
 }
 
+// Additive station SHIFT metrics (MetricBucket counters). Each becomes a
+// metric-mirror leaf on Station and a rollup{sum} on Workcenter + Site — these are
+// extensive quantities, so summing across children is correct. Ratios (oee,
+// availability, performance, quality) are NOT here: they roll up as expr over
+// these summed components (Phase 2 / RATIO_PROPERTIES). Keys must match the bridge's
+// MIRRORED_METRIC_KEYS and the BucketSnapshot field names.
+const COUNTER_KEYS = [
+  "totalCycles",
+  "goodCycles",
+  "badCycles",
+  "expectedCycles",
+  "totalItems",
+  "goodItems",
+  "badItems",
+  "expectedItems",
+  "runSeconds",
+  "downSeconds",
+  "plannedDownSeconds",
+  "unplannedDownSeconds",
+  "plannedProductionSeconds",
+  "idealCycleSeconds",
+  "totalCycleSeconds",
+  "elapsedExpectedCycles",
+  "elapsedExpectedItems",
+  "elapsedPlannedProductionSeconds",
+];
+
+const metricLeaf = (key: string): PropertySpec => ({
+  name: `shift_${key}`,
+  resolverType: "metric",
+  resolver: { type: "metric", granularity: "SHIFT", metricKey: key },
+});
+
+const sumRollup = (key: string, childKind: string, relation: string): PropertySpec => ({
+  name: `shift_${key}`,
+  resolverType: "rollup",
+  resolver: { type: "rollup", childKind, relation, childProperty: `shift_${key}`, aggregation: "sum" },
+});
+
 const KIND_PROPERTIES: Record<string, PropertySpec[]> = {
-  Station: [
-    {
-      // Leaf: mirror the station's current SHIFT MetricBucket goodItems, push-fed
-      // over NATS by the metric mirror (subject metrics.<stationId>.SHIFT.goodItems).
-      name: "shift_goodItems",
-      resolverType: "metric",
-      resolver: { type: "metric", granularity: "SHIFT", metricKey: "goodItems" },
-    },
-  ],
-  Workcenter: [
-    {
-      // Sum the stations' shift_goodItems. goodItems is additive, so a plain
-      // rollup{sum} is correct (no expr needed). Evaluates once the reactive
-      // scheduler (M3) + rollup resolver (M6) land.
-      name: "shift_goodItems",
-      resolverType: "rollup",
-      resolver: {
-        type: "rollup",
-        childKind: "Station",
-        relation: "stations",
-        childProperty: "shift_goodItems",
-        aggregation: "sum",
-      },
-    },
-  ],
-  Site: [
-    {
-      name: "shift_goodItems",
-      resolverType: "rollup",
-      resolver: {
-        type: "rollup",
-        childKind: "Workcenter",
-        relation: "workcenters",
-        childProperty: "shift_goodItems",
-        aggregation: "sum",
-      },
-    },
-  ],
+  Station: COUNTER_KEYS.map((k) => metricLeaf(k)),
+  Workcenter: COUNTER_KEYS.map((k) => sumRollup(k, "Station", "stations")),
+  Site: COUNTER_KEYS.map((k) => sumRollup(k, "Workcenter", "workcenters")),
 };
+
+// Ratio KPIs derived from the summed components via expr (Phase 2 / §8.6). Each
+// names the component properties it needs; the expression is built per node from
+// those components' actual IDs (mathjs symbols, hyphen-safe). Materialized only on
+// kinds carrying the summed components (Workcenter, Site) — never on Station leaves.
+interface RatioSpec {
+  name: string;
+  deps: string[];
+  build: (idByName: Map<string, string>) => string;
+}
+
+const sym = (idByName: Map<string, string>, name: string): string => symbolFor(idByName.get(name) as string);
+
+const RATIO_SPECS: RatioSpec[] = [
+  {
+    name: "shift_availability",
+    deps: ["shift_runSeconds", "shift_elapsedPlannedProductionSeconds"],
+    build: (id) => `${sym(id, "shift_runSeconds")} / ${sym(id, "shift_elapsedPlannedProductionSeconds")}`,
+  },
+  {
+    name: "shift_performance",
+    deps: ["shift_idealCycleSeconds", "shift_runSeconds"],
+    build: (id) => `${sym(id, "shift_idealCycleSeconds")} / ${sym(id, "shift_runSeconds")}`,
+  },
+  {
+    name: "shift_quality",
+    deps: ["shift_goodItems", "shift_totalItems"],
+    build: (id) => `${sym(id, "shift_goodItems")} / ${sym(id, "shift_totalItems")}`,
+  },
+  {
+    name: "shift_oee",
+    deps: ["shift_idealCycleSeconds", "shift_goodItems", "shift_elapsedPlannedProductionSeconds", "shift_totalItems"],
+    build: (id) =>
+      `(${sym(id, "shift_idealCycleSeconds")} * ${sym(id, "shift_goodItems")}) / ` +
+      `(${sym(id, "shift_elapsedPlannedProductionSeconds")} * ${sym(id, "shift_totalItems")})`,
+  },
+];
+
+const RATIO_KINDS = new Set(["Workcenter", "Site"]);
 
 export interface NodeSyncResult {
   synced: Record<string, number>; // live entities upserted per kind
@@ -139,13 +183,36 @@ export async function syncNodes(
 
       // Materialize the kind's property schema onto this node. Upsert only — never
       // prune, so editor-added ad-hoc properties (§4.6) survive a re-sync.
+      const idByName = new Map<string, string>();
       for (const spec of specs) {
-        await prisma.graphProperty.upsert({
+        const property = await prisma.graphProperty.upsert({
           where: { nodeId_name: { nodeId: node.id, name: spec.name } },
           create: { nodeId: node.id, name: spec.name, resolverType: spec.resolverType, resolver: spec.resolver },
           update: { resolverType: spec.resolverType, resolver: spec.resolver, isDeleted: false },
         });
+        idByName.set(spec.name, property.id);
         propertyCount += 1;
+      }
+
+      // Phase 2: ratio KPIs as expr over the summed components. Built per node from
+      // the component IDs, with persisted GraphEdges (component -> expr) so the
+      // scheduler recomputes the ratio when a component rolls up.
+      if (RATIO_KINDS.has(kind)) {
+        for (const ratio of RATIO_SPECS) {
+          if (!ratio.deps.every((d) => idByName.has(d))) continue;
+          const resolver = { type: "expr", expression: ratio.build(idByName) };
+          const exprProp = await prisma.graphProperty.upsert({
+            where: { nodeId_name: { nodeId: node.id, name: ratio.name } },
+            create: { nodeId: node.id, name: ratio.name, resolverType: "expr", resolver },
+            update: { resolverType: "expr", resolver, isDeleted: false },
+          });
+          await prisma.graphEdge.deleteMany({ where: { toPropertyId: exprProp.id } });
+          await prisma.graphEdge.createMany({
+            data: ratio.deps.map((d) => ({ fromPropertyId: idByName.get(d) as string, toPropertyId: exprProp.id })),
+            skipDuplicates: true,
+          });
+          propertyCount += 1;
+        }
       }
     }
 
