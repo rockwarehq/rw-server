@@ -16,9 +16,30 @@ interface ValueEnvelope {
   timestamp: number;
 }
 
-// Station metrics the graph mirrors as leaves. Add more keys here as leaf
-// properties are added — each must exist in the bucket snapshot + the catalog.
-const MIRRORED_METRIC_KEYS = ["goodItems"];
+// Station metrics the graph mirrors as leaves (the additive SHIFT counters). Each
+// must be a BucketSnapshot field; the list mirrors livestore node-sync's
+// COUNTER_KEYS. Ratios (oee/availability/…) are NOT bridged — the graph derives
+// them via expr from these summed components.
+const MIRRORED_METRIC_KEYS = [
+  "totalCycles",
+  "goodCycles",
+  "badCycles",
+  "expectedCycles",
+  "totalItems",
+  "goodItems",
+  "badItems",
+  "expectedItems",
+  "runSeconds",
+  "downSeconds",
+  "plannedDownSeconds",
+  "unplannedDownSeconds",
+  "plannedProductionSeconds",
+  "idealCycleSeconds",
+  "totalCycleSeconds",
+  "elapsedExpectedCycles",
+  "elapsedExpectedItems",
+  "elapsedPlannedProductionSeconds",
+];
 const MIRRORED_GRANULARITY = "SHIFT";
 
 // Pure: expand a bucket change into the graph publishes it should produce — one
