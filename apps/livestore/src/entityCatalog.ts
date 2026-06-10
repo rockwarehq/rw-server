@@ -7,6 +7,8 @@
 
 import type { PrismaClient } from "@rw/db";
 
+import { assertMetricCatalogComplete, type MetricField, metricsForKind } from "./metricCatalog.js";
+
 export interface CatalogScalar {
   name: string;
   type: string; // String | Int | Boolean | DateTime | Json | <enum>
@@ -24,8 +26,9 @@ export interface CatalogRelation {
 export interface EntityCatalogEntry {
   kind: string; // Prisma model name, e.g. "Workcenter"
   entityType: string; // graph entityType, e.g. "WORKCENTER"
-  scalars: CatalogScalar[];
-  relations: CatalogRelation[];
+  scalars: CatalogScalar[]; // Prisma columns (structure)
+  relations: CatalogRelation[]; // Prisma relations (hierarchy)
+  metrics: MetricField[]; // pickable KPI fields (from the metric catalog, not reflectable here)
 }
 
 interface RuntimeField {
@@ -52,6 +55,10 @@ export function loadEntityCatalog(
   const dm = (prisma as unknown as { _runtimeDataModel?: RuntimeDataModel })._runtimeDataModel;
   if (!dm?.models) throw new Error("entityCatalog: prisma._runtimeDataModel unavailable (Prisma upgrade?)");
 
+  // Validate the metric catalog against MetricBucket before folding it in, so a
+  // schema/catalog drift fails fast at boot rather than surfacing as a dead picker entry.
+  assertMetricCatalogComplete(prisma);
+
   const next = new Map<string, EntityCatalogEntry>();
   for (const kind of kinds) {
     const model = dm.models[kind];
@@ -68,7 +75,7 @@ export function loadEntityCatalog(
         scalars.push({ name: f.name, type: f.type });
       }
     }
-    next.set(kind, { kind, entityType: kind.toUpperCase(), scalars, relations });
+    next.set(kind, { kind, entityType: kind.toUpperCase(), scalars, relations, metrics: metricsForKind(kind) });
   }
 
   catalog = next;

@@ -2,6 +2,7 @@ import type { PrismaClient } from "@rw/db";
 
 import { DEFAULT_KINDS } from "./entityCatalog.js";
 import { symbolFor } from "./expr.js";
+import { additiveFields, metricPropertyName, type MetricField, ratioFields } from "./metricCatalog.js";
 
 interface EntityRow {
   id: string;
@@ -58,89 +59,74 @@ interface PropertySpec {
   resolver: Record<string, unknown>;
 }
 
-// Additive station SHIFT metrics (MetricBucket counters). Each becomes a
-// metric-mirror leaf on Station and a rollup{sum} on Workcenter + Site — these are
-// extensive quantities, so summing across children is correct. Ratios (oee,
-// availability, performance, quality) are NOT here: they roll up as expr over
-// these summed components (Phase 2 / RATIO_PROPERTIES). Keys must match the bridge's
-// MIRRORED_METRIC_KEYS and the BucketSnapshot field names.
-const COUNTER_KEYS = [
-  "totalCycles",
-  "goodCycles",
-  "badCycles",
-  "expectedCycles",
-  "totalItems",
-  "goodItems",
-  "badItems",
-  "expectedItems",
-  "runSeconds",
-  "downSeconds",
-  "plannedDownSeconds",
-  "unplannedDownSeconds",
-  "plannedProductionSeconds",
-  "idealCycleSeconds",
-  "totalCycleSeconds",
-  "elapsedExpectedCycles",
-  "elapsedExpectedItems",
-  "elapsedPlannedProductionSeconds",
-];
-
-const metricLeaf = (key: string): PropertySpec => ({
-  name: `shift_${key}`,
-  resolverType: "metric",
-  resolver: { type: "metric", granularity: "SHIFT", metricKey: key },
-});
-
-const sumRollup = (key: string, childKind: string, relation: string): PropertySpec => ({
-  name: `shift_${key}`,
-  resolverType: "rollup",
-  resolver: { type: "rollup", childKind, relation, childProperty: `shift_${key}`, aggregation: "sum" },
-});
-
-const KIND_PROPERTIES: Record<string, PropertySpec[]> = {
-  Station: COUNTER_KEYS.map((k) => metricLeaf(k)),
-  Workcenter: COUNTER_KEYS.map((k) => sumRollup(k, "Station", "stations")),
-  Site: COUNTER_KEYS.map((k) => sumRollup(k, "Workcenter", "workcenters")),
+// The additive + ratio property schema is derived from the metric catalog
+// (metricCatalog.ts) so the materialized properties and the catalog the picker
+// reads can't drift. Additive counters become a metric-mirror leaf on Station and a
+// rollup{sum} on Workcenter + Site (extensive — summing across children is correct).
+// Ratios become an expr over those components on every kind that carries them.
+const ROLLUP_CHILD: Record<string, { childKind: string; relation: string }> = {
+  Workcenter: { childKind: "Station", relation: "stations" },
+  Site: { childKind: "Workcenter", relation: "workcenters" },
 };
 
-// Ratio KPIs derived from the summed components via expr (Phase 2 / §8.6). Each
-// names the component properties it needs; the expression is built per node from
-// those components' actual IDs (mathjs symbols, hyphen-safe). Materialized only on
-// kinds carrying the summed components (Workcenter, Site) — never on Station leaves.
+const metricLeaf = (field: MetricField): PropertySpec => ({
+  name: metricPropertyName(field.key),
+  resolverType: "metric",
+  resolver: { type: "metric", granularity: "SHIFT", metricKey: field.key },
+});
+
+const sumRollup = (field: MetricField, childKind: string, relation: string): PropertySpec => {
+  const name = metricPropertyName(field.key);
+  return {
+    name,
+    resolverType: "rollup",
+    resolver: { type: "rollup", childKind, relation, childProperty: name, aggregation: "sum" },
+  };
+};
+
+// Additive property specs for a kind: Station mirrors the metric leaf; Workcenter/Site
+// sum the same property over their children.
+const additiveSpecs = (kind: string): PropertySpec[] => {
+  const child = ROLLUP_CHILD[kind];
+  return additiveFields().map((f) => (child ? sumRollup(f, child.childKind, child.relation) : metricLeaf(f)));
+};
+
+// Ratio KPIs as expr over the summed components (§8.6). The expression is built per
+// node from the components' actual property IDs (mathjs symbols, hyphen-safe) by
+// substituting each component key in the catalog formula. Materialized on Station
+// (over its metric leaves — canonical per-station OEE) and Workcenter/Site (over the
+// summed rollup components — intensive-correct).
 interface RatioSpec {
   name: string;
-  deps: string[];
+  deps: string[]; // component property names, e.g. "shift_runSeconds"
   build: (idByName: Map<string, string>) => string;
 }
 
-const sym = (idByName: Map<string, string>, name: string): string => symbolFor(idByName.get(name) as string);
+// Substitute each component key in the formula with its property's mathjs symbol.
+// Longest key first so no key is a prefix of another's replacement; keys are camelCase
+// identifiers, so a word-boundary, case-sensitive match is exact for the OEE family.
+const buildRatioExpr = (field: MetricField, idByName: Map<string, string>): string => {
+  const keys = [...(field.deps ?? [])].sort((a, b) => b.length - a.length);
+  let expr = field.formula as string;
+  for (const key of keys) {
+    const symbol = symbolFor(idByName.get(metricPropertyName(key)) as string);
+    expr = expr.replace(new RegExp(`\\b${key}\\b`, "g"), symbol);
+  }
+  return expr;
+};
 
-const RATIO_SPECS: RatioSpec[] = [
-  {
-    name: "shift_availability",
-    deps: ["shift_runSeconds", "shift_elapsedPlannedProductionSeconds"],
-    build: (id) => `${sym(id, "shift_runSeconds")} / ${sym(id, "shift_elapsedPlannedProductionSeconds")}`,
-  },
-  {
-    name: "shift_performance",
-    deps: ["shift_idealCycleSeconds", "shift_runSeconds"],
-    build: (id) => `${sym(id, "shift_idealCycleSeconds")} / ${sym(id, "shift_runSeconds")}`,
-  },
-  {
-    name: "shift_quality",
-    deps: ["shift_goodItems", "shift_totalItems"],
-    build: (id) => `${sym(id, "shift_goodItems")} / ${sym(id, "shift_totalItems")}`,
-  },
-  {
-    name: "shift_oee",
-    deps: ["shift_idealCycleSeconds", "shift_goodItems", "shift_elapsedPlannedProductionSeconds", "shift_totalItems"],
-    build: (id) =>
-      `(${sym(id, "shift_idealCycleSeconds")} * ${sym(id, "shift_goodItems")}) / ` +
-      `(${sym(id, "shift_elapsedPlannedProductionSeconds")} * ${sym(id, "shift_totalItems")})`,
-  },
-];
+const RATIO_SPECS: RatioSpec[] = ratioFields().map((f) => ({
+  name: metricPropertyName(f.key),
+  deps: (f.deps ?? []).map((d) => metricPropertyName(d)),
+  build: (idByName) => buildRatioExpr(f, idByName),
+}));
 
-const RATIO_KINDS = new Set(["Workcenter", "Site"]);
+// Kinds that carry at least one ratio field, from the catalog.
+const RATIO_KINDS = new Set(ratioFields().flatMap((f) => f.kinds));
+
+const KIND_PROPERTIES: Record<string, PropertySpec[]> = Object.fromEntries(
+  DEFAULT_KINDS.map((kind) => [kind, additiveSpecs(kind)]),
+);
 
 export interface NodeSyncResult {
   synced: Record<string, number>; // live entities upserted per kind
