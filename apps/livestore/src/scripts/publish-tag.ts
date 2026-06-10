@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import { connect } from "@nats-io/transport-node";
 
-import { deriveTagSubject } from "../subjects.js";
+import { deriveTagSubject } from "@rw/runtime/graph-subjects";
 import { parseValueEnvelope, type ValueEnvelope } from "../types.js";
 
 const encoder = new TextEncoder();
