@@ -1,184 +1,81 @@
-# Livestore
+# @rw/livestore
 
-`@rw/livestore` is the first slice of the Reactive Graph Engine. It runs the tag-backed live value pipeline:
+The Reactive Graph Engine (see `spec.md`): live values mirrored into a reactive
+graph and fanned out to dashboards over WebSocket. Two input paths feed the same
+engine:
 
 ```text
-NATS tag message -> TagResolver -> commitValue() -> in-memory current cache -> NATS KV cvg -> WebSocket clients
+metrics worker (MetricBucket change)
+  -> graph NATS bridge (packages/services/src/metrics/graph-nats-bridge.ts)
+  -> NATS subject metrics.<stationId>.SHIFT.<metricKey>
+  -> MetricResolver (Station leaf properties)
+  -> rollup{sum} on Workcenter / Site + ratio exprs (oee, availability, ...)
+  -> NATS KV `cvg` (current value table)
+  -> WebSocket /ws/graph -> dashboards
+
+NATS tag message (tags.<deviceId>.<tagPath>)
+  -> TagResolver -> commitValue() -> NATS KV `cvg` -> WebSocket clients
 ```
 
-## Requirements
+## How it fits together
 
-- Postgres available through `DATABASE_URL`
-- NATS with JetStream enabled
-- `apps/livestore/.env` present for local dev
+- **Entity catalog** (`entityCatalog.ts`) — kinds/relations reflected from Prisma at
+  boot. **Metric catalog** (`metricCatalog.ts`) — the declared KPI layer (additive
+  counters + ratio formulas) the schema can't reflect; the mirrored key set lives in
+  `@rw/runtime/graph-subjects` so the worker bridge and this consumer can't drift.
+- **Node sync** (`node-sync.ts`) — materializes one GraphNode per Site/Workcenter/
+  Station and each kind's property schema: metric leaves on Stations, `rollup{sum}`
+  on Workcenter/Site, ratio KPIs as exprs at every level. Idempotent; runs on boot
+  (`LIVESTORE_SYNC_NODES_ON_BOOT`) or via `pnpm --filter @rw/livestore sync:nodes`.
+- **Engine** (`kernel.ts`, `scheduler.ts`, `runtime.ts`) — in-memory DAG, dirty-set
+  coalescing (50ms), topo-ordered flush; rollups/exprs recompute bottom-up so a
+  station counter change lands in workcenter and site KPIs in one pass.
+- **WS gateway** (`server.ts`) — subscribe/unsubscribe per property id; initial
+  value from KV, then KV watch; per-connection backpressure.
 
-If you need a starting point:
+## Run locally
 
-```sh
-cp apps/livestore/.env.example apps/livestore/.env
+Requirements: Postgres via `DATABASE_URL`, NATS with JetStream, and a local env file
+(`cp apps/livestore/.env.example apps/livestore/.env`).
+
+```bash
+docker compose up -d nats            # JetStream-enabled NATS
+pnpm --filter @rw/db db:migrate      # GraphNode / GraphProperty / GraphEdge tables
+pnpm --filter @rw/livestore dev      # boots, syncs nodes, opens /ws/graph on :30100
 ```
 
-Optional env vars:
+Simulate the worker (publishes ramping SHIFT goodItems for a few stations):
 
-- `NATS_URL`, defaults to `nats://localhost:4222`
-- `NATS_CLIENT_NAME`, defaults to `rw-livestore`
-- `PORT`, defaults to `30100`
-- `HOST`, defaults to `::`
-
-## Start NATS
-
-Preferred local setup from the repo root:
-
-```sh
-docker compose up nats
+```bash
+pnpm --filter @rw/livestore playground:simulate
 ```
 
-One-off alternative:
+Or exercise the tag path (creates a tag-backed node, then publishes envelopes):
 
-```sh
-docker run --rm -p 4222:4222 nats:latest -js
-```
-
-NATS monitoring is exposed at `http://localhost:8222` when using `compose.yml`.
-
-## Prepare Database
-
-Run from the repo root:
-
-```sh
-pnpm db:migrate:dev
-pnpm db:generate
-```
-
-## Create Test Fixture
-
-Run from the repo root:
-
-```sh
+```bash
 pnpm --filter @rw/livestore fixture:create
-```
-
-This creates or updates:
-
-- GraphNode: `Press 7`
-- GraphProperty: `cycleTime`
-- Resolver: `{ "type": "tag", "deviceId": "press7-plc", "tagPath": "cycleTime" }`
-
-The default derived NATS subject is:
-
-```text
-tags.press7-plc.cycleTime
-```
-
-The command prints the `propertyId`; use that for websocket subscription testing.
-
-## Start Livestore
-
-Run from the repo root:
-
-```sh
-pnpm --filter @rw/livestore dev
-```
-
-## Publish Test Tag Value
-
-In another terminal, run from the repo root:
-
-```sh
 pnpm --filter @rw/livestore fixture:publish
 ```
 
-By default, the helper publishes a random numeric value and a current timestamp so repeated runs produce visible updates:
-
-```json
-{
-  "value": 14.8,
-  "quality": "good",
-  "timestamp": 1730000000000
-}
-```
-
-Override fixture publish values with env vars:
-
-```sh
-GRAPH_VALUE=18.2 GRAPH_TIMESTAMP=1730000001000 pnpm --filter @rw/livestore fixture:publish
-```
-
-Publish the exact previous envelope again to test the no-change commit path:
-
-```sh
-pnpm --filter @rw/livestore fixture:publish -- --same
-```
-
-`--same` reuses the previous published envelope from a temp-file cache, including timestamp. Run `fixture:publish` once without `--same` first.
-
-## HTTP Checks
-
-```sh
-curl http://localhost:30100/health
-curl http://localhost:30100/healthz
-curl http://localhost:30100/readyz
-curl http://localhost:30100/graph/nodes
-```
-
-`/healthz` is process liveness. `/readyz` checks runtime readiness, including the NATS connection.
-
-Fetch one node by ID:
-
-```sh
-curl http://localhost:30100/graph/nodes/<nodeId>
-```
-
-## WebSocket Test
-
-Connect to:
-
-```text
-ws://localhost:30100/ws/graph
-```
-
-Send:
+Watch values: `GET /graph/nodes` for ids, then over WS
 
 ```json
 { "op": "subscribe", "propertyIds": ["<propertyId>"] }
 ```
 
-Then publish another test value:
+## Endpoints
 
-```sh
-pnpm --filter @rw/livestore fixture:publish
+| Route | Purpose |
+| --- | --- |
+| `GET /health`, `/healthz`, `/readyz` | liveness / NATS readiness |
+| `GET /graph/nodes` | nodes + properties + current values |
+| `GET /graph/nodes/:id` | one node |
+| `GET /graph/catalog` | entity kinds, relations, pickable metric fields |
+| `GET /ws/graph` | WebSocket subscribe/unsubscribe per property |
+
+## Tests
+
+```bash
+pnpm --filter @rw/livestore test     # engine scheduler unit tests
+pnpm --filter @rw/services test      # NATS bridge publish mapping
 ```
-
-The WebSocket client should receive:
-
-```json
-{
-  "op": "value",
-  "propertyId": "<propertyId>",
-  "envelope": {
-    "value": 12.4,
-    "quality": "good",
-    "timestamp": 1730000000000
-  }
-}
-```
-
-## Current Value Store
-
-- KV bucket: `cvg`
-- KV key format: `prop.<propertyId>`
-- KV value: JSON `ValueEnvelope`
-
-On boot, Livestore seeds each property's in-memory `current` value from `cvg`. If no KV entry exists, the property starts as a stale/null envelope using the current boot time:
-
-```json
-{ "value": null, "quality": "stale", "timestamp": 1730000000000 }
-```
-
-## Architecture Notes
-
-- Resolvers do not write to KV directly.
-- All value changes go through `commitValue()`.
-- WebSocket clients subscribe by `propertyId`, never raw NATS subjects.
-- `GraphEdge` is reserved for future property-to-property dependencies.
-- The current tag-backed slice does not implement expressions, windows, rollups, entity resolvers, or dirty flush evaluation.
