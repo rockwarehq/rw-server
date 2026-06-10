@@ -4,7 +4,8 @@
  *
  * Usage:
  *   pnpm fly:generate --app api|workers|livestore <tenant>     # write fly.generated.toml
- *   pnpm fly:deploy   --app api|workers|livestore <tenant>     # generate + validate + deploy
+ *   pnpm fly:deploy   --app api|workers|livestore <tenant>     # generate + validate + deploy (local build)
+ *   pnpm fly:deploy   --app ... <tenant> --remote             # build on Fly's remote builder (use on arm64 hosts)
  *
  * Tenant configs live at:
  *   apps/api/fly/base.toml      + apps/api/fly/tenants/<tenant>.toml
@@ -171,9 +172,13 @@ function ensureCertificate(appName: string, domain: string): void {
   }
 }
 
-function deploy(outPath: string, dockerfile: string, target: DeployApp): void {
-  console.log("\nDeploying to Fly.io...\n");
-  execSync(`flyctl deploy --local-only -c ${outPath} --dockerfile ${dockerfile} --build-target ${target} ${ROOT_DIR}`, {
+function deploy(outPath: string, dockerfile: string, target: DeployApp, remote: boolean): void {
+  // Local build by default. Pass --remote to use Fly's amd64 remote builder
+  // instead — needed on non-amd64 hosts (e.g. arm64), where a local amd64 build
+  // fails with "exec format error" unless qemu emulation is installed.
+  const builder = remote ? "--remote-only" : "--local-only";
+  console.log(`\nDeploying to Fly.io (${remote ? "remote" : "local"} build)...\n`);
+  execSync(`flyctl deploy ${builder} -c ${outPath} --dockerfile ${dockerfile} --build-target ${target} ${ROOT_DIR}`, {
     stdio: "inherit",
   });
 }
@@ -186,6 +191,7 @@ function getFlagValue(args: string[], name: string): string | undefined {
 function main(): void {
   const args = process.argv.slice(2);
   const generateOnly = args.includes("--generate-only");
+  const remote = args.includes("--remote");
 
   const appArg = getFlagValue(args, "--app");
   if (appArg !== "api" && appArg !== "workers" && appArg !== "livestore") {
@@ -204,7 +210,7 @@ function main(): void {
   if (!tenant) {
     const { tenantsDir } = appPaths(app);
     const available = listTenants(tenantsDir);
-    console.error(`Usage: fly-deploy [--generate-only] --app api|workers|livestore <tenant>`);
+    console.error(`Usage: fly-deploy [--generate-only] [--remote] --app api|workers|livestore <tenant>`);
     console.error(`Available tenants for app=${app}: ${available.join(", ") || "(none)"}`);
     process.exit(1);
   }
@@ -229,7 +235,7 @@ function main(): void {
   }
 
   const { dockerfile } = appPaths(app);
-  deploy(outPath, dockerfile, app);
+  deploy(outPath, dockerfile, app, remote);
   console.log("\nDeployment complete!");
 }
 
