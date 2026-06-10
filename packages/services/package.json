@@ -34,6 +34,8 @@
     "test:document": "vitest run src/document/document.test.ts"
   },
   "dependencies": {
+    "@nats-io/nats-core": "^3.4.0",
+    "@nats-io/transport-node": "^3.4.0",
     "@orpc/server": "^1.14.0",
     "@rw/automations": "workspace:*",
     "@rw/db": "workspace:*",

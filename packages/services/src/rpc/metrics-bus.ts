@@ -57,8 +57,24 @@ let publishValueFn: (event: MetricValueEvent) => void = (event) => {
   metricsPublisher.publish("value", event);
 };
 
+// Transport-independent graph sink: called for every change in addition to
+// publishChangeFn. Lets the livestore NATS bridge dual-publish at the source,
+// decoupled from the Redis path (which it is meant to outlive).
+let graphMetricSink: ((change: MetricChangeEvent) => void) | null = null;
+export function setGraphMetricSink(sink: ((change: MetricChangeEvent) => void) | null): void {
+  graphMetricSink = sink;
+}
+
 export function publishMetricChange(change: MetricChangeEvent): void {
   publishChangeFn(change);
+  if (graphMetricSink) {
+    try {
+      graphMetricSink(change);
+    } catch (err) {
+      // The graph sink must never break the metric pipeline.
+      console.error("[metrics-bus] graph sink failed:", err);
+    }
+  }
 }
 
 export function subscribeMetricChanges(options?: { signal?: AbortSignal }) {
