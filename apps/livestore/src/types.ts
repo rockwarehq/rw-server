@@ -13,7 +13,34 @@ export interface TagResolverConfig {
   tagPath: string;
 }
 
-export type GraphResolver = TagResolverConfig | ({ type: string } & Record<string, unknown>);
+export type Aggregation = "sum" | "avg" | "count" | "min" | "max";
+
+export interface RollupResolverConfig {
+  type: "rollup";
+  childKind: string;
+  relation: string;
+  childProperty: string;
+  aggregation: Aggregation;
+  weightBy?: string;
+}
+
+export interface MetricResolverConfig {
+  type: "metric";
+  granularity: string;
+  metricKey: string;
+}
+
+export interface ExprResolverConfig {
+  type: "expr";
+  expression: string;
+}
+
+export type GraphResolver =
+  | TagResolverConfig
+  | RollupResolverConfig
+  | MetricResolverConfig
+  | ExprResolverConfig
+  | ({ type: string } & Record<string, unknown>);
 
 export interface NodeRuntime {
   id: string;
@@ -48,7 +75,7 @@ export interface GraphSnapshotProperty extends Omit<PropertyRuntime, "current"> 
   current: ValueEnvelope;
 }
 
-export type CommitSource = "tag" | "entity" | "expr" | "window" | "rollup" | "manual";
+export type CommitSource = "tag" | "entity" | "expr" | "rollup" | "metric" | "manual";
 
 export interface LivestoreLogger {
   info: (obj: Record<string, unknown>, msg?: string) => void;
@@ -90,6 +117,42 @@ export function parseGraphResolver(value: unknown, resolverType: string): GraphR
 
 export function isTagResolverConfig(value: GraphResolver): value is TagResolverConfig {
   return value.type === "tag" && typeof value.deviceId === "string" && typeof value.tagPath === "string";
+}
+
+export function isRollupResolverConfig(value: GraphResolver): value is RollupResolverConfig {
+  return (
+    value.type === "rollup" &&
+    typeof (value as RollupResolverConfig).childKind === "string" &&
+    typeof (value as RollupResolverConfig).relation === "string" &&
+    typeof (value as RollupResolverConfig).childProperty === "string" &&
+    typeof (value as RollupResolverConfig).aggregation === "string"
+  );
+}
+
+export function isExprResolverConfig(value: GraphResolver): value is ExprResolverConfig {
+  return value.type === "expr" && typeof (value as ExprResolverConfig).expression === "string";
+}
+
+export function isMetricResolver(value: GraphResolver): value is MetricResolverConfig {
+  return (
+    value.type === "metric" &&
+    typeof (value as MetricResolverConfig).granularity === "string" &&
+    typeof (value as MetricResolverConfig).metricKey === "string"
+  );
+}
+
+// Worst-of quality ordering (spec §8.6): good < stale < uncertain < bad.
+const QUALITY_RANK: Record<Quality, number> = { good: 0, stale: 1, uncertain: 2, bad: 3 };
+export function worse(a: Quality, b: Quality): Quality {
+  return QUALITY_RANK[a] >= QUALITY_RANK[b] ? a : b;
+}
+
+// A finite numeric contribution from an envelope, or null when it can't be used
+// (missing value, bad quality, non-finite) — the shared input guard for expr + rollup.
+export function usableValue(env: ValueEnvelope): number | null {
+  if (env.value == null || env.quality === "bad") return null;
+  const v = Number(env.value);
+  return Number.isFinite(v) ? v : null;
 }
 
 export function envelopesEqual(a: ValueEnvelope, b: ValueEnvelope): boolean {

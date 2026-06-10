@@ -1,11 +1,13 @@
 import websocket from "@fastify/websocket";
-import Fastify from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 
 import { parseEnvelopeText } from "./cvg-store.js";
 import type { GraphRuntime } from "./runtime.js";
+import type { LivestoreLogger } from "./types.js";
 
 interface WsLike {
   readyState: number;
+  bufferedAmount: number;
   send: (data: string) => void;
   close: () => void;
   on(event: "message", handler: (data: unknown) => void): void;
@@ -15,10 +17,22 @@ interface WsLike {
 
 const OPEN = 1;
 
-export async function createLivestoreServer(runtime: GraphRuntime) {
+// Backpressure threshold for websocket sends
+const HIGH_WATER_MARK = 1_000_000;
+
+// Create the Fastify app first so the engine can log through its Pino instance (see asLivestoreLogger).
+export async function createLivestoreServer(): Promise<FastifyInstance> {
   const server = Fastify({ logger: true });
   await server.register(websocket);
+  return server;
+}
 
+// Fastify's logger is a Pino instance whose signature already matches ours.
+export function asLivestoreLogger(server: FastifyInstance): LivestoreLogger {
+  return server.log as unknown as LivestoreLogger;
+}
+
+export function registerGraphRoutes(server: FastifyInstance, runtime: GraphRuntime): void {
   server.get("/health", async () => ({
     status: runtime.isReady() ? "ok" : "starting",
     ...runtime.counts(),
@@ -37,6 +51,8 @@ export async function createLivestoreServer(runtime: GraphRuntime) {
 
   server.get("/graph/nodes", async () => ({ data: runtime.listNodes() }));
 
+  server.get("/graph/catalog", async () => ({ data: runtime.listCatalog() }));
+
   server.get<{ Params: { id: string } }>("/graph/nodes/:id", async (request, reply) => {
     const node = runtime.getNode(request.params.id);
     if (!node) return reply.code(404).send({ error: "Graph node not found" });
@@ -47,9 +63,45 @@ export async function createLivestoreServer(runtime: GraphRuntime) {
     const ws = socket as WsLike;
     const watchers = new Map<string, { stop: () => void }>();
 
+    // lates wins per property to avoid backpressure
+    const pending = new Map<string, unknown>();
+    let drainTimer: ReturnType<typeof setInterval> | null = null;
+
     const sendJson = (payload: unknown) => {
       if (ws.readyState !== OPEN) return;
       ws.send(JSON.stringify(payload));
+    };
+
+    const clearDrainTimer = () => {
+      if (drainTimer) {
+        clearInterval(drainTimer);
+        drainTimer = null;
+      }
+    };
+
+    // Flush queued updates while under the high-water mark; retry the rest on a short timer (§9.3).
+    const flushPending = () => {
+      if (ws.readyState !== OPEN) {
+        pending.clear();
+        clearDrainTimer();
+        return;
+      }
+      for (const [propertyId, envelope] of pending) {
+        if (ws.bufferedAmount > HIGH_WATER_MARK) break;
+        pending.delete(propertyId);
+        ws.send(JSON.stringify({ op: "value", propertyId, envelope }));
+      }
+      if (pending.size > 0) {
+        if (!drainTimer) drainTimer = setInterval(flushPending, 50);
+      } else {
+        clearDrainTimer();
+      }
+    };
+
+    const sendValue = (propertyId: string, envelope: unknown) => {
+      if (ws.readyState !== OPEN) return;
+      pending.set(propertyId, envelope);
+      flushPending();
     };
 
     const stopWatcher = (propertyId: string) => {
@@ -59,6 +111,8 @@ export async function createLivestoreServer(runtime: GraphRuntime) {
 
     const stopAll = () => {
       for (const propertyId of watchers.keys()) stopWatcher(propertyId);
+      pending.clear();
+      clearDrainTimer();
     };
 
     const subscribe = async (propertyIds: string[]) => {
@@ -66,7 +120,7 @@ export async function createLivestoreServer(runtime: GraphRuntime) {
         if (watchers.has(propertyId)) continue;
 
         const initial = (await runtime.getCvgValue(propertyId)) ?? runtime.getCurrentOrStale(propertyId);
-        sendJson({ op: "value", propertyId, envelope: initial });
+        sendValue(propertyId, initial);
 
         const watcher = await runtime.watchCvgValue(propertyId);
         watchers.set(propertyId, { stop: () => watcher.stop() });
@@ -75,7 +129,7 @@ export async function createLivestoreServer(runtime: GraphRuntime) {
             for await (const entry of watcher) {
               const envelope = parseEnvelopeText(entry.string());
               if (!envelope) continue;
-              sendJson({ op: "value", propertyId, envelope });
+              sendValue(propertyId, envelope);
             }
           } catch (err) {
             server.log.warn({ err, propertyId }, "livestore websocket KV watcher stopped");
@@ -117,8 +171,6 @@ export async function createLivestoreServer(runtime: GraphRuntime) {
       stopAll();
     });
   });
-
-  return server;
 }
 
 type ClientMessage = { op: "subscribe" | "unsubscribe"; propertyIds: string[] };

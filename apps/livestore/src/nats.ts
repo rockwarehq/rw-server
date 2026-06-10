@@ -32,12 +32,12 @@ export async function connectNatsResources(): Promise<NatsResources> {
   });
   const js = jetstream(nc);
   const jsm = await jetstreamManager(nc);
-  const kv = await new Kvm(js).create(CVG_BUCKET, {
+  const kvm = new Kvm(js);
+  const kv = await kvm.create(CVG_BUCKET, {
     history: 5,
     maxValueSize: 64 * 1024,
     storage: StorageType.File,
   });
-
   resources = {
     nc,
     jetstream: js,

@@ -17,6 +17,7 @@ export class GraphKernel {
   private readonly nodes = new Map<string, NodeRuntime>();
   private readonly properties = new Map<string, PropertyRuntime>();
   private readonly dependencyGraph = new DependencyGraph();
+  private persistedEdges: GraphEdgeRuntime[] = [];
 
   constructor(
     private readonly prisma: PrismaClient,
@@ -79,6 +80,7 @@ export class GraphKernel {
       fromPropertyId: edge.fromPropertyId,
       toPropertyId: edge.toPropertyId,
     }));
+    this.persistedEdges = runtimeEdges;
     this.dependencyGraph.rebuild(this.properties.values(), runtimeEdges);
 
     this.logger.info(
@@ -121,6 +123,21 @@ export class GraphKernel {
 
   getDependents(propertyId: string): string[] {
     return this.dependencyGraph.getDependents(propertyId);
+  }
+
+  getDependencies(propertyId: string): string[] {
+    return this.dependencyGraph.getDependencies(propertyId);
+  }
+
+  topoOrder(): string[] {
+    return this.dependencyGraph.topoOrder();
+  }
+
+  // Inject runtime rollup into DAG
+  // Rebuilt each boot from the domain model 
+  applyRollupEdges(rollupEdges: GraphEdgeRuntime[]): void {
+    this.dependencyGraph.rebuild(this.properties.values(), [...this.persistedEdges, ...rollupEdges]);
+    this.logger.info({ rollupEdges: rollupEdges.length }, "livestore rollup edges applied");
   }
 
   counts(): { nodeCount: number; propertyCount: number; edgeCount: number } {

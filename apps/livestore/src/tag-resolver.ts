@@ -1,6 +1,6 @@
 import type { NatsConnection, Subscription } from "@nats-io/nats-core";
 
-import { deriveTagSubject } from "./subjects.js";
+import { deriveTagSubject } from "@rw/runtime/graph-subjects";
 import {
   isTagResolverConfig,
   parseValueEnvelope,
