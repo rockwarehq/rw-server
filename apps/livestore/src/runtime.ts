@@ -2,6 +2,7 @@ import type { PrismaClient } from "@rw/db";
 import type { KV } from "@nats-io/kv";
 import type { NatsConnection } from "@nats-io/nats-core";
 
+import { AggStateStore } from "./agg-store.js";
 import { CvgStore } from "./cvg-store.js";
 import { syncDatasourceTags } from "./datasource-tag-sync.js";
 import { loadEntityCatalog, type EntityCatalogEntry } from "./entityCatalog.js";
@@ -14,11 +15,13 @@ import { buildRollupEdges } from "./rollup-index.js";
 import { Scheduler } from "./scheduler.js";
 import { deriveMetricSubject } from "@rw/runtime/graph-subjects";
 import { TagResolver } from "./tag-resolver.js";
+import { WindowResolver } from "./window-resolver.js";
 import {
   envelopesEqual,
   isExprResolverConfig,
   isMetricResolver,
   isRollupResolverConfig,
+  isWindowResolverConfig,
   staleEnvelope,
   type CommitSource,
   type LivestoreLogger,
@@ -29,6 +32,7 @@ export interface GraphRuntimeOptions {
   prisma: PrismaClient;
   nc: NatsConnection;
   kv: KV;
+  aggKv: KV;
   logger: LivestoreLogger;
   isNatsReady?: () => boolean;
 }
@@ -38,6 +42,7 @@ export class GraphRuntime {
   private readonly kernel: GraphKernel;
   private readonly tagResolver: TagResolver;
   private readonly metricResolver: MetricResolver;
+  private readonly windowResolver: WindowResolver;
   private readonly scheduler: Scheduler;
   private catalog: Map<string, EntityCatalogEntry> = new Map();
   private ready = false;
@@ -47,6 +52,7 @@ export class GraphRuntime {
     this.kernel = new GraphKernel(options.prisma, this.cvg, options.logger);
     this.tagResolver = new TagResolver(options.nc, this, options.logger);
     this.metricResolver = new MetricResolver(options.nc, this, options.logger);
+    this.windowResolver = new WindowResolver(new AggStateStore(options.aggKv), this, options.logger);
     this.scheduler = new Scheduler(
       (id) => this.kernel.getDependents(id),
       () => this.kernel.topoOrder(),
@@ -71,6 +77,10 @@ export class GraphRuntime {
     const rollupEdges = await buildRollupEdges(this.options.prisma, this.kernel, this.options.logger);
     this.kernel.applyRollupEdges(rollupEdges);
 
+    // Windows rehydrate before input subscriptions open, so no live sample can
+    // arrive ahead of the resolver's source index.
+    await this.windowResolver.start(this.kernel.listProperties(), (id) => this.kernel.getProperty(id));
+
     this.tagResolver.start(this.kernel.listProperties());
     this.metricResolver.start(this.buildMetricSubscriptions());
     this.ready = true;
@@ -86,6 +96,7 @@ export class GraphRuntime {
     this.ready = false;
     this.tagResolver.stop();
     this.metricResolver.stop();
+    await this.windowResolver.stop(); // drains emit chains + flushes agg state to KV
     this.scheduler.stop();
   }
 
@@ -118,6 +129,9 @@ export class GraphRuntime {
     const changed = !envelopesEqual(previous, envelope);
     if (changed) {
       this.scheduler.markDirty(propertyId);
+      // Fold before the KV await: windows must see every sample synchronously —
+      // the 50ms flush only ever reads the latest current value.
+      this.windowResolver.onInput(propertyId, envelope);
       await this.cvg.put(propertyId, envelope);
     }
 
@@ -161,6 +175,7 @@ export class GraphRuntime {
   counts() {
     return {
       ...this.kernel.counts(),
+      ...this.windowResolver.counts(),
       tagSubscriptionCount: this.tagResolver.subscriptionCount(),
       metricSubscriptionCount: this.metricResolver.subscriptionCount(),
       catalogKindCount: this.catalog.size,
@@ -176,6 +191,8 @@ export class GraphRuntime {
   private async evaluate(propertyId: string): Promise<void> {
     const property = this.kernel.getProperty(propertyId);
     if (!property) return;
+    // Windows never compute in a flush — they emit only from their own resolver.
+    if (isWindowResolverConfig(property.resolver)) return;
     if (isRollupResolverConfig(property.resolver)) {
       const childIds = this.kernel.getDependencies(propertyId);
       const children = childIds.map((id) => this.kernel.getCurrent(id) ?? staleEnvelope());

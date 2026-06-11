@@ -15,6 +15,12 @@ export interface TagResolverConfig {
 
 export type Aggregation = "sum" | "avg" | "count" | "min" | "max";
 
+const AGGREGATION_VALUES = new Set<Aggregation>(["sum", "avg", "count", "min", "max"]);
+
+export function isAggregation(value: unknown): value is Aggregation {
+  return typeof value === "string" && AGGREGATION_VALUES.has(value as Aggregation);
+}
+
 export interface RollupResolverConfig {
   type: "rollup";
   childKind: string;
@@ -22,6 +28,18 @@ export interface RollupResolverConfig {
   childProperty: string;
   aggregation: Aggregation;
   weightBy?: string;
+}
+
+// Time-windowed aggregation over one source property (spec §17.3).
+// aggregation/windowMs/alignToMs are tumbling-only; alpha is ewma-only.
+export interface WindowResolverConfig {
+  type: "window";
+  sourcePropertyId: string;
+  kind: "tumbling" | "ewma";
+  aggregation: Aggregation;
+  windowMs?: number;
+  alignToMs?: number;
+  alpha?: number;
 }
 
 export interface MetricResolverConfig {
@@ -40,7 +58,31 @@ export type GraphResolver =
   | RollupResolverConfig
   | MetricResolverConfig
   | ExprResolverConfig
+  | WindowResolverConfig
   | ({ type: string } & Record<string, unknown>);
+
+// Aggregation state persisted to imm_agg_state, keyed agg.<propertyId> (spec §17.4).
+// Internal to the engine — never exposed to WS clients.
+export interface TumblingState {
+  kind: "tumbling";
+  bucketStart: number; // ms, inclusive
+  bucketEnd: number; // ms, exclusive (== bucketStart + windowMs)
+  count: number;
+  sum: number;
+  min: number | null;
+  max: number | null;
+  goodCount: number; // samples with quality 'good'
+  totalCount: number; // samples seen (incl. non-good)
+}
+
+export interface EwmaState {
+  kind: "ewma";
+  value: number;
+  lastInputTs: number; // ms, for staleness reporting
+  lastInputQuality: Quality;
+}
+
+export type AggState = TumblingState | EwmaState;
 
 export interface NodeRuntime {
   id: string;
@@ -75,7 +117,7 @@ export interface GraphSnapshotProperty extends Omit<PropertyRuntime, "current"> 
   current: ValueEnvelope;
 }
 
-export type CommitSource = "tag" | "entity" | "expr" | "rollup" | "metric" | "manual";
+export type CommitSource = "tag" | "entity" | "expr" | "window" | "rollup" | "metric" | "manual";
 
 export interface LivestoreLogger {
   info: (obj: Record<string, unknown>, msg?: string) => void;
@@ -139,6 +181,31 @@ export function isMetricResolver(value: GraphResolver): value is MetricResolverC
     typeof (value as MetricResolverConfig).granularity === "string" &&
     typeof (value as MetricResolverConfig).metricKey === "string"
   );
+}
+
+// Shape check only — value ranges (windowMs >= 1000, alpha in (0,1]) are window-validate.ts's job.
+export function isWindowResolverConfig(value: GraphResolver): value is WindowResolverConfig {
+  if (value.type !== "window") return false;
+  const window = value as WindowResolverConfig;
+  return typeof window.sourcePropertyId === "string" && (window.kind === "tumbling" || window.kind === "ewma");
+}
+
+export function parseAggState(value: unknown): AggState | null {
+  if (!isRecord(value)) return null;
+  if (value.kind === "tumbling") {
+    if (typeof value.bucketStart !== "number" || typeof value.bucketEnd !== "number") return null;
+    if (typeof value.count !== "number" || typeof value.sum !== "number") return null;
+    if (typeof value.goodCount !== "number" || typeof value.totalCount !== "number") return null;
+    if (value.min !== null && typeof value.min !== "number") return null;
+    if (value.max !== null && typeof value.max !== "number") return null;
+    return value as unknown as TumblingState;
+  }
+  if (value.kind === "ewma") {
+    if (typeof value.value !== "number" || typeof value.lastInputTs !== "number") return null;
+    if (!isQuality(value.lastInputQuality)) return null;
+    return value as unknown as EwmaState;
+  }
+  return null;
 }
 
 // Worst-of quality ordering (spec §8.6): good < stale < uncertain < bad.

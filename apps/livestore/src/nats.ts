@@ -9,6 +9,7 @@ import { Kvm, type KV } from "@nats-io/kv";
 import type { NatsConnection } from "@nats-io/nats-core";
 import { connect } from "@nats-io/transport-node";
 
+import { AGG_BUCKET } from "./agg-store.js";
 import { CVG_BUCKET } from "./cvg-store.js";
 
 export interface NatsResources {
@@ -16,6 +17,7 @@ export interface NatsResources {
   jetstream: JetStreamClient;
   jetstreamManager: JetStreamManager;
   kv: KV;
+  aggKv: KV;
   isReady: () => boolean;
 }
 
@@ -38,11 +40,18 @@ export async function connectNatsResources(): Promise<NatsResources> {
     maxValueSize: 64 * 1024,
     storage: StorageType.File,
   });
+  // last-write-wins used for recovery.
+  const aggKv = await kvm.create(AGG_BUCKET, {
+    history: 1,
+    maxValueSize: 16 * 1024,
+    storage: StorageType.File,
+  });
   resources = {
     nc,
     jetstream: js,
     jetstreamManager: jsm,
     kv,
+    aggKv,
     isReady: () => !nc.isClosed(),
   };
 

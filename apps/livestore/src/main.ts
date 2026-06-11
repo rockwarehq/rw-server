@@ -20,6 +20,7 @@ async function main(): Promise<void> {
     prisma,
     nc: nats.nc,
     kv: nats.kv,
+    aggKv: nats.aggKv,
     logger: asLivestoreLogger(server),
     isNatsReady: nats.isReady,
   });
