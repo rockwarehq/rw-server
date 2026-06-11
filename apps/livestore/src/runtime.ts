@@ -3,6 +3,7 @@ import type { KV } from "@nats-io/kv";
 import type { NatsConnection } from "@nats-io/nats-core";
 
 import { CvgStore } from "./cvg-store.js";
+import { syncDatasourceTags } from "./datasource-tag-sync.js";
 import { loadEntityCatalog, type EntityCatalogEntry } from "./entityCatalog.js";
 import { evaluateExpr } from "./expr.js";
 import { GraphKernel } from "./kernel.js";
@@ -61,6 +62,9 @@ export class GraphRuntime {
     if (process.env.LIVESTORE_SYNC_NODES_ON_BOOT !== "false") {
       const result = await syncNodes(this.options.prisma);
       this.options.logger.info({ ...result }, "livestore node sync complete");
+      // TEMPORARY until UI authoring — remove with datasource-tag-sync.ts.
+      const tagResult = await syncDatasourceTags(this.options.prisma);
+      this.options.logger.info({ ...tagResult }, "livestore datasource tag sync complete");
     }
     await this.kernel.load();
 

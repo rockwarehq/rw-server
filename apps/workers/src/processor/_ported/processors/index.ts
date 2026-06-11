@@ -63,6 +63,7 @@ export function createProcessorRuntimeEntries(args: {
   logger: Logger;
   prisma: PrismaClient;
   stationEventsProcessor?: Processor;
+  tagPublishProcessor?: Processor;
 }): ProcessorRuntimeEntry[] {
   const common = {
     metrics: args.metrics,
@@ -80,6 +81,16 @@ export function createProcessorRuntimeEntries(args: {
     });
 
     entries.push({ processor: consoleProcessor, runtime: consoleRuntime });
+  }
+
+  if (args.tagPublishProcessor) {
+    const tagPublishRuntime = createBoundedRuntime({
+      processor: args.tagPublishProcessor,
+      config: mergeRuntimeConfig(args.config.processorDefaults),
+      ...common,
+    });
+
+    entries.push({ processor: args.tagPublishProcessor, runtime: tagPublishRuntime });
   }
 
   if (args.stationEventsProcessor) {

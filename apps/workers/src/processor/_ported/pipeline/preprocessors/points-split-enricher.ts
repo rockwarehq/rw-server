@@ -5,6 +5,7 @@ import type { EventPreprocessor, JsonObject, ParsedEvent } from "../types.js";
 interface PointRow {
   scaleFactor: number;
   offset: number;
+  datasourceId: string;
 }
 
 interface PointsSplitEnricherQueryClient {
@@ -28,7 +29,7 @@ async function getPointCalibration(
   pointId: string,
 ): Promise<PointRow | undefined> {
   const result = await queryClient.query(
-    'SELECT "scaleFactor", "offset" FROM "Point" WHERE "id" = $1 LIMIT 1',
+    'SELECT "scaleFactor", "offset", "datasourceId" FROM "Point" WHERE "id" = $1 LIMIT 1',
     [pointId],
   );
 
@@ -39,12 +40,13 @@ async function getPointCalibration(
 
   const scaleFactor = toFiniteNumber(row.scaleFactor);
   const offset = toFiniteNumber(row.offset);
+  const datasourceId = typeof row.datasourceId === "string" ? row.datasourceId : undefined;
 
-  if (scaleFactor === undefined || offset === undefined) {
+  if (scaleFactor === undefined || offset === undefined || datasourceId === undefined) {
     return undefined;
   }
 
-  return { scaleFactor, offset };
+  return { scaleFactor, offset, datasourceId };
 }
 
 function scale(raw: number, scaleFactor: number, offset: number): number {
@@ -106,6 +108,7 @@ export function createPointsSplitEnricher(args: {
           try {
             const calibration = await getPointCalibration(args.queryClient, pointId);
             if (calibration) {
+              point.datasourceId = calibration.datasourceId;
               point.value = scale(rawValue, calibration.scaleFactor, calibration.offset);
               if (rawPreviousValue !== undefined) {
                 point.previousValue = scale(
