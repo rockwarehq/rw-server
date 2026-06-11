@@ -5,18 +5,19 @@
 // max_connections budget. DB_POOL_SIZE env var overrides if set.
 //
 // Total per tenant baseline:
-//   api(5) + rollups(10) + processor(5) + processor-consumer(10) = 30
+//   api(5) + rollups(10) + processor(5) + processor-consumer(10) + livestore(5) = 35
 
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "./generated/client.js";
 
-export type DbRole = "api" | "rollups" | "processor" | "processor-consumer";
+export type DbRole = "api" | "rollups" | "processor" | "processor-consumer" | "livestore";
 
 const DEFAULT_POOL: Record<DbRole, number> = {
   api: 5,
   rollups: 10,
   processor: 5,
   "processor-consumer": 10,
+  livestore: 5,
 };
 
 let cached: PrismaClient | null = null;

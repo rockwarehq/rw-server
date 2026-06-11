@@ -1,10 +1,12 @@
 # syntax=docker/dockerfile:1.6
 # Multi-target build for the rw-server-new monorepo.
 #
-# Build:   docker build --target api     -t <tenant>-api     .
-#          docker build --target workers -t <tenant>-workers .
-# Deploy:  flyctl deploy --build-target api     -c apps/api/fly.generated.toml
-#          flyctl deploy --build-target workers -c apps/workers/fly.generated.toml
+# Build:   docker build --target api       -t <tenant>-api       .
+#          docker build --target workers   -t <tenant>-workers   .
+#          docker build --target livestore -t <tenant>-livestore .
+# Deploy:  flyctl deploy --build-target api       -c apps/api/fly.generated.toml
+#          flyctl deploy --build-target workers   -c apps/workers/fly.generated.toml
+#          flyctl deploy --build-target livestore -c apps/livestore/fly.generated.toml
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared base
@@ -25,6 +27,7 @@ COPY packages/runtime/package.json packages/runtime/
 COPY packages/automations/package.json packages/automations/
 COPY apps/api/package.json apps/api/
 COPY apps/workers/package.json apps/workers/
+COPY apps/livestore/package.json apps/livestore/
 
 COPY packages/db/schema packages/db/schema/
 COPY packages/db/prisma.config.ts packages/db/
@@ -70,6 +73,18 @@ COPY packages/runtime/package.json packages/runtime/
 COPY packages/automations/package.json packages/automations/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --prod --filter '@rw/workers...'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3c. Production deps for livestore (pruned to @rw/livestore's transitive set)
+# ─────────────────────────────────────────────────────────────────────────────
+FROM base AS prod-deps-livestore
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
+COPY apps/livestore/package.json apps/livestore/
+COPY packages/db/package.json packages/db/
+COPY packages/runtime/package.json packages/runtime/
+RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --prod --filter '@rw/livestore...'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -147,3 +162,33 @@ COPY --from=build /repo/pnpm-workspace.yaml /repo/package.json ./
 WORKDIR /repo/apps/workers
 EXPOSE 9465
 CMD ["node", "dist/main.js", "--worker", "rollups"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4c. livestore runtime image
+# ─────────────────────────────────────────────────────────────────────────────
+FROM base AS livestore
+ENV NODE_ENV=production
+
+COPY --from=prod-deps-livestore /repo/node_modules ./node_modules
+COPY --from=prod-deps-livestore /repo/apps/livestore/node_modules apps/livestore/node_modules
+COPY --from=prod-deps-livestore /repo/packages/db/node_modules packages/db/node_modules
+COPY --from=prod-deps-livestore /repo/packages/runtime/node_modules packages/runtime/node_modules
+
+COPY --from=build /repo/packages/db/dist packages/db/dist
+COPY --from=build /repo/packages/db/src/generated packages/db/src/generated
+COPY --from=build /repo/packages/db/schema packages/db/schema
+COPY --from=build /repo/packages/db/migrations packages/db/migrations
+COPY --from=build /repo/packages/db/prisma.config.ts packages/db/
+COPY --from=build /repo/packages/db/package.json packages/db/
+COPY --from=build /repo/packages/runtime/dist packages/runtime/dist
+COPY --from=build /repo/packages/runtime/package.json packages/runtime/
+COPY --from=build /repo/apps/livestore/dist apps/livestore/dist
+COPY --from=build /repo/apps/livestore/package.json apps/livestore/
+
+# Workspace metadata for `pnpm db:migrate` (run by fly's release_command).
+COPY --from=build /repo/pnpm-workspace.yaml /repo/package.json ./
+
+WORKDIR /repo/apps/livestore
+EXPOSE 30100
+CMD ["node", "dist/main.js"]

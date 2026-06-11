@@ -5,6 +5,7 @@
     { "path": "./packages/services" },
     { "path": "./packages/runtime" },
     { "path": "./packages/automations" },
-    { "path": "./apps/workers" }
+    { "path": "./apps/workers" },
+    { "path": "./apps/livestore" }
   ]
 }

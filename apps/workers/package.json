@@ -13,13 +13,14 @@
     "dev:processor-consumer": "tsx watch src/main.ts --worker processor-consumer"
   },
   "dependencies": {
+    "@nats-io/transport-node": "^3.4.0",
     "@orpc/client": "^1.14.3",
     "@orpc/server": "^1.14.0",
     "@prisma/adapter-pg": "^7.5.0",
     "@prisma/client": "^7.5.0",
     "@rw/db": "workspace:*",
-    "@rw/services": "workspace:*",
     "@rw/runtime": "workspace:*",
+    "@rw/services": "workspace:*",
     "better-result": "^2.9.2",
     "bullmq": "^5.66.5",
     "dotenv": "^17.2.3",

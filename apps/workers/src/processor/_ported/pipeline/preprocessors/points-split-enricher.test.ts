@@ -96,6 +96,7 @@ describe("createPointsSplitEnricher", () => {
                 {
                   scaleFactor: 0.1,
                   offset: 1,
+                  datasourceId: "ds-1",
                 },
               ],
             };
@@ -106,6 +107,7 @@ describe("createPointsSplitEnricher", () => {
               {
                 scaleFactor: 2,
                 offset: 5,
+                datasourceId: "ds-2",
               },
             ],
           };
@@ -140,6 +142,7 @@ describe("createPointsSplitEnricher", () => {
       timestamp: 1770651932996,
       gatewayTimestamp: 1770651933000,
       pointValueId: firstPoint.pointValueId,
+      datasourceId: "ds-1",
     });
 
     const secondPoint = result[1]?.payload.point as Record<string, unknown>;
@@ -156,6 +159,7 @@ describe("createPointsSplitEnricher", () => {
       timestamp: 1770651932996,
       gatewayTimestamp: 1770651933000,
       pointValueId: secondPoint.pointValueId,
+      datasourceId: "ds-2",
     });
 
     assert.equal(result[0]?.payload.points, undefined);

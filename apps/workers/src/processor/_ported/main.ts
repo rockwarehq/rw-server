@@ -1,3 +1,4 @@
+import { connect } from "@nats-io/transport-node";
 import mqtt from "mqtt";
 
 import { createPrismaClient, type PrismaClient } from "@rw/db";
@@ -12,6 +13,7 @@ import { createPointsSplitEnricher } from "./pipeline/preprocessors/points-split
 import type { EventPreprocessor, Logger } from "./pipeline/types.js";
 import { createProcessorRuntimeEntries } from "./processors/index.js";
 import { createStationEventsProcessor } from "./processors/station-events-processor.js";
+import { createTagPublishProcessor } from "./processors/tag-publish-processor.js";
 import { startStationEventsCacheRefreshServer } from "./station-events/cache-refresh-server.js";
 import { createPointSnapshotPreprocessor } from "./station-events/point-snapshot-preprocessor.js";
 import { createStationEventsRpcClient } from "./station-events/rpc-client.js";
@@ -47,6 +49,7 @@ interface ListenerHandle {
   prisma: PrismaClient;
   dispatcher: Awaited<ReturnType<typeof createDispatcher>>;
   mqttClient: mqtt.MqttClient;
+  natsClient: Awaited<ReturnType<typeof connect>> | undefined;
   metrics: ReturnType<typeof createMetrics>;
   metricsServer: Awaited<ReturnType<typeof startMetricsServer>>;
   stationEventsRefreshServer: Awaited<ReturnType<typeof startStationEventsCacheRefreshServer>>;
@@ -156,12 +159,38 @@ export async function startListener(): Promise<void> {
     logger.info("points split enrichment disabled");
   }
 
+  // Tag publishing follows the graph-nats-bridge convention: NATS_URL unset → disabled, no crash.
+  let natsClient: Awaited<ReturnType<typeof connect>> | undefined;
+  if (process.env.NATS_URL) {
+    natsClient = await connect({
+      servers: process.env.NATS_URL,
+      name: "rw-processor-tag-publish",
+      maxReconnectAttempts: -1,
+    }).catch((error: unknown) => {
+      logger.error("could not connect to NATS — tag publishing disabled", {
+        natsUrl: process.env.NATS_URL,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    });
+  } else {
+    logger.info("tag publishing disabled (NATS_URL not set)");
+  }
+
+  const tagPublishProcessor = natsClient
+    ? createTagPublishProcessor({ publisher: natsClient, logger })
+    : undefined;
+  if (tagPublishProcessor) {
+    logger.info("tag publishing enabled", { natsUrl: process.env.NATS_URL });
+  }
+
   const entries = createProcessorRuntimeEntries({
     config,
     metrics,
     logger,
     prisma,
     stationEventsProcessor,
+    tagPublishProcessor,
   });
 
   const dispatcher = createDispatcher({ entries, metrics, logger, preprocessors });
@@ -256,6 +285,7 @@ export async function startListener(): Promise<void> {
     prisma,
     dispatcher,
     mqttClient,
+    natsClient,
     metrics,
     metricsServer,
     stationEventsRefreshServer,
@@ -280,6 +310,9 @@ export async function stopListener(): Promise<void> {
     await h.stationEventsRefreshServer.close();
   }
   await endClient(h.mqttClient);
+  if (h.natsClient) {
+    await h.natsClient.drain();
+  }
   h.metrics.setServiceUp(0);
   if (h.metricsServer) {
     await h.metricsServer.close();
