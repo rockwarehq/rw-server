@@ -74,6 +74,8 @@ export const router = {
     },
     property: {
       create: graph.propertyCreate,
+      list: graph.propertyList,
+      get: graph.propertyGet,
       update: graph.propertyUpdate,
       delete: graph.propertyDelete,
       dependents: graph.propertyDependents,

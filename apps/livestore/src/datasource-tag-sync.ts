@@ -14,7 +14,7 @@ export async function syncDatasourceTags(prisma: PrismaClient): Promise<Datasour
     select: {
       id: true,
       name: true,
-      site: { select: { name: true } },
+      site: { select: { id: true, name: true } },
       points: { select: { id: true, name: true }, orderBy: { id: "asc" } },
     },
   });
@@ -24,10 +24,11 @@ export async function syncDatasourceTags(prisma: PrismaClient): Promise<Datasour
   let pruned = 0;
 
   for (const ds of datasources) {
+    if (!ds.site) continue;
     const nodeName = ds.site ? `${ds.site.name} / ${ds.name}` : ds.name;
     const node = await prisma.graphNode.upsert({
-      where: { name: nodeName },
-      create: { name: nodeName },
+      where: { siteId_name: { siteId: ds.site.id, name: nodeName } },
+      create: { name: nodeName, siteId: ds.site.id },
       update: { isDeleted: false },
     });
     nodes += 1;

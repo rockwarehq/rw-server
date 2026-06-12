@@ -19,9 +19,19 @@ const windowAlpha = Number(process.env.GRAPH_WINDOW_ALPHA ?? 0.3);
 
 async function main(): Promise<void> {
   const prisma = createPrismaClient("livestore");
+  const siteId =
+    process.env.GRAPH_SITE_ID ??
+    (
+      await prisma.site.findFirst({
+        orderBy: { name: "asc" },
+        select: { id: true },
+      })
+    )?.id;
+  if (!siteId) throw new Error("GRAPH_SITE_ID is required when no site exists");
+
   const node = await prisma.graphNode.upsert({
-    where: { name: nodeName },
-    create: { name: nodeName },
+    where: { siteId_name: { siteId, name: nodeName } },
+    create: { name: nodeName, siteId },
     update: { isDeleted: false },
   });
 

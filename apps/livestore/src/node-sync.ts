@@ -10,7 +10,7 @@ import { additiveFields, metricPropertyName, type MetricField, ratioFields } fro
 interface EntityRow {
   id: string;
   name: string;
-  site?: { name: string } | null;
+  site?: { id: string; name: string } | null;
   workcenter?: { name: string } | null;
 }
 interface ModelDelegate {
@@ -19,6 +19,11 @@ interface ModelDelegate {
 
 // Path segments keep same-named nodes in a site from colliding on GraphNode.name.
 const SITE = (row: EntityRow): string => row.site?.name ?? "(unknown site)";
+const siteIdForRow = (kind: string, row: EntityRow): string => {
+  if (kind === "Site") return row.id;
+  if (row.site?.id) return row.site.id;
+  throw new Error(`syncNodes: ${kind} row "${row.id}" has no site id`);
+};
 
 interface KindConfig {
   delegate: string; // Prisma client delegate, e.g. "station"
@@ -35,13 +40,13 @@ const KIND_CONFIG: Record<string, KindConfig> = {
   },
   Workcenter: {
     delegate: "workcenter",
-    select: { id: true, name: true, site: { select: { name: true } } },
+    select: { id: true, name: true, site: { select: { id: true, name: true } } },
     nodeName: (row) => `${SITE(row)} / ${row.name}`,
   },
   Station: {
     delegate: "station",
     where: { deletedAt: null, archivedAt: null }, // only Station carries soft-delete columns
-    select: { id: true, name: true, site: { select: { name: true } }, workcenter: { select: { name: true } } },
+    select: { id: true, name: true, site: { select: { id: true, name: true } }, workcenter: { select: { name: true } } },
     nodeName: (row) =>
       row.workcenter ? `${SITE(row)} / ${row.workcenter.name} / ${row.name}` : `${SITE(row)} / ${row.name}`,
   },
@@ -120,11 +125,12 @@ export interface NodeSyncResult {
 
 // Upsert one node by display name. Source identity now lives on property resolvers,
 // not the node itself.
-async function upsertNode(prisma: PrismaClient, config: KindConfig, row: EntityRow) {
+async function upsertNode(prisma: PrismaClient, kind: string, config: KindConfig, row: EntityRow) {
   const name = config.nodeName(row);
+  const siteId = siteIdForRow(kind, row);
   return prisma.graphNode.upsert({
-    where: { name },
-    create: { name },
+    where: { siteId_name: { siteId, name } },
+    create: { name, siteId },
     update: { isDeleted: false },
   });
 }
@@ -208,7 +214,7 @@ async function syncKind(
   let properties = 0;
 
   for (const row of rows) {
-    const node = await upsertNode(prisma, config, row);
+    const node = await upsertNode(prisma, kind, config, row);
     const idByName = await materializeSchema(prisma, node.id, kind, row, specs);
     properties += idByName.size;
     if (RATIO_KINDS.has(kind)) properties += await materializeRatios(prisma, node.id, idByName);

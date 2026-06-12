@@ -1,5 +1,10 @@
 export type ServiceResult<T> = { data: T } | { error: string; code: string };
 
+export interface GraphScope {
+  workspaceId: string;
+  siteId: string;
+}
+
 export interface ListResult<T> {
   data: T[];
   total: number;

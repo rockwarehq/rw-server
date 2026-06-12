@@ -2,6 +2,7 @@ import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import * as graph from "@rw/services/graph/index";
 import { hasPermission, type Permission } from "@rw/services/iam/index";
+import type { GraphScope } from "@rw/services/graph/types";
 
 import { authRequired } from "./middleware.js";
 
@@ -9,6 +10,7 @@ const jsonObjectSchema = z.record(z.string(), z.unknown());
 const idInputSchema = z.object({ id: z.uuid() });
 
 const nodeCreateInputSchema = z.object({
+  siteId: z.uuid(),
   name: z.string().min(1),
   schemaId: z.uuid().optional(),
   objectInstanceId: z.uuid().optional(),
@@ -16,6 +18,7 @@ const nodeCreateInputSchema = z.object({
 });
 
 const nodeListInputSchema = z.object({
+  siteId: z.uuid(),
   schemaId: z.uuid().optional(),
   objectInstanceId: z.uuid().optional(),
   name: z.string().optional(),
@@ -48,27 +51,43 @@ const propertyUpdateInputSchema = z.object({
   sampleRateMs: z.number().int().positive().nullable().optional(),
 });
 
+const propertyListInputSchema = z
+  .object({
+    siteId: z.uuid().optional(),
+    nodeId: z.uuid().optional(),
+    name: z.string().optional(),
+    resolverType: z.string().min(1).optional(),
+    limit: z.number().int().min(0).default(50),
+    offset: z.number().int().min(0).default(0),
+  })
+  .refine((input) => Boolean(input.siteId || input.nodeId), { message: "siteId or nodeId is required" });
+
 const propertyValidateInputSchema = propertyCreateInputSchema.extend({
   id: z.uuid().optional(),
 });
 
 type AuthContext = { iam: { id: string; workspaceId?: string | null; siteId?: string | null } };
 
-async function assertPermission(context: AuthContext, permission: Permission): Promise<string> {
+function requireWorkspaceId(context: AuthContext): string {
   const workspaceId = context.iam.workspaceId;
   if (!workspaceId) throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
+  return workspaceId;
+}
+
+async function assertSitePermission(context: AuthContext, permission: Permission, siteId: string): Promise<GraphScope> {
+  const workspaceId = requireWorkspaceId(context);
   const ok = await hasPermission(context.iam.id, permission, {
     workspaceId,
-    ...(context.iam.siteId ? { siteId: context.iam.siteId } : {}),
+    siteId,
   });
   if (!ok) throw new ORPCError("FORBIDDEN", { message: `Missing permission: ${permission}` });
-  return workspaceId;
+  return { workspaceId, siteId };
 }
 
 function throwServiceError(result: { error: string; code: string }): never {
   if (result.code.includes("NOT_FOUND")) throw new ORPCError("NOT_FOUND", { message: result.error, cause: result });
   if (result.code.includes("MISMATCH")) throw new ORPCError("FORBIDDEN", { message: result.error, cause: result });
-  if (result.code.includes("EXISTS") || result.code === "GRAPH_CYCLE") {
+  if (result.code.includes("EXISTS") || result.code.includes("HAS_") || result.code === "GRAPH_CYCLE") {
     throw new ORPCError("CONFLICT", { message: result.error, cause: result });
   }
   throw new ORPCError("BAD_REQUEST", { message: result.error, cause: result });
@@ -80,54 +99,90 @@ function unwrap<T>(result: { data: T } | { error: string; code: string } | null)
   return result.data;
 }
 
+async function assertNodePermission(context: AuthContext, permission: Permission, nodeId: string): Promise<GraphScope> {
+  const workspaceId = requireWorkspaceId(context);
+  const siteId = unwrap(await graph.nodes.getSiteId(nodeId, workspaceId));
+  return assertSitePermission(context, permission, siteId);
+}
+
+async function assertPropertyPermission(context: AuthContext, permission: Permission, propertyId: string): Promise<GraphScope> {
+  const workspaceId = requireWorkspaceId(context);
+  const siteId = unwrap(await graph.properties.getSiteId(propertyId, workspaceId));
+  return assertSitePermission(context, permission, siteId);
+}
+
 export const nodeCreate = authRequired.input(nodeCreateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "graph:write");
-  return unwrap(await graph.nodes.create(input, workspaceId));
+  const { siteId, ...nodeInput } = input;
+  const scope = await assertSitePermission(context, "graph:write", siteId);
+  return unwrap(await graph.nodes.create(nodeInput, scope));
 });
 
 export const nodeList = authRequired.input(nodeListInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "graph:read");
-  return graph.nodes.list(input, workspaceId);
+  const { siteId, ...filter } = input;
+  const scope = await assertSitePermission(context, "graph:read", siteId);
+  return graph.nodes.list(filter, scope);
 });
 
 export const nodeGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "graph:read");
-  return unwrap(await graph.nodes.getById(input.id, workspaceId));
+  const scope = await assertNodePermission(context, "graph:read", input.id);
+  return unwrap(await graph.nodes.getById(input.id, scope));
 });
 
 export const nodeUpdate = authRequired.input(nodeUpdateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "graph:write");
   const { id, ...updates } = input;
-  return unwrap(await graph.nodes.update(id, updates, workspaceId));
+  const scope = await assertNodePermission(context, "graph:write", id);
+  return unwrap(await graph.nodes.update(id, updates, scope));
 });
 
 export const nodeDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "graph:write");
-  return unwrap(await graph.nodes.remove(input.id, workspaceId));
+  const scope = await assertNodePermission(context, "graph:write", input.id);
+  return unwrap(await graph.nodes.remove(input.id, scope));
 });
 
 export const propertyCreate = authRequired.input(propertyCreateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "graph:write");
-  return unwrap(await graph.properties.create(input, workspaceId));
+  const scope = await assertNodePermission(context, "graph:write", input.nodeId);
+  return unwrap(await graph.properties.create(input, scope));
+});
+
+export const propertyList = authRequired.input(propertyListInputSchema).handler(async ({ input, context }) => {
+  if (input.nodeId) {
+    const scope = await assertNodePermission(context, "graph:read", input.nodeId);
+    if (input.siteId && input.siteId !== scope.siteId) {
+      throw new ORPCError("BAD_REQUEST", { message: "siteId must match node site" });
+    }
+    const { siteId: _siteId, ...filter } = input;
+    return graph.properties.list(filter, scope);
+  }
+
+  const siteId = input.siteId;
+  if (!siteId) throw new ORPCError("BAD_REQUEST", { message: "siteId or nodeId is required" });
+  const scope = await assertSitePermission(context, "graph:read", siteId);
+  const { siteId: _siteId, ...filter } = input;
+  return graph.properties.list(filter, scope);
+});
+
+export const propertyGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertPropertyPermission(context, "graph:read", input.id);
+  return unwrap(await graph.properties.getById(input.id, scope));
 });
 
 export const propertyUpdate = authRequired.input(propertyUpdateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "graph:write");
   const { id, ...updates } = input;
-  return unwrap(await graph.properties.update(id, updates, workspaceId));
+  const scope = await assertPropertyPermission(context, "graph:write", id);
+  return unwrap(await graph.properties.update(id, updates, scope));
 });
 
 export const propertyDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "graph:write");
-  return unwrap(await graph.properties.remove(input.id, workspaceId));
+  const scope = await assertPropertyPermission(context, "graph:write", input.id);
+  return unwrap(await graph.properties.remove(input.id, scope));
 });
 
 export const propertyDependents = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "graph:read");
-  return unwrap(await graph.properties.dependents(input.id, workspaceId));
+  const scope = await assertPropertyPermission(context, "graph:read", input.id);
+  return unwrap(await graph.properties.dependents(input.id, scope));
 });
 
 export const propertyValidate = authRequired.input(propertyValidateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "graph:write");
-  return unwrap(await graph.properties.validate(input, workspaceId));
+  const scope = await assertNodePermission(context, "graph:write", input.nodeId);
+  return unwrap(await graph.properties.validate(input, scope));
 });

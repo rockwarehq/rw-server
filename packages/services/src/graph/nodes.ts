@@ -1,8 +1,14 @@
 import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
 
-import { errorResult, type ListResult, type ServiceResult } from "./types.js";
-import { graphNodeInclude, graphNodeWorkspaceWhere, getGraphNodeForWorkspace } from "./scope.js";
+import { errorResult, type GraphScope, type ListResult, type ServiceResult } from "./types.js";
+import {
+  graphNodeInclude,
+  graphNodeSiteWhere,
+  getGraphNodeForSite,
+  getGraphNodeSiteId,
+  getGraphSiteForWorkspace,
+} from "./scope.js";
 
 export interface CreateGraphNodeInput {
   name: string;
@@ -27,7 +33,7 @@ export interface ListGraphNodesFilter {
 
 async function resolveBinding(
   input: { schemaId?: string | null; objectInstanceId?: string | null },
-  workspaceId: string,
+  scope: GraphScope,
 ) {
   if (input.objectInstanceId) {
     const instance = await prisma.objectInstance.findUnique({
@@ -37,7 +43,7 @@ async function resolveBinding(
     if (!instance || instance.isDeleted || instance.schema.isDeleted) {
       return errorResult("OBJECT_INSTANCE_NOT_FOUND", "Object instance not found");
     }
-    if (instance.schema.workspaceId !== workspaceId) {
+    if (instance.schema.workspaceId !== scope.workspaceId) {
       return errorResult("WORKSPACE_MISMATCH", "Object instance does not belong to this workspace");
     }
     if (input.schemaId && input.schemaId !== instance.schemaId) {
@@ -50,7 +56,7 @@ async function resolveBinding(
     return errorResult("SCHEMA_REQUIRED", "Graph nodes created through the API require schemaId or objectInstanceId");
   const schema = await prisma.objectSchema.findUnique({ where: { id: input.schemaId } });
   if (!schema || schema.isDeleted) return errorResult("SCHEMA_NOT_FOUND", "Schema not found");
-  if (schema.workspaceId !== workspaceId)
+  if (schema.workspaceId !== scope.workspaceId)
     return errorResult("WORKSPACE_MISMATCH", "Schema does not belong to this workspace");
   return { data: { schemaId: schema.id, objectInstanceId: null } };
 }
@@ -104,14 +110,17 @@ async function materializeFields(nodeId: string, schemaId: string, objectInstanc
   return fields.length;
 }
 
-export async function create(input: CreateGraphNodeInput, workspaceId: string): Promise<ServiceResult<unknown>> {
+export async function create(input: CreateGraphNodeInput, scope: GraphScope): Promise<ServiceResult<unknown>> {
   const name = input.name.trim();
   if (!name) return errorResult("INVALID_NAME", "Graph node name is required");
 
-  const binding = await resolveBinding(input, workspaceId);
+  const siteResult = await getGraphSiteForWorkspace(scope.siteId, scope.workspaceId);
+  if ("error" in siteResult) return siteResult;
+
+  const binding = await resolveBinding(input, scope);
   if ("error" in binding) return binding;
 
-  const existing = await prisma.graphNode.findUnique({ where: { name } });
+  const existing = await prisma.graphNode.findUnique({ where: { siteId_name: { siteId: scope.siteId, name } } });
   if (existing && !existing.isDeleted) return errorResult("GRAPH_NODE_NAME_EXISTS", "Graph node name already exists");
 
   const node = await prisma.$transaction(async (tx) => {
@@ -120,14 +129,15 @@ export async function create(input: CreateGraphNodeInput, workspaceId: string): 
           where: { id: existing.id },
           data: {
             name,
+            siteId: scope.siteId,
             schemaId: binding.data.schemaId,
             objectInstanceId: binding.data.objectInstanceId,
             isDeleted: false,
           },
         })
-      : await tx.graphNode.create({
-          data: { name, schemaId: binding.data.schemaId, objectInstanceId: binding.data.objectInstanceId },
-        });
+        : await tx.graphNode.create({
+            data: { name, siteId: scope.siteId, schemaId: binding.data.schemaId, objectInstanceId: binding.data.objectInstanceId },
+          });
     return next;
   });
 
@@ -139,10 +149,10 @@ export async function create(input: CreateGraphNodeInput, workspaceId: string): 
   return { data: created };
 }
 
-export async function list(filter: ListGraphNodesFilter, workspaceId: string): Promise<ListResult<unknown>> {
+export async function list(filter: ListGraphNodesFilter, scope: GraphScope): Promise<ListResult<unknown>> {
   const { schemaId, objectInstanceId, name, limit = 50, offset = 0 } = filter;
   const where = {
-    ...graphNodeWorkspaceWhere(workspaceId),
+    ...graphNodeSiteWhere(scope),
     ...(schemaId ? { schemaId } : {}),
     ...(objectInstanceId ? { objectInstanceId } : {}),
     ...(name ? { name: { contains: name, mode: "insensitive" as const } } : {}),
@@ -162,16 +172,20 @@ export async function list(filter: ListGraphNodesFilter, workspaceId: string): P
   return { data: nodes, total, limit: Number(limit), offset: Number(offset) };
 }
 
-export async function getById(id: string, workspaceId: string): Promise<ServiceResult<unknown> | null> {
-  return getGraphNodeForWorkspace(id, workspaceId);
+export async function getById(id: string, scope: GraphScope): Promise<ServiceResult<unknown> | null> {
+  return getGraphNodeForSite(id, scope);
+}
+
+export async function getSiteId(id: string, workspaceId: string): Promise<ServiceResult<string> | null> {
+  return getGraphNodeSiteId(id, workspaceId);
 }
 
 export async function update(
   id: string,
   input: UpdateGraphNodeInput,
-  workspaceId: string,
+  scope: GraphScope,
 ): Promise<ServiceResult<unknown>> {
-  const currentResult = await getGraphNodeForWorkspace(id, workspaceId);
+  const currentResult = await getGraphNodeForSite(id, scope);
   if (!currentResult) return errorResult("GRAPH_NODE_NOT_FOUND", "Graph node not found");
   if ("error" in currentResult) return currentResult;
   const current = currentResult.data;
@@ -181,7 +195,7 @@ export async function update(
     const name = input.name.trim();
     if (!name) return errorResult("INVALID_NAME", "Graph node name is required");
     if (name !== current.name) {
-      const conflict = await prisma.graphNode.findUnique({ where: { name } });
+      const conflict = await prisma.graphNode.findUnique({ where: { siteId_name: { siteId: scope.siteId, name } } });
       if (conflict) return errorResult("GRAPH_NODE_NAME_EXISTS", "Graph node name already exists");
     }
     updateData.name = name;
@@ -193,7 +207,7 @@ export async function update(
         schemaId: input.schemaId !== undefined ? input.schemaId : current.schemaId,
         objectInstanceId: input.objectInstanceId !== undefined ? input.objectInstanceId : current.objectInstanceId,
       },
-      workspaceId,
+      scope,
     );
     if ("error" in binding) return binding;
 
@@ -214,13 +228,25 @@ export async function update(
   return { data: node };
 }
 
-export async function remove(id: string, workspaceId: string): Promise<ServiceResult<{ success: true }>> {
-  const currentResult = await getGraphNodeForWorkspace(id, workspaceId);
+export async function remove(id: string, scope: GraphScope): Promise<ServiceResult<{ success: true }>> {
+  const currentResult = await getGraphNodeForSite(id, scope);
   if (!currentResult) return errorResult("GRAPH_NODE_NOT_FOUND", "Graph node not found");
   if ("error" in currentResult) return currentResult;
 
-  const properties = await prisma.graphProperty.findMany({ where: { nodeId: id }, select: { id: true } });
+  const properties = await prisma.graphProperty.findMany({ where: { nodeId: id, isDeleted: false }, select: { id: true } });
   const propertyIds = properties.map((property) => property.id);
+
+  if (propertyIds.length > 0) {
+    const externalDependentCount = await prisma.graphEdge.count({
+      where: {
+        fromPropertyId: { in: propertyIds },
+        toProperty: { isDeleted: false, node: { ...graphNodeSiteWhere(scope), id: { not: id } } },
+      },
+    });
+    if (externalDependentCount > 0) {
+      return errorResult("GRAPH_NODE_HAS_EXTERNAL_DEPENDENTS", "Cannot delete a node with properties used by other nodes");
+    }
+  }
 
   await prisma.$transaction([
     ...(propertyIds.length > 0

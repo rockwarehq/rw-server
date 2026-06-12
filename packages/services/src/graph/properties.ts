@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
 
-import { getGraphNodeForWorkspace, getGraphPropertyForWorkspace, graphNodeWorkspaceWhere } from "./scope.js";
-import { errorResult, type ServiceResult } from "./types.js";
+import { getGraphNodeForSite, getGraphPropertyForSite, getGraphPropertySiteId, graphNodeSiteWhere } from "./scope.js";
+import { errorResult, type GraphScope, type ListResult, type ServiceResult } from "./types.js";
 import { isRecordResolver, validateAcyclicStaticEdges, validateResolverConfig } from "./validation.js";
 
 export interface CreateGraphPropertyInput {
@@ -21,6 +21,14 @@ export interface UpdateGraphPropertyInput {
   resolverType?: string;
   resolver?: Record<string, unknown>;
   sampleRateMs?: number | null;
+}
+
+export interface ListGraphPropertiesFilter {
+  nodeId?: string;
+  name?: string;
+  resolverType?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface ValidateGraphPropertyInput extends CreateGraphPropertyInput {
@@ -58,7 +66,7 @@ async function buildResolver(args: {
   field: { id: string; name: string } | null;
   resolverType?: string;
   resolver?: Record<string, unknown>;
-  workspaceId: string;
+  scope: GraphScope;
 }) {
   let resolverType = args.resolverType;
   let resolver = args.resolver;
@@ -80,7 +88,7 @@ async function buildResolver(args: {
     );
   }
 
-  return validateResolverConfig({ resolverType, resolver, workspaceId: args.workspaceId });
+  return validateResolverConfig({ resolverType, resolver, scope: args.scope });
 }
 
 function validateSampleRate(sampleRateMs: number | null | undefined) {
@@ -90,8 +98,8 @@ function validateSampleRate(sampleRateMs: number | null | undefined) {
     : errorResult("INVALID_SAMPLE_RATE", "sampleRateMs must be a positive integer");
 }
 
-export async function create(input: CreateGraphPropertyInput, workspaceId: string): Promise<ServiceResult<unknown>> {
-  const nodeResult = await getGraphNodeForWorkspace(input.nodeId, workspaceId);
+export async function create(input: CreateGraphPropertyInput, scope: GraphScope): Promise<ServiceResult<unknown>> {
+  const nodeResult = await getGraphNodeForSite(input.nodeId, scope);
   if (!nodeResult) return errorResult("GRAPH_NODE_NOT_FOUND", "Graph node not found");
   if ("error" in nodeResult) return nodeResult;
   const node = nodeResult.data;
@@ -115,7 +123,7 @@ export async function create(input: CreateGraphPropertyInput, workspaceId: strin
     field,
     resolverType: input.resolverType,
     resolver: input.resolver,
-    workspaceId,
+    scope,
   });
   if ("error" in resolverResult) return resolverResult;
 
@@ -170,9 +178,9 @@ export async function create(input: CreateGraphPropertyInput, workspaceId: strin
 export async function update(
   id: string,
   input: UpdateGraphPropertyInput,
-  workspaceId: string,
+  scope: GraphScope,
 ): Promise<ServiceResult<unknown>> {
-  const currentResult = await getGraphPropertyForWorkspace(id, workspaceId);
+  const currentResult = await getGraphPropertyForSite(id, scope);
   if (!currentResult) return errorResult("GRAPH_PROPERTY_NOT_FOUND", "Graph property not found");
   if ("error" in currentResult) return currentResult;
   const current = currentResult.data;
@@ -204,7 +212,7 @@ export async function update(
     field,
     resolverType: input.resolverType ?? current.resolverType,
     resolver: input.resolver ?? currentResolver,
-    workspaceId,
+    scope,
   });
   if ("error" in resolverResult) return resolverResult;
 
@@ -241,13 +249,13 @@ export async function update(
   return { data: property };
 }
 
-export async function remove(id: string, workspaceId: string): Promise<ServiceResult<{ success: true }>> {
-  const currentResult = await getGraphPropertyForWorkspace(id, workspaceId);
+export async function remove(id: string, scope: GraphScope): Promise<ServiceResult<{ success: true }>> {
+  const currentResult = await getGraphPropertyForSite(id, scope);
   if (!currentResult) return errorResult("GRAPH_PROPERTY_NOT_FOUND", "Graph property not found");
   if ("error" in currentResult) return currentResult;
 
   const dependentCount = await prisma.graphEdge.count({
-    where: { fromPropertyId: id, toProperty: { isDeleted: false, node: { isDeleted: false } } },
+    where: { fromPropertyId: id, toProperty: { isDeleted: false, node: graphNodeSiteWhere(scope) } },
   });
   if (dependentCount > 0)
     return errorResult("GRAPH_PROPERTY_HAS_DEPENDENTS", "Cannot delete a property with active dependents");
@@ -260,13 +268,13 @@ export async function remove(id: string, workspaceId: string): Promise<ServiceRe
   return { data: { success: true } };
 }
 
-export async function dependents(id: string, workspaceId: string): Promise<ServiceResult<unknown[]>> {
-  const currentResult = await getGraphPropertyForWorkspace(id, workspaceId);
+export async function dependents(id: string, scope: GraphScope): Promise<ServiceResult<unknown[]>> {
+  const currentResult = await getGraphPropertyForSite(id, scope);
   if (!currentResult) return errorResult("GRAPH_PROPERTY_NOT_FOUND", "Graph property not found");
   if ("error" in currentResult) return currentResult;
 
   const edges = await prisma.graphEdge.findMany({
-    where: { fromPropertyId: id, toProperty: { isDeleted: false, node: graphNodeWorkspaceWhere(workspaceId) } },
+    where: { fromPropertyId: id, toProperty: { isDeleted: false, node: graphNodeSiteWhere(scope) } },
     include: { toProperty: { include: { node: true } } },
     orderBy: { createdAt: "asc" },
   });
@@ -276,9 +284,9 @@ export async function dependents(id: string, workspaceId: string): Promise<Servi
 
 export async function validate(
   input: ValidateGraphPropertyInput,
-  workspaceId: string,
+  scope: GraphScope,
 ): Promise<ServiceResult<unknown>> {
-  const nodeResult = await getGraphNodeForWorkspace(input.nodeId, workspaceId);
+  const nodeResult = await getGraphNodeForSite(input.nodeId, scope);
   if (!nodeResult) return errorResult("GRAPH_NODE_NOT_FOUND", "Graph node not found");
   if ("error" in nodeResult) return nodeResult;
   const node = nodeResult.data;
@@ -292,7 +300,7 @@ export async function validate(
     field,
     resolverType: input.resolverType,
     resolver: input.resolver,
-    workspaceId,
+    scope,
   });
   if ("error" in resolverResult) return resolverResult;
 
@@ -309,4 +317,36 @@ export async function validate(
       dependencyIds: resolverResult.data.dependencyIds,
     },
   };
+}
+
+export async function getById(id: string, scope: GraphScope): Promise<ServiceResult<unknown> | null> {
+  return getGraphPropertyForSite(id, scope);
+}
+
+export async function getSiteId(id: string, workspaceId: string): Promise<ServiceResult<string> | null> {
+  return getGraphPropertySiteId(id, workspaceId);
+}
+
+export async function list(filter: ListGraphPropertiesFilter, scope: GraphScope): Promise<ListResult<unknown>> {
+  const { nodeId, name, resolverType, limit = 50, offset = 0 } = filter;
+  const where = {
+    isDeleted: false,
+    node: graphNodeSiteWhere(scope),
+    ...(nodeId ? { nodeId } : {}),
+    ...(resolverType ? { resolverType } : {}),
+    ...(name ? { name: { contains: name, mode: "insensitive" as const } } : {}),
+  };
+
+  const [properties, total] = await Promise.all([
+    prisma.graphProperty.findMany({
+      where,
+      include: { node: { select: { id: true, name: true, siteId: true, schemaId: true, objectInstanceId: true } } },
+      ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
+      skip: Number(offset),
+      orderBy: [{ node: { name: "asc" as const } }, { name: "asc" as const }],
+    }),
+    prisma.graphProperty.count({ where }),
+  ]);
+
+  return { data: properties, total, limit: Number(limit), offset: Number(offset) };
 }

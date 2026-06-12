@@ -1,6 +1,7 @@
 model GraphNode {
   id               String  @id @default(uuid()) @db.Uuid
-  name             String  @unique
+  name             String
+  siteId           String  @db.Uuid
   schemaId         String? @db.Uuid
   objectInstanceId String? @db.Uuid
   isDeleted        Boolean @default(false)
@@ -9,9 +10,12 @@ model GraphNode {
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   properties     GraphProperty[]
+  site           Site             @relation(fields: [siteId], references: [id], onDelete: Cascade)
   schema         ObjectSchema?    @relation(fields: [schemaId], references: [id], onDelete: SetNull)
   objectInstance ObjectInstance?  @relation(fields: [objectInstanceId], references: [id], onDelete: SetNull)
 
+  @@unique([siteId, name])
+  @@index([siteId])
   @@index([schemaId])
   @@index([objectInstanceId])
   @@index([isDeleted])

@@ -17,7 +17,7 @@ function fakePrisma(args: FakeArgs) {
       findMany: async () => args.datasources,
     },
     graphNode: {
-      upsert: async (input: { where: { name: string } }) => {
+      upsert: async (input: { where: { siteId_name: { siteId: string; name: string } } }) => {
         nodeUpserts.push(input);
         return { id: "node" };
       },
@@ -46,7 +46,7 @@ describe("syncDatasourceTags", () => {
         {
           id: "ds-1",
           name: "Press PLC",
-          site: { name: "Sarasota" },
+          site: { id: "site-1", name: "Sarasota" },
           points: [
             { id: "p-1", name: "cycleTime" },
             { id: "p-2", name: "cavityCount" },
@@ -59,8 +59,8 @@ describe("syncDatasourceTags", () => {
 
     expect(result).toEqual({ nodes: 1, properties: 4, pruned: 0 });
     expect(nodeUpserts[0]).toMatchObject({
-      where: { name: "Sarasota / Press PLC" },
-      create: { name: "Sarasota / Press PLC" },
+      where: { siteId_name: { siteId: "site-1", name: "Sarasota / Press PLC" } },
+      create: { name: "Sarasota / Press PLC", siteId: "site-1" },
     });
     expect(propUpserts[0]).toMatchObject({
       where: { nodeId_name: { nodeId: "node", name: "cycleTime" } },
@@ -90,7 +90,7 @@ describe("syncDatasourceTags", () => {
         {
           id: "ds-1",
           name: "PLC",
-          site: null,
+          site: { id: "site-1", name: "Sarasota" },
           points: [
             { id: "aaaaaaaa-0000-0000-0000-000000000000", name: "temp" },
             { id: "bbbbbbbb-0000-0000-0000-000000000000", name: "temp" },
@@ -107,7 +107,9 @@ describe("syncDatasourceTags", () => {
 
   it("prunes tag properties whose point is gone and their windows", async () => {
     const { prisma, propSoftDeletes } = fakePrisma({
-      datasources: [{ id: "ds-1", name: "PLC", site: null, points: [{ id: "p-1", name: "cycleTime" }] }],
+      datasources: [
+        { id: "ds-1", name: "PLC", site: { id: "site-1", name: "Sarasota" }, points: [{ id: "p-1", name: "cycleTime" }] },
+      ],
       existingProps: {
         node: [
           { id: "keep", resolverType: "tag", resolver: { type: "tag", deviceId: "ds-1", tagPath: "p-1" } },

@@ -1,7 +1,7 @@
 import prisma from "@rw/db";
 
-import { graphNodeWorkspaceWhere } from "./scope.js";
-import { errorResult } from "./types.js";
+import { graphNodeSiteWhere } from "./scope.js";
+import { errorResult, type GraphScope } from "./types.js";
 
 const AGGREGATIONS = new Set(["sum", "avg", "count", "min", "max"]);
 const PREFIXED_UUID_PATTERN = /\bp_([0-9a-f]{8}_[0-9a-f]{4}_[1-8][0-9a-f]{3}_[89ab][0-9a-f]{3}_[0-9a-f]{12})\b/gi;
@@ -22,14 +22,14 @@ export function extractExpressionDependencyIds(expression: string): string[] {
   return [...ids];
 }
 
-async function assertPropertiesInWorkspace(propertyIds: readonly string[], workspaceId: string) {
+async function assertPropertiesInSite(propertyIds: readonly string[], scope: GraphScope) {
   const uniqueIds = [...new Set(propertyIds)];
   if (uniqueIds.length === 0) return null;
   const properties = await prisma.graphProperty.findMany({
     where: {
       id: { in: uniqueIds },
       isDeleted: false,
-      node: graphNodeWorkspaceWhere(workspaceId),
+      node: graphNodeSiteWhere(scope),
     },
     select: { id: true, resolverType: true },
   });
@@ -38,10 +38,40 @@ async function assertPropertiesInWorkspace(propertyIds: readonly string[], works
   return { data: properties };
 }
 
+async function assertKnownEntityInSite(entityType: string, entityId: string, scope: GraphScope) {
+  const type = entityType.toUpperCase();
+  if (type === "SITE") {
+    if (entityId !== scope.siteId) return errorResult("ENTITY_SITE_MISMATCH", "Metric entity is outside this graph site");
+    const site = await prisma.site.findFirst({ where: { id: entityId, workspaceId: scope.workspaceId } });
+    return site ? null : errorResult("ENTITY_SITE_MISMATCH", "Metric entity is outside this graph site");
+  }
+  if (type === "WORKCENTER") {
+    const workcenter = await prisma.workcenter.findFirst({
+      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId } },
+    });
+    return workcenter ? null : errorResult("ENTITY_SITE_MISMATCH", "Metric entity is outside this graph site");
+  }
+  if (type === "STATION") {
+    const station = await prisma.station.findFirst({
+      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId } },
+    });
+    return station ? null : errorResult("ENTITY_SITE_MISMATCH", "Metric entity is outside this graph site");
+  }
+  return errorResult("INVALID_RESOLVER", "metric resolver entityType must be Site, Workcenter, or Station");
+}
+
+async function validateRollupParent(parent: unknown, scope: GraphScope) {
+  if (parent === undefined) return null;
+  if (!isRecord(parent) || typeof parent.model !== "string" || typeof parent.id !== "string") {
+    return errorResult("INVALID_RESOLVER", "rollup parent must include model and id");
+  }
+  return assertKnownEntityInSite(parent.model, parent.id, scope);
+}
+
 export async function validateResolverConfig(args: {
   resolverType: string;
   resolver: Record<string, unknown>;
-  workspaceId: string;
+  scope: GraphScope;
 }): Promise<
   { data: { resolver: Record<string, unknown>; dependencyIds: string[] } } | { error: string; code: string }
 > {
@@ -72,6 +102,8 @@ export async function validateResolverConfig(args: {
         "metric resolver requires entityType, entityId, granularity, and metricKey",
       );
     }
+    const entityError = await assertKnownEntityInSite(resolver.entityType, resolver.entityId, args.scope);
+    if (entityError) return entityError;
     return { data: { resolver, dependencyIds: [] } };
   }
 
@@ -94,7 +126,7 @@ export async function validateResolverConfig(args: {
     });
     if (!instance || instance.isDeleted || instance.schema.isDeleted)
       return errorResult("OBJECT_INSTANCE_NOT_FOUND", "Object instance not found");
-    if (instance.schema.workspaceId !== args.workspaceId)
+    if (instance.schema.workspaceId !== args.scope.workspaceId)
       return errorResult("WORKSPACE_MISMATCH", "Object instance is outside this workspace");
     const field = await prisma.objectSchemaField.findUnique({ where: { id: resolver.schemaFieldId } });
     if (!field || field.isDeleted || field.schemaId !== instance.schemaId)
@@ -109,7 +141,7 @@ export async function validateResolverConfig(args: {
       return errorResult("INVALID_RESOLVER", "expr resolver requires expression");
     }
     const dependencyIds = extractExpressionDependencyIds(resolver.expression);
-    const dependencyResult = await assertPropertiesInWorkspace(dependencyIds, args.workspaceId);
+    const dependencyResult = await assertPropertiesInSite(dependencyIds, args.scope);
     if (dependencyResult && "error" in dependencyResult) return dependencyResult;
     return { data: { resolver, dependencyIds } };
   }
@@ -117,7 +149,7 @@ export async function validateResolverConfig(args: {
   if (resolverType === "window") {
     if (typeof resolver.sourcePropertyId !== "string")
       return errorResult("INVALID_RESOLVER", "window resolver requires sourcePropertyId");
-    const dependencyResult = await assertPropertiesInWorkspace([resolver.sourcePropertyId], args.workspaceId);
+    const dependencyResult = await assertPropertiesInSite([resolver.sourcePropertyId], args.scope);
     if (dependencyResult && "error" in dependencyResult) return dependencyResult;
     const source = dependencyResult?.data[0];
     if (source?.resolverType === "window")
@@ -150,6 +182,8 @@ export async function validateResolverConfig(args: {
         "rollup resolver requires childKind, relation, childProperty, and aggregation",
       );
     }
+    const parentError = await validateRollupParent(resolver.parent, args.scope);
+    if (parentError) return parentError;
     return { data: { resolver, dependencyIds: [] } };
   }
 
