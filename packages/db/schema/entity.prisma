@@ -1,0 +1,78 @@
+enum ObjectFieldType {
+  TEXT
+  NUMBER
+  BOOLEAN
+  DATE
+  TIMESTAMP
+  SELECT
+  JSON
+  OBJECT
+}
+
+model ObjectSchema {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  version     Int     @default(1)
+  isDeleted   Boolean @default(false)
+
+  workspaceId String?    @db.Uuid
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  fields             ObjectSchemaField[] @relation("SchemaFields")
+  referencedByFields ObjectSchemaField[] @relation("FieldRefSchema")
+  instances          ObjectInstance[]
+  graphNodes         GraphNode[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@index([isDeleted])
+}
+
+model ObjectSchemaField {
+  id       String       @id @default(uuid()) @db.Uuid
+  schemaId String       @db.Uuid
+  schema   ObjectSchema @relation("SchemaFields", fields: [schemaId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+  type        ObjectFieldType
+  refSchemaId String?         @db.Uuid
+  refSchema   ObjectSchema?   @relation("FieldRefSchema", fields: [refSchemaId], references: [id], onDelete: SetNull)
+  isList      Boolean         @default(false)
+  required    Boolean         @default(false)
+  config      Json?
+  sortOrder   Int             @default(0)
+  isDeleted   Boolean         @default(false)
+
+  graphProperties GraphProperty[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([schemaId, name])
+  @@index([schemaId])
+  @@index([refSchemaId])
+  @@index([type])
+  @@index([isDeleted])
+}
+
+model ObjectInstance {
+  id       String       @id @default(uuid()) @db.Uuid
+  schemaId String       @db.Uuid
+  schema   ObjectSchema @relation(fields: [schemaId], references: [id], onDelete: Cascade)
+
+  name      String
+  values    Json    @default("{}")
+  isDeleted Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([schemaId])
+  @@index([schemaId, isDeleted])
+  @@index([values], type: Gin)
+}

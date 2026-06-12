@@ -117,28 +117,42 @@ export interface NodeSyncResult {
   properties: Record<string, number>; // property rows materialized per kind
 }
 
-// Upsert one node on the (entityType, entityId) unique.
-async function upsertNode(prisma: PrismaClient, kind: string, config: KindConfig, row: EntityRow) {
+// Upsert one node by display name. Source identity now lives on property resolvers,
+// not the node itself.
+async function upsertNode(prisma: PrismaClient, config: KindConfig, row: EntityRow) {
   const name = config.nodeName(row);
   return prisma.graphNode.upsert({
-    where: { entityType_entityId: { entityType: kind, entityId: row.id } },
-    create: { name, kind, entityType: kind, entityId: row.id },
-    update: { name, kind, isDeleted: false },
+    where: { name },
+    create: { name },
+    update: { isDeleted: false },
   });
+}
+
+function resolverForRow(spec: PropertySpec, kind: string, row: EntityRow): Record<string, unknown> {
+  if (spec.resolverType === "metric") {
+    return { ...spec.resolver, entityType: kind, entityId: row.id };
+  }
+  if (spec.resolverType === "rollup") {
+    return { ...spec.resolver, parent: { model: kind, id: row.id } };
+  }
+  return spec.resolver;
 }
 
 // Upsert the kind's static schema onto a node; return name→id. Never prunes editor-added props.
 async function materializeSchema(
   prisma: PrismaClient,
   nodeId: string,
+  kind: string,
+  row: EntityRow,
   specs: PropertySpec[],
 ): Promise<Map<string, string>> {
   const idByName = new Map<string, string>();
   for (const spec of specs) {
+    const resolver = resolverForRow(spec, kind, row);
     const property = await prisma.graphProperty.upsert({
       where: { nodeId_name: { nodeId, name: spec.name } },
-      create: { nodeId, name: spec.name, resolverType: spec.resolverType, resolver: spec.resolver },
-      update: { resolverType: spec.resolverType, resolver: spec.resolver, isDeleted: false },
+      create: { nodeId, name: spec.name, resolverType: spec.resolverType, resolver },
+      update: { resolverType: spec.resolverType, resolver, isDeleted: false },
     });
     idByName.set(spec.name, property.id);
   }
@@ -166,13 +180,13 @@ async function materializeRatios(prisma: PrismaClient, nodeId: string, idByName:
   return count;
 }
 
-// Soft-delete nodes of this kind whose backing entity is gone.
+// Without node-level source binding, boot sync cannot safely identify stale nodes
+// for one system kind without risking unrelated user-authored graph nodes.
 async function pruneDeleted(prisma: PrismaClient, kind: string, rows: EntityRow[]): Promise<number> {
-  const prune = await prisma.graphNode.updateMany({
-    where: { entityType: kind, isDeleted: false, entityId: { notIn: rows.map((row) => row.id) } },
-    data: { isDeleted: true },
-  });
-  return prune.count;
+  void prisma;
+  void kind;
+  void rows;
+  return 0;
 }
 
 // Reconcile and materialize one kind: upsert live nodes + schema, then prune dead ones.
@@ -190,8 +204,8 @@ async function syncKind(
   let properties = 0;
 
   for (const row of rows) {
-    const node = await upsertNode(prisma, kind, config, row);
-    const idByName = await materializeSchema(prisma, node.id, specs);
+    const node = await upsertNode(prisma, config, row);
+    const idByName = await materializeSchema(prisma, node.id, kind, row, specs);
     properties += idByName.size;
     if (RATIO_KINDS.has(kind)) properties += await materializeRatios(prisma, node.id, idByName);
   }

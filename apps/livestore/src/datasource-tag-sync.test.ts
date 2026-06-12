@@ -5,27 +5,21 @@ import { syncDatasourceTags } from "./datasource-tag-sync.js";
 interface FakeArgs {
   datasources: unknown[];
   existingTagProps?: Record<string, { id: string; resolver: unknown }[]>;
-  prunedNodeCount?: number;
 }
 
 function fakePrisma(args: FakeArgs) {
   const nodeUpserts: Record<string, unknown>[] = [];
   const propUpserts: Record<string, unknown>[] = [];
   const propSoftDeletes: string[] = [];
-  let nodePruneWhere: Record<string, unknown> | undefined;
 
   const prisma = {
     datasource: {
       findMany: async () => args.datasources,
     },
     graphNode: {
-      upsert: async (input: { where: { entityType_entityId: { entityId: string } } }) => {
+      upsert: async (input: { where: { name: string } }) => {
         nodeUpserts.push(input);
-        return { id: `node-${input.where.entityType_entityId.entityId}` };
-      },
-      updateMany: async (input: { where: Record<string, unknown> }) => {
-        nodePruneWhere = input.where;
-        return { count: args.prunedNodeCount ?? 0 };
+        return { id: "node" };
       },
     },
     graphProperty: {
@@ -41,7 +35,7 @@ function fakePrisma(args: FakeArgs) {
     },
   };
 
-  return { prisma: prisma as never, nodeUpserts, propUpserts, propSoftDeletes, getNodePruneWhere: () => nodePruneWhere };
+  return { prisma: prisma as never, nodeUpserts, propUpserts, propSoftDeletes };
 }
 
 describe("syncDatasourceTags", () => {
@@ -64,11 +58,11 @@ describe("syncDatasourceTags", () => {
 
     expect(result).toEqual({ nodes: 1, properties: 2, pruned: 0 });
     expect(nodeUpserts[0]).toMatchObject({
-      where: { entityType_entityId: { entityType: "Datasource", entityId: "ds-1" } },
-      create: { name: "Sarasota / Press PLC", kind: "Datasource" },
+      where: { name: "Sarasota / Press PLC" },
+      create: { name: "Sarasota / Press PLC" },
     });
     expect(propUpserts[0]).toMatchObject({
-      where: { nodeId_name: { nodeId: "node-ds-1", name: "cycleTime" } },
+      where: { nodeId_name: { nodeId: "node", name: "cycleTime" } },
       create: { resolverType: "tag", resolver: { type: "tag", deviceId: "ds-1", tagPath: "p-1" } },
     });
     expect(propUpserts[1]).toMatchObject({
@@ -97,28 +91,22 @@ describe("syncDatasourceTags", () => {
     expect(names).toEqual(["temp", "temp_bbbbbbbb"]);
   });
 
-  it("prunes tag properties whose point is gone and nodes whose datasource is gone", async () => {
-    const { prisma, propSoftDeletes, getNodePruneWhere } = fakePrisma({
+  it("prunes tag properties whose point is gone", async () => {
+    const { prisma, propSoftDeletes } = fakePrisma({
       datasources: [
         { id: "ds-1", name: "PLC", site: null, points: [{ id: "p-1", name: "cycleTime" }] },
       ],
       existingTagProps: {
-        "node-ds-1": [
+        node: [
           { id: "keep", resolver: { type: "tag", deviceId: "ds-1", tagPath: "p-1" } },
           { id: "stale", resolver: { type: "tag", deviceId: "ds-1", tagPath: "p-deleted" } },
         ],
       },
-      prunedNodeCount: 2,
     });
 
     const result = await syncDatasourceTags(prisma);
 
     expect(propSoftDeletes).toEqual(["stale"]);
-    expect(result.pruned).toBe(3);
-    expect(getNodePruneWhere()).toMatchObject({
-      entityType: "Datasource",
-      isDeleted: false,
-      entityId: { notIn: ["ds-1"] },
-    });
+    expect(result.pruned).toBe(1);
   });
 });

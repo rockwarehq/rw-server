@@ -23,6 +23,7 @@ export function isAggregation(value: unknown): value is Aggregation {
 
 export interface RollupResolverConfig {
   type: "rollup";
+  parent?: { model: string; id: string };
   childKind: string;
   relation: string;
   childProperty: string;
@@ -44,6 +45,8 @@ export interface WindowResolverConfig {
 
 export interface MetricResolverConfig {
   type: "metric";
+  entityType: string;
+  entityId: string;
   granularity: string;
   metricKey: string;
 }
@@ -87,9 +90,7 @@ export type AggState = TumblingState | EwmaState;
 export interface NodeRuntime {
   id: string;
   name: string;
-  kind: string | null;
-  entityType: string | null;
-  entityId: string | null;
+  schemaId: string | null;
   propertyIds: string[];
 }
 
@@ -178,6 +179,8 @@ export function isExprResolverConfig(value: GraphResolver): value is ExprResolve
 export function isMetricResolver(value: GraphResolver): value is MetricResolverConfig {
   return (
     value.type === "metric" &&
+    typeof (value as MetricResolverConfig).entityType === "string" &&
+    typeof (value as MetricResolverConfig).entityId === "string" &&
     typeof (value as MetricResolverConfig).granularity === "string" &&
     typeof (value as MetricResolverConfig).metricKey === "string"
   );

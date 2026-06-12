@@ -26,9 +26,9 @@ export async function syncDatasourceTags(prisma: PrismaClient): Promise<Datasour
   for (const ds of datasources) {
     const nodeName = ds.site ? `${ds.site.name} / ${ds.name}` : ds.name;
     const node = await prisma.graphNode.upsert({
-      where: { entityType_entityId: { entityType: "Datasource", entityId: ds.id } },
-      create: { name: nodeName, kind: "Datasource", entityType: "Datasource", entityId: ds.id },
-      update: { name: nodeName, kind: "Datasource", isDeleted: false },
+      where: { name: nodeName },
+      create: { name: nodeName },
+      update: { isDeleted: false },
     });
     nodes += 1;
 
@@ -61,11 +61,5 @@ export async function syncDatasourceTags(prisma: PrismaClient): Promise<Datasour
     }
   }
 
-  // Soft-delete nodes whose datasource is gone or no longer ACTIVE.
-  const prunedNodes = await prisma.graphNode.updateMany({
-    where: { entityType: "Datasource", isDeleted: false, entityId: { notIn: datasources.map((ds) => ds.id) } },
-    data: { isDeleted: true },
-  });
-
-  return { nodes, properties, pruned: pruned + prunedNodes.count };
+  return { nodes, properties, pruned };
 }

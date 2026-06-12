@@ -101,16 +101,14 @@ export class GraphRuntime {
   }
 
   private buildMetricSubscriptions(): MetricSubscription[] {
-    const entityIdByNode = new Map<string, string>();
-    for (const node of this.kernel.listNodes()) {
-      if (node.entityId) entityIdByNode.set(node.id, node.entityId);
-    }
     const subs: MetricSubscription[] = [];
     for (const property of this.kernel.listProperties()) {
       if (!isMetricResolver(property.resolver)) continue;
-      const entityId = entityIdByNode.get(property.nodeId);
-      if (!entityId) continue;
-      const subject = deriveMetricSubject(entityId, property.resolver.granularity, property.resolver.metricKey);
+      const subject = deriveMetricSubject(
+        property.resolver.entityId,
+        property.resolver.granularity,
+        property.resolver.metricKey,
+      );
       subs.push({ subject, propertyId: property.id });
     }
     return subs;

@@ -23,6 +23,9 @@ model Workspace {
 
   // RBAC
   roles Role[]
+
+  // Shared object schemas owned by this workspace
+  objectSchemas ObjectSchema[]
 }
 
 /// Membership: links a User to a Workspace and owns that user's role assignments.

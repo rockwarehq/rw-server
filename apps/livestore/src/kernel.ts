@@ -51,9 +51,7 @@ export class GraphKernel {
       const runtimeNode: NodeRuntime = {
         id: node.id,
         name: node.name,
-        kind: node.kind,
-        entityType: node.entityType,
-        entityId: node.entityId,
+        schemaId: node.schemaId,
         propertyIds: [],
       };
       this.nodes.set(node.id, runtimeNode);
@@ -157,9 +155,7 @@ export class GraphKernel {
     return {
       id: node.id,
       name: node.name,
-      kind: node.kind,
-      entityType: node.entityType,
-      entityId: node.entityId,
+      schemaId: node.schemaId,
       properties,
     };
   }
