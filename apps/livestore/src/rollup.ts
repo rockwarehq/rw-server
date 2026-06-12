@@ -8,7 +8,7 @@ export interface RollupChild {
 // Evaluates a rollup resolver by aggregating the values of its children
 // Checks quality and values
 export function evaluateRollup(resolver: RollupResolverConfig, children: RollupChild[]): ValueEnvelope {
-  // weightBy applies to avg only 
+  // weightBy applies to avg only
   const weighted = resolver.aggregation === "avg" && Boolean(resolver.weightBy);
   const total = children.length;
   let present = 0;
@@ -42,7 +42,7 @@ export function evaluateRollup(resolver: RollupResolverConfig, children: RollupC
         break;
       case "avg":
         if (weighted) {
-          // missing/zero weight excludes the child and degrades quality 
+          // missing/zero weight excludes the child and degrades quality
           const w = child.weight ? usableValue(child.weight) : null;
           if (w !== null && w > 0) {
             weightedSum += v * w;
