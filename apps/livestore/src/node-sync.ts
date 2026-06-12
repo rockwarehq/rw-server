@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@rw/db";
 
 import { DEFAULT_KINDS } from "./entityCatalog.js";
+import { validateExpression } from "./expr-sandbox.js";
 import { prefixPropertyId } from "./expr.js";
 import { additiveFields, metricPropertyName, type MetricField, ratioFields } from "./metricCatalog.js";
 
@@ -150,7 +151,10 @@ async function materializeRatios(prisma: PrismaClient, nodeId: string, idByName:
   let count = 0;
   for (const ratio of RATIO_SPECS) {
     if (!ratio.deps.every((d) => idByName.has(d))) continue;
-    const resolver = { type: "expr", expression: ratio.build(idByName) };
+    const expression = ratio.build(idByName);
+    const errors = validateExpression(expression);
+    if (errors.length) throw new Error(`invalid catalog expression for "${ratio.name}": ${errors.join("; ")}`);
+    const resolver = { type: "expr", expression };
     const exprProp = await prisma.graphProperty.upsert({
       where: { nodeId_name: { nodeId, name: ratio.name } },
       create: { nodeId, name: ratio.name, resolverType: "expr", resolver },
