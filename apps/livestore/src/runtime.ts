@@ -198,9 +198,21 @@ export class GraphRuntime {
     // Windows never compute in a flush — they emit only from their own resolver.
     if (isWindowResolverConfig(property.resolver)) return;
     if (isRollupResolverConfig(property.resolver)) {
-      const childIds = this.kernel.getDependencies(propertyId);
-      const children = childIds.map((id) => this.kernel.getCurrent(id) ?? staleEnvelope());
-      const envelope = evaluateRollup(property.resolver, children);
+      const resolver = property.resolver;
+      const deps = this.kernel
+        .getDependencies(propertyId)
+        .map((id) => this.kernel.getProperty(id))
+        .filter((dep) => dep !== null);
+      // deps hold child values plus weight siblings; pair them by node
+      const children = deps
+        .filter((dep) => dep.name === resolver.childProperty)
+        .map((dep) => ({
+          current: dep.current,
+          weight: resolver.weightBy
+            ? deps.find((w) => w.nodeId === dep.nodeId && w.name === resolver.weightBy)?.current
+            : undefined,
+        }));
+      const envelope = evaluateRollup(resolver, children);
       await this.commitValue(propertyId, envelope, "rollup");
     } else if (isExprResolverConfig(property.resolver)) {
       if (this.sampleGate.shouldDefer(propertyId, property.sampleRateMs)) return;
