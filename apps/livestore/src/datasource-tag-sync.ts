@@ -38,10 +38,26 @@ export async function syncDatasourceTags(prisma: PrismaClient): Promise<Datasour
       const name = seen.has(point.name) ? `${point.name}_${point.id.slice(0, 8)}` : point.name;
       seen.add(name);
       const resolver = { type: "tag", deviceId: ds.id, tagPath: point.id };
-      await prisma.graphProperty.upsert({
+      const tagProp = await prisma.graphProperty.upsert({
         where: { nodeId_name: { nodeId: node.id, name } },
         create: { nodeId: node.id, name, resolverType: "tag", resolver },
         update: { resolverType: "tag", resolver, isDeleted: false },
+      });
+      properties += 1;
+
+      // TEMPORARY: 1m change-count window per tag, for exercising the window resolver.
+      const windowName = `${name}_changes_1m`;
+      const windowResolver = {
+        type: "window",
+        sourcePropertyId: tagProp.id,
+        kind: "tumbling",
+        aggregation: "count",
+        windowMs: 60_000,
+      };
+      await prisma.graphProperty.upsert({
+        where: { nodeId_name: { nodeId: node.id, name: windowName } },
+        create: { nodeId: node.id, name: windowName, resolverType: "window", resolver: windowResolver },
+        update: { resolverType: "window", resolver: windowResolver, isDeleted: false },
       });
       properties += 1;
     }
@@ -52,11 +68,28 @@ export async function syncDatasourceTags(prisma: PrismaClient): Promise<Datasour
       where: { nodeId: node.id, resolverType: "tag", isDeleted: false },
       select: { id: true, resolver: true },
     });
+    const prunedTagPropIds = new Set<string>();
     for (const prop of tagProps) {
       const tagPath = (prop.resolver as { tagPath?: string } | null)?.tagPath;
       if (typeof tagPath === "string" && !livePointIds.has(tagPath)) {
         await prisma.graphProperty.update({ where: { id: prop.id }, data: { isDeleted: true } });
+        prunedTagPropIds.add(prop.id);
         pruned += 1;
+      }
+    }
+
+    // Windows over a pruned tag prop are orphaned — prune them too.
+    if (prunedTagPropIds.size > 0) {
+      const windowProps = await prisma.graphProperty.findMany({
+        where: { nodeId: node.id, resolverType: "window", isDeleted: false },
+        select: { id: true, resolver: true },
+      });
+      for (const prop of windowProps) {
+        const sourceId = (prop.resolver as { sourcePropertyId?: string } | null)?.sourcePropertyId;
+        if (typeof sourceId === "string" && prunedTagPropIds.has(sourceId)) {
+          await prisma.graphProperty.update({ where: { id: prop.id }, data: { isDeleted: true } });
+          pruned += 1;
+        }
       }
     }
   }
