@@ -4,7 +4,7 @@ import type { LivestoreLogger } from "./types.js";
 // graph's recalc engine. A value
 // change marks its dependents dirty; a short coalescing window collapses bursts
 // into one flush; the flush evaluates the dirty set in topological order so each
-// property recomputes once. 
+// property recomputes once.
 export class Scheduler {
   private readonly dirty = new Set<string>();
   private flushScheduled = false;

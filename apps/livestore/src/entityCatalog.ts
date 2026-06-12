@@ -1,4 +1,4 @@
-// Builds the in memory domain catalog - relationships 
+// Builds the in memory domain catalog - relationships
 
 import type { PrismaClient } from "@rw/db";
 

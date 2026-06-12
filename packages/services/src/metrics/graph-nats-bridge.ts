@@ -12,7 +12,6 @@ interface ValueEnvelope {
   timestamp: number;
 }
 
-
 // Metrics changes each own publish to NATS with a subject
 export function metricChangeToGraphPublishes(
   change: MetricChangeEvent,
@@ -49,12 +48,10 @@ export async function startGraphNatsBridge(options: GraphNatsBridgeOptions = {})
     return async () => {};
   }
 
-  const nc = await connect({ servers, name: "rw-graph-bridge", maxReconnectAttempts: -1 }).catch(
-    (err: unknown) => {
-      log.error(`could not connect to NATS at ${servers} — graph bridge disabled`, err);
-      return null;
-    },
-  );
+  const nc = await connect({ servers, name: "rw-graph-bridge", maxReconnectAttempts: -1 }).catch((err: unknown) => {
+    log.error(`could not connect to NATS at ${servers} — graph bridge disabled`, err);
+    return null;
+  });
   if (!nc) return async () => {};
 
   const encoder = new TextEncoder();

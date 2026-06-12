@@ -41,7 +41,13 @@ function fakePrisma(args: FakeArgs) {
     },
   };
 
-  return { prisma: prisma as never, nodeUpserts, propUpserts, propSoftDeletes, getNodePruneWhere: () => nodePruneWhere };
+  return {
+    prisma: prisma as never,
+    nodeUpserts,
+    propUpserts,
+    propSoftDeletes,
+    getNodePruneWhere: () => nodePruneWhere,
+  };
 }
 
 describe("syncDatasourceTags", () => {
@@ -99,9 +105,7 @@ describe("syncDatasourceTags", () => {
 
   it("prunes tag properties whose point is gone and nodes whose datasource is gone", async () => {
     const { prisma, propSoftDeletes, getNodePruneWhere } = fakePrisma({
-      datasources: [
-        { id: "ds-1", name: "PLC", site: null, points: [{ id: "p-1", name: "cycleTime" }] },
-      ],
+      datasources: [{ id: "ds-1", name: "PLC", site: null, points: [{ id: "p-1", name: "cycleTime" }] }],
       existingTagProps: {
         "node-ds-1": [
           { id: "keep", resolver: { type: "tag", deviceId: "ds-1", tagPath: "p-1" } },

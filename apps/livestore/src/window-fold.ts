@@ -1,6 +1,5 @@
 import { usableValue, type EwmaState, type TumblingState, type ValueEnvelope } from "./types.js";
 
-
 // Bucket boundary a timestamp falls in, floored to the windowMs grid anchored at alignToMs.
 export function bucketStartFor(timestamp: number, windowMs: number, alignToMs = 0): number {
   return alignToMs + Math.floor((timestamp - alignToMs) / windowMs) * windowMs;
@@ -20,7 +19,7 @@ export function initTumblingState(bucketStart: number, windowMs: number): Tumbli
   };
 }
 
-// Fold one sample into the open bucket. 
+// Fold one sample into the open bucket.
 export function foldTumblingSample(state: TumblingState, input: ValueEnvelope): TumblingState {
   const next: TumblingState = { ...state, totalCount: state.totalCount + 1 };
   const v = usableValue(input);
