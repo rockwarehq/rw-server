@@ -12,6 +12,7 @@ import { MetricResolver, type MetricSubscription } from "./metric-resolver.js";
 import { syncNodes } from "./node-sync.js";
 import { evaluateRollup } from "./rollup.js";
 import { buildRollupEdges } from "./rollup-index.js";
+import { SampleGate } from "./sample-gate.js";
 import { Scheduler } from "./scheduler.js";
 import { deriveMetricSubject } from "@rw/runtime/graph-subjects";
 import { TagResolver } from "./tag-resolver.js";
@@ -44,6 +45,7 @@ export class GraphRuntime {
   private readonly metricResolver: MetricResolver;
   private readonly windowResolver: WindowResolver;
   private readonly scheduler: Scheduler;
+  private readonly sampleGate: SampleGate;
   private catalog: Map<string, EntityCatalogEntry> = new Map();
   private ready = false;
 
@@ -60,6 +62,7 @@ export class GraphRuntime {
       (id) => this.kernel.getProperty(id)?.resolverType === "window",
       options.logger,
     );
+    this.sampleGate = new SampleGate((id) => this.scheduler.markDirtyMany([id]));
   }
 
   async start(): Promise<void> {
@@ -97,6 +100,7 @@ export class GraphRuntime {
     this.tagResolver.stop();
     this.metricResolver.stop();
     await this.windowResolver.stop(); // drains emit chains + flushes agg state to KV
+    this.sampleGate.stop();
     this.scheduler.stop();
   }
 
@@ -199,10 +203,12 @@ export class GraphRuntime {
       const envelope = evaluateRollup(property.resolver, children);
       await this.commitValue(propertyId, envelope, "rollup");
     } else if (isExprResolverConfig(property.resolver)) {
+      if (this.sampleGate.shouldDefer(propertyId, property.sampleRateMs)) return;
       const deps = this.kernel
         .getDependencies(propertyId)
         .map((id) => ({ id, current: this.kernel.getCurrent(id) ?? staleEnvelope() }));
       const envelope = evaluateExpr(property.resolver.expression, deps, { logger: this.options.logger });
+      this.sampleGate.recordEvaluated(propertyId);
       await this.commitValue(propertyId, envelope, "expr");
     }
   }
