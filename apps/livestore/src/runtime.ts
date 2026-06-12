@@ -184,7 +184,7 @@ export class GraphRuntime {
     return this.ready && (this.options.isNatsReady?.() ?? true);
   }
 
-  // Evaluate a computed property by its resolver type, 
+  // Evaluate a computed property by its resolver type,
   // using the current values of its dependencies.
   private async evaluate(propertyId: string): Promise<void> {
     const property = this.kernel.getProperty(propertyId);
@@ -200,7 +200,7 @@ export class GraphRuntime {
       const deps = this.kernel
         .getDependencies(propertyId)
         .map((id) => ({ id, current: this.kernel.getCurrent(id) ?? staleEnvelope() }));
-      const envelope = evaluateExpr(property.resolver.expression, deps);
+      const envelope = evaluateExpr(property.resolver.expression, deps, { logger: this.options.logger });
       await this.commitValue(propertyId, envelope, "expr");
     }
   }

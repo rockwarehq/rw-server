@@ -36,7 +36,10 @@ export class MetricResolver {
       this.subscriptions.set(subject, subscription);
       void this.consume(subscription, subject, propertyIds);
     }
-    this.logger.info({ subjects: this.subscriptions.size, properties: subs.length }, "livestore metric resolver started");
+    this.logger.info(
+      { subjects: this.subscriptions.size, properties: subs.length },
+      "livestore metric resolver started",
+    );
   }
 
   stop(): void {

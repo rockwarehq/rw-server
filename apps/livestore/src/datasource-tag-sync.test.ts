@@ -4,7 +4,7 @@ import { syncDatasourceTags } from "./datasource-tag-sync.js";
 
 interface FakeArgs {
   datasources: unknown[];
-  existingTagProps?: Record<string, { id: string; resolver: unknown }[]>;
+  existingProps?: Record<string, { id: string; resolverType: string; resolver: unknown }[]>;
 }
 
 function fakePrisma(args: FakeArgs) {
@@ -23,11 +23,12 @@ function fakePrisma(args: FakeArgs) {
       },
     },
     graphProperty: {
-      upsert: async (input: Record<string, unknown>) => {
+      upsert: async (input: { where: { nodeId_name: { name: string } } }) => {
         propUpserts.push(input);
-        return { id: "prop" };
+        return { id: `prop-${input.where.nodeId_name.name}` };
       },
-      findMany: async (input: { where: { nodeId: string } }) => args.existingTagProps?.[input.where.nodeId] ?? [],
+      findMany: async (input: { where: { nodeId: string; resolverType: string } }) =>
+        (args.existingProps?.[input.where.nodeId] ?? []).filter((p) => p.resolverType === input.where.resolverType),
       update: async (input: { where: { id: string } }) => {
         propSoftDeletes.push(input.where.id);
         return {};
@@ -56,7 +57,7 @@ describe("syncDatasourceTags", () => {
 
     const result = await syncDatasourceTags(prisma);
 
-    expect(result).toEqual({ nodes: 1, properties: 2, pruned: 0 });
+    expect(result).toEqual({ nodes: 1, properties: 4, pruned: 0 });
     expect(nodeUpserts[0]).toMatchObject({
       where: { name: "Sarasota / Press PLC" },
       create: { name: "Sarasota / Press PLC" },
@@ -66,6 +67,19 @@ describe("syncDatasourceTags", () => {
       create: { resolverType: "tag", resolver: { type: "tag", deviceId: "ds-1", tagPath: "p-1" } },
     });
     expect(propUpserts[1]).toMatchObject({
+      where: { nodeId_name: { nodeId: "node", name: "cycleTime_changes_1m" } },
+      create: {
+        resolverType: "window",
+        resolver: {
+          type: "window",
+          sourcePropertyId: "prop-cycleTime",
+          kind: "tumbling",
+          aggregation: "count",
+          windowMs: 60_000,
+        },
+      },
+    });
+    expect(propUpserts[2]).toMatchObject({
       create: { resolver: { type: "tag", deviceId: "ds-1", tagPath: "p-2" } },
     });
   });
@@ -88,25 +102,25 @@ describe("syncDatasourceTags", () => {
     await syncDatasourceTags(prisma);
 
     const names = propUpserts.map((u) => (u.where as { nodeId_name: { name: string } }).nodeId_name.name);
-    expect(names).toEqual(["temp", "temp_bbbbbbbb"]);
+    expect(names).toEqual(["temp", "temp_changes_1m", "temp_bbbbbbbb", "temp_bbbbbbbb_changes_1m"]);
   });
 
-  it("prunes tag properties whose point is gone", async () => {
+  it("prunes tag properties whose point is gone and their windows", async () => {
     const { prisma, propSoftDeletes } = fakePrisma({
-      datasources: [
-        { id: "ds-1", name: "PLC", site: null, points: [{ id: "p-1", name: "cycleTime" }] },
-      ],
-      existingTagProps: {
+      datasources: [{ id: "ds-1", name: "PLC", site: null, points: [{ id: "p-1", name: "cycleTime" }] }],
+      existingProps: {
         node: [
-          { id: "keep", resolver: { type: "tag", deviceId: "ds-1", tagPath: "p-1" } },
-          { id: "stale", resolver: { type: "tag", deviceId: "ds-1", tagPath: "p-deleted" } },
+          { id: "keep", resolverType: "tag", resolver: { type: "tag", deviceId: "ds-1", tagPath: "p-1" } },
+          { id: "stale", resolverType: "tag", resolver: { type: "tag", deviceId: "ds-1", tagPath: "p-deleted" } },
+          { id: "keep-window", resolverType: "window", resolver: { type: "window", sourcePropertyId: "keep" } },
+          { id: "stale-window", resolverType: "window", resolver: { type: "window", sourcePropertyId: "stale" } },
         ],
       },
     });
 
     const result = await syncDatasourceTags(prisma);
 
-    expect(propSoftDeletes).toEqual(["stale"]);
-    expect(result.pruned).toBe(1);
+    expect(propSoftDeletes).toEqual(["stale", "stale-window"]);
+    expect(result.pruned).toBe(2);
   });
 });

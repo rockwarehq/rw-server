@@ -1,7 +1,7 @@
 // The only granularity bridged end-to-end right now.
 export const MIRRORED_GRANULARITY = "SHIFT";
 
-// The MetricBucket columns the bridge publishes 
+// The MetricBucket columns the bridge publishes
 export const MIRRORED_METRIC_KEYS = [
   "totalCycles",
   "goodCycles",
@@ -33,7 +33,6 @@ function sanitizeSubjectToken(value: string): string {
     .map((part) => part.replace(/[*>]/g, "_"))
     .join(".");
 }
-
 
 export function deriveTagSubject(deviceId: string, tagPath: string): string {
   const deviceToken = sanitizeSubjectToken(deviceId);
