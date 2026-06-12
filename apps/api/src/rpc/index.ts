@@ -26,6 +26,8 @@ import * as order from "./order.js";
 import * as siteAndonRules from "./site-andon-rules.js";
 import * as workspace from "./workspace.js";
 import * as automations from "./automations.js";
+import * as entity from "./entity.js";
+import * as graph from "./graph.js";
 
 export const router = {
   events: {
@@ -39,6 +41,44 @@ export const router = {
   workspace: {
     listMembers: workspace.listMembers,
     listUserRoles: workspace.listUserRoles,
+  },
+  entity: {
+    schema: {
+      create: entity.schemaCreate,
+      list: entity.schemaList,
+      get: entity.schemaGet,
+      update: entity.schemaUpdate,
+      delete: entity.schemaDelete,
+    },
+    field: {
+      create: entity.fieldCreate,
+      update: entity.fieldUpdate,
+      delete: entity.fieldDelete,
+      reorder: entity.fieldReorder,
+    },
+    instance: {
+      create: entity.instanceCreate,
+      list: entity.instanceList,
+      get: entity.instanceGet,
+      update: entity.instanceUpdate,
+      delete: entity.instanceDelete,
+    },
+  },
+  graph: {
+    node: {
+      create: graph.nodeCreate,
+      list: graph.nodeList,
+      get: graph.nodeGet,
+      update: graph.nodeUpdate,
+      delete: graph.nodeDelete,
+    },
+    property: {
+      create: graph.propertyCreate,
+      update: graph.propertyUpdate,
+      delete: graph.propertyDelete,
+      dependents: graph.propertyDependents,
+      validate: graph.propertyValidate,
+    },
   },
   metrics: {
     stream: metrics.stream,

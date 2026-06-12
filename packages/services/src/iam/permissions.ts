@@ -9,6 +9,8 @@ export const RESOURCES = [
   "tool", // tools
   "product", // products, materials, process types
   "dashboard", // dashboards (saved views)
+  "entity", // user-defined object schemas and instances
+  "graph", // graph nodes, properties, and dependency definitions
   "user", // workspace users + memberships
   "employee", // employee roster (shop-floor identities)
   "billing", // invoices, payment method, subscription, plan changes

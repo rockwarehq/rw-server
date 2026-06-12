@@ -69,6 +69,8 @@ model ObjectInstance {
   values    Json    @default("{}")
   isDeleted Boolean @default(false)
 
+  graphNodes GraphNode[]
+
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 

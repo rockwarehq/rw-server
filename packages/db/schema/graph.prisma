@@ -1,16 +1,19 @@
 model GraphNode {
-  id        String  @id @default(uuid()) @db.Uuid
-  name      String  @unique
-  schemaId  String? @db.Uuid
-  isDeleted Boolean @default(false)
+  id               String  @id @default(uuid()) @db.Uuid
+  name             String  @unique
+  schemaId         String? @db.Uuid
+  objectInstanceId String? @db.Uuid
+  isDeleted        Boolean @default(false)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  properties GraphProperty[]
-  schema     ObjectSchema?   @relation(fields: [schemaId], references: [id], onDelete: SetNull)
+  properties     GraphProperty[]
+  schema         ObjectSchema?    @relation(fields: [schemaId], references: [id], onDelete: SetNull)
+  objectInstance ObjectInstance?  @relation(fields: [objectInstanceId], references: [id], onDelete: SetNull)
 
   @@index([schemaId])
+  @@index([objectInstanceId])
   @@index([isDeleted])
 }
 
