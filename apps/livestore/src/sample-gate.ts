@@ -1,4 +1,4 @@
-// Per-property evaluation throttle 
+// Per-property evaluation throttle
 // This is used to prevent expensive computations from running too frequently when their dependencies are rapidly changing.
 export class SampleGate {
   private readonly lastEvaluatedAt = new Map<string, number>();
