@@ -29,42 +29,64 @@ function toEpochMs(value: unknown): number | undefined {
   return undefined;
 }
 
-// Publishes enriched point values as ValueEnvelopes on tags.<datasourceId>.<pointId> for the graph engine.
+// Publishes point values as ValueEnvelopes on tags.<datasourceId>.<pointId> for the
+// graph engine. Handles both event shapes: enriched per-point events (payload.point,
+// calibrated, datasourceId attached) and raw gateway batches (payload.points, value
+// as received). The gateway publishes each batch on Device/<datasourceId>/Points, so
+// for raw points the topic's deviceId IS the datasourceId — no lookup needed.
 export function createTagPublishProcessor(args: {
   publisher: TagPublisher;
   logger: ProcessorContext["logger"];
 }): Processor {
+  function publishPoint(event: ParsedEvent, point: Record<string, unknown>): void {
+    const pointId = typeof point.id === "string" ? point.id : undefined;
+    const timestamp = toEpochMs(point.timestamp);
+    const datasourceId =
+      typeof point.datasourceId === "string" ? point.datasourceId : event.metadata?.deviceId;
+
+    if (!pointId || !datasourceId || point.value === undefined || timestamp === undefined) {
+      args.logger.debug("skipping tag publish", {
+        processor: "tag-publish",
+        eventId: event.id,
+        pointId,
+        hasDatasourceId: datasourceId !== undefined,
+      });
+      return;
+    }
+
+    const envelope = {
+      value: point.value,
+      quality: QUALITY_MAP[String(point.quality)] ?? "uncertain",
+      timestamp,
+      ...(point.valueRaw !== undefined && { context: { valueRaw: point.valueRaw } }),
+    };
+
+    args.publisher.publish(deriveTagSubject(datasourceId, pointId), encoder.encode(JSON.stringify(envelope)));
+  }
+
   return {
     name: "tag-publish",
     matches: (event: ParsedEvent) => event.metadata?.resource === "Points",
     async process(event: ParsedEvent): Promise<void> {
-      const point = isJsonObject(event.payload) ? event.payload.point : undefined;
-      if (!isJsonObject(point)) {
+      if (!isJsonObject(event.payload)) {
         return;
       }
 
-      const pointId = typeof point.id === "string" ? point.id : undefined;
-      const datasourceId = typeof point.datasourceId === "string" ? point.datasourceId : undefined;
-      const timestamp = toEpochMs(point.timestamp);
-
-      if (!pointId || !datasourceId || point.value === undefined || timestamp === undefined) {
-        args.logger.debug("skipping tag publish", {
-          processor: "tag-publish",
-          eventId: event.id,
-          pointId,
-          hasDatasourceId: datasourceId !== undefined,
-        });
+      const single = event.payload.point;
+      if (isJsonObject(single)) {
+        publishPoint(event, single);
         return;
       }
 
-      const envelope = {
-        value: point.value,
-        quality: QUALITY_MAP[String(point.quality)] ?? "uncertain",
-        timestamp,
-        context: { valueRaw: point.valueRaw },
-      };
-
-      args.publisher.publish(deriveTagSubject(datasourceId, pointId), encoder.encode(JSON.stringify(envelope)));
+      const batch = event.payload.points;
+      if (!Array.isArray(batch)) {
+        return;
+      }
+      for (const candidate of batch) {
+        if (isJsonObject(candidate)) {
+          publishPoint(event, candidate);
+        }
+      }
     },
   };
 }

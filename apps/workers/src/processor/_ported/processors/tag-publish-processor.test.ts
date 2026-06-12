@@ -93,11 +93,20 @@ describe("createTagPublishProcessor", () => {
     }
   });
 
-  test("skips points missing datasourceId, value, or timestamp", async () => {
+  test("falls back to the topic's deviceId when the point has no datasourceId", async () => {
     const { published, publisher } = createCapture();
     const processor = createTagPublishProcessor({ publisher, logger: testLogger });
 
     await processor.process(createPointEvent({ datasourceId: undefined }), undefined as never);
+
+    assert.equal(published.length, 1);
+    assert.equal(published[0]?.subject, "tags.device-1.9da3d1c3-7c6d-4d2c-82a9-4c76196222d0");
+  });
+
+  test("skips points missing value or timestamp", async () => {
+    const { published, publisher } = createCapture();
+    const processor = createTagPublishProcessor({ publisher, logger: testLogger });
+
     await processor.process(createPointEvent({ value: undefined }), undefined as never);
     await processor.process(createPointEvent({ timestamp: "not-a-date" }), undefined as never);
 
@@ -111,5 +120,55 @@ describe("createTagPublishProcessor", () => {
     const event = createPointEvent();
     event.metadata = { ...(event.metadata as object), resource: "Health" } as ParsedEvent["metadata"];
     assert.equal(processor.matches(event), false);
+  });
+});
+
+function createBatchEvent(points: Record<string, unknown>[]): ParsedEvent {
+  const event = createPointEvent();
+  event.payload = { points };
+  return event;
+}
+
+const rawPoint = (id: string, value: number): Record<string, unknown> => ({
+  id,
+  value,
+  quality: "GOOD",
+  timestamp: 1770651932996,
+});
+
+describe("createTagPublishProcessor (raw batch events)", () => {
+  test("publishes every point using the topic's deviceId as datasourceId", async () => {
+    const { published, publisher } = createCapture();
+    const processor = createTagPublishProcessor({ publisher, logger: testLogger });
+
+    await processor.process(createBatchEvent([rawPoint("p1", 10), rawPoint("p2", 20)]), undefined as never);
+
+    assert.equal(published.length, 2);
+    assert.equal(published[0]?.subject, "tags.device-1.p1");
+    assert.deepEqual(published[0]?.envelope, { value: 10, quality: "good", timestamp: 1770651932996 });
+    assert.equal(published[1]?.subject, "tags.device-1.p2");
+  });
+
+  test("a point carrying datasourceId wins over the topic's deviceId", async () => {
+    const { published, publisher } = createCapture();
+    const processor = createTagPublishProcessor({ publisher, logger: testLogger });
+
+    await processor.process(createBatchEvent([{ ...rawPoint("p1", 5), datasourceId: "ds-inline" }]), undefined as never);
+
+    assert.equal(published.length, 1);
+    assert.equal(published[0]?.subject, "tags.ds-inline.p1");
+  });
+
+  test("skips unusable points and continues with the rest", async () => {
+    const { published, publisher } = createCapture();
+    const processor = createTagPublishProcessor({ publisher, logger: testLogger });
+
+    await processor.process(
+      createBatchEvent([{ ...rawPoint("p1", 1), value: undefined }, "not-an-object" as never, rawPoint("p2", 2)]),
+      undefined as never,
+    );
+
+    assert.equal(published.length, 1);
+    assert.equal(published[0]?.subject, "tags.device-1.p2");
   });
 });
