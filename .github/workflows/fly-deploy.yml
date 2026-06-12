@@ -1,4 +1,4 @@
-# Deploy api and/or workers to fly for a given tenant.
+# Deploy api, workers, and/or livestore to fly for a given tenant.
 #
 # Migrations: NOT handled here. Each fly app's [deploy] release_command in
 # its base.toml runs `pnpm -w db:migrate` in a temporary fly machine before
@@ -29,8 +29,9 @@ on:
         options:
           - api
           - workers
-          - both
-        default: both
+          - livestore
+          - all
+        default: all
 
 permissions:
   contents: read
@@ -64,13 +65,19 @@ jobs:
         uses: superfly/flyctl-actions/setup-flyctl@master
 
       - name: Deploy api
-        if: inputs.app == 'api' || inputs.app == 'both'
+        if: inputs.app == 'api' || inputs.app == 'all'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: pnpm fly:deploy --app api ${{ inputs.tenant }}
 
       - name: Deploy workers
-        if: inputs.app == 'workers' || inputs.app == 'both'
+        if: inputs.app == 'workers' || inputs.app == 'all'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: pnpm fly:deploy --app workers ${{ inputs.tenant }}
+
+      - name: Deploy livestore
+        if: inputs.app == 'livestore' || inputs.app == 'all'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: pnpm fly:deploy --app livestore ${{ inputs.tenant }}
