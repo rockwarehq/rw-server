@@ -65,7 +65,11 @@ export async function buildRollupEdges(
       if (!childNodeId) continue;
       const childPropertyId = propByNodeName.get(`${childNodeId}|${resolver.childProperty}`);
       if (!childPropertyId) continue;
-      edges.push({ id: `rollup:${childPropertyId}:${rollup.id}`, fromPropertyId: childPropertyId, toPropertyId: rollup.id });
+      edges.push({
+        id: `rollup:${childPropertyId}:${rollup.id}`,
+        fromPropertyId: childPropertyId,
+        toPropertyId: rollup.id,
+      });
     }
   }
 

@@ -51,7 +51,7 @@ function safeEvaluate(compiled: EvalFunction, scope: Record<string, number>): nu
   }
 }
 
-// Eval sandboxed mathjs expression 
+// Eval sandboxed mathjs expression
 export function evaluateExpr(
   expression: string,
   deps: { id: string; current: ValueEnvelope }[],

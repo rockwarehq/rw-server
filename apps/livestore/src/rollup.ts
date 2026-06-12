@@ -1,7 +1,7 @@
 import { usableValue, worse, type Quality, type RollupResolverConfig, type ValueEnvelope } from "./types.js";
 
-// Evaluates a rollup resolver by aggregating the values of its children 
-// Checks quality and values  
+// Evaluates a rollup resolver by aggregating the values of its children
+// Checks quality and values
 export function evaluateRollup(resolver: RollupResolverConfig, children: ValueEnvelope[]): ValueEnvelope {
   const total = children.length;
   let present = 0;

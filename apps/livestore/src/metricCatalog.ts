@@ -33,7 +33,6 @@ export const metricPropertyName = (key: string): string => `${MIRRORED_GRANULARI
 const ALL_KINDS = ["Site", "Workcenter", "Station"];
 const G = [MIRRORED_GRANULARITY];
 
-
 const COUNTER_UNITS: Record<MirroredMetricKey, MetricUnit> = {
   totalCycles: "count",
   goodCycles: "count",
@@ -73,10 +72,13 @@ const ratio = (key: string, deps: string[], formula: string): MetricField => ({
   formula,
 });
 
-
 export const METRIC_FIELDS: MetricField[] = [
   ...MIRRORED_METRIC_KEYS.map(counter),
-  ratio("availability", ["runSeconds", "elapsedPlannedProductionSeconds"], "runSeconds / elapsedPlannedProductionSeconds"),
+  ratio(
+    "availability",
+    ["runSeconds", "elapsedPlannedProductionSeconds"],
+    "runSeconds / elapsedPlannedProductionSeconds",
+  ),
   ratio("performance", ["idealCycleSeconds", "runSeconds"], "idealCycleSeconds / runSeconds"),
   ratio("quality", ["goodItems", "totalItems"], "goodItems / totalItems"),
   ratio(
@@ -123,8 +125,7 @@ interface RuntimeModel {
 
 // drift protection
 export function assertMetricCatalogComplete(prisma: PrismaClient): void {
-  const dm = (prisma as unknown as { _runtimeDataModel?: { models?: Record<string, RuntimeModel> } })
-    ._runtimeDataModel;
+  const dm = (prisma as unknown as { _runtimeDataModel?: { models?: Record<string, RuntimeModel> } })._runtimeDataModel;
   const model = dm?.models?.MetricBucket;
   if (!model) throw new Error("metricCatalog: MetricBucket not found in Prisma runtime model (schema change?)");
 

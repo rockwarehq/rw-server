@@ -134,7 +134,7 @@ export class GraphKernel {
   }
 
   // Inject runtime rollup into DAG
-  // Rebuilt each boot from the domain model 
+  // Rebuilt each boot from the domain model
   applyRollupEdges(rollupEdges: GraphEdgeRuntime[]): void {
     this.dependencyGraph.rebuild(this.properties.values(), [...this.persistedEdges, ...rollupEdges]);
     this.logger.info({ rollupEdges: rollupEdges.length }, "livestore rollup edges applied");
