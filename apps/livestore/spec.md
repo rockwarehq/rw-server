@@ -124,11 +124,9 @@ The tree comes from Prisma relations, not the graph. The graph does not store pa
 Two directions of dataflow over the same tree:
 Up — rollup aggregation. A parent's KPI is an aggregate of its children. `Workcenter.oee` = weighted avg of its stations' `oee`. `Site.oee` = aggregate of its workcenters. The `rollup` resolver (§18).
 Down — dashboard repeaters. A dashboard scoped to a level renders one tile per child. Site overview repeats over workcenters; a workcenter screen repeats over stations. This is a consumption-layer concern (§9 / dashboard workstream), not an engine resolver — but it relies on the same Prisma relations.
-Entity catalog (two-sourced). At boot, the engine loads a catalog of entity types and their fields. It has two sources, merged into one catalog the rest of the system treats uniformly:
-System entities — generated at build time from `schema.prisma` (Prisma DMMF). `Site`, `Workcenter`, `Station`, `Job`, `Tool`, `Recipe`, `Carrier`. Full relations, hot path.
-User-defined entities — read at runtime from the `EntityType`/`PropertyDef` tables (§5.1). JSONB-backed, standalone (no relations in v1).
-The editor's property picker autocompletes from both — nobody hand-types field names. The `entity` resolver dispatches to the right backend (Prisma query vs JSONB lookup) based on which tier the type lives in; everything downstream (projection to nodes, expressions, dashboards) is identical regardless of origin. Relations in the catalog drive the kind→children traversal for rollups — and because user-defined entities are standalone in v1, they don't participate in rollups (no relation to traverse), but their properties still feed expressions and dashboards like any other.
-A third declared layer folds into each kind's catalog entry: the metric catalog (§4.7), which supplies the pickable KPI fields that DMMF reflection can't see.
+Data catalog. The API entity service exposes data definitions from `ObjectSchema`, not from LiveStore boot reflection. System records such as `Site`, `Workcenter`, and `Station` are projected into system `ObjectSchema` rows (`source = RECORD`), while user-authored documents use workspace `ObjectSchema` rows (`source = DOCUMENT`) backed by `ObjectInstance`.
+The editor's property picker autocompletes from this data catalog — nobody hand-types field names. The `entity` resolver dispatches to the right backend (`record` vs JSONB document lookup) based on the schema source; everything downstream (projection to nodes, expressions, dashboards) is identical regardless of origin. Relations in record schema fields drive the kind→children traversal for rollups, while document schemas remain standalone unless a future relation model is added.
+A declared metric layer (§4.7) still supplies live KPI fields and materialized graph properties that are computed outside ordinary object field storage.
 4.7 Metric mirror — worker-computed KPIs (`metric` resolver)
 The platform already computes shift KPIs outside the graph: the metrics worker folds raw point data into `MetricBucket` rows, applying shift calendars, planned/unplanned downtime classification, expected cycles from standards, and job context. That logic is not expressible as graph windows, and reimplementing it would fork the numbers — graph dashboards disagreeing with existing reports is the worst failure mode available. So the graph consumes it and never recomputes it.
 Dataflow:
@@ -136,7 +134,7 @@ The worker's metric bus dual-publishes every bucket change to NATS via the graph
 Each Station node carries one `metric` property per additive counter (`shift_goodItems`, `shift_runSeconds`, …) — push-fed leaves, mechanically identical to tag subscriptions but with instance-relative addressing (the entityId comes from the node binding, so one resolver config serves every Station).
 Workcenter and Site carry the same properties as `rollup { aggregation: 'sum' }` over their children — extensive quantities, so summing is correct.
 Ratios (`oee`, `availability`, `performance`, `quality`) are never mirrored and never summed; they are `expr` properties over the summed components at each level, so every level's ratio is intensive-correct.
-Metric catalog. DMMF reflection can't tell which `MetricBucket` columns belong to which kind — the table is polymorphic (an `(entityType, entityId)` discriminator, no typed relations to follow). A declared catalog (`metricCatalog.ts`) supplies that layer: each field's role (additive / ratio / display), units, applicable kinds, and ratio formulas. It is the single source of truth for the pickable KPI set — node-sync materializes properties from it and the catalog endpoint exposes it to the picker, so the two can't drift. A boot assertion reconciles it against the live `MetricBucket` schema: an unclassified column, or a declared field with no backing column, fails the boot.
+Metric catalog. DMMF reflection can't tell which `MetricBucket` columns belong to which kind — the table is polymorphic (an `(entityType, entityId)` discriminator, no typed relations to follow). A declared catalog (`metricCatalog.ts`) supplies that layer: each field's role (additive / ratio / display), units, applicable kinds, and ratio formulas. It is the single source of truth for the pickable KPI set — node-sync materializes properties from it and the API data catalog can expose it to the picker, so the two can't drift. A boot assertion reconciles it against the live `MetricBucket` schema: an unclassified column, or a declared field with no backing column, fails the boot.
 Division of labor with `window`: the OEE/shift-counter family comes from the mirror; `window` remains for ad-hoc time aggregation the worker doesn't compute (smoothed cycle time via EWMA, alarms/hour over a raw tag).
 5. Data model (Prisma)
 ```prisma
@@ -460,7 +458,7 @@ PUT	`/graph/properties/:id`	Update a property (runs cycle check)
 DELETE	`/graph/properties/:id`	Soft-delete a property (warns on dependents)
 POST	`/graph/validate`	Dry-run a property config; returns parsed deps + cycle check, no persistence
 GET	`/graph/properties/:id/dependents`	What breaks if I delete this?
-GET	`/graph/catalog`	Reflected entity catalog: kinds, fields, relations (for the editor's property picker)
+GET	`entity.catalog.list/get`	Data catalog from `ObjectSchema`: record/document definitions, fields, and relations for the editor's property picker
 GET	`/graph/nodes/:id/children?kind=Station`	Resolve children of a node by kind/relation (powers rollups and dashboard repeaters)
 GET	`/graph/collections?kind=Station&scope=Workcenter:wc_a`	Resolve a collection: nodes of a kind filtered by hierarchy scope (dashboard repeater binding)
 All write routes emit an event the engine subscribes to for hot-reload. The `children` and `collections` endpoints are read-only projections over entity relations — the same traversal the rollup resolver uses internally (§18.8).
@@ -513,7 +511,7 @@ NATS KV bucket setup: `imm_cvt` for current values, `imm_agg_state` for tumbling
 Engine skeleton: in-memory `Map<id, Property>` + `Map<id, Node>`, no resolvers yet
 Boot from Postgres + seed from KV
 Resolver dispatch as explicit switch/registry
-Build-time entity catalog generation from `schema.prisma` (DMMF → JSON)
+ObjectSchema-backed data catalog served by the API entity service
 Health endpoint
 M2 — Tag resolver (1 week)
 NATS subscription manager grouped by subject
@@ -530,11 +528,11 @@ Quality propagation
 Object-valued properties + field access
 M4 — Entity resolver + asset hierarchy (2 weeks)
 Domain event publisher in Fastify mutation handlers (`Job`, `Tool`, `Recipe`, `Station`, `Workcenter`, `Site`)
-Entity subscription manager; entity-backed nodes (node-level `entityType`/`entityId` binding)
+Entity subscription manager; entity-backed nodes (`recordId` for records, `documentId` for documents)
 One-time sync: materialize a node per existing Station/Workcenter/Site instance
 Relation-aware re-fetch: change to an instance marks dependent properties dirty
 Membership events (`asset.moved`: a Station's workcenter changed) on the domain bus
-Two-source the entity catalog (system DMMF + user-defined `EntityType`/`PropertyDef`) and dispatch the `entity` resolver by backend (Prisma vs JSONB). The user-entity store + designer UI is a parallel workstream (§5.1); this milestone covers only the graph-side hooks to consume it.
+Project system records into `ObjectSchema` and dispatch the `entity` resolver by backend (`record` vs JSONB document). The data catalog is owned by the API entity service.
 M5 — Window resolver: tumbling + EWMA (2 weeks)
 `imm_agg_state` KV bucket integration
 Tumbling: bucket lifecycle, incremental `count/sum/min/max`, derived `avg`, `setTimeout` close scheduling, `alignToMs` offset
@@ -812,7 +810,7 @@ The `context.present / context.childCount` lets the dashboard show "based on 4 o
 18.6 Cycle and depth checks (save-time)
 A rollup cannot aggregate a `childProperty` whose own resolver transitively depends on this rollup (would loop). The existing cycle check (§8.8) extends to rollup edges — but since rollup edges are dynamic, the check is on the kind/relation/property triple, not specific instances: reject if `childKind.childProperty` could reach this rollup's node-kind property through the static graph.
 Reject rollup chains deeper than 3 hops.
-Validate `relation` exists in the entity catalog and points to `childKind`.
+Validate `relation` exists in the ObjectSchema-backed data catalog and points to `childKind`.
 18.7 Restart behavior
 Rollups hold no durable accumulator state — they recompute from current child values. On boot: build the `rollupChildren` index from entity relations, mark all rollups dirty, evaluate in topo order once children are seeded from KV. Simpler than windows (no `imm_agg_state` involvement).
 18.8 Relation to dashboard repeaters (consumption layer)
@@ -839,6 +837,6 @@ mathjs expression API: https://mathjs.org/docs/expressions/parsing.html
 NATS JetStream KV: https://docs.nats.io/nats-concepts/jetstream/key-value-store
 Apache Flink windowing semantics (event time, late data, watermarks — prior art for §17.9)
 EWMA in process control: https://en.wikipedia.org/wiki/Exponential_smoothing
-Prisma DMMF (datamodel reflection for the entity catalog): generated from `schema.prisma`
+ObjectSchema-backed data catalog: system records plus user-authored document definitions
 Postgres JSONB + GIN indexing (storage model for the user-defined entity tier, §5.1)
 EAV vs JSONB vs dynamic-DDL tradeoffs (background for the §5.1 storage decision)

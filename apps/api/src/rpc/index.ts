@@ -43,6 +43,10 @@ export const router = {
     listUserRoles: workspace.listUserRoles,
   },
   entity: {
+    catalog: {
+      list: entity.catalogList,
+      get: entity.catalogGet,
+    },
     schema: {
       create: entity.schemaCreate,
       list: entity.schemaList,

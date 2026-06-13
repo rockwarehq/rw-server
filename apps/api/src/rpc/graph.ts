@@ -13,14 +13,16 @@ const nodeCreateInputSchema = z.object({
   siteId: z.uuid(),
   name: z.string().min(1),
   schemaId: z.uuid().optional(),
-  objectInstanceId: z.uuid().optional(),
+  documentId: z.uuid().optional(),
+  recordId: z.uuid().optional(),
   materializeFields: z.boolean().optional(),
 });
 
 const nodeListInputSchema = z.object({
   siteId: z.uuid(),
   schemaId: z.uuid().optional(),
-  objectInstanceId: z.uuid().optional(),
+  documentId: z.uuid().optional(),
+  recordId: z.uuid().optional(),
   name: z.string().optional(),
   limit: z.number().int().min(0).default(50),
   offset: z.number().int().min(0).default(0),
@@ -30,7 +32,8 @@ const nodeUpdateInputSchema = z.object({
   id: z.uuid(),
   name: z.string().min(1).optional(),
   schemaId: z.uuid().nullable().optional(),
-  objectInstanceId: z.uuid().nullable().optional(),
+  documentId: z.uuid().nullable().optional(),
+  recordId: z.uuid().nullable().optional(),
 });
 
 const propertyCreateInputSchema = z.object({

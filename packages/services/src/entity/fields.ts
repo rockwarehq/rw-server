@@ -33,6 +33,8 @@ async function getWritableSchema(schemaId: string, workspaceId: string) {
   if (schema.workspaceId !== workspaceId)
     return errorResult("WORKSPACE_MISMATCH", "Schema does not belong to this workspace");
   if (schema.isDeleted) return errorResult("SCHEMA_DELETED", "Schema has been deleted");
+  if (schema.isSystem || schema.source !== "DOCUMENT")
+    return errorResult("SCHEMA_READ_ONLY", "System and record schemas cannot be edited through this API");
   return { data: schema };
 }
 
@@ -42,6 +44,8 @@ async function validateRefSchema(refSchemaId: string | null, workspaceId: string
   if (!refSchema || refSchema.isDeleted) return errorResult("REF_SCHEMA_NOT_FOUND", "Referenced schema not found");
   if (refSchema.workspaceId !== workspaceId)
     return errorResult("REF_SCHEMA_WORKSPACE_MISMATCH", "Referenced schema is outside this workspace");
+  if (refSchema.source !== "DOCUMENT")
+    return errorResult("REF_SCHEMA_SOURCE_INVALID", "OBJECT fields can only reference DOCUMENT schemas");
   return null;
 }
 
@@ -105,6 +109,8 @@ export async function update(
     return errorResult("WORKSPACE_MISMATCH", "Field does not belong to this workspace");
   if (current.schema.isDeleted) return errorResult("SCHEMA_DELETED", "Schema has been deleted");
   if (current.isDeleted) return errorResult("FIELD_DELETED", "Field has been deleted");
+  if (current.schema.isSystem || current.schema.source !== "DOCUMENT")
+    return errorResult("SCHEMA_READ_ONLY", "System and record schemas cannot be edited through this API");
 
   const nextType = input.type ?? current.type;
   const normalizedResult = validateAndNormalizeFieldConfig({
@@ -178,6 +184,8 @@ export async function remove(id: string, workspaceId: string): Promise<ServiceRe
   if (current.schema.workspaceId !== workspaceId)
     return errorResult("WORKSPACE_MISMATCH", "Field does not belong to this workspace");
   if (current.isDeleted) return { data: { success: true } };
+  if (current.schema.isSystem || current.schema.source !== "DOCUMENT")
+    return errorResult("SCHEMA_READ_ONLY", "System and record schemas cannot be edited through this API");
 
   await prisma.$transaction([
     prisma.objectSchemaField.update({ where: { id }, data: { isDeleted: true } }),

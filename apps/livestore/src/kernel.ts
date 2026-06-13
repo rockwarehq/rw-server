@@ -52,6 +52,8 @@ export class GraphKernel {
         id: node.id,
         name: node.name,
         schemaId: node.schemaId,
+        documentId: node.documentId,
+        recordId: node.recordId,
         propertyIds: [],
       };
       this.nodes.set(node.id, runtimeNode);
@@ -156,6 +158,8 @@ export class GraphKernel {
       id: node.id,
       name: node.name,
       schemaId: node.schemaId,
+      documentId: node.documentId,
+      recordId: node.recordId,
       properties,
     };
   }

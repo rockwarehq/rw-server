@@ -6,6 +6,7 @@ import { hasPermission, type Permission } from "@rw/services/iam/index";
 import { authRequired } from "./middleware.js";
 
 const fieldTypeSchema = z.enum(["TEXT", "NUMBER", "BOOLEAN", "DATE", "TIMESTAMP", "SELECT", "JSON", "OBJECT"]);
+const schemaSourceSchema = z.enum(["RECORD", "DOCUMENT"]);
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 
 const idInputSchema = z.object({ id: z.uuid() });
@@ -71,6 +72,20 @@ const instanceUpdateInputSchema = z.object({
   values: jsonObjectSchema.optional(),
 });
 
+const catalogListInputSchema = listInputSchema.extend({
+  source: schemaSourceSchema.optional(),
+  key: z.string().min(1).optional(),
+  includeFields: z.boolean().default(true),
+});
+
+const catalogGetInputSchema = z
+  .object({
+    id: z.uuid().optional(),
+    key: z.string().min(1).optional(),
+    includeFields: z.boolean().default(true),
+  })
+  .refine((input) => Boolean(input.id || input.key), { message: "id or key is required" });
+
 type AuthContext = { iam: { id: string; workspaceId?: string | null; siteId?: string | null } };
 
 async function assertPermission(context: AuthContext, permission: Permission): Promise<string> {
@@ -100,6 +115,16 @@ function unwrap<T>(result: { data: T } | { error: string; code: string } | null)
 export const schemaCreate = authRequired.input(schemaCreateInputSchema).handler(async ({ input, context }) => {
   const workspaceId = await assertPermission(context, "entity:write");
   return unwrap(await entity.schemas.create(input, workspaceId));
+});
+
+export const catalogList = authRequired.input(catalogListInputSchema).handler(async ({ input, context }) => {
+  const workspaceId = await assertPermission(context, "entity:read");
+  return entity.catalog.list(input, workspaceId);
+});
+
+export const catalogGet = authRequired.input(catalogGetInputSchema).handler(async ({ input, context }) => {
+  const workspaceId = await assertPermission(context, "entity:read");
+  return unwrap(await entity.catalog.get(input, workspaceId));
 });
 
 export const schemaList = authRequired.input(listInputSchema).handler(async ({ input, context }) => {

@@ -5,7 +5,6 @@ import type { NatsConnection } from "@nats-io/nats-core";
 import { AggStateStore } from "./agg-store.js";
 import { CvgStore } from "./cvg-store.js";
 import { syncDatasourceTags } from "./datasource-tag-sync.js";
-import { loadEntityCatalog, type EntityCatalogEntry } from "./entityCatalog.js";
 import { evaluateExpr } from "./expr.js";
 import { GraphKernel } from "./kernel.js";
 import { MetricResolver, type MetricSubscription } from "./metric-resolver.js";
@@ -44,7 +43,6 @@ export class GraphRuntime {
   private readonly metricResolver: MetricResolver;
   private readonly windowResolver: WindowResolver;
   private readonly scheduler: Scheduler;
-  private catalog: Map<string, EntityCatalogEntry> = new Map();
   private ready = false;
 
   constructor(private readonly options: GraphRuntimeOptions) {
@@ -52,7 +50,11 @@ export class GraphRuntime {
     this.kernel = new GraphKernel(options.prisma, this.cvg, options.logger);
     this.tagResolver = new TagResolver(options.nc, this, options.logger);
     this.metricResolver = new MetricResolver(options.nc, this, options.logger);
-    this.windowResolver = new WindowResolver(new AggStateStore(options.aggKv), this, options.logger);
+    this.windowResolver = new WindowResolver(
+      new AggStateStore(options.aggKv),
+      this,
+      options.logger,
+    );
     this.scheduler = new Scheduler(
       (id) => this.kernel.getDependents(id),
       () => this.kernel.topoOrder(),
@@ -60,44 +62,6 @@ export class GraphRuntime {
       (id) => this.kernel.getProperty(id)?.resolverType === "window",
       options.logger,
     );
-  }
-
-  async start(): Promise<void> {
-    this.catalog = loadEntityCatalog(this.options.prisma);
-    this.options.logger.info({ kinds: [...this.catalog.keys()] }, "livestore entity catalog loaded");
-    if (process.env.LIVESTORE_SYNC_NODES_ON_BOOT !== "false") {
-      const result = await syncNodes(this.options.prisma);
-      this.options.logger.info({ ...result }, "livestore node sync complete");
-      // TEMPORARY until UI authoring — remove with datasource-tag-sync.ts.
-      const tagResult = await syncDatasourceTags(this.options.prisma);
-      this.options.logger.info({ ...tagResult }, "livestore datasource tag sync complete");
-    }
-    await this.kernel.load();
-
-    const rollupEdges = await buildRollupEdges(this.options.prisma, this.kernel, this.options.logger);
-    this.kernel.applyRollupEdges(rollupEdges);
-
-    // Windows rehydrate before input subscriptions open, so no live sample can
-    // arrive ahead of the resolver's source index.
-    await this.windowResolver.start(this.kernel.listProperties(), (id) => this.kernel.getProperty(id));
-
-    this.tagResolver.start(this.kernel.listProperties());
-    this.metricResolver.start(this.buildMetricSubscriptions());
-    this.ready = true;
-
-    const computedIds = this.kernel
-      .listProperties()
-      .filter((property) => isRollupResolverConfig(property.resolver) || isExprResolverConfig(property.resolver))
-      .map((property) => property.id);
-    if (computedIds.length > 0) this.scheduler.markDirtyMany(computedIds);
-  }
-
-  async stop(): Promise<void> {
-    this.ready = false;
-    this.tagResolver.stop();
-    this.metricResolver.stop();
-    await this.windowResolver.stop(); // drains emit chains + flushes agg state to KV
-    this.scheduler.stop();
   }
 
   private buildMetricSubscriptions(): MetricSubscription[] {
@@ -114,10 +78,94 @@ export class GraphRuntime {
     return subs;
   }
 
-  async commitValue(propertyId: string, envelope: ValueEnvelope, source: CommitSource): Promise<void> {
+  // Evaluate a computed property by its resolver type,
+  // using the current values of its dependencies.
+  private async evaluate(propertyId: string): Promise<void> {
+    const property = this.kernel.getProperty(propertyId);
+    if (!property) return;
+    // Windows never compute in a flush — they emit only from their own resolver.
+    if (isWindowResolverConfig(property.resolver)) return;
+    if (isRollupResolverConfig(property.resolver)) {
+      const childIds = this.kernel.getDependencies(propertyId);
+      const children = childIds.map(
+        (id) => this.kernel.getCurrent(id) ?? staleEnvelope(),
+      );
+      const envelope = evaluateRollup(property.resolver, children);
+      await this.commitValue(propertyId, envelope, "rollup");
+    } else if (isExprResolverConfig(property.resolver)) {
+      const deps = this.kernel
+        .getDependencies(propertyId)
+        .map((id) => ({
+          id,
+          current: this.kernel.getCurrent(id) ?? staleEnvelope(),
+        }));
+      const envelope = evaluateExpr(property.resolver.expression, deps, {
+        logger: this.options.logger,
+      });
+      await this.commitValue(propertyId, envelope, "expr");
+    }
+  }
+
+  async start(): Promise<void> {
+    if (process.env.LIVESTORE_SYNC_NODES_ON_BOOT !== "false") {
+      const result = await syncNodes(this.options.prisma);
+      this.options.logger.info({ ...result }, "livestore node sync complete");
+      // TEMPORARY until UI authoring — remove with datasource-tag-sync.ts.
+      const tagResult = await syncDatasourceTags(this.options.prisma);
+      this.options.logger.info(
+        { ...tagResult },
+        "livestore datasource tag sync complete",
+      );
+    }
+    await this.kernel.load();
+
+    const rollupEdges = await buildRollupEdges(
+      this.options.prisma,
+      this.kernel,
+      this.options.logger,
+    );
+    this.kernel.applyRollupEdges(rollupEdges);
+
+    // Windows rehydrate before input subscriptions open, so no live sample can
+    // arrive ahead of the resolver's source index.
+    await this.windowResolver.start(this.kernel.listProperties(), (id) =>
+      this.kernel.getProperty(id),
+    );
+
+    this.tagResolver.start(this.kernel.listProperties());
+    this.metricResolver.start(this.buildMetricSubscriptions());
+    this.ready = true;
+
+    const computedIds = this.kernel
+      .listProperties()
+      .filter(
+        (property) =>
+          isRollupResolverConfig(property.resolver) ||
+          isExprResolverConfig(property.resolver),
+      )
+      .map((property) => property.id);
+    if (computedIds.length > 0) this.scheduler.markDirtyMany(computedIds);
+  }
+
+  async stop(): Promise<void> {
+    this.ready = false;
+    this.tagResolver.stop();
+    this.metricResolver.stop();
+    await this.windowResolver.stop(); // drains emit chains + flushes agg state to KV
+    this.scheduler.stop();
+  }
+
+  async commitValue(
+    propertyId: string,
+    envelope: ValueEnvelope,
+    source: CommitSource,
+  ): Promise<void> {
     const property = this.kernel.getProperty(propertyId);
     if (!property) {
-      this.options.logger.warn({ propertyId, source }, "livestore commit ignored for unknown property");
+      this.options.logger.warn(
+        { propertyId, source },
+        "livestore commit ignored for unknown property",
+      );
       return;
     }
 
@@ -162,10 +210,6 @@ export class GraphRuntime {
     return this.kernel.listNodes();
   }
 
-  listCatalog(): EntityCatalogEntry[] {
-    return [...this.catalog.values()];
-  }
-
   getNode(nodeId: string) {
     return this.kernel.getNode(nodeId);
   }
@@ -176,32 +220,10 @@ export class GraphRuntime {
       ...this.windowResolver.counts(),
       tagSubscriptionCount: this.tagResolver.subscriptionCount(),
       metricSubscriptionCount: this.metricResolver.subscriptionCount(),
-      catalogKindCount: this.catalog.size,
     };
   }
 
   isReady(): boolean {
     return this.ready && (this.options.isNatsReady?.() ?? true);
-  }
-
-  // Evaluate a computed property by its resolver type,
-  // using the current values of its dependencies.
-  private async evaluate(propertyId: string): Promise<void> {
-    const property = this.kernel.getProperty(propertyId);
-    if (!property) return;
-    // Windows never compute in a flush — they emit only from their own resolver.
-    if (isWindowResolverConfig(property.resolver)) return;
-    if (isRollupResolverConfig(property.resolver)) {
-      const childIds = this.kernel.getDependencies(propertyId);
-      const children = childIds.map((id) => this.kernel.getCurrent(id) ?? staleEnvelope());
-      const envelope = evaluateRollup(property.resolver, children);
-      await this.commitValue(propertyId, envelope, "rollup");
-    } else if (isExprResolverConfig(property.resolver)) {
-      const deps = this.kernel
-        .getDependencies(propertyId)
-        .map((id) => ({ id, current: this.kernel.getCurrent(id) ?? staleEnvelope() }));
-      const envelope = evaluateExpr(property.resolver.expression, deps, { logger: this.options.logger });
-      await this.commitValue(propertyId, envelope, "expr");
-    }
   }
 }

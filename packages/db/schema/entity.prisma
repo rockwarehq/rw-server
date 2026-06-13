@@ -9,10 +9,19 @@ enum ObjectFieldType {
   OBJECT
 }
 
+enum ObjectSchemaSource {
+  RECORD
+  DOCUMENT
+}
+
 model ObjectSchema {
   id          String  @id @default(uuid()) @db.Uuid
+  key         String? @unique
   name        String
   description String?
+  source      ObjectSchemaSource @default(DOCUMENT)
+  meta        Json               @default("{}")
+  isSystem    Boolean            @default(false)
   version     Int     @default(1)
   isDeleted   Boolean @default(false)
 
@@ -29,6 +38,8 @@ model ObjectSchema {
 
   @@unique([workspaceId, name])
   @@index([workspaceId])
+  @@index([source])
+  @@index([isSystem])
   @@index([isDeleted])
 }
 

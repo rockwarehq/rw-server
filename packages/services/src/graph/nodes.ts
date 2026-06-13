@@ -9,76 +9,137 @@ import {
   getGraphNodeSiteId,
   getGraphSiteForWorkspace,
 } from "./scope.js";
+import { assertRecordInSite, fieldBindingPath, recordModelFromMeta, schemaVisibleToWorkspace } from "./records.js";
 
 export interface CreateGraphNodeInput {
   name: string;
   schemaId?: string;
-  objectInstanceId?: string;
+  documentId?: string;
+  recordId?: string;
   materializeFields?: boolean;
 }
 
 export interface UpdateGraphNodeInput {
   name?: string;
   schemaId?: string | null;
-  objectInstanceId?: string | null;
+  documentId?: string | null;
+  recordId?: string | null;
 }
 
 export interface ListGraphNodesFilter {
   schemaId?: string;
-  objectInstanceId?: string;
+  documentId?: string;
+  recordId?: string;
   name?: string;
   limit?: number;
   offset?: number;
 }
 
 async function resolveBinding(
-  input: { schemaId?: string | null; objectInstanceId?: string | null },
+  input: { schemaId?: string | null; documentId?: string | null; recordId?: string | null },
   scope: GraphScope,
 ) {
-  if (input.objectInstanceId) {
-    const instance = await prisma.objectInstance.findUnique({
-      where: { id: input.objectInstanceId },
+  if (input.documentId && input.recordId) {
+    return errorResult("INVALID_BINDING", "Graph node cannot bind to both documentId and recordId");
+  }
+
+  if (input.documentId) {
+    const document = await prisma.objectInstance.findUnique({
+      where: { id: input.documentId },
       include: { schema: true },
     });
-    if (!instance || instance.isDeleted || instance.schema.isDeleted) {
-      return errorResult("OBJECT_INSTANCE_NOT_FOUND", "Object instance not found");
+    if (!document || document.isDeleted || document.schema.isDeleted) {
+      return errorResult("DOCUMENT_NOT_FOUND", "Document not found");
     }
-    if (instance.schema.workspaceId !== scope.workspaceId) {
-      return errorResult("WORKSPACE_MISMATCH", "Object instance does not belong to this workspace");
+    if (document.schema.source !== "DOCUMENT") {
+      return errorResult("INVALID_SCHEMA_SOURCE", "documentId must reference a DOCUMENT schema");
     }
-    if (input.schemaId && input.schemaId !== instance.schemaId) {
-      return errorResult("SCHEMA_INSTANCE_MISMATCH", "Graph node schema must match the object instance schema");
+    if (document.schema.workspaceId !== scope.workspaceId) {
+      return errorResult("WORKSPACE_MISMATCH", "Document does not belong to this workspace");
     }
-    return { data: { schemaId: instance.schemaId, objectInstanceId: instance.id } };
+    if (input.schemaId && input.schemaId !== document.schemaId) {
+      return errorResult("SCHEMA_DOCUMENT_MISMATCH", "Graph node schema must match the document schema");
+    }
+    return { data: { schemaId: document.schemaId, documentId: document.id, recordId: null, recordModel: null } };
   }
 
   if (!input.schemaId)
-    return errorResult("SCHEMA_REQUIRED", "Graph nodes created through the API require schemaId or objectInstanceId");
+    return errorResult("SCHEMA_REQUIRED", "Graph nodes created through the API require schemaId, documentId, or recordId");
   const schema = await prisma.objectSchema.findUnique({ where: { id: input.schemaId } });
   if (!schema || schema.isDeleted) return errorResult("SCHEMA_NOT_FOUND", "Schema not found");
-  if (schema.workspaceId !== scope.workspaceId)
+  if (!schemaVisibleToWorkspace(schema, scope.workspaceId))
     return errorResult("WORKSPACE_MISMATCH", "Schema does not belong to this workspace");
-  return { data: { schemaId: schema.id, objectInstanceId: null } };
+
+  if (input.recordId) {
+    if (schema.source !== "RECORD") return errorResult("INVALID_SCHEMA_SOURCE", "recordId requires a RECORD schema");
+    const recordModel = recordModelFromMeta(schema.meta);
+    if (!recordModel) return errorResult("INVALID_SCHEMA_META", "RECORD schema meta must include record.model");
+    const recordError = await assertRecordInSite(recordModel, input.recordId, scope);
+    if (recordError) return recordError;
+    return { data: { schemaId: schema.id, documentId: null, recordId: input.recordId, recordModel } };
+  }
+
+  return { data: { schemaId: schema.id, documentId: null, recordId: null, recordModel: null } };
 }
 
-function entityResolver(args: { schemaId: string; objectInstanceId: string; schemaFieldId: string; path: string }) {
+function documentEntityResolver(args: { schemaId: string; documentId: string; schemaFieldId: string; path: string }) {
   return {
     type: "entity",
     backend: "jsonb",
     schemaId: args.schemaId,
-    objectInstanceId: args.objectInstanceId,
+    documentId: args.documentId,
     schemaFieldId: args.schemaFieldId,
     path: args.path,
   };
 }
 
-async function materializeFields(nodeId: string, schemaId: string, objectInstanceId: string): Promise<number> {
+function recordEntityResolver(args: {
+  schemaId: string;
+  recordId: string;
+  recordModel: string;
+  schemaFieldId: string;
+  path: string;
+}) {
+  return {
+    type: "entity",
+    backend: "record",
+    schemaId: args.schemaId,
+    recordId: args.recordId,
+    recordModel: args.recordModel,
+    schemaFieldId: args.schemaFieldId,
+    path: args.path,
+  };
+}
+
+async function materializeFields(
+  nodeId: string,
+  binding: { schemaId: string; documentId: string | null; recordId: string | null; recordModel: string | null },
+): Promise<number> {
   const fields = await prisma.objectSchemaField.findMany({
-    where: { schemaId, isDeleted: false },
+    where: { schemaId: binding.schemaId, isDeleted: false },
     orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
   });
 
   for (const field of fields) {
+    const path = fieldBindingPath(field);
+    const resolver = binding.documentId
+      ? documentEntityResolver({
+          schemaId: binding.schemaId,
+          documentId: binding.documentId,
+          schemaFieldId: field.id,
+          path,
+        })
+      : binding.recordId && binding.recordModel
+        ? recordEntityResolver({
+            schemaId: binding.schemaId,
+            recordId: binding.recordId,
+            recordModel: binding.recordModel,
+            schemaFieldId: field.id,
+            path,
+          })
+        : null;
+    if (!resolver) continue;
+
     await prisma.graphProperty.upsert({
       where: { nodeId_name: { nodeId, name: field.name } },
       create: {
@@ -86,22 +147,12 @@ async function materializeFields(nodeId: string, schemaId: string, objectInstanc
         name: field.name,
         schemaFieldId: field.id,
         resolverType: "entity",
-        resolver: entityResolver({
-          schemaId,
-          objectInstanceId,
-          schemaFieldId: field.id,
-          path: field.name,
-        }) as Prisma.InputJsonValue,
+        resolver: resolver as Prisma.InputJsonValue,
       },
       update: {
         schemaFieldId: field.id,
         resolverType: "entity",
-        resolver: entityResolver({
-          schemaId,
-          objectInstanceId,
-          schemaFieldId: field.id,
-          path: field.name,
-        }) as Prisma.InputJsonValue,
+        resolver: resolver as Prisma.InputJsonValue,
         isDeleted: false,
       },
     });
@@ -131,18 +182,25 @@ export async function create(input: CreateGraphNodeInput, scope: GraphScope): Pr
             name,
             siteId: scope.siteId,
             schemaId: binding.data.schemaId,
-            objectInstanceId: binding.data.objectInstanceId,
+            documentId: binding.data.documentId,
+            recordId: binding.data.recordId,
             isDeleted: false,
           },
         })
         : await tx.graphNode.create({
-            data: { name, siteId: scope.siteId, schemaId: binding.data.schemaId, objectInstanceId: binding.data.objectInstanceId },
+            data: {
+              name,
+              siteId: scope.siteId,
+              schemaId: binding.data.schemaId,
+              documentId: binding.data.documentId,
+              recordId: binding.data.recordId,
+            },
           });
     return next;
   });
 
-  if (input.materializeFields && binding.data.objectInstanceId) {
-    await materializeFields(node.id, binding.data.schemaId, binding.data.objectInstanceId);
+  if (input.materializeFields && (binding.data.documentId || binding.data.recordId)) {
+    await materializeFields(node.id, binding.data);
   }
 
   const created = await prisma.graphNode.findUnique({ where: { id: node.id }, include: graphNodeInclude });
@@ -150,11 +208,12 @@ export async function create(input: CreateGraphNodeInput, scope: GraphScope): Pr
 }
 
 export async function list(filter: ListGraphNodesFilter, scope: GraphScope): Promise<ListResult<unknown>> {
-  const { schemaId, objectInstanceId, name, limit = 50, offset = 0 } = filter;
+  const { schemaId, documentId, recordId, name, limit = 50, offset = 0 } = filter;
   const where = {
     ...graphNodeSiteWhere(scope),
     ...(schemaId ? { schemaId } : {}),
-    ...(objectInstanceId ? { objectInstanceId } : {}),
+    ...(documentId ? { documentId } : {}),
+    ...(recordId ? { recordId } : {}),
     ...(name ? { name: { contains: name, mode: "insensitive" as const } } : {}),
   };
 
@@ -201,11 +260,12 @@ export async function update(
     updateData.name = name;
   }
 
-  if (input.schemaId !== undefined || input.objectInstanceId !== undefined) {
+  if (input.schemaId !== undefined || input.documentId !== undefined || input.recordId !== undefined) {
     const binding = await resolveBinding(
       {
         schemaId: input.schemaId !== undefined ? input.schemaId : current.schemaId,
-        objectInstanceId: input.objectInstanceId !== undefined ? input.objectInstanceId : current.objectInstanceId,
+        documentId: input.documentId !== undefined ? input.documentId : current.documentId,
+        recordId: input.recordId !== undefined ? input.recordId : current.recordId,
       },
       scope,
     );
@@ -221,7 +281,8 @@ export async function update(
     }
 
     updateData.schemaId = binding.data.schemaId;
-    updateData.objectInstanceId = binding.data.objectInstanceId;
+    updateData.documentId = binding.data.documentId;
+    updateData.recordId = binding.data.recordId;
   }
 
   const node = await prisma.graphNode.update({ where: { id }, data: updateData, include: graphNodeInclude });

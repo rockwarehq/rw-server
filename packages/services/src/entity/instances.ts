@@ -23,7 +23,7 @@ export interface ListObjectInstancesFilter {
 }
 
 const instanceInclude = {
-  schema: { select: { id: true, name: true, workspaceId: true, version: true } },
+  schema: { select: { id: true, name: true, source: true, workspaceId: true, version: true } },
 };
 
 async function getSchemaWithFields(schemaId: string, workspaceId: string) {
@@ -35,13 +35,14 @@ async function getSchemaWithFields(schemaId: string, workspaceId: string) {
   if (schema.workspaceId !== workspaceId)
     return errorResult("WORKSPACE_MISMATCH", "Schema does not belong to this workspace");
   if (schema.isDeleted) return errorResult("SCHEMA_DELETED", "Schema has been deleted");
+  if (schema.source !== "DOCUMENT") return errorResult("SCHEMA_SOURCE_INVALID", "Only DOCUMENT schemas can create documents");
   return { data: schema };
 }
 
 async function validateObjectRefs(refs: readonly string[], workspaceId: string) {
   if (refs.length === 0) return null;
   const count = await prisma.objectInstance.count({
-    where: { id: { in: [...refs] }, isDeleted: false, schema: { workspaceId, isDeleted: false } },
+    where: { id: { in: [...refs] }, isDeleted: false, schema: { workspaceId, source: "DOCUMENT", isDeleted: false } },
   });
   return count === refs.length
     ? null
@@ -75,7 +76,7 @@ export async function list(filter: ListObjectInstancesFilter, workspaceId: strin
   const { schemaId, name, limit = 50, offset = 0 } = filter;
   const where = {
     isDeleted: false,
-    schema: { workspaceId, isDeleted: false },
+    schema: { workspaceId, source: "DOCUMENT" as const, isDeleted: false },
     ...(schemaId ? { schemaId } : {}),
     ...(name ? { name: { contains: name, mode: "insensitive" as const } } : {}),
   };
@@ -99,6 +100,7 @@ export async function getById(id: string, workspaceId: string): Promise<ServiceR
   if (!instance) return null;
   if (instance.schema.workspaceId !== workspaceId)
     return errorResult("WORKSPACE_MISMATCH", "Instance does not belong to this workspace");
+  if (instance.schema.source !== "DOCUMENT") return errorResult("SCHEMA_SOURCE_INVALID", "Only DOCUMENT schemas have documents");
   if (instance.isDeleted) return errorResult("INSTANCE_DELETED", "Instance has been deleted");
   return { data: instance };
 }
@@ -115,6 +117,7 @@ export async function update(
   if (!current) return errorResult("INSTANCE_NOT_FOUND", "Instance not found");
   if (current.schema.workspaceId !== workspaceId)
     return errorResult("WORKSPACE_MISMATCH", "Instance does not belong to this workspace");
+  if (current.schema.source !== "DOCUMENT") return errorResult("SCHEMA_SOURCE_INVALID", "Only DOCUMENT schemas have documents");
   if (current.schema.isDeleted) return errorResult("SCHEMA_DELETED", "Schema has been deleted");
   if (current.isDeleted) return errorResult("INSTANCE_DELETED", "Instance has been deleted");
 
@@ -143,6 +146,7 @@ export async function remove(id: string, workspaceId: string): Promise<ServiceRe
   if (!current) return errorResult("INSTANCE_NOT_FOUND", "Instance not found");
   if (current.schema.workspaceId !== workspaceId)
     return errorResult("WORKSPACE_MISMATCH", "Instance does not belong to this workspace");
+  if (current.schema.source !== "DOCUMENT") return errorResult("SCHEMA_SOURCE_INVALID", "Only DOCUMENT schemas have documents");
   if (current.isDeleted) return { data: { success: true } };
 
   await prisma.objectInstance.update({ where: { id }, data: { isDeleted: true } });

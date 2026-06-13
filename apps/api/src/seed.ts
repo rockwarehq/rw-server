@@ -2,6 +2,7 @@ import "dotenv/config";
 import bcrypt from "bcrypt";
 import prisma from "@rw/db";
 import { findSystemRole } from "@rw/services/iam/roles";
+import { seedSystemObjectSchemas } from "@rw/services/entity/system-catalog";
 import { seedSystemRoles } from "./seed-system-roles.js";
 
 const SALT_ROUNDS = 10;
@@ -17,6 +18,9 @@ const SALT_ROUNDS = 10;
 // Run compiled:  node dist/seed.js                    (used by fly release_command)
 async function seed() {
   console.log("Starting database seed...");
+
+  await seedSystemObjectSchemas();
+  console.log("Seeded system object schemas");
 
   // Skip if already bootstrapped. Lets the seed run unconditionally on every
   // deploy (no SEED_ON_RELEASE flag needed) while staying a fast no-op once a

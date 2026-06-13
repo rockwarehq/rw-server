@@ -1,6 +1,5 @@
 import type { PrismaClient } from "@rw/db";
 
-import { DEFAULT_KINDS } from "./entityCatalog.js";
 import { validateExpression } from "./expr-sandbox.js";
 import { prefixPropertyId } from "./expr.js";
 import { additiveFields, metricPropertyName, type MetricField, ratioFields } from "./metricCatalog.js";
@@ -16,6 +15,13 @@ interface EntityRow {
 interface ModelDelegate {
   findMany(args: { where?: Record<string, unknown>; select: Record<string, unknown> }): Promise<EntityRow[]>;
 }
+
+const DEFAULT_KINDS = ["Site", "Workcenter", "Station"] as const;
+const SYSTEM_SCHEMA_KEYS: Record<string, string> = {
+  Site: "system.site",
+  Workcenter: "system.workcenter",
+  Station: "system.station",
+};
 
 // Path segments keep same-named nodes in a site from colliding on GraphNode.name.
 const SITE = (row: EntityRow): string => row.site?.name ?? "(unknown site)";
@@ -125,13 +131,26 @@ export interface NodeSyncResult {
 
 // Upsert one node by display name. Source identity now lives on property resolvers,
 // not the node itself.
-async function upsertNode(prisma: PrismaClient, kind: string, config: KindConfig, row: EntityRow) {
+async function recordSchemaIdForKind(prisma: PrismaClient, kind: string): Promise<string | null> {
+  const key = SYSTEM_SCHEMA_KEYS[kind];
+  if (!key) return null;
+  const schema = await prisma.objectSchema.findUnique({ where: { key }, select: { id: true } });
+  return schema?.id ?? null;
+}
+
+async function upsertNode(
+  prisma: PrismaClient,
+  kind: string,
+  config: KindConfig,
+  row: EntityRow,
+  schemaId: string | null,
+) {
   const name = config.nodeName(row);
   const siteId = siteIdForRow(kind, row);
   return prisma.graphNode.upsert({
     where: { siteId_name: { siteId, name } },
-    create: { name, siteId },
-    update: { isDeleted: false },
+    create: { name, siteId, schemaId, recordId: row.id, documentId: null },
+    update: { schemaId, recordId: row.id, documentId: null, isDeleted: false },
   });
 }
 
@@ -211,10 +230,11 @@ async function syncKind(
 
   const rows = await delegate.findMany({ where: config.where, select: config.select });
   const specs = KIND_PROPERTIES[kind] ?? [];
+  const schemaId = await recordSchemaIdForKind(prisma, kind);
   let properties = 0;
 
   for (const row of rows) {
-    const node = await upsertNode(prisma, kind, config, row);
+    const node = await upsertNode(prisma, kind, config, row, schemaId);
     const idByName = await materializeSchema(prisma, node.id, kind, row, specs);
     properties += idByName.size;
     if (RATIO_KINDS.has(kind)) properties += await materializeRatios(prisma, node.id, idByName);

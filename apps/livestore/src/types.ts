@@ -91,6 +91,8 @@ export interface NodeRuntime {
   id: string;
   name: string;
   schemaId: string | null;
+  documentId: string | null;
+  recordId: string | null;
   propertyIds: string[];
 }
 

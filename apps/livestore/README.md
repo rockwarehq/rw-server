@@ -19,10 +19,10 @@ NATS tag message (tags.<deviceId>.<tagPath>)
 
 ## How it fits together
 
-- **Entity catalog** (`entityCatalog.ts`) — kinds/relations reflected from Prisma at
-  boot. **Metric catalog** (`metricCatalog.ts`) — the declared KPI layer (additive
-  counters + ratio formulas) the schema can't reflect; the mirrored key set lives in
-  `@rw/runtime/graph-subjects` so the worker bridge and this consumer can't drift.
+- **Metric catalog** (`metricCatalog.ts`) — the declared KPI layer (additive counters
+  + ratio formulas); the mirrored key set lives in `@rw/runtime/graph-subjects` so
+  the worker bridge and this consumer can't drift. The entity/data catalog is owned
+  by the API entity service and backed by `ObjectSchema`.
 - **Node sync** (`node-sync.ts`) — materializes one GraphNode per Site/Workcenter/
   Station and each kind's property schema: metric leaves on Stations, `rollup{sum}`
   on Workcenter/Site, ratio KPIs as exprs at every level. Idempotent; runs on boot
@@ -70,7 +70,6 @@ Watch values: `GET /graph/nodes` for ids, then over WS
 | `GET /health`, `/healthz`, `/readyz` | liveness / NATS readiness |
 | `GET /graph/nodes` | nodes + properties + current values |
 | `GET /graph/nodes/:id` | one node |
-| `GET /graph/catalog` | entity kinds, relations, pickable metric fields |
 | `GET /ws/graph` | WebSocket subscribe/unsubscribe per property |
 
 ## Tests

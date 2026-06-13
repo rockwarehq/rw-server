@@ -5,6 +5,7 @@ import type { Prisma } from "@rw/db";
 import { getGraphNodeForSite, getGraphPropertyForSite, getGraphPropertySiteId, graphNodeSiteWhere } from "./scope.js";
 import { errorResult, type GraphScope, type ListResult, type ServiceResult } from "./types.js";
 import { isRecordResolver, validateAcyclicStaticEdges, validateResolverConfig } from "./validation.js";
+import { fieldBindingPath, recordModelFromMeta } from "./records.js";
 
 export interface CreateGraphPropertyInput {
   nodeId: string;
@@ -35,12 +36,30 @@ export interface ValidateGraphPropertyInput extends CreateGraphPropertyInput {
   id?: string;
 }
 
-function entityResolver(args: { schemaId: string; objectInstanceId: string; schemaFieldId: string; path: string }) {
+function documentEntityResolver(args: { schemaId: string; documentId: string; schemaFieldId: string; path: string }) {
   return {
     type: "entity",
     backend: "jsonb",
     schemaId: args.schemaId,
-    objectInstanceId: args.objectInstanceId,
+    documentId: args.documentId,
+    schemaFieldId: args.schemaFieldId,
+    path: args.path,
+  };
+}
+
+function recordEntityResolver(args: {
+  schemaId: string;
+  recordId: string;
+  recordModel: string;
+  schemaFieldId: string;
+  path: string;
+}) {
+  return {
+    type: "entity",
+    backend: "record",
+    schemaId: args.schemaId,
+    recordId: args.recordId,
+    recordModel: args.recordModel,
     schemaFieldId: args.schemaFieldId,
     path: args.path,
   };
@@ -62,8 +81,13 @@ function resolveName(inputName: string | undefined, field: { name: string } | nu
 }
 
 async function buildResolver(args: {
-  node: { schemaId: string | null; objectInstanceId: string | null };
-  field: { id: string; name: string } | null;
+  node: {
+    schemaId: string | null;
+    documentId: string | null;
+    recordId: string | null;
+    schema?: { meta: unknown } | null;
+  };
+  field: { id: string; name: string; config: unknown } | null;
   resolverType?: string;
   resolver?: Record<string, unknown>;
   scope: GraphScope;
@@ -71,20 +95,31 @@ async function buildResolver(args: {
   let resolverType = args.resolverType;
   let resolver = args.resolver;
 
-  if (!resolver && args.field && args.node.schemaId && args.node.objectInstanceId) {
+  if (!resolver && args.field && args.node.schemaId && args.node.documentId) {
     resolverType = "entity";
-    resolver = entityResolver({
+    resolver = documentEntityResolver({
       schemaId: args.node.schemaId,
-      objectInstanceId: args.node.objectInstanceId,
+      documentId: args.node.documentId,
       schemaFieldId: args.field.id,
-      path: args.field.name,
+      path: fieldBindingPath(args.field),
+    });
+  } else if (!resolver && args.field && args.node.schemaId && args.node.recordId) {
+    const recordModel = recordModelFromMeta(args.node.schema?.meta);
+    if (!recordModel) return errorResult("INVALID_SCHEMA_META", "RECORD schema meta must include record.model");
+    resolverType = "entity";
+    resolver = recordEntityResolver({
+      schemaId: args.node.schemaId,
+      recordId: args.node.recordId,
+      recordModel,
+      schemaFieldId: args.field.id,
+      path: fieldBindingPath(args.field),
     });
   }
 
   if (!resolverType || !resolver || !isRecordResolver(resolver)) {
     return errorResult(
       "RESOLVER_REQUIRED",
-      "resolverType and resolver are required unless schemaFieldId can infer an object-backed resolver",
+      "resolverType and resolver are required unless schemaFieldId can infer a document- or record-backed resolver",
     );
   }
 
@@ -340,7 +375,7 @@ export async function list(filter: ListGraphPropertiesFilter, scope: GraphScope)
   const [properties, total] = await Promise.all([
     prisma.graphProperty.findMany({
       where,
-      include: { node: { select: { id: true, name: true, siteId: true, schemaId: true, objectInstanceId: true } } },
+      include: { node: { select: { id: true, name: true, siteId: true, schemaId: true, documentId: true, recordId: true } } },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
       skip: Number(offset),
       orderBy: [{ node: { name: "asc" as const } }, { name: "asc" as const }],

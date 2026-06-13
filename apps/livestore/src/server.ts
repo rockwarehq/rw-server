@@ -51,8 +51,6 @@ export function registerGraphRoutes(server: FastifyInstance, runtime: GraphRunti
 
   server.get("/graph/nodes", async () => ({ data: runtime.listNodes() }));
 
-  server.get("/graph/catalog", async () => ({ data: runtime.listCatalog() }));
-
   server.get<{ Params: { id: string } }>("/graph/nodes/:id", async (request, reply) => {
     const node = runtime.getNode(request.params.id);
     if (!node) return reply.code(404).send({ error: "Graph node not found" });

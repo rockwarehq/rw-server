@@ -1,5 +1,6 @@
 import prisma from "@rw/db";
 
+import { assertRecordInSite, fieldBindingPath, recordModelFromMeta, schemaVisibleToWorkspace } from "./records.js";
 import { graphNodeSiteWhere } from "./scope.js";
 import { errorResult, type GraphScope } from "./types.js";
 
@@ -108,32 +109,63 @@ export async function validateResolverConfig(args: {
   }
 
   if (resolverType === "entity") {
-    if (resolver.backend !== "jsonb")
-      return errorResult("INVALID_RESOLVER", "entity resolver currently supports backend=jsonb only");
-    if (
-      typeof resolver.objectInstanceId !== "string" ||
-      typeof resolver.schemaFieldId !== "string" ||
-      typeof resolver.path !== "string"
-    ) {
-      return errorResult(
-        "INVALID_RESOLVER",
-        "jsonb entity resolver requires objectInstanceId, schemaFieldId, and path",
-      );
+    if (resolver.backend === "jsonb") {
+      if (
+        typeof resolver.documentId !== "string" ||
+        typeof resolver.schemaFieldId !== "string" ||
+        typeof resolver.path !== "string"
+      ) {
+        return errorResult("INVALID_RESOLVER", "jsonb entity resolver requires documentId, schemaFieldId, and path");
+      }
+      const document = await prisma.objectInstance.findUnique({
+        where: { id: resolver.documentId },
+        include: { schema: true },
+      });
+      if (!document || document.isDeleted || document.schema.isDeleted)
+        return errorResult("DOCUMENT_NOT_FOUND", "Document not found");
+      if (document.schema.source !== "DOCUMENT")
+        return errorResult("INVALID_SCHEMA_SOURCE", "jsonb entity resolver requires a DOCUMENT schema");
+      if (document.schema.workspaceId !== args.scope.workspaceId)
+        return errorResult("WORKSPACE_MISMATCH", "Document is outside this workspace");
+      const field = await prisma.objectSchemaField.findUnique({ where: { id: resolver.schemaFieldId } });
+      if (!field || field.isDeleted || field.schemaId !== document.schemaId)
+        return errorResult("SCHEMA_FIELD_NOT_FOUND", "Schema field not found on this document schema");
+      if (fieldBindingPath(field) !== resolver.path)
+        return errorResult("INVALID_RESOLVER", "entity resolver path must match the schema field binding path");
+      return { data: { resolver: { ...resolver, schemaId: document.schemaId }, dependencyIds: [] } };
     }
-    const instance = await prisma.objectInstance.findUnique({
-      where: { id: resolver.objectInstanceId },
-      include: { schema: true },
-    });
-    if (!instance || instance.isDeleted || instance.schema.isDeleted)
-      return errorResult("OBJECT_INSTANCE_NOT_FOUND", "Object instance not found");
-    if (instance.schema.workspaceId !== args.scope.workspaceId)
-      return errorResult("WORKSPACE_MISMATCH", "Object instance is outside this workspace");
-    const field = await prisma.objectSchemaField.findUnique({ where: { id: resolver.schemaFieldId } });
-    if (!field || field.isDeleted || field.schemaId !== instance.schemaId)
-      return errorResult("SCHEMA_FIELD_NOT_FOUND", "Schema field not found on this instance schema");
-    if (field.name !== resolver.path)
-      return errorResult("INVALID_RESOLVER", "entity resolver path must match the schema field name");
-    return { data: { resolver: { ...resolver, schemaId: instance.schemaId }, dependencyIds: [] } };
+
+    if (resolver.backend === "record") {
+      if (
+        typeof resolver.schemaId !== "string" ||
+        typeof resolver.recordId !== "string" ||
+        typeof resolver.schemaFieldId !== "string" ||
+        typeof resolver.path !== "string"
+      ) {
+        return errorResult(
+          "INVALID_RESOLVER",
+          "record entity resolver requires schemaId, recordId, schemaFieldId, and path",
+        );
+      }
+      const schema = await prisma.objectSchema.findUnique({ where: { id: resolver.schemaId } });
+      if (!schema || schema.isDeleted) return errorResult("SCHEMA_NOT_FOUND", "Schema not found");
+      if (schema.source !== "RECORD")
+        return errorResult("INVALID_SCHEMA_SOURCE", "record entity resolver requires a RECORD schema");
+      if (!schemaVisibleToWorkspace(schema, args.scope.workspaceId))
+        return errorResult("WORKSPACE_MISMATCH", "Schema is outside this workspace");
+      const recordModel = recordModelFromMeta(schema.meta);
+      if (!recordModel) return errorResult("INVALID_SCHEMA_META", "RECORD schema meta must include record.model");
+      const recordError = await assertRecordInSite(recordModel, resolver.recordId, args.scope);
+      if (recordError) return recordError;
+      const field = await prisma.objectSchemaField.findUnique({ where: { id: resolver.schemaFieldId } });
+      if (!field || field.isDeleted || field.schemaId !== schema.id)
+        return errorResult("SCHEMA_FIELD_NOT_FOUND", "Schema field not found on this record schema");
+      if (fieldBindingPath(field) !== resolver.path)
+        return errorResult("INVALID_RESOLVER", "entity resolver path must match the schema field binding path");
+      return { data: { resolver: { ...resolver, recordModel }, dependencyIds: [] } };
+    }
+
+    return errorResult("INVALID_RESOLVER", "entity resolver backend must be jsonb or record");
   }
 
   if (resolverType === "expr") {

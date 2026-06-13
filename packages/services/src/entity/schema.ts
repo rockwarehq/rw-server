@@ -57,6 +57,7 @@ export async function list(filter: ListObjectSchemasFilter, workspaceId: string)
   const { name, limit = 50, offset = 0 } = filter;
   const where = {
     workspaceId,
+    source: "DOCUMENT" as const,
     isDeleted: false,
     ...(name ? { name: { contains: name, mode: "insensitive" as const } } : {}),
   };
@@ -94,6 +95,8 @@ export async function update(
   if (current.workspaceId !== workspaceId)
     return errorResult("WORKSPACE_MISMATCH", "Schema does not belong to this workspace");
   if (current.isDeleted) return errorResult("SCHEMA_DELETED", "Schema has been deleted");
+  if (current.isSystem || current.source !== "DOCUMENT")
+    return errorResult("SCHEMA_READ_ONLY", "System and record schemas cannot be updated through this API");
 
   const updateData: Record<string, unknown> = {};
   if (input.name !== undefined) {
@@ -117,6 +120,8 @@ export async function remove(id: string, workspaceId: string): Promise<ServiceRe
   if (current.workspaceId !== workspaceId)
     return errorResult("WORKSPACE_MISMATCH", "Schema does not belong to this workspace");
   if (current.isDeleted) return { data: { success: true } };
+  if (current.isSystem || current.source !== "DOCUMENT")
+    return errorResult("SCHEMA_READ_ONLY", "System and record schemas cannot be deleted through this API");
 
   await prisma.$transaction([
     prisma.objectSchema.update({ where: { id }, data: { isDeleted: true } }),
