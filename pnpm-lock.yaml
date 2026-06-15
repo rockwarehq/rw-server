@@ -150,6 +150,9 @@ importers:
 
   apps/livestore:
     dependencies:
+      '@fastify/cors':
+        specifier: ^11.2.0
+        version: 11.2.0
       '@fastify/websocket':
         specifier: ^11.2.0
         version: 11.2.0

@@ -1,3 +1,4 @@
+import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance } from "fastify";
 
@@ -23,6 +24,12 @@ const HIGH_WATER_MARK = 1_000_000;
 // Create the Fastify app first so the engine can log through its Pino instance (see asLivestoreLogger).
 export async function createLivestoreServer(): Promise<FastifyInstance> {
   const server = Fastify({ logger: true });
+  await server.register(cors, {
+    origin: true,
+    methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
+  });
   await server.register(websocket);
   return server;
 }
