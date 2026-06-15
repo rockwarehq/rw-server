@@ -107,6 +107,17 @@ export async function buildRollupEdges(
         fromPropertyId: childPropertyId,
         toPropertyId: rollup.id,
       });
+      // weight changes must re-trigger the rollup too (§18.2)
+      if (resolver.aggregation === "avg" && resolver.weightBy) {
+        const weightPropertyId = propByNodeName.get(`${childNodeId}|${resolver.weightBy}`);
+        if (weightPropertyId) {
+          edges.push({
+            id: `rollup:${weightPropertyId}:${rollup.id}`,
+            fromPropertyId: weightPropertyId,
+            toPropertyId: rollup.id,
+          });
+        }
+      }
     }
   }
 

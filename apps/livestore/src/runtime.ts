@@ -11,6 +11,7 @@ import { MetricResolver, type MetricSubscription } from "./metric-resolver.js";
 import { syncNodes } from "./node-sync.js";
 import { evaluateRollup } from "./rollup.js";
 import { buildRollupEdges } from "./rollup-index.js";
+import { SampleGate } from "./sample-gate.js";
 import { Scheduler } from "./scheduler.js";
 import { deriveMetricSubject } from "@rw/runtime/graph-subjects";
 import { TagResolver } from "./tag-resolver.js";
@@ -43,6 +44,7 @@ export class GraphRuntime {
   private readonly metricResolver: MetricResolver;
   private readonly windowResolver: WindowResolver;
   private readonly scheduler: Scheduler;
+  private readonly sampleGate: SampleGate;
   private ready = false;
 
   constructor(private readonly options: GraphRuntimeOptions) {
@@ -62,6 +64,7 @@ export class GraphRuntime {
       (id) => this.kernel.getProperty(id)?.resolverType === "window",
       options.logger,
     );
+    this.sampleGate = new SampleGate((id) => this.scheduler.markDirtyMany([id]));
   }
 
   private buildMetricSubscriptions(): MetricSubscription[] {
@@ -86,13 +89,26 @@ export class GraphRuntime {
     // Windows never compute in a flush — they emit only from their own resolver.
     if (isWindowResolverConfig(property.resolver)) return;
     if (isRollupResolverConfig(property.resolver)) {
-      const childIds = this.kernel.getDependencies(propertyId);
-      const children = childIds.map(
-        (id) => this.kernel.getCurrent(id) ?? staleEnvelope(),
-      );
-      const envelope = evaluateRollup(property.resolver, children);
+      const resolver = property.resolver;
+      const deps = this.kernel
+        .getDependencies(propertyId)
+        .map((id) => this.kernel.getProperty(id))
+        .filter((dep) => dep !== null);
+      const children = deps
+        .filter((dep) => dep.name === resolver.childProperty)
+        .map((dep) => ({
+          current: dep.current,
+          weight: resolver.weightBy
+            ? deps.find(
+                (weight) =>
+                  weight.nodeId === dep.nodeId && weight.name === resolver.weightBy,
+              )?.current
+            : undefined,
+        }));
+      const envelope = evaluateRollup(resolver, children);
       await this.commitValue(propertyId, envelope, "rollup");
     } else if (isExprResolverConfig(property.resolver)) {
+      if (this.sampleGate.shouldDefer(propertyId, property.sampleRateMs)) return;
       const deps = this.kernel
         .getDependencies(propertyId)
         .map((id) => ({
@@ -102,6 +118,7 @@ export class GraphRuntime {
       const envelope = evaluateExpr(property.resolver.expression, deps, {
         logger: this.options.logger,
       });
+      this.sampleGate.recordEvaluated(propertyId);
       await this.commitValue(propertyId, envelope, "expr");
     }
   }
@@ -152,6 +169,7 @@ export class GraphRuntime {
     this.tagResolver.stop();
     this.metricResolver.stop();
     await this.windowResolver.stop(); // drains emit chains + flushes agg state to KV
+    this.sampleGate.stop();
     this.scheduler.stop();
   }
 
