@@ -69,20 +69,49 @@ export class WindowResolver {
     properties: Iterable<PropertyRuntime>,
     getProperty: (id: string) => { resolverType: string } | null,
   ): Promise<void> {
+    this.stopped = false;
     for (const property of properties) {
-      if (!isWindowResolverConfig(property.resolver)) continue;
-      const errors = validateWindowResolver(property.resolver, getProperty);
-      if (errors.length > 0) {
-        this.logger.warn({ propertyId: property.id, errors }, "livestore window skipped: invalid resolver");
-        continue;
-      }
-      const rt = await this.rehydrate(property.id, property.resolver);
-      this.byId.set(property.id, rt);
-      const siblings = this.bySource.get(property.resolver.sourcePropertyId) ?? [];
-      siblings.push(rt);
-      this.bySource.set(property.resolver.sourcePropertyId, siblings);
+      await this.upsertProperty(property, getProperty);
     }
     this.logger.info({ windowCount: this.byId.size }, "livestore window resolver started");
+  }
+
+  async upsertProperty(
+    property: PropertyRuntime,
+    getProperty: (id: string) => { resolverType: string } | null,
+  ): Promise<void> {
+    await this.removeProperty(property.id);
+    if (!isWindowResolverConfig(property.resolver)) return;
+
+    const errors = validateWindowResolver(property.resolver, getProperty);
+    if (errors.length > 0) {
+      this.logger.warn({ propertyId: property.id, errors }, "livestore window skipped: invalid resolver");
+      return;
+    }
+
+    const rt = await this.rehydrate(property.id, property.resolver);
+    this.byId.set(property.id, rt);
+    const siblings = this.bySource.get(property.resolver.sourcePropertyId) ?? [];
+    siblings.push(rt);
+    this.bySource.set(property.resolver.sourcePropertyId, siblings);
+  }
+
+  async removeProperty(propertyId: string): Promise<void> {
+    const rt = this.byId.get(propertyId);
+    if (!rt) return;
+    this.byId.delete(propertyId);
+
+    for (const [sourcePropertyId, windows] of this.bySource) {
+      const next = windows.filter((window) => window.propertyId !== propertyId);
+      if (next.length > 0) this.bySource.set(sourcePropertyId, next);
+      else this.bySource.delete(sourcePropertyId);
+    }
+
+    if (rt.kind === "tumbling" && rt.closeTimer) clearTimeout(rt.closeTimer);
+    if (rt.persistTimer) clearTimeout(rt.persistTimer);
+    rt.persistTimer = null;
+    await rt.emitChain;
+    await this.store.put(rt.propertyId, rt.state);
   }
 
   // Synchronous by design
@@ -131,6 +160,8 @@ export class WindowResolver {
     const results = await Promise.allSettled(runtimes.map((rt) => this.store.put(rt.propertyId, rt.state)));
     const failed = results.filter((result) => result.status === "rejected").length;
     if (failed > 0) this.logger.error({ failed }, "livestore window state flush failed on shutdown");
+    this.byId.clear();
+    this.bySource.clear();
   }
 
   counts(): { windowCount: number; lateSamplesDropped: number; gapBucketsSkipped: number } {

@@ -10,8 +10,8 @@
     "test": "vitest run",
     "fixture:create": "tsx src/scripts/create-fixture.ts",
     "fixture:publish": "tsx src/scripts/publish-tag.ts",
-    "sync:nodes": "tsx src/scripts/sync-nodes.ts",
-    "playground:simulate": "tsx src/scripts/simulate-metrics.ts"
+    "playground:simulate": "tsx src/scripts/simulate-metrics.ts",
+    "simulate:tags": "tsx src/scripts/simulate-tags.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",

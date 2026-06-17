@@ -19,6 +19,8 @@ async function main(): Promise<void> {
   const runtime = new GraphRuntime({
     prisma,
     nc: nats.nc,
+    jetstream: nats.jetstream,
+    jetstreamManager: nats.jetstreamManager,
     kv: nats.kv,
     aggKv: nats.aggKv,
     logger: asLivestoreLogger(server),

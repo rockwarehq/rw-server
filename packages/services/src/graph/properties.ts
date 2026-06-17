@@ -3,6 +3,7 @@ import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
 
 import { getGraphNodeForSite, getGraphPropertyForSite, getGraphPropertySiteId, graphNodeSiteWhere } from "./scope.js";
+import { publishGraphDefinitionEvent } from "./definition-events.js";
 import { errorResult, type GraphScope, type ListResult, type ServiceResult } from "./types.js";
 import { isRecordResolver, validateAcyclicStaticEdges, validateResolverConfig } from "./validation.js";
 import { fieldBindingPath, recordModelFromMeta } from "./records.js";
@@ -207,6 +208,14 @@ export async function create(input: CreateGraphPropertyInput, scope: GraphScope)
     return next;
   });
 
+  publishGraphDefinitionEvent({
+    entity: "property",
+    action: "created",
+    entityId: property.id,
+    nodeId: property.nodeId,
+    siteId: scope.siteId,
+  });
+
   return { data: property };
 }
 
@@ -281,6 +290,14 @@ export async function update(
     return next;
   });
 
+  publishGraphDefinitionEvent({
+    entity: "property",
+    action: "updated",
+    entityId: property.id,
+    nodeId: property.nodeId,
+    siteId: scope.siteId,
+  });
+
   return { data: property };
 }
 
@@ -288,6 +305,7 @@ export async function remove(id: string, scope: GraphScope): Promise<ServiceResu
   const currentResult = await getGraphPropertyForSite(id, scope);
   if (!currentResult) return errorResult("GRAPH_PROPERTY_NOT_FOUND", "Graph property not found");
   if ("error" in currentResult) return currentResult;
+  const current = currentResult.data;
 
   const dependentCount = await prisma.graphEdge.count({
     where: { fromPropertyId: id, toProperty: { isDeleted: false, node: graphNodeSiteWhere(scope) } },
@@ -299,6 +317,14 @@ export async function remove(id: string, scope: GraphScope): Promise<ServiceResu
     prisma.graphEdge.deleteMany({ where: { OR: [{ fromPropertyId: id }, { toPropertyId: id }] } }),
     prisma.graphProperty.update({ where: { id }, data: { isDeleted: true } }),
   ]);
+
+  publishGraphDefinitionEvent({
+    entity: "property",
+    action: "deleted",
+    entityId: id,
+    nodeId: current.nodeId,
+    siteId: scope.siteId,
+  });
 
   return { data: { success: true } };
 }

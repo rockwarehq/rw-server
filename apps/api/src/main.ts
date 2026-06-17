@@ -32,9 +32,11 @@ import { createServer } from "./server.js";
 import { driver } from "./services/device/index.js";
 import { registerReplayReconcileWorker, stopReplayReconcileWorker } from "@rw/services/queues/replay-reconcile";
 import { recoverReplayWindows, cleanup as cleanupReplay } from "@rw/services/cycle/replay";
+import { startGraphDefinitionPublisher } from "./graph-definition-publisher.js";
 
 let cleanupBridge: (() => Promise<void>) | null = null;
 let cleanupMetricsBridge: (() => Promise<void>) | null = null;
+let cleanupGraphDefinitionPublisher: (() => Promise<void>) | null = null;
 
 async function main() {
   // Initialize driver registry (load from files and upsert to DB —
@@ -52,6 +54,7 @@ async function main() {
   // back through Redis (~1ms) — fine for SSE latency, no double-delivery.
   cleanupBridge = await initEventsBridge("both");
   cleanupMetricsBridge = await initMetricsBridge("both");
+  cleanupGraphDefinitionPublisher = await startGraphDefinitionPublisher();
 
   // Producer-side queues that HTTP/RPC handlers enqueue against. These
   // initialize Queue instances; the workers consuming them run elsewhere
@@ -86,6 +89,7 @@ async function shutdown() {
   ]);
   if (cleanupBridge) await cleanupBridge();
   if (cleanupMetricsBridge) await cleanupMetricsBridge();
+  if (cleanupGraphDefinitionPublisher) await cleanupGraphDefinitionPublisher();
   const { createPrismaClient: getClient } = await import("@rw/db");
   await getClient("api").$disconnect();
 }
