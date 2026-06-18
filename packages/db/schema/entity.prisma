@@ -16,17 +16,21 @@ enum ObjectSchemaSource {
 
 model ObjectSchema {
   id          String  @id @default(uuid()) @db.Uuid
-  key         String? @unique
+  key         String
+  label       String
   name        String
   description String?
   source      ObjectSchemaSource @default(DOCUMENT)
   meta        Json               @default("{}")
+  displayFieldKey String?
   isSystem    Boolean            @default(false)
   version     Int     @default(1)
   isDeleted   Boolean @default(false)
 
   workspaceId String?    @db.Uuid
   workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  siteId      String?    @db.Uuid
+  site        Site?      @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
   fields             ObjectSchemaField[] @relation("SchemaFields")
   referencedByFields ObjectSchemaField[] @relation("FieldRefSchema")
@@ -36,8 +40,10 @@ model ObjectSchema {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
+  @@unique([siteId, key])
   @@unique([workspaceId, name])
   @@index([workspaceId])
+  @@index([siteId])
   @@index([source])
   @@index([isSystem])
   @@index([isDeleted])
@@ -49,6 +55,8 @@ model ObjectSchemaField {
   schema   ObjectSchema @relation("SchemaFields", fields: [schemaId], references: [id], onDelete: Cascade)
 
   name        String
+  key         String
+  label       String
   description String?
   type        ObjectFieldType
   refSchemaId String?         @db.Uuid
@@ -64,6 +72,7 @@ model ObjectSchemaField {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
+  @@unique([schemaId, key])
   @@unique([schemaId, name])
   @@index([schemaId])
   @@index([refSchemaId])
@@ -75,6 +84,8 @@ model ObjectInstance {
   id       String       @id @default(uuid()) @db.Uuid
   schemaId String       @db.Uuid
   schema   ObjectSchema @relation(fields: [schemaId], references: [id], onDelete: Cascade)
+  siteId   String?      @db.Uuid
+  site     Site?        @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
   name      String
   values    Json    @default("{}")
@@ -86,6 +97,8 @@ model ObjectInstance {
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([schemaId])
+  @@index([siteId])
+  @@index([siteId, schemaId, isDeleted])
   @@index([schemaId, isDeleted])
   @@index([values], type: Gin)
 }

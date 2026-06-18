@@ -1,6 +1,6 @@
 import prisma from "@rw/db";
 
-import { assertRecordInSite, fieldBindingPath, recordModelFromMeta, schemaVisibleToWorkspace } from "./records.js";
+import { fieldBindingPath } from "./records.js";
 import { graphNodeSiteWhere } from "./scope.js";
 import { errorResult, type GraphScope } from "./types.js";
 
@@ -42,7 +42,8 @@ async function assertPropertiesInSite(propertyIds: readonly string[], scope: Gra
 async function assertKnownEntityInSite(entityType: string, entityId: string, scope: GraphScope) {
   const type = entityType.toUpperCase();
   if (type === "SITE") {
-    if (entityId !== scope.siteId) return errorResult("ENTITY_SITE_MISMATCH", "Metric entity is outside this graph site");
+    if (entityId !== scope.siteId)
+      return errorResult("ENTITY_SITE_MISMATCH", "Metric entity is outside this graph site");
     const site = await prisma.site.findFirst({ where: { id: entityId, workspaceId: scope.workspaceId } });
     return site ? null : errorResult("ENTITY_SITE_MISMATCH", "Metric entity is outside this graph site");
   }
@@ -125,8 +126,12 @@ export async function validateResolverConfig(args: {
         return errorResult("DOCUMENT_NOT_FOUND", "Document not found");
       if (document.schema.source !== "DOCUMENT")
         return errorResult("INVALID_SCHEMA_SOURCE", "jsonb entity resolver requires a DOCUMENT schema");
-      if (document.schema.workspaceId !== args.scope.workspaceId)
-        return errorResult("WORKSPACE_MISMATCH", "Document is outside this workspace");
+      if (
+        document.schema.workspaceId !== args.scope.workspaceId ||
+        document.schema.siteId !== args.scope.siteId ||
+        document.siteId !== args.scope.siteId
+      )
+        return errorResult("SITE_MISMATCH", "Document is outside this site");
       const field = await prisma.objectSchemaField.findUnique({ where: { id: resolver.schemaFieldId } });
       if (!field || field.isDeleted || field.schemaId !== document.schemaId)
         return errorResult("SCHEMA_FIELD_NOT_FOUND", "Schema field not found on this document schema");
@@ -135,37 +140,7 @@ export async function validateResolverConfig(args: {
       return { data: { resolver: { ...resolver, schemaId: document.schemaId }, dependencyIds: [] } };
     }
 
-    if (resolver.backend === "record") {
-      if (
-        typeof resolver.schemaId !== "string" ||
-        typeof resolver.recordId !== "string" ||
-        typeof resolver.schemaFieldId !== "string" ||
-        typeof resolver.path !== "string"
-      ) {
-        return errorResult(
-          "INVALID_RESOLVER",
-          "record entity resolver requires schemaId, recordId, schemaFieldId, and path",
-        );
-      }
-      const schema = await prisma.objectSchema.findUnique({ where: { id: resolver.schemaId } });
-      if (!schema || schema.isDeleted) return errorResult("SCHEMA_NOT_FOUND", "Schema not found");
-      if (schema.source !== "RECORD")
-        return errorResult("INVALID_SCHEMA_SOURCE", "record entity resolver requires a RECORD schema");
-      if (!schemaVisibleToWorkspace(schema, args.scope.workspaceId))
-        return errorResult("WORKSPACE_MISMATCH", "Schema is outside this workspace");
-      const recordModel = recordModelFromMeta(schema.meta);
-      if (!recordModel) return errorResult("INVALID_SCHEMA_META", "RECORD schema meta must include record.model");
-      const recordError = await assertRecordInSite(recordModel, resolver.recordId, args.scope);
-      if (recordError) return recordError;
-      const field = await prisma.objectSchemaField.findUnique({ where: { id: resolver.schemaFieldId } });
-      if (!field || field.isDeleted || field.schemaId !== schema.id)
-        return errorResult("SCHEMA_FIELD_NOT_FOUND", "Schema field not found on this record schema");
-      if (fieldBindingPath(field) !== resolver.path)
-        return errorResult("INVALID_RESOLVER", "entity resolver path must match the schema field binding path");
-      return { data: { resolver: { ...resolver, recordModel }, dependencyIds: [] } };
-    }
-
-    return errorResult("INVALID_RESOLVER", "entity resolver backend must be jsonb or record");
+    return errorResult("INVALID_RESOLVER", "entity resolver backend must be jsonb");
   }
 
   if (resolverType === "expr") {

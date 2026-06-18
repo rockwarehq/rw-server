@@ -6,7 +6,7 @@ import { getGraphNodeForSite, getGraphPropertyForSite, getGraphPropertySiteId, g
 import { publishGraphDefinitionEvent } from "./definition-events.js";
 import { errorResult, type GraphScope, type ListResult, type ServiceResult } from "./types.js";
 import { isRecordResolver, validateAcyclicStaticEdges, validateResolverConfig } from "./validation.js";
-import { fieldBindingPath, recordModelFromMeta } from "./records.js";
+import { fieldBindingPath } from "./records.js";
 
 export interface CreateGraphPropertyInput {
   nodeId: string;
@@ -43,24 +43,6 @@ function documentEntityResolver(args: { schemaId: string; documentId: string; sc
     backend: "jsonb",
     schemaId: args.schemaId,
     documentId: args.documentId,
-    schemaFieldId: args.schemaFieldId,
-    path: args.path,
-  };
-}
-
-function recordEntityResolver(args: {
-  schemaId: string;
-  recordId: string;
-  recordModel: string;
-  schemaFieldId: string;
-  path: string;
-}) {
-  return {
-    type: "entity",
-    backend: "record",
-    schemaId: args.schemaId,
-    recordId: args.recordId,
-    recordModel: args.recordModel,
     schemaFieldId: args.schemaFieldId,
     path: args.path,
   };
@@ -104,23 +86,12 @@ async function buildResolver(args: {
       schemaFieldId: args.field.id,
       path: fieldBindingPath(args.field),
     });
-  } else if (!resolver && args.field && args.node.schemaId && args.node.recordId) {
-    const recordModel = recordModelFromMeta(args.node.schema?.meta);
-    if (!recordModel) return errorResult("INVALID_SCHEMA_META", "RECORD schema meta must include record.model");
-    resolverType = "entity";
-    resolver = recordEntityResolver({
-      schemaId: args.node.schemaId,
-      recordId: args.node.recordId,
-      recordModel,
-      schemaFieldId: args.field.id,
-      path: fieldBindingPath(args.field),
-    });
   }
 
   if (!resolverType || !resolver || !isRecordResolver(resolver)) {
     return errorResult(
       "RESOLVER_REQUIRED",
-      "resolverType and resolver are required unless schemaFieldId can infer a document- or record-backed resolver",
+      "resolverType and resolver are required unless schemaFieldId can infer an object-backed resolver",
     );
   }
 
@@ -343,10 +314,7 @@ export async function dependents(id: string, scope: GraphScope): Promise<Service
   return { data: edges.map((edge) => edge.toProperty) };
 }
 
-export async function validate(
-  input: ValidateGraphPropertyInput,
-  scope: GraphScope,
-): Promise<ServiceResult<unknown>> {
+export async function validate(input: ValidateGraphPropertyInput, scope: GraphScope): Promise<ServiceResult<unknown>> {
   const nodeResult = await getGraphNodeForSite(input.nodeId, scope);
   if (!nodeResult) return errorResult("GRAPH_NODE_NOT_FOUND", "Graph node not found");
   if ("error" in nodeResult) return nodeResult;
@@ -401,7 +369,9 @@ export async function list(filter: ListGraphPropertiesFilter, scope: GraphScope)
   const [properties, total] = await Promise.all([
     prisma.graphProperty.findMany({
       where,
-      include: { node: { select: { id: true, name: true, siteId: true, schemaId: true, documentId: true, recordId: true } } },
+      include: {
+        node: { select: { id: true, name: true, siteId: true, schemaId: true, documentId: true, recordId: true } },
+      },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
       skip: Number(offset),
       orderBy: [{ node: { name: "asc" as const } }, { name: "asc" as const }],

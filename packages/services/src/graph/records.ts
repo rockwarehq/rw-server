@@ -8,25 +8,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function schemaVisibleToWorkspace(
-  schema: { workspaceId: string | null; isSystem?: boolean | null },
-  workspaceId: string,
-): boolean {
-  return schema.workspaceId === workspaceId || (schema.workspaceId === null && schema.isSystem === true);
-}
-
-export function recordModelFromMeta(meta: unknown): string | null {
-  if (!isRecord(meta) || !isRecord(meta.record)) return null;
-  return typeof meta.record.model === "string" ? meta.record.model : null;
-}
-
-export function fieldBindingPath(field: { name: string; config: unknown }): string {
-  if (!isRecord(field.config) || !isRecord(field.config.binding)) return field.name;
-  return typeof field.config.binding.path === "string" ? field.config.binding.path : field.name;
-}
-
-export function fieldRelationTarget(field: { refSchema?: { meta: unknown } | null }): string | null {
-  return field.refSchema ? recordModelFromMeta(field.refSchema.meta) : null;
+export function fieldBindingPath(field: { name: string; key?: string; config: unknown }): string {
+  const fallback = field.key ?? field.name;
+  if (!isRecord(field.config) || !isRecord(field.config.binding)) return fallback;
+  return typeof field.config.binding.path === "string" ? field.config.binding.path : fallback;
 }
 
 export async function assertRecordInSite(model: string, recordId: string, scope: GraphScope) {

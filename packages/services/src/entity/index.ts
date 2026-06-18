@@ -1,6 +1,11 @@
-export * as schemas from "./schema.js";
-export * as fields from "./fields.js";
+export * as models from "./model.js";
 export * as instances from "./instances.js";
 export * as catalog from "./catalog.js";
+export * as registry from "./registry.js";
 export { validateInstanceValues, validateAndNormalizeFieldConfig } from "./validation.js";
-export type { ServiceResult, ListResult } from "./types.js";
+export type * from "./catalog.types.js";
+export type * from "./instances.types.js";
+export type * from "./model.types.js";
+export type * from "./registry.types.js";
+export type { EntityScope, ServiceResult, ListResult } from "./types.js";
+export type * from "./validation.types.js";

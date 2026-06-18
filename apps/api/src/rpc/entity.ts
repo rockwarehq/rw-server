@@ -1,102 +1,46 @@
+import {
+  catalogGetInputSchema,
+  catalogListInputSchema,
+  idInputSchema,
+  instanceCreateInputSchema,
+  instanceListInputSchema,
+  instanceUpdateInputSchema,
+  listInputSchema,
+  modelCreateInputSchema,
+  modelFieldCreateInputSchema,
+  modelFieldReorderInputSchema,
+  modelFieldUpdateInputSchema,
+  modelUpdateInputSchema,
+  type AuthContext,
+} from "./entity.types.js";
+
 import { ORPCError } from "@orpc/server";
-import { z } from "zod";
 import * as entity from "@rw/services/entity/index";
+import type { EntityScope } from "@rw/services/entity/index";
 import { hasPermission, type Permission } from "@rw/services/iam/index";
 
 import { authRequired } from "./middleware.js";
 
-const fieldTypeSchema = z.enum(["TEXT", "NUMBER", "BOOLEAN", "DATE", "TIMESTAMP", "SELECT", "JSON", "OBJECT"]);
-const schemaSourceSchema = z.enum(["RECORD", "DOCUMENT"]);
-const jsonObjectSchema = z.record(z.string(), z.unknown());
-
-const idInputSchema = z.object({ id: z.uuid() });
-const listInputSchema = z.object({
-  name: z.string().optional(),
-  limit: z.number().int().min(0).default(50),
-  offset: z.number().int().min(0).default(0),
-});
-
-const schemaCreateInputSchema = z.object({
-  name: z.string().min(1),
-  description: z.string().optional(),
-});
-
-const schemaUpdateInputSchema = z.object({
-  id: z.uuid(),
-  name: z.string().min(1).optional(),
-  description: z.string().nullable().optional(),
-});
-
-const fieldCreateInputSchema = z.object({
-  schemaId: z.uuid(),
-  name: z.string().min(1),
-  description: z.string().optional(),
-  type: fieldTypeSchema,
-  refSchemaId: z.uuid().nullable().optional(),
-  isList: z.boolean().optional(),
-  required: z.boolean().optional(),
-  config: jsonObjectSchema.nullable().optional(),
-  sortOrder: z.number().int().optional(),
-});
-
-const fieldUpdateInputSchema = z.object({
-  id: z.uuid(),
-  name: z.string().min(1).optional(),
-  description: z.string().nullable().optional(),
-  type: fieldTypeSchema.optional(),
-  refSchemaId: z.uuid().nullable().optional(),
-  isList: z.boolean().optional(),
-  required: z.boolean().optional(),
-  config: jsonObjectSchema.nullable().optional(),
-  sortOrder: z.number().int().optional(),
-});
-
-const fieldReorderInputSchema = z.object({
-  schemaId: z.uuid(),
-  fieldIds: z.array(z.uuid()),
-});
-
-const instanceCreateInputSchema = z.object({
-  schemaId: z.uuid(),
-  name: z.string().min(1),
-  values: jsonObjectSchema.optional(),
-});
-
-const instanceListInputSchema = listInputSchema.extend({
-  schemaId: z.uuid().optional(),
-});
-
-const instanceUpdateInputSchema = z.object({
-  id: z.uuid(),
-  name: z.string().min(1).optional(),
-  values: jsonObjectSchema.optional(),
-});
-
-const catalogListInputSchema = listInputSchema.extend({
-  source: schemaSourceSchema.optional(),
-  key: z.string().min(1).optional(),
-  includeFields: z.boolean().default(true),
-});
-
-const catalogGetInputSchema = z
-  .object({
-    id: z.uuid().optional(),
-    key: z.string().min(1).optional(),
-    includeFields: z.boolean().default(true),
-  })
-  .refine((input) => Boolean(input.id || input.key), { message: "id or key is required" });
-
-type AuthContext = { iam: { id: string; workspaceId?: string | null; siteId?: string | null } };
-
-async function assertPermission(context: AuthContext, permission: Permission): Promise<string> {
+async function assertPermission(context: AuthContext, permission: Permission): Promise<EntityScope> {
   const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
+  if (!workspaceId)
+    throw new ORPCError("BAD_REQUEST", {
+      message: "Workspace context required",
+    });
   const ok = await hasPermission(context.iam.id, permission, {
     workspaceId,
     ...(context.iam.siteId ? { siteId: context.iam.siteId } : {}),
   });
-  if (!ok) throw new ORPCError("FORBIDDEN", { message: `Missing permission: ${permission}` });
-  return workspaceId;
+  if (!ok)
+    throw new ORPCError("FORBIDDEN", {
+      message: `Missing permission: ${permission}`,
+    });
+  const siteId = context.iam.siteId;
+  if (!siteId)
+    throw new ORPCError("BAD_REQUEST", {
+      message: "Site context required",
+    });
+  return { workspaceId, siteId };
 }
 
 function throwServiceError(result: { error: string; code: string }): never {
@@ -112,85 +56,90 @@ function unwrap<T>(result: { data: T } | { error: string; code: string } | null)
   return result.data;
 }
 
-export const schemaCreate = authRequired.input(schemaCreateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "entity:write");
-  return unwrap(await entity.schemas.create(input, workspaceId));
+export const modelCreate = authRequired.input(modelCreateInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertPermission(context, "entity:write");
+  return unwrap(await entity.models.create(input, scope));
 });
 
 export const catalogList = authRequired.input(catalogListInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "entity:read");
-  return entity.catalog.list(input, workspaceId);
+  const scope = await assertPermission(context, "entity:read");
+  return entity.catalog.list(input, scope);
 });
 
 export const catalogGet = authRequired.input(catalogGetInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "entity:read");
-  return unwrap(await entity.catalog.get(input, workspaceId));
+  const scope = await assertPermission(context, "entity:read");
+  return unwrap(await entity.catalog.get(input, scope));
 });
 
-export const schemaList = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "entity:read");
-  return entity.schemas.list(input, workspaceId);
+export const modelList = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertPermission(context, "entity:read");
+  return entity.models.list(input, scope);
 });
 
-export const schemaGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "entity:read");
-  return unwrap(await entity.schemas.getById(input.id, workspaceId));
+export const modelGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertPermission(context, "entity:read");
+  return unwrap(await entity.models.getById(input.id, scope));
 });
 
-export const schemaUpdate = authRequired.input(schemaUpdateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "entity:write");
+export const modelUpdate = authRequired.input(modelUpdateInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertPermission(context, "entity:write");
   const { id, ...updates } = input;
-  return unwrap(await entity.schemas.update(id, updates, workspaceId));
+  return unwrap(await entity.models.update(id, updates, scope));
 });
 
-export const schemaDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "entity:write");
-  return unwrap(await entity.schemas.remove(input.id, workspaceId));
+export const modelDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertPermission(context, "entity:write");
+  return unwrap(await entity.models.remove(input.id, scope));
 });
 
-export const fieldCreate = authRequired.input(fieldCreateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "entity:write");
-  return unwrap(await entity.fields.create(input, workspaceId));
+export const modelFieldCreate = authRequired.input(modelFieldCreateInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertPermission(context, "entity:write");
+  return unwrap(await entity.models.createField(input, scope));
 });
 
-export const fieldUpdate = authRequired.input(fieldUpdateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "entity:write");
+export const modelFieldUpdate = authRequired.input(modelFieldUpdateInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertPermission(context, "entity:write");
   const { id, ...updates } = input;
-  return unwrap(await entity.fields.update(id, updates, workspaceId));
+  return unwrap(await entity.models.updateField(id, updates, scope));
 });
 
-export const fieldDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "entity:write");
-  return unwrap(await entity.fields.remove(input.id, workspaceId));
+export const modelFieldDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertPermission(context, "entity:write");
+  return unwrap(await entity.models.removeField(input.id, scope));
 });
 
-export const fieldReorder = authRequired.input(fieldReorderInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "entity:write");
-  return unwrap(await entity.fields.reorder(input.schemaId, input.fieldIds, workspaceId));
-});
+export const modelFieldReorder = authRequired
+  .input(modelFieldReorderInputSchema)
+  .handler(async ({ input, context }) => {
+    const scope = await assertPermission(context, "entity:write");
+    return unwrap(await entity.models.reorderFields(input.schemaId, input.fieldIds, scope));
+  });
 
 export const instanceCreate = authRequired.input(instanceCreateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "entity:write");
-  return unwrap(await entity.instances.create(input, workspaceId));
+  const scope = await assertPermission(context, "entity:write");
+  const { name: _legacyName, ...instanceInput } = input;
+  return unwrap(await entity.instances.create(instanceInput, scope));
 });
 
 export const instanceList = authRequired.input(instanceListInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "entity:read");
-  return entity.instances.list(input, workspaceId);
+  const scope = await assertPermission(context, "entity:read");
+  const result = await entity.instances.list(input, scope);
+  if ("error" in result) throwServiceError(result);
+  return result;
 });
 
 export const instanceGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "entity:read");
-  return unwrap(await entity.instances.getById(input.id, workspaceId));
+  const scope = await assertPermission(context, "entity:read");
+  return unwrap(await entity.instances.getById(input.id, scope));
 });
 
 export const instanceUpdate = authRequired.input(instanceUpdateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "entity:write");
-  const { id, ...updates } = input;
-  return unwrap(await entity.instances.update(id, updates, workspaceId));
+  const scope = await assertPermission(context, "entity:write");
+  const { id, name: _legacyName, ...updates } = input;
+  return unwrap(await entity.instances.update(id, updates, scope));
 });
 
 export const instanceDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = await assertPermission(context, "entity:write");
-  return unwrap(await entity.instances.remove(input.id, workspaceId));
+  const scope = await assertPermission(context, "entity:write");
+  return unwrap(await entity.instances.remove(input.id, scope));
 });

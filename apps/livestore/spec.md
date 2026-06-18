@@ -124,8 +124,8 @@ The tree comes from Prisma relations, not the graph. The graph does not store pa
 Two directions of dataflow over the same tree:
 Up — rollup aggregation. A parent's KPI is an aggregate of its children. `Workcenter.oee` = weighted avg of its stations' `oee`. `Site.oee` = aggregate of its workcenters. The `rollup` resolver (§18).
 Down — dashboard repeaters. A dashboard scoped to a level renders one tile per child. Site overview repeats over workcenters; a workcenter screen repeats over stations. This is a consumption-layer concern (§9 / dashboard workstream), not an engine resolver — but it relies on the same Prisma relations.
-Data catalog. The API entity service exposes data definitions from `ObjectSchema`, not from LiveStore boot reflection. System records such as `Site`, `Workcenter`, and `Station` are projected into system `ObjectSchema` rows (`source = RECORD`), while user-authored documents use workspace `ObjectSchema` rows (`source = DOCUMENT`) backed by `ObjectInstance`.
-The editor's property picker autocompletes from this data catalog — nobody hand-types field names. The `entity` resolver dispatches to the right backend (`record` vs JSONB document lookup) based on the schema source; everything downstream (projection to nodes, expressions, dashboards) is identical regardless of origin. Relations in record schema fields drive the kind→children traversal for rollups, while document schemas remain standalone unless a future relation model is added.
+Data catalog. The API entity service exposes data definitions from an explicit entity catalog, not from LiveStore boot reflection. System records such as `Site`, `Workcenter`, and `Station` are service-defined catalog entries, while user-authored entities are workspace `ObjectSchema` rows backed by `ObjectInstance`.
+The editor's property picker autocompletes from this data catalog — nobody hand-types field names. The catalog identifies each entity's origin and backend without projecting system records into object schema tables. System entity relations drive the kind→children traversal for rollups, while user-authored object schemas remain standalone unless a future relation model is added.
 A declared metric layer (§4.7) still supplies live KPI fields and materialized graph properties that are computed outside ordinary object field storage.
 4.7 Metric mirror — worker-computed KPIs (`metric` resolver)
 The platform already computes shift KPIs outside the graph: the metrics worker folds raw point data into `MetricBucket` rows, applying shift calendars, planned/unplanned downtime classification, expected cycles from standards, and job context. That logic is not expressible as graph windows, and reimplementing it would fork the numbers — graph dashboards disagreeing with existing reports is the worst failure mode available. So the graph consumes it and never recomputes it.
@@ -458,7 +458,7 @@ PUT	`/graph/properties/:id`	Update a property (runs cycle check)
 DELETE	`/graph/properties/:id`	Soft-delete a property (warns on dependents)
 POST	`/graph/validate`	Dry-run a property config; returns parsed deps + cycle check, no persistence
 GET	`/graph/properties/:id/dependents`	What breaks if I delete this?
-GET	`entity.catalog.list/get`	Data catalog from `ObjectSchema`: record/document definitions, fields, and relations for the editor's property picker
+GET	`entity.catalog.list/get`	Entity catalog: service-defined system records plus user-authored object definitions, fields, and relations for the editor's property picker
 GET	`/graph/nodes/:id/children?kind=Station`	Resolve children of a node by kind/relation (powers rollups and dashboard repeaters)
 GET	`/graph/collections?kind=Station&scope=Workcenter:wc_a`	Resolve a collection: nodes of a kind filtered by hierarchy scope (dashboard repeater binding)
 All write routes emit an event the engine subscribes to for hot-reload. The `children` and `collections` endpoints are read-only projections over entity relations — the same traversal the rollup resolver uses internally (§18.8).
@@ -532,7 +532,7 @@ Entity subscription manager; entity-backed nodes (`recordId` for records, `docum
 One-time sync: materialize a node per existing Station/Workcenter/Site instance
 Relation-aware re-fetch: change to an instance marks dependent properties dirty
 Membership events (`asset.moved`: a Station's workcenter changed) on the domain bus
-Project system records into `ObjectSchema` and dispatch the `entity` resolver by backend (`record` vs JSONB document). The data catalog is owned by the API entity service.
+Expose system records through the API entity catalog without projecting them into `ObjectSchema`. User-authored entities remain backed by `ObjectSchema` and `ObjectInstance`; the data catalog is owned by the API entity service.
 M5 — Window resolver: tumbling + EWMA (2 weeks)
 `imm_agg_state` KV bucket integration
 Tumbling: bucket lifecycle, incremental `count/sum/min/max`, derived `avg`, `setTimeout` close scheduling, `alignToMs` offset

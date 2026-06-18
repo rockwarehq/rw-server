@@ -10,14 +10,14 @@ export const graphNodeSiteWhere = (scope: GraphScope) => ({
 
 export const graphNodeInclude = {
   site: { select: { id: true, name: true, workspaceId: true } },
-  schema: { select: { id: true, key: true, name: true, source: true, meta: true, workspaceId: true, isSystem: true, isDeleted: true } },
+  schema: { select: { id: true, key: true, label: true, name: true, source: true, meta: true, workspaceId: true, siteId: true, isSystem: true, isDeleted: true } },
   document: {
     select: {
       id: true,
       name: true,
       schemaId: true,
       isDeleted: true,
-      schema: { select: { id: true, key: true, name: true, source: true, workspaceId: true, isSystem: true, isDeleted: true } },
+      schema: { select: { id: true, key: true, label: true, name: true, source: true, workspaceId: true, siteId: true, isSystem: true, isDeleted: true } },
     },
   },
   properties: {

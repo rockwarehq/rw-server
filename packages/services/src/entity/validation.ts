@@ -1,32 +1,9 @@
-import type { ObjectFieldType } from "@rw/db";
-
-export interface FieldDefinition {
-  id: string;
-  name: string;
-  type: ObjectFieldType;
-  refSchemaId: string | null;
-  isList: boolean;
-  required: boolean;
-  config: unknown;
-  isDeleted?: boolean;
-}
-
-export interface FieldConfigInput {
-  type: ObjectFieldType;
-  refSchemaId?: string | null;
-  config?: Record<string, unknown> | null;
-}
-
-export interface NormalizedFieldConfig {
-  config: Record<string, unknown> | null;
-  refSchemaId: string | null;
-}
-
-export interface InstanceValueValidationResult {
-  values: Record<string, unknown>;
-  objectInstanceRefs: string[];
-  errors: string[];
-}
+import type {
+  FieldConfigInput,
+  FieldDefinition,
+  InstanceValueValidationResult,
+  NormalizedFieldConfig,
+} from "./validation.types.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -153,47 +130,48 @@ export function validateInstanceValues(
   values: Record<string, unknown>,
 ): InstanceValueValidationResult {
   const activeFields = fields.filter((field) => !field.isDeleted);
-  const fieldByName = new Map(activeFields.map((field) => [field.name, field]));
+  const fieldByKey = new Map(activeFields.map((field) => [field.key ?? field.name, field]));
   const errors: string[] = [];
   const normalized: Record<string, unknown> = {};
   const objectInstanceRefs: string[] = [];
 
   for (const key of Object.keys(values)) {
-    if (!fieldByName.has(key)) errors.push(`unknown field "${key}"`);
+    if (!fieldByKey.has(key)) errors.push(`unknown field "${key}"`);
   }
 
   for (const field of activeFields) {
+    const fieldKey = field.key ?? field.name;
     const hasValue =
-      Object.hasOwn(values, field.name) && values[field.name] !== undefined && values[field.name] !== null;
+      Object.hasOwn(values, fieldKey) && values[fieldKey] !== undefined && values[fieldKey] !== null;
     if (!hasValue) {
-      if (field.required) errors.push(`field "${field.name}" is required`);
+      if (field.required) errors.push(`field "${fieldKey}" is required`);
       continue;
     }
 
-    const raw = values[field.name];
+    const raw = values[fieldKey];
     if (field.isList) {
       if (!Array.isArray(raw)) {
-        errors.push(`field "${field.name}" must be an array`);
+        errors.push(`field "${fieldKey}" must be an array`);
         continue;
       }
-      if (field.required && raw.length === 0) errors.push(`field "${field.name}" requires at least one value`);
+      if (field.required && raw.length === 0) errors.push(`field "${fieldKey}" requires at least one value`);
       const next: unknown[] = [];
       for (const [index, entry] of raw.entries()) {
         const result = validateScalarValue(field, entry);
-        if (result.error) errors.push(`field "${field.name}" item ${index} ${result.error}`);
+        if (result.error) errors.push(`field "${fieldKey}" item ${index} ${result.error}`);
         else {
           next.push(result.value);
           if (result.ref) objectInstanceRefs.push(result.ref);
         }
       }
-      normalized[field.name] = next;
+      normalized[fieldKey] = next;
       continue;
     }
 
     const result = validateScalarValue(field, raw);
-    if (result.error) errors.push(`field "${field.name}" ${result.error}`);
+    if (result.error) errors.push(`field "${fieldKey}" ${result.error}`);
     else {
-      normalized[field.name] = result.value;
+      normalized[fieldKey] = result.value;
       if (result.ref) objectInstanceRefs.push(result.ref);
     }
   }

@@ -180,6 +180,9 @@ importers:
       '@rw/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@rw/services':
+        specifier: workspace:*
+        version: link:../../packages/services
       dotenv:
         specifier: ^17.2.3
         version: 17.4.2

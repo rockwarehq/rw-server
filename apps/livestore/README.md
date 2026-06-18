@@ -27,10 +27,11 @@ API graph authoring write
 - **Metric catalog** (`metricCatalog.ts`) — the declared KPI layer (additive counters
   + ratio formulas); the mirrored key set lives in `@rw/runtime/graph-subjects` so
   the worker bridge and this consumer can't drift. The entity/data catalog is owned
-  by the API entity service and backed by `ObjectSchema`.
+  by the API entity service and combines service-defined system records with
+  user-authored `ObjectSchema` definitions.
 - **Graph authoring** — nodes and properties are created through the API/UI against
-  the `ObjectSchema` data definition layer. LiveStore does not materialize graph
-  nodes or tag properties on boot.
+  the entity catalog. LiveStore does not materialize graph nodes or tag properties
+  on boot.
 - **Engine** (`kernel.ts`, `scheduler.ts`, `runtime.ts`) — in-memory DAG, dirty-set
   coalescing (50ms), topo-ordered flush; authored rollups/exprs recompute from
   their dependencies. Authored graph definition changes are applied as NATS-backed

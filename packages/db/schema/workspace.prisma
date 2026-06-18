@@ -105,6 +105,8 @@ model Site {
   materialLedgerEntries  MaterialLedgerEntry[]
   materialShiftUsage     MaterialShiftUsage[]
   graphNodes             GraphNode[]
+  objectSchemas          ObjectSchema[]
+  objectInstances        ObjectInstance[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId])
