@@ -26,6 +26,8 @@ import * as order from "./order.js";
 import * as siteAndonRules from "./site-andon-rules.js";
 import * as workspace from "./workspace.js";
 import * as automations from "./automations.js";
+import * as entity from "./entity.js";
+import * as graph from "./graph.js";
 
 export const router = {
   events: {
@@ -39,6 +41,63 @@ export const router = {
   workspace: {
     listMembers: workspace.listMembers,
     listUserRoles: workspace.listUserRoles,
+  },
+  entity: {
+    catalog: {
+      list: entity.catalogList,
+      get: entity.catalogGet,
+    },
+    model: {
+      create: entity.modelCreate,
+      list: entity.modelList,
+      get: entity.modelGet,
+      update: entity.modelUpdate,
+      delete: entity.modelDelete,
+      field: {
+        create: entity.modelFieldCreate,
+        update: entity.modelFieldUpdate,
+        delete: entity.modelFieldDelete,
+        reorder: entity.modelFieldReorder,
+      },
+    },
+    schema: {
+      create: entity.modelCreate,
+      list: entity.modelList,
+      get: entity.modelGet,
+      update: entity.modelUpdate,
+      delete: entity.modelDelete,
+    },
+    field: {
+      create: entity.modelFieldCreate,
+      update: entity.modelFieldUpdate,
+      delete: entity.modelFieldDelete,
+      reorder: entity.modelFieldReorder,
+    },
+    instance: {
+      create: entity.instanceCreate,
+      list: entity.instanceList,
+      get: entity.instanceGet,
+      update: entity.instanceUpdate,
+      delete: entity.instanceDelete,
+    },
+  },
+  graph: {
+    node: {
+      create: graph.nodeCreate,
+      list: graph.nodeList,
+      get: graph.nodeGet,
+      update: graph.nodeUpdate,
+      delete: graph.nodeDelete,
+    },
+    property: {
+      create: graph.propertyCreate,
+      list: graph.propertyList,
+      get: graph.propertyGet,
+      update: graph.propertyUpdate,
+      delete: graph.propertyDelete,
+      dependents: graph.propertyDependents,
+      validate: graph.propertyValidate,
+    },
   },
   metrics: {
     stream: metrics.stream,

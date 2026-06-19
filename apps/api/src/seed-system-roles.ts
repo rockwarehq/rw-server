@@ -15,6 +15,8 @@ const FACTORY_ADMINISTRATOR_PERMISSIONS: readonly Permission[] = [
   ...all("tool"),
   ...all("product"),
   ...all("dashboard"),
+  ...all("entity"),
+  ...all("graph"),
   ...all("employee"),
   "user:read",
   "user:write",
@@ -33,6 +35,10 @@ const OFFICE_USER_PERMISSIONS: readonly Permission[] = [
   "product:read",
   "product:write",
   "dashboard:read",
+  "entity:read",
+  "entity:write",
+  "graph:read",
+  "graph:write",
   "employee:read",
 ];
 
@@ -44,6 +50,8 @@ const READ_ONLY_USER_PERMISSIONS: readonly Permission[] = [
   "tool:read",
   "schedule:read",
   "dashboard:read",
+  "entity:read",
+  "graph:read",
   "employee:read",
 ];
 

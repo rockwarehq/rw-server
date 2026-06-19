@@ -16,6 +16,8 @@ const decoder = new TextDecoder();
 
 export class MetricResolver {
   private readonly subscriptions = new Map<string, Subscription>();
+  private readonly bySubject = new Map<string, Set<string>>();
+  private readonly propertySubjects = new Map<string, string>();
 
   constructor(
     private readonly nc: NatsConnection,
@@ -24,17 +26,8 @@ export class MetricResolver {
   ) {}
 
   start(subs: MetricSubscription[]): void {
-    const bySubject = new Map<string, Set<string>>();
     for (const sub of subs) {
-      const set = bySubject.get(sub.subject) ?? new Set<string>();
-      set.add(sub.propertyId);
-      bySubject.set(sub.subject, set);
-    }
-
-    for (const [subject, propertyIds] of bySubject) {
-      const subscription = this.nc.subscribe(subject);
-      this.subscriptions.set(subject, subscription);
-      void this.consume(subscription, subject, propertyIds);
+      this.upsertSubscription(sub);
     }
     this.logger.info(
       { subjects: this.subscriptions.size, properties: subs.length },
@@ -42,9 +35,42 @@ export class MetricResolver {
     );
   }
 
+  upsertSubscription(sub: MetricSubscription): void {
+    if (this.propertySubjects.get(sub.propertyId) === sub.subject) return;
+    this.removeProperty(sub.propertyId);
+
+    const propertyIds = this.bySubject.get(sub.subject) ?? new Set<string>();
+    propertyIds.add(sub.propertyId);
+    this.bySubject.set(sub.subject, propertyIds);
+    this.propertySubjects.set(sub.propertyId, sub.subject);
+
+    if (!this.subscriptions.has(sub.subject)) {
+      const subscription = this.nc.subscribe(sub.subject);
+      this.subscriptions.set(sub.subject, subscription);
+      void this.consume(subscription, sub.subject, propertyIds);
+    }
+  }
+
+  removeProperty(propertyId: string): void {
+    const subject = this.propertySubjects.get(propertyId);
+    if (!subject) return;
+    this.propertySubjects.delete(propertyId);
+
+    const propertyIds = this.bySubject.get(subject);
+    if (!propertyIds) return;
+    propertyIds.delete(propertyId);
+    if (propertyIds.size > 0) return;
+
+    this.bySubject.delete(subject);
+    this.subscriptions.get(subject)?.unsubscribe();
+    this.subscriptions.delete(subject);
+  }
+
   stop(): void {
     for (const subscription of this.subscriptions.values()) subscription.unsubscribe();
     this.subscriptions.clear();
+    this.bySubject.clear();
+    this.propertySubjects.clear();
   }
 
   subscriptionCount(): number {

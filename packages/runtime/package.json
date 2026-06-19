@@ -8,6 +8,7 @@
   "exports": {
     ".": "./dist/index.js",
     "./graph-subjects": "./dist/graph-subjects.js",
+    "./graph-definitions": "./dist/graph-definitions.js",
     "./events-bus": "./dist/events-bus.js",
     "./bullmq-config": "./dist/bullmq-config.js",
     "./logger": "./dist/logger.js",

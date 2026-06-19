@@ -29,6 +29,8 @@
     "@fastify/swagger": "^9.6.1",
     "@fastify/swagger-ui": "^5.2.4",
     "@fastify/type-provider-json-schema-to-ts": "^5.0.0",
+    "@nats-io/jetstream": "^3.4.0",
+    "@nats-io/transport-node": "^3.4.0",
     "@orpc/server": "^1.14.0",
     "@rw/db": "workspace:*",
     "@rw/runtime": "workspace:*",

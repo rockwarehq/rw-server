@@ -1,8 +1,8 @@
 import type { PrismaClient } from "@rw/db";
+import { systemRelationTargets } from "@rw/services/entity/registry";
 
-import { relationTarget } from "./entityCatalog.js";
 import type { GraphKernel } from "./kernel.js";
-import { isRollupResolverConfig, type GraphEdgeRuntime, type LivestoreLogger } from "./types.js";
+import { isMetricResolver, isRollupResolverConfig, type GraphEdgeRuntime, type LivestoreLogger } from "./types.js";
 
 interface ChildRow {
   id: string;
@@ -21,29 +21,33 @@ export async function buildRollupEdges(
   kernel: GraphKernel,
   logger: LivestoreLogger,
 ): Promise<GraphEdgeRuntime[]> {
-  // (entityType|entityId) -> nodeId, and nodeId -> entity binding, for instance lookups.
+  // (entityType|entityId) -> nodeId. Source identity lives on property resolvers,
+  // not GraphNode; metric leaf and rollup parent resolvers both expose it.
   const nodeByEntity = new Map<string, string>();
-  const entityByNode = new Map<string, { entityType: string; entityId: string }>();
-  for (const node of kernel.listNodes()) {
-    if (!node.entityType || !node.entityId) continue;
-    nodeByEntity.set(`${node.entityType}|${node.entityId}`, node.id);
-    entityByNode.set(node.id, { entityType: node.entityType, entityId: node.entityId });
+  for (const property of kernel.listProperties()) {
+    const resolver = property.resolver;
+    if (isMetricResolver(resolver)) {
+      nodeByEntity.set(`${resolver.entityType}|${resolver.entityId}`, property.nodeId);
+    } else if (isRollupResolverConfig(resolver) && resolver.parent) {
+      nodeByEntity.set(`${resolver.parent.model}|${resolver.parent.id}`, property.nodeId);
+    }
   }
   // (nodeId|propertyName) -> propertyId
   const propByNodeName = new Map<string, string>();
   for (const prop of kernel.listProperties()) propByNodeName.set(`${prop.nodeId}|${prop.name}`, prop.id);
 
+  const relationTargets = systemRelationTargets();
   const edges: GraphEdgeRuntime[] = [];
 
   for (const rollup of kernel.listProperties()) {
     const resolver = rollup.resolver;
     if (!isRollupResolverConfig(resolver)) continue;
 
-    const parent = entityByNode.get(rollup.nodeId);
-    if (!parent) continue; // rollup on a non-entity-bound node — nothing to traverse
+    const parent = resolver.parent;
+    if (!parent) continue; // rollup has no explicit source scope — nothing to traverse
 
     // Validate the relation against the catalog (§18.6): it must point to childKind.
-    const target = relationTarget(parent.entityType, resolver.relation);
+    const target = relationTargets.get(parent.model)?.get(resolver.relation);
     if (target !== resolver.childKind) {
       logger.warn(
         { propertyId: rollup.id, relation: resolver.relation, expected: resolver.childKind, got: target ?? null },
@@ -52,10 +56,10 @@ export async function buildRollupEdges(
       continue;
     }
 
-    const delegate = (prisma as unknown as Record<string, UniqueDelegate | undefined>)[delegateName(parent.entityType)];
+    const delegate = (prisma as unknown as Record<string, UniqueDelegate | undefined>)[delegateName(parent.model)];
     if (!delegate) continue;
     const row = await delegate.findUnique({
-      where: { id: parent.entityId },
+      where: { id: parent.id },
       select: { [resolver.relation]: { select: { id: true } } },
     });
     const children = (row?.[resolver.relation] as ChildRow[] | undefined) ?? [];
