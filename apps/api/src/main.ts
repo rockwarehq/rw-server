@@ -4,7 +4,6 @@
 //   - stale-gateway-check  (BullMQ repeating job, every 30s)
 //   - station-detect       (slow + down)
 //   - replay-reconcile     (with startup recoverReplayWindows)
-//   - dev-cycle-simulator  (DEV_CYCLE_SIMULATOR=1 only)
 //
 // Producer-side queue inits (no worker registered here):
 //   - station-detection queues   (HTTP handlers call scheduleDetection)
@@ -70,11 +69,6 @@ async function main() {
   await startStaleGatewayCheck();
   await registerReplayReconcileWorker();
   await recoverReplayWindows();
-
-  if (process.env.DEV_CYCLE_SIMULATOR) {
-    const { maybeStartCycleSimulator } = await import("./dev-cycle-simulator.js");
-    await maybeStartCycleSimulator();
-  }
 
   console.log("[api] HTTP + in-process workers started");
 }

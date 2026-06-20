@@ -20,12 +20,17 @@ export class Scheduler {
     private readonly evaluate: (propertyId: string) => Promise<void>,
     private readonly isBarrier: (propertyId: string) => boolean,
     private readonly logger: LivestoreLogger,
+    private readonly afterSettled?: () => Promise<void>,
   ) {}
 
   // A property's value changed: walk its transitive dependents into the dirty set
   markDirty(changedPropertyId: string): void {
     this.enqueueDependents(changedPropertyId);
     this.schedule();
+  }
+
+  scheduleTerminal(): void {
+    this.schedule(true);
   }
 
   markDirtyMany(propertyIds: Iterable<string>): void {
@@ -52,8 +57,8 @@ export class Scheduler {
     }
   }
 
-  private schedule(): void {
-    if (this.flushScheduled || this.flushing || this.dirty.size === 0) return;
+  private schedule(force = false): void {
+    if (this.flushScheduled || this.flushing || (!force && this.dirty.size === 0)) return;
     this.flushScheduled = true;
     this.timer = setTimeout(() => {
       this.flushScheduled = false;
@@ -78,6 +83,7 @@ export class Scheduler {
     this.logger.info({ evaluated }, "livestore flush complete");
     if (this.dirty.size === 0) {
       this.dirtyPasses = 0;
+      await this.afterSettled?.();
       return;
     }
 
@@ -86,6 +92,7 @@ export class Scheduler {
       this.logger.warn({ remaining: this.dirty.size }, "livestore flush stalled (cycle?) — dropping dirty set");
       this.dirty.clear();
       this.dirtyPasses = 0;
+      await this.afterSettled?.();
       return;
     }
     this.schedule();

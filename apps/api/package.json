@@ -16,6 +16,7 @@
     "build": "tsc -b",
     "start": "node dist/main.js",
     "dev": "tsx watch src/main.ts",
+    "dev:cycle-simulator": "tsx scripts/dev-cycle-simulator.ts",
     "db:seed": "tsx src/seed.ts",
     "db:import": "tsx scripts/seed-import/index.ts",
     "db:importdev": "tsx scripts/seed-import/importdev.ts"

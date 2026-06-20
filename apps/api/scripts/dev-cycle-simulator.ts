@@ -5,15 +5,19 @@
  * station it can find. Useful for testing metric bucket accumulation.
  *
  * Enable with:
- *   DEV_CYCLE_SIMULATOR=1 pnpm dev
- *   DEV_CYCLE_SIMULATOR=1 DEV_CYCLE_SIMULATOR_INTERVAL_MS=5000 pnpm dev
- *   pnpm dev:testcycle
+ *   pnpm --filter @rw/api dev:cycle-simulator
+ *   DEV_CYCLE_SIMULATOR_INTERVAL_MS=5000 pnpm --filter @rw/api dev:cycle-simulator
  */
 
-import prisma from "@rw/db";
-import { complete } from "@rw/services/cycle/cycle";
+import "dotenv/config";
 
-const INTERVAL_MS = parseInt(process.env.DEV_CYCLE_SIMULATOR_INTERVAL_MS || "", 10) || 10_000;
+import prisma, { createPrismaClient } from "@rw/db";
+import { complete } from "@rw/services/cycle/cycle";
+import { pathToFileURL } from "node:url";
+
+createPrismaClient("api");
+
+const INTERVAL_MS = parseInt(process.env.DEV_CYCLE_SIMULATOR_INTERVAL_MS || "", 10) || 1_000;
 
 let handle: ReturnType<typeof setInterval> | null = null;
 let count = 0;
@@ -80,8 +84,8 @@ async function tick() {
   }
 }
 
-export function maybeStartCycleSimulator() {
-  if (!process.env.DEV_CYCLE_SIMULATOR) return;
+export function startCycleSimulator() {
+  if (handle) return;
 
   console.log(`[cycle-simulator] Starting — every ${INTERVAL_MS}ms`);
 
@@ -90,10 +94,32 @@ export function maybeStartCycleSimulator() {
   }, INTERVAL_MS);
 }
 
+export function maybeStartCycleSimulator() {
+  if (!process.env.DEV_CYCLE_SIMULATOR) return;
+  startCycleSimulator();
+}
+
 export function stopCycleSimulator() {
   if (handle) {
     clearInterval(handle);
     handle = null;
     console.log(`[cycle-simulator] Stopped after ${count} cycles`);
   }
+}
+
+function isDirectRun() {
+  const entrypoint = process.argv[1];
+  return Boolean(entrypoint && import.meta.url === pathToFileURL(entrypoint).href);
+}
+
+if (isDirectRun()) {
+  startCycleSimulator();
+  process.once("SIGINT", () => {
+    stopCycleSimulator();
+    process.exit(0);
+  });
+  process.once("SIGTERM", () => {
+    stopCycleSimulator();
+    process.exit(0);
+  });
 }

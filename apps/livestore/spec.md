@@ -136,6 +136,39 @@ Workcenter and Site carry the same properties as `rollup { aggregation: 'sum' }`
 Ratios (`oee`, `availability`, `performance`, `quality`) are never mirrored and never summed; they are `expr` properties over the summed components at each level, so every level's ratio is intensive-correct.
 Metric catalog. DMMF reflection can't tell which `MetricBucket` columns belong to which kind — the table is polymorphic (an `(entityType, entityId)` discriminator, no typed relations to follow). A declared catalog (`metricCatalog.ts`) supplies that layer: each field's role (additive / ratio / display), units, applicable kinds, and ratio formulas. It feeds picker metadata and validation for UI-authored metric properties. A boot assertion reconciles it against the live `MetricBucket` schema: an unclassified column, or a declared field with no backing column, fails the boot.
 Division of labor with `window`: the OEE/shift-counter family comes from the mirror; `window` remains for ad-hoc time aggregation the worker doesn't compute (smoothed cycle time via EWMA, alarms/hour over a raw tag).
+4.8 Hooks — event-only graph triggers
+Hooks are terminal event emitters over graph values. A hook does not execute actions directly; it only decides that a named event happened and publishes that event to NATS. Alerts, station-event execution, automations, webhooks, and other side effects are downstream consumers.
+V1 hook conditions watch one graph property:
+```json
+{
+  "source": { "type": "property", "propertyId": "p1234" },
+  "operator": "increases",
+  "minDelta": 1
+}
+```
+Future hook conditions may use expressions over multiple properties. Those expressions should reuse the same `p_<propertyId>` symbol convention, dependency extraction, sandboxing, and quality rules as `expr` properties, but hooks remain terminal sinks: they do not produce CVG values and are not dashboard-subservable properties.
+Hook event types come from a registry exposed by integrations. The registry is versioned by `(eventType, eventVersion)` and declares display metadata plus required/optional context fields. The hook editor uses this catalog to render event choices and required bindings; the API uses it to reject unknown event types and hooks missing required context.
+Example event schema:
+```json
+{
+  "type": "imm.cycle.completed",
+  "version": "1",
+  "integration": "rockware-imm",
+  "contextFields": {
+    "stationId": { "type": "string", "required": true, "sourceTypes": ["property"] },
+    "jobId": { "type": "string", "required": false, "sourceTypes": ["property"] },
+    "cycleTime": { "type": "number", "required": false, "sourceTypes": ["property"] }
+  }
+}
+```
+Hook `eventPayload` is static JSON merged into the emitted event. Hook `eventContext` binds registry fields to graph values resolved at emit time:
+```json
+{
+  "stationId": { "source": { "type": "property", "propertyId": "stationIdProp" } },
+  "cycleTime": { "source": { "type": "property", "propertyId": "cycleTimeProp" } }
+}
+```
+The v1 runtime derives an in-memory `propertyId -> hookIds` trigger index from hook condition JSON. It also parses `eventContext` for validation and payload resolution. No persisted hook dependency table is needed until expression conditions create multi-property trigger dependencies or context queries become too expensive to derive from JSON.
 5. Data model (Prisma)
 ```prisma
 model GraphNode {
@@ -186,8 +219,29 @@ model GraphEdge {
   @@index([fromPropertyId])
   @@index([toPropertyId])
 }
+
+model GraphHook {
+  id            String   @id @default(cuid())
+  siteId        String
+  name          String
+  enabled       Boolean  @default(true)
+  condition     Json     // v1: property-source condition; later: expression-source condition
+  eventType     String   // e.g. 'imm.cycle.completed'
+  eventVersion  String   @default("1")
+  eventPayload  Json     @default("{}")
+  eventContext  Json     @default("{}")  // registry field -> graph binding
+  isDeleted     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([siteId, name])
+  @@index([siteId, enabled])
+  @@index([isDeleted])
+  @@index([eventType])
+}
 ```
 Soft-delete only. `GraphEdge` is rebuilt on every property save — for `expr` from the parsed expression, for `window` from `resolver.sourcePropertyId` (one edge). For `rollup`, edges are not persisted in `GraphEdge` because the child set is dynamic; the engine maintains rollup dependencies in memory and refreshes them on membership change (§18.3). `GraphEdge` remains the authority for static (expr/window) dependencies and cycle checking.
+`GraphHook` is soft-deleted and site-scoped. V1 stores trigger dependencies inside `condition` and payload dependencies inside `eventContext`; the engine parses active hooks on boot/hot-reload to build its runtime hook index. Property/node delete checks also parse active hook JSON and reject deletes for properties used by active hooks. Add a persisted hook dependency table only when expression-source hooks require multi-property dependency queries and deletion checks at scale.
 Property names are unique within a node, not globally. `Press7.cycleTime` and `Press8.cycleTime` coexist.
 Aggregation state is not in Postgres. Tumbling/EWMA state lives in the `imm_agg_state` NATS KV bucket (see §6 and §17.4). Rollup output is just a property value in `imm_cvt` like any other; rollups hold no durable accumulator state (they recompute from current child values). Postgres holds only property definitions. This keeps Prisma schemas stable and avoids hot-write traffic to Postgres on every input event.
 5.1 User-defined entity store
@@ -418,6 +472,55 @@ if (prop.resolver.type === 'expr' && prop.sampleRateMs) {
 Default unset = recompute every tick when dirty.
 8.10 Rollup evaluation (summary; full design §18)
 `rollup` properties evaluate in the same flush loop as `expr`, dispatched on `resolverType`. The difference is dependency resolution: instead of a fixed input set, a rollup reads the current children of its node (via the entity relation) and aggregates `childProperty` across them. The engine keeps an in-memory `Map<rollupPropertyId, Set<childPropertyId>>` refreshed whenever (a) a child value changes — rides the normal dirty mechanism — or (b) membership changes — a new event type on the domain bus. See §18 for the full design, including weighted aggregation and dynamic-membership handling.
+8.11 Hook evaluation
+Hooks are terminal sinks over the graph. Hook conditions are matched after a property value actually changes and has been written to CVG, but matching hooks are queued rather than published immediately. The commit path has the previous and current envelopes, so it can evaluate edge operators (`increases`, `decreases`, `crossesAbove`, `crossesBelow`) without storing extra history. The emitted event is published only after the graph dirty flush settles, so `eventContext` can safely read computed properties affected by the same trigger.
+V1 boot/hot-reload:
+```ts
+load active GraphHook rows
+for each hook:
+  parse hook.condition
+  parse hook.eventContext
+  if condition.source.type === 'property':
+    hookIndex.get(propertyId).add(hook.id)
+```
+On property commit:
+```ts
+if envelope changed:
+  write CVG
+  for hook of hookIndex[propertyId]:
+    if condition matches previous/current:
+      queue pending hook event with previous/current trigger envelopes
+  schedule terminal graph flush if no computed dependents are already scheduled
+```
+After graph flush settles:
+```ts
+for pending hook event:
+  resolve eventContext from current graph values
+  merge eventPayload + resolved context values into payload
+  publish NATS JetStream event
+```
+Quality defaults are conservative. Current quality must be `good` for every hook. Edge operators that compare previous/current values also require previous quality `good`, preventing boot-time stale-to-good transitions from accidentally firing cycle-style events.
+Required context fields must resolve to non-null `good` values of the registry-declared type. If a required context field is missing, bad/stale/uncertain, null, or the wrong type, the hook event is skipped and logged. Optional context fields with missing or non-good values are omitted from the payload.
+Hook events publish to the `RW_LIVESTORE_EVENTS` stream on subjects derived as `livestore.events.<siteId>.<eventType>`. LiveStore does not create alerts, enqueue jobs, or execute station actions directly.
+Emitted event shape:
+```json
+{
+  "id": "event-uuid",
+  "type": "imm.cycle.completed",
+  "version": "1",
+  "siteId": "site-id",
+  "hookId": "hook-id",
+  "hookName": "Cycle complete",
+  "propertyId": "cycleCounterProp",
+  "emittedAt": "2026-06-19T00:00:00.000Z",
+  "previous": { "value": 10, "quality": "good", "timestamp": 123 },
+  "current": { "value": 11, "quality": "good", "timestamp": 456 },
+  "payload": { "source": "livestore", "stationId": "station-123", "cycleTime": 28.4 },
+  "context": {
+    "stationId": { "propertyId": "stationIdProp", "quality": "good", "timestamp": 456 }
+  }
+}
+```
 9. WebSocket gateway
 Fastify route `/ws/graph` using `@fastify/websocket`.
 9.1 Protocol
@@ -458,6 +561,12 @@ PUT	`/graph/properties/:id`	Update a property (runs cycle check)
 DELETE	`/graph/properties/:id`	Soft-delete a property (warns on dependents)
 POST	`/graph/validate`	Dry-run a property config; returns parsed deps + cycle check, no persistence
 GET	`/graph/properties/:id/dependents`	What breaks if I delete this?
+GET	`/graph/hooks`	List graph hooks for a site
+GET	`/graph/hooks/:id`	Get one graph hook
+POST	`/graph/hooks`	Create a hook (validates condition property and event catalog)
+PUT	`/graph/hooks/:id`	Update a hook
+DELETE	`/graph/hooks/:id`	Soft-delete a hook
+GET	`/graph/hooks/event-catalog`	List event types integrations expose for hooks
 GET	`entity.catalog.list/get`	Entity catalog: service-defined system records plus user-authored object definitions, fields, and relations for the editor's property picker
 GET	`/graph/nodes/:id/children?kind=Station`	Resolve children of a node by kind/relation (powers rollups and dashboard repeaters)
 GET	`/graph/collections?kind=Station&scope=Workcenter:wc_a`	Resolve a collection: nodes of a kind filtered by hierarchy scope (dashboard repeater binding)

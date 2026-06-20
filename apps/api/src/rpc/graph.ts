@@ -71,6 +71,37 @@ const propertyValidateInputSchema = propertyCreateInputSchema.extend({
   id: z.uuid().optional(),
 });
 
+const hookCreateInputSchema = z.object({
+  siteId: z.uuid(),
+  name: z.string().min(1),
+  enabled: z.boolean().optional(),
+  condition: jsonObjectSchema,
+  eventType: z.string().min(1),
+  eventVersion: z.string().min(1).optional(),
+  eventPayload: jsonObjectSchema.optional(),
+  eventContext: jsonObjectSchema.optional(),
+});
+
+const hookUpdateInputSchema = z.object({
+  id: z.uuid(),
+  name: z.string().min(1).optional(),
+  enabled: z.boolean().optional(),
+  condition: jsonObjectSchema.optional(),
+  eventType: z.string().min(1).optional(),
+  eventVersion: z.string().min(1).optional(),
+  eventPayload: jsonObjectSchema.optional(),
+  eventContext: jsonObjectSchema.optional(),
+});
+
+const hookListInputSchema = z.object({
+  siteId: z.uuid(),
+  name: z.string().optional(),
+  enabled: z.boolean().optional(),
+  eventType: z.string().min(1).optional(),
+  limit: z.number().int().min(0).default(50),
+  offset: z.number().int().min(0).default(0),
+});
+
 type AuthContext = {
   iam: { id: string; workspaceId?: string | null; siteId?: string | null };
 };
@@ -144,6 +175,16 @@ async function assertPropertyPermission(
   const siteId = unwrap(
     await graph.properties.getSiteId(propertyId, workspaceId),
   );
+  return assertSitePermission(context, permission, siteId);
+}
+
+async function assertHookPermission(
+  context: AuthContext,
+  permission: Permission,
+  hookId: string,
+): Promise<GraphScope> {
+  const workspaceId = requireWorkspaceId(context);
+  const siteId = unwrap(await graph.hooks.getSiteId(hookId, workspaceId));
   return assertSitePermission(context, permission, siteId);
 }
 
@@ -276,3 +317,43 @@ export const propertyValidate = authRequired
     );
     return unwrap(await graph.properties.validate(input, scope));
   });
+
+export const hookCreate = authRequired
+  .input(hookCreateInputSchema)
+  .handler(async ({ input, context }) => {
+    const { siteId, ...hookInput } = input;
+    const scope = await assertSitePermission(context, "graph:write", siteId);
+    return unwrap(await graph.hooks.create(hookInput, scope));
+  });
+
+export const hookList = authRequired
+  .input(hookListInputSchema)
+  .handler(async ({ input, context }) => {
+    const { siteId, ...filter } = input;
+    const scope = await assertSitePermission(context, "graph:read", siteId);
+    return graph.hooks.list(filter, scope);
+  });
+
+export const hookGet = authRequired
+  .input(idInputSchema)
+  .handler(async ({ input, context }) => {
+    const scope = await assertHookPermission(context, "graph:read", input.id);
+    return unwrap(await graph.hooks.getById(input.id, scope));
+  });
+
+export const hookUpdate = authRequired
+  .input(hookUpdateInputSchema)
+  .handler(async ({ input, context }) => {
+    const { id, ...updates } = input;
+    const scope = await assertHookPermission(context, "graph:write", id);
+    return unwrap(await graph.hooks.update(id, updates, scope));
+  });
+
+export const hookDelete = authRequired
+  .input(idInputSchema)
+  .handler(async ({ input, context }) => {
+    const scope = await assertHookPermission(context, "graph:write", input.id);
+    return unwrap(await graph.hooks.remove(input.id, scope));
+  });
+
+export const hookEventCatalog = authRequired.handler(async () => graph.hooks.eventCatalog());
