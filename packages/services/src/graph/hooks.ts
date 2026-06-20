@@ -3,6 +3,8 @@ import type { Prisma } from "@rw/db";
 import {
   LIVESTORE_HOOK_EVENT_CATALOG,
   getLivestoreHookEventSchema,
+  normalizeLivestoreEventToken,
+  normalizeLivestoreEventVersion,
   type LivestoreHookEventSchema,
 } from "@rw/runtime/livestore-events";
 import {
@@ -23,7 +25,8 @@ export interface CreateGraphHookInput {
   name: string;
   enabled?: boolean;
   condition: Record<string, unknown>;
-  eventType: string;
+  eventNamespace: string;
+  eventName: string;
   eventVersion?: string;
   eventPayload?: Record<string, unknown>;
   eventContext?: Record<string, unknown>;
@@ -33,7 +36,8 @@ export interface UpdateGraphHookInput {
   name?: string;
   enabled?: boolean;
   condition?: Record<string, unknown>;
-  eventType?: string;
+  eventNamespace?: string;
+  eventName?: string;
   eventVersion?: string;
   eventPayload?: Record<string, unknown>;
   eventContext?: Record<string, unknown>;
@@ -42,7 +46,8 @@ export interface UpdateGraphHookInput {
 export interface ListGraphHooksFilter {
   name?: string;
   enabled?: boolean;
-  eventType?: string;
+  eventNamespace?: string;
+  eventName?: string;
   limit?: number;
   offset?: number;
 }
@@ -99,16 +104,25 @@ async function assertPropertyIdsInSite(propertyIds: readonly string[], scope: Gr
   return { data: true as const };
 }
 
-function validateEvent(type: string, version: string) {
-  const eventType = type.trim();
-  const eventVersion = version.trim();
-  if (!eventType) return errorResult("INVALID_HOOK_EVENT", "Graph hook eventType is required");
-  if (!eventVersion) return errorResult("INVALID_HOOK_EVENT", "Graph hook eventVersion is required");
-  const schema = getLivestoreHookEventSchema(eventType, eventVersion);
-  if (!schema) {
-    return errorResult("UNKNOWN_HOOK_EVENT", `Unknown LiveStore hook event: ${eventType}@${eventVersion}`);
+function validateEvent(namespace: string, name: string, version: string) {
+  let eventNamespace: string;
+  let eventName: string;
+  let eventVersion: string;
+  try {
+    eventNamespace = normalizeLivestoreEventToken(namespace);
+    eventName = normalizeLivestoreEventToken(name);
+    eventVersion = normalizeLivestoreEventVersion(version);
+  } catch (err) {
+    return errorResult("INVALID_HOOK_EVENT", err instanceof Error ? err.message : "Graph hook event is invalid");
   }
-  return { data: { eventType, eventVersion, schema } };
+  const schema = getLivestoreHookEventSchema(eventNamespace, eventName, eventVersion);
+  if (!schema) {
+    return errorResult(
+      "UNKNOWN_HOOK_EVENT",
+      `Unknown LiveStore hook event: ${eventNamespace}.${eventName}@${eventVersion}`,
+    );
+  }
+  return { data: { eventNamespace, eventName, eventVersion, schema } };
 }
 
 function validatePayload(payload: unknown) {
@@ -125,7 +139,10 @@ async function validateEventContext(input: unknown, eventSchema: LivestoreHookEv
   for (const field of Object.keys(context)) {
     const schema = fields[field];
     if (!schema)
-      return errorResult("UNKNOWN_HOOK_CONTEXT_FIELD", `Unknown context field for ${eventSchema.type}: ${field}`);
+      return errorResult(
+        "UNKNOWN_HOOK_CONTEXT_FIELD",
+        `Unknown context field for ${eventSchema.namespace}.${eventSchema.name}: ${field}`,
+      );
     if (!schema.sourceTypes.includes(context[field].source.type)) {
       return errorResult(
         "INVALID_HOOK_CONTEXT_SOURCE",
@@ -164,7 +181,7 @@ export async function create(input: CreateGraphHookInput, scope: GraphScope): Pr
   const conditionResult = await assertHookCondition(input.condition, scope);
   if ("error" in conditionResult) return conditionResult;
 
-  const eventResult = validateEvent(input.eventType, input.eventVersion ?? "1");
+  const eventResult = validateEvent(input.eventNamespace, input.eventName, input.eventVersion ?? "1");
   if ("error" in eventResult) return eventResult;
 
   const payloadResult = validatePayload(input.eventPayload);
@@ -184,7 +201,8 @@ export async function create(input: CreateGraphHookInput, scope: GraphScope): Pr
           siteId: scope.siteId,
           enabled: input.enabled ?? true,
           condition: conditionResult.data as unknown as Prisma.InputJsonValue,
-          eventType: eventResult.data.eventType,
+          eventNamespace: eventResult.data.eventNamespace,
+          eventName: eventResult.data.eventName,
           eventVersion: eventResult.data.eventVersion,
           eventPayload: payloadResult.data as Prisma.InputJsonValue,
           eventContext: contextResult.data as unknown as Prisma.InputJsonValue,
@@ -197,7 +215,8 @@ export async function create(input: CreateGraphHookInput, scope: GraphScope): Pr
           name,
           enabled: input.enabled ?? true,
           condition: conditionResult.data as unknown as Prisma.InputJsonValue,
-          eventType: eventResult.data.eventType,
+          eventNamespace: eventResult.data.eventNamespace,
+          eventName: eventResult.data.eventName,
           eventVersion: eventResult.data.eventVersion,
           eventPayload: payloadResult.data as Prisma.InputJsonValue,
           eventContext: contextResult.data as unknown as Prisma.InputJsonValue,
@@ -242,18 +261,27 @@ export async function update(
     data.condition = conditionResult.data as unknown as Prisma.InputJsonValue;
   }
 
-  const eventType = input.eventType ?? current.eventType;
+  const eventNamespace = input.eventNamespace ?? current.eventNamespace;
+  const eventName = input.eventName ?? current.eventName;
   const eventVersion = input.eventVersion ?? current.eventVersion;
-  let eventSchema: LivestoreHookEventSchema | null = getLivestoreHookEventSchema(eventType, eventVersion);
-  if (input.eventType !== undefined || input.eventVersion !== undefined) {
-    const eventResult = validateEvent(eventType, eventVersion);
+  let eventSchema: LivestoreHookEventSchema | null = getLivestoreHookEventSchema(
+    eventNamespace,
+    eventName,
+    eventVersion,
+  );
+  if (input.eventNamespace !== undefined || input.eventName !== undefined || input.eventVersion !== undefined) {
+    const eventResult = validateEvent(eventNamespace, eventName, eventVersion);
     if ("error" in eventResult) return eventResult;
-    data.eventType = eventResult.data.eventType;
+    data.eventNamespace = eventResult.data.eventNamespace;
+    data.eventName = eventResult.data.eventName;
     data.eventVersion = eventResult.data.eventVersion;
     eventSchema = eventResult.data.schema;
   }
   if (!eventSchema)
-    return errorResult("UNKNOWN_HOOK_EVENT", `Unknown LiveStore hook event: ${eventType}@${eventVersion}`);
+    return errorResult(
+      "UNKNOWN_HOOK_EVENT",
+      `Unknown LiveStore hook event: ${eventNamespace}.${eventName}@${eventVersion}`,
+    );
 
   if (input.eventPayload !== undefined) {
     const payloadResult = validatePayload(input.eventPayload);
@@ -261,7 +289,12 @@ export async function update(
     data.eventPayload = payloadResult.data as Prisma.InputJsonValue;
   }
 
-  if (input.eventContext !== undefined || input.eventType !== undefined || input.eventVersion !== undefined) {
+  if (
+    input.eventContext !== undefined ||
+    input.eventNamespace !== undefined ||
+    input.eventName !== undefined ||
+    input.eventVersion !== undefined
+  ) {
     const contextResult = await validateEventContext(input.eventContext ?? current.eventContext, eventSchema, scope);
     if ("error" in contextResult) return contextResult;
     data.eventContext = contextResult.data as unknown as Prisma.InputJsonValue;
@@ -310,14 +343,20 @@ export async function getSiteId(id: string, workspaceId: string): Promise<Servic
 }
 
 export async function list(filter: ListGraphHooksFilter, scope: GraphScope): Promise<ListResult<unknown>> {
-  const { name, enabled, eventType, limit = 50, offset = 0 } = filter;
+  const { name, enabled, eventNamespace, eventName, limit = 50, offset = 0 } = filter;
+  const normalizedNamespace = normalizeFilterToken(eventNamespace);
+  const normalizedName = normalizeFilterToken(eventName);
+  if (normalizedNamespace === false || normalizedName === false) {
+    return { data: [], total: 0, limit: Number(limit), offset: Number(offset) };
+  }
   const where = {
     isDeleted: false,
     siteId: scope.siteId,
     site: { workspaceId: scope.workspaceId },
     ...(name ? { name: { contains: name, mode: "insensitive" as const } } : {}),
     ...(enabled !== undefined ? { enabled } : {}),
-    ...(eventType ? { eventType } : {}),
+    ...(normalizedNamespace ? { eventNamespace: normalizedNamespace } : {}),
+    ...(normalizedName ? { eventName: normalizedName } : {}),
   };
   const [hooks, total] = await Promise.all([
     prisma.graphHook.findMany({
@@ -334,6 +373,15 @@ export async function list(filter: ListGraphHooksFilter, scope: GraphScope): Pro
 
 export function eventCatalog() {
   return { data: LIVESTORE_HOOK_EVENT_CATALOG };
+}
+
+function normalizeFilterToken(value: string | undefined): string | false | undefined {
+  if (!value) return undefined;
+  try {
+    return normalizeLivestoreEventToken(value);
+  } catch {
+    return false;
+  }
 }
 
 export async function activeHookIdsForProperties(propertyIds: readonly string[], scope: GraphScope): Promise<string[]> {

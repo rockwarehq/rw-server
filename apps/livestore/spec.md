@@ -147,11 +147,12 @@ V1 hook conditions watch one graph property:
 }
 ```
 Future hook conditions may use expressions over multiple properties. Those expressions should reuse the same `p_<propertyId>` symbol convention, dependency extraction, sandboxing, and quality rules as `expr` properties, but hooks remain terminal sinks: they do not produce CVG values and are not dashboard-subservable properties.
-Hook event types come from a registry exposed by integrations. The registry is versioned by `(eventType, eventVersion)` and declares display metadata plus required/optional context fields. The hook editor uses this catalog to render event choices and required bindings; the API uses it to reject unknown event types and hooks missing required context.
+Hook events come from a registry exposed by integrations. The registry identity is `(eventNamespace, eventName, eventVersion)` and declares display metadata plus required/optional context fields. Namespace and name are separate NATS-safe subject tokens: lowercase `a-z0-9_-`, with UI-generated defaults using `_`; `-` is accepted. Wildcards, empty tokens, control characters, and NATS system tokens are rejected. The hook editor uses this catalog to render event choices and required bindings; the API uses it to reject unknown events and hooks missing required context.
 Example event schema:
 ```json
 {
-  "type": "imm.cycle.completed",
+  "namespace": "imm",
+  "name": "cycle_completed",
   "version": "1",
   "integration": "rockware-imm",
   "contextFields": {
@@ -226,7 +227,8 @@ model GraphHook {
   name          String
   enabled       Boolean  @default(true)
   condition     Json     // v1: property-source condition; later: expression-source condition
-  eventType     String   // e.g. 'imm.cycle.completed'
+  eventNamespace String  // e.g. 'imm'
+  eventName      String  // e.g. 'cycle_completed'
   eventVersion  String   @default("1")
   eventPayload  Json     @default("{}")
   eventContext  Json     @default("{}")  // registry field -> graph binding
@@ -237,7 +239,7 @@ model GraphHook {
   @@unique([siteId, name])
   @@index([siteId, enabled])
   @@index([isDeleted])
-  @@index([eventType])
+  @@index([eventNamespace, eventName])
 }
 ```
 Soft-delete only. `GraphEdge` is rebuilt on every property save — for `expr` from the parsed expression, for `window` from `resolver.sourcePropertyId` (one edge). For `rollup`, edges are not persisted in `GraphEdge` because the child set is dynamic; the engine maintains rollup dependencies in memory and refreshes them on membership change (§18.3). `GraphEdge` remains the authority for static (expr/window) dependencies and cycle checking.
@@ -501,12 +503,14 @@ for pending hook event:
 ```
 Quality defaults are conservative. Current quality must be `good` for every hook. Edge operators that compare previous/current values also require previous quality `good`, preventing boot-time stale-to-good transitions from accidentally firing cycle-style events.
 Required context fields must resolve to non-null `good` values of the registry-declared type. If a required context field is missing, bad/stale/uncertain, null, or the wrong type, the hook event is skipped and logged. Optional context fields with missing or non-good values are omitted from the payload.
-Hook events publish to the `RW_LIVESTORE_EVENTS` stream on subjects derived as `livestore.events.<siteId>.<eventType>`. LiveStore does not create alerts, enqueue jobs, or execute station actions directly.
+Hook events publish to the `RW_LIVESTORE_EVENTS` stream on subjects derived as `livestore.events.<siteId>.<eventNamespace>.<eventName>.v<eventVersion>`, for example `livestore.events.site_123.imm.cycle_completed.v1`. LiveStore does not create alerts, enqueue jobs, or execute station actions directly.
 Emitted event shape:
 ```json
 {
   "id": "event-uuid",
-  "type": "imm.cycle.completed",
+  "namespace": "imm",
+  "name": "cycle_completed",
+  "type": "imm.cycle_completed",
   "version": "1",
   "siteId": "site-id",
   "hookId": "hook-id",

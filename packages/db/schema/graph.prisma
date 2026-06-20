@@ -69,7 +69,10 @@ model GraphHook {
   name          String
   enabled       Boolean @default(true)
   condition     Json
-  eventType     String
+  /// Deprecated: use eventNamespace + eventName for NATS-safe routing.
+  legacyEventType String @default("livestore_hook_triggered") @map("eventType")
+  eventNamespace String  @default("livestore")
+  eventName      String  @default("hook_triggered")
   eventVersion  String  @default("1")
   eventPayload  Json    @default("{}")
   eventContext  Json    @default("{}")
@@ -83,5 +86,5 @@ model GraphHook {
   @@unique([siteId, name])
   @@index([siteId, enabled])
   @@index([isDeleted])
-  @@index([eventType])
+  @@index([eventNamespace, eventName])
 }

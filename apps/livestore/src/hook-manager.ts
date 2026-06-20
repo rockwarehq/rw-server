@@ -12,6 +12,7 @@ import {
   LIVESTORE_EVENT_SUBJECT_FILTER,
   deriveLivestoreEventSubject,
   getLivestoreHookEventSchema,
+  livestoreEventType,
   type LivestoreHookContextFieldType,
   type LivestoreHookEventContextMetadata,
   type LivestoreHookEvent,
@@ -36,7 +37,8 @@ interface GraphHookRuntime {
   siteId: string;
   name: string;
   condition: GraphHookCondition;
-  eventType: string;
+  eventNamespace: string;
+  eventName: string;
   eventVersion: string;
   eventPayload: Record<string, unknown>;
   eventContext: GraphHookEventContext;
@@ -48,7 +50,8 @@ interface HookRow {
   name: string;
   enabled: boolean;
   condition: unknown;
-  eventType: string;
+  eventNamespace: string;
+  eventName: string;
   eventVersion: string;
   eventPayload: unknown;
   eventContext: unknown;
@@ -170,7 +173,8 @@ export class HookManager {
       siteId: row.siteId,
       name: row.name,
       condition,
-      eventType: row.eventType,
+      eventNamespace: row.eventNamespace,
+      eventName: row.eventName,
       eventVersion: row.eventVersion,
       eventPayload: isRecord(row.eventPayload) ? row.eventPayload : {},
       eventContext,
@@ -194,7 +198,9 @@ export class HookManager {
 
     const event: LivestoreHookEvent = {
       id: randomUUID(),
-      type: hook.eventType,
+      namespace: hook.eventNamespace,
+      name: hook.eventName,
+      type: livestoreEventType(hook.eventNamespace, hook.eventName),
       version: hook.eventVersion,
       siteId: hook.siteId,
       hookId: hook.id,
@@ -206,10 +212,10 @@ export class HookManager {
       payload: { ...hook.eventPayload, ...resolvedContext.payload },
       context: resolvedContext.context,
     };
-    const subject = deriveLivestoreEventSubject(hook.siteId, hook.eventType);
+    const subject = deriveLivestoreEventSubject(hook.siteId, hook.eventNamespace, hook.eventName, hook.eventVersion);
     await this.js.publish(subject, encoder.encode(JSON.stringify(event)), { msgID: event.id });
     this.logger.info(
-      { hookId: hook.id, propertyId: event.propertyId, eventType: hook.eventType },
+      { hookId: hook.id, propertyId: event.propertyId, eventNamespace: hook.eventNamespace, eventName: hook.eventName },
       "livestore hook event published",
     );
   }
@@ -218,10 +224,15 @@ export class HookManager {
     hook: GraphHookRuntime,
     getCurrent: (propertyId: string) => ValueEnvelope | null,
   ): { payload: Record<string, unknown>; context: Record<string, LivestoreHookEventContextMetadata> } | null {
-    const schema = getLivestoreHookEventSchema(hook.eventType, hook.eventVersion);
+    const schema = getLivestoreHookEventSchema(hook.eventNamespace, hook.eventName, hook.eventVersion);
     if (!schema) {
       this.logger.warn(
-        { hookId: hook.id, eventType: hook.eventType, eventVersion: hook.eventVersion },
+        {
+          hookId: hook.id,
+          eventNamespace: hook.eventNamespace,
+          eventName: hook.eventName,
+          eventVersion: hook.eventVersion,
+        },
         "livestore hook event skipped because event schema is unknown",
       );
       return null;

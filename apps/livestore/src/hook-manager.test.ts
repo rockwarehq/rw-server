@@ -31,7 +31,8 @@ function makeHarness(overrides: { stationEnvelope?: ValueEnvelope | null } = {})
             source: { type: "property", propertyId: "cycle-prop" },
             operator: "increases",
           },
-          eventType: "imm.cycle.completed",
+          eventNamespace: "imm",
+          eventName: "cycle_completed",
           eventVersion: "1",
           eventPayload: { source: "test" },
           eventContext: {
@@ -77,8 +78,15 @@ describe("HookManager", () => {
     expect(publish).toHaveBeenCalledOnce();
     const call = publish.mock.calls[0];
     if (!call) throw new Error("expected publish call");
-    const [, payload] = call;
+    const [subject, payload] = call;
+    expect(subject).toBe("livestore.events.site-1.imm.cycle_completed.v1");
     const event = JSON.parse(decoder.decode(payload));
+    expect(event).toMatchObject({
+      namespace: "imm",
+      name: "cycle_completed",
+      type: "imm.cycle_completed",
+      version: "1",
+    });
     expect(event.payload).toMatchObject({ source: "test", stationId: "station-1" });
     expect(event.context.stationId).toMatchObject({ propertyId: "station-prop", quality: "good", timestamp: 1000 });
   });
