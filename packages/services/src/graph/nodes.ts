@@ -11,6 +11,7 @@ import {
   getGraphSiteForWorkspace,
 } from "./scope.js";
 import { assertRecordInSite, fieldBindingPath } from "./records.js";
+import { activeHookIdsForProperties } from "./hooks.js";
 
 export interface CreateGraphNodeInput {
   name: string;
@@ -372,6 +373,11 @@ export async function remove(id: string, scope: GraphScope): Promise<ServiceResu
         "GRAPH_NODE_HAS_EXTERNAL_DEPENDENTS",
         "Cannot delete a node with properties used by other nodes",
       );
+    }
+
+    const hookIds = await activeHookIdsForProperties(propertyIds, scope);
+    if (hookIds.length > 0) {
+      return errorResult("GRAPH_NODE_HAS_HOOKS", "Cannot delete a node with properties used by active graph hooks");
     }
   }
 

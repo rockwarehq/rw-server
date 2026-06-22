@@ -60,13 +60,6 @@ export const router = {
         reorder: entity.modelFieldReorder,
       },
     },
-    schema: {
-      create: entity.modelCreate,
-      list: entity.modelList,
-      get: entity.modelGet,
-      update: entity.modelUpdate,
-      delete: entity.modelDelete,
-    },
     field: {
       create: entity.modelFieldCreate,
       update: entity.modelFieldUpdate,
@@ -97,6 +90,14 @@ export const router = {
       delete: graph.propertyDelete,
       dependents: graph.propertyDependents,
       validate: graph.propertyValidate,
+    },
+    hook: {
+      create: graph.hookCreate,
+      list: graph.hookList,
+      get: graph.hookGet,
+      update: graph.hookUpdate,
+      delete: graph.hookDelete,
+      eventCatalog: graph.hookEventCatalog,
     },
   },
   metrics: {

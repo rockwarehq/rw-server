@@ -3,7 +3,7 @@ export const GRAPH_DEFINITION_SUBJECT_PREFIX = "graph.definitions";
 export const GRAPH_DEFINITION_SUBJECT_FILTER = `${GRAPH_DEFINITION_SUBJECT_PREFIX}.>`;
 export const GRAPH_DEFINITION_DURABLE = "rw-livestore-graph-definitions";
 
-export type GraphDefinitionEntity = "node" | "property";
+export type GraphDefinitionEntity = "node" | "property" | "hook";
 export type GraphDefinitionAction = "created" | "updated" | "deleted";
 
 export interface GraphDefinitionEvent {
@@ -36,7 +36,7 @@ export function isGraphDefinitionEvent(value: unknown): value is GraphDefinition
   const event = value as Partial<GraphDefinitionEvent>;
   return (
     typeof event.id === "string" &&
-    (event.entity === "node" || event.entity === "property") &&
+    (event.entity === "node" || event.entity === "property" || event.entity === "hook") &&
     (event.action === "created" || event.action === "updated" || event.action === "deleted") &&
     typeof event.entityId === "string" &&
     typeof event.siteId === "string" &&

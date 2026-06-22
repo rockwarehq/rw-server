@@ -62,3 +62,29 @@ model GraphEdge {
   @@index([fromPropertyId])
   @@index([toPropertyId])
 }
+
+model GraphHook {
+  id            String  @id @default(uuid()) @db.Uuid
+  siteId        String  @db.Uuid
+  name          String
+  enabled       Boolean @default(true)
+  condition     Json
+  /// Deprecated: use eventNamespace + eventName for NATS-safe routing.
+  legacyEventType String @default("livestore_hook_triggered") @map("eventType")
+  eventNamespace String  @default("livestore")
+  eventName      String  @default("hook_triggered")
+  eventVersion  String  @default("1")
+  eventPayload  Json    @default("{}")
+  eventContext  Json    @default("{}")
+  isDeleted     Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, name])
+  @@index([siteId, enabled])
+  @@index([isDeleted])
+  @@index([eventNamespace, eventName])
+}

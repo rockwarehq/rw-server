@@ -4,7 +4,7 @@ Monorepo consolidating `rw-server` and `rw-processor` into one workspace with
 two deployables per tenant:
 
 - **`apps/api`** — Fastify/oRPC HTTP server plus in-process BullMQ workers
-  (stale-gateway-check, replay-reconcile, station-detect, dev-cycle-simulator).
+  (stale-gateway-check, replay-reconcile, station-detect).
   Today it boots ALL background workers in-process (matching the old
   `SINGLE_PROCESS=1` mode); workers move out to `apps/workers` one at a time
   during cutover.
@@ -145,9 +145,8 @@ secret needed: `FLY_API_TOKEN`.
 
 ### Deploying API
 
-`apps/api` is the Fastify/oRPC HTTP server plus four in-process BullMQ
-workers (stale-gateway-check, replay-reconcile, station-detect,
-dev-cycle-simulator).
+`apps/api` is the Fastify/oRPC HTTP server plus three in-process BullMQ
+workers (stale-gateway-check, replay-reconcile, station-detect).
 
 - **Port**: bound to `[::]:3000` (IPv6 dual-stack; required for cross-app
   traffic on fly's 6PN network — see [Fly IPv6 binding](#fly-cross-app-traffic-is-ipv6))

@@ -7,6 +7,7 @@ import { publishGraphDefinitionEvent } from "./definition-events.js";
 import { errorResult, type GraphScope, type ListResult, type ServiceResult } from "./types.js";
 import { isRecordResolver, validateAcyclicStaticEdges, validateResolverConfig } from "./validation.js";
 import { fieldBindingPath } from "./records.js";
+import { activeHookIdsForProperties } from "./hooks.js";
 
 export interface CreateGraphPropertyInput {
   nodeId: string;
@@ -283,6 +284,10 @@ export async function remove(id: string, scope: GraphScope): Promise<ServiceResu
   });
   if (dependentCount > 0)
     return errorResult("GRAPH_PROPERTY_HAS_DEPENDENTS", "Cannot delete a property with active dependents");
+
+  const hookIds = await activeHookIdsForProperties([id], scope);
+  if (hookIds.length > 0)
+    return errorResult("GRAPH_PROPERTY_HAS_HOOKS", "Cannot delete a property used by active graph hooks");
 
   await prisma.$transaction([
     prisma.graphEdge.deleteMany({ where: { OR: [{ fromPropertyId: id }, { toPropertyId: id }] } }),

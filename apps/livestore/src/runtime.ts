@@ -8,6 +8,7 @@ import { AggStateStore } from "./agg-store.js";
 import { CvgStore } from "./cvg-store.js";
 import { GraphDefinitionConsumer } from "./definition-consumer.js";
 import { evaluateExpr } from "./expr.js";
+import { HookManager } from "./hook-manager.js";
 import { GraphKernel } from "./kernel.js";
 import { MetricResolver, type MetricSubscription } from "./metric-resolver.js";
 import { evaluateRollup } from "./rollup.js";
@@ -47,6 +48,7 @@ export class GraphRuntime {
   private readonly tagResolver: TagResolver;
   private readonly metricResolver: MetricResolver;
   private readonly windowResolver: WindowResolver;
+  private readonly hookManager: HookManager;
   private readonly definitionConsumer: GraphDefinitionConsumer;
   private readonly scheduler: Scheduler;
   private readonly sampleGate: SampleGate;
@@ -63,6 +65,12 @@ export class GraphRuntime {
     this.kernel = new GraphKernel(options.prisma, this.cvg, options.logger);
     this.tagResolver = new TagResolver(options.nc, this, options.logger);
     this.metricResolver = new MetricResolver(options.nc, this, options.logger);
+    this.hookManager = new HookManager(
+      options.prisma,
+      options.jetstream,
+      options.jetstreamManager,
+      options.logger,
+    );
     this.windowResolver = new WindowResolver(
       new AggStateStore(options.aggKv),
       this,
@@ -80,6 +88,7 @@ export class GraphRuntime {
       (id) => this.evaluate(id),
       (id) => this.kernel.getProperty(id)?.resolverType === "window",
       options.logger,
+      () => this.hookManager.flushPending((id) => this.kernel.getCurrent(id)),
     );
     this.sampleGate = new SampleGate((id) => this.scheduler.markDirtyMany([id]));
   }
@@ -157,6 +166,8 @@ export class GraphRuntime {
     );
     this.kernel.applyRollupEdges(rollupEdges);
 
+    await this.hookManager.start();
+
     // Windows rehydrate before input subscriptions open, so no live sample can
     // arrive ahead of the resolver's source index.
     await this.windowResolver.start(this.kernel.listProperties(), (id) =>
@@ -231,7 +242,7 @@ export class GraphRuntime {
   private async reconcileDefinitionChanges(): Promise<void> {
     const since = this.lastDefinitionReconcileAt;
     const next = new Date();
-    const [nodes, properties] = await Promise.all([
+    const [nodes, properties, hooks] = await Promise.all([
       this.options.prisma.graphNode.findMany({
         where: { updatedAt: { gt: since } },
         select: { id: true, siteId: true },
@@ -239,6 +250,10 @@ export class GraphRuntime {
       this.options.prisma.graphProperty.findMany({
         where: { updatedAt: { gt: since } },
         select: { id: true, nodeId: true, node: { select: { siteId: true } } },
+      }),
+      this.options.prisma.graphHook.findMany({
+        where: { updatedAt: { gt: since } },
+        select: { id: true, siteId: true },
       }),
     ]);
 
@@ -261,6 +276,14 @@ export class GraphRuntime {
         siteId: property.node.siteId,
         emittedAt,
       })),
+      ...hooks.map((hook) => ({
+        id: `reconcile:hook:${hook.id}:${emittedAt}`,
+        entity: "hook" as const,
+        action: "updated" as const,
+        entityId: hook.id,
+        siteId: hook.siteId,
+        emittedAt,
+      })),
     ];
 
     if (events.length > 0) await this.applyDefinitionChanges(events);
@@ -271,8 +294,19 @@ export class GraphRuntime {
     const dirty = new Set<string>();
     const touched: Array<{ previous: PropertyRuntime | null; current: PropertyRuntime }> = [];
     const removed: PropertyRuntime[] = [];
+    let graphChanged = false;
+    let hookEvents = 0;
 
     for (const event of events) {
+      if (event.entity === "hook") {
+        hookEvents += 1;
+        if (event.action === "deleted") this.hookManager.removeHook(event.entityId);
+        else await this.hookManager.loadHookDefinition(event.entityId);
+        continue;
+      }
+
+      graphChanged = true;
+
       if (event.entity === "node") {
         const definition = event.action === "deleted" ? null : await this.kernel.loadNodeDefinition(event.entityId);
         const result = definition ? this.kernel.applyNodeDefinition(definition) : this.kernel.removeNode(event.entityId);
@@ -285,6 +319,11 @@ export class GraphRuntime {
       const result = definition ? this.kernel.applyPropertyDefinition(definition) : this.kernel.removeProperty(event.entityId);
       touched.push(...result.upsertedProperties);
       removed.push(...result.removedProperties);
+    }
+
+    if (!graphChanged) {
+      this.options.logger.info({ events: events.length, hooks: hookEvents }, "livestore graph definitions patched");
+      return;
     }
 
     for (const property of removed) await this.unconfigureProperty(property);
@@ -307,7 +346,7 @@ export class GraphRuntime {
     if (dirty.size > 0) this.scheduler.markDirtyMany(dirty);
 
     this.options.logger.info(
-      { events: events.length, touched: touched.length, removed: removed.length, dirty: dirty.size },
+      { events: events.length, hooks: hookEvents, touched: touched.length, removed: removed.length, dirty: dirty.size },
       "livestore graph definitions patched",
     );
   }
@@ -350,6 +389,8 @@ export class GraphRuntime {
       // the 50ms flush only ever reads the latest current value.
       this.windowResolver.onInput(propertyId, envelope);
       await this.cvg.put(propertyId, envelope);
+      const hookQueued = this.hookManager.onPropertyCommitted({ propertyId, previous, current: envelope });
+      if (hookQueued) this.scheduler.scheduleTerminal();
     }
 
     this.options.logger.info(
@@ -391,6 +432,7 @@ export class GraphRuntime {
       ...this.windowResolver.counts(),
       tagSubscriptionCount: this.tagResolver.subscriptionCount(),
       metricSubscriptionCount: this.metricResolver.subscriptionCount(),
+      ...this.hookManager.counts(),
     };
   }
 
