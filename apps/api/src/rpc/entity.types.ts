@@ -14,13 +14,15 @@ export const listInputSchema = z.object({
   offset: z.number().int().min(0).default(0),
 });
 
-export const modelCreateInputSchema = z.object({
-  key: z.string().min(1).optional(),
-  label: z.string().min(1).optional(),
-  name: z.string().min(1).optional(),
-  description: z.string().optional(),
-  displayFieldKey: z.string().min(1).nullable().optional(),
-}).refine((input) => Boolean(input.label || input.name), { message: "label or name is required" });
+export const modelCreateInputSchema = z
+  .object({
+    key: z.string().min(1).optional(),
+    label: z.string().min(1).optional(),
+    name: z.string().min(1).optional(),
+    description: z.string().optional(),
+    displayFieldKey: z.string().min(1).nullable().optional(),
+  })
+  .refine((input) => Boolean(input.label || input.name), { message: "label or name is required" });
 
 export const modelUpdateInputSchema = z.object({
   id: z.uuid(),
@@ -31,19 +33,21 @@ export const modelUpdateInputSchema = z.object({
   displayFieldKey: z.string().min(1).nullable().optional(),
 });
 
-export const modelFieldCreateInputSchema = z.object({
-  schemaId: z.uuid(),
-  key: z.string().min(1).optional(),
-  label: z.string().min(1).optional(),
-  name: z.string().min(1).optional(),
-  description: z.string().optional(),
-  type: fieldTypeSchema,
-  refSchemaId: z.uuid().nullable().optional(),
-  isList: z.boolean().optional(),
-  required: z.boolean().optional(),
-  config: jsonObjectSchema.nullable().optional(),
-  sortOrder: z.number().int().optional(),
-}).refine((input) => Boolean(input.label || input.name), { message: "label or name is required" });
+export const modelFieldCreateInputSchema = z
+  .object({
+    schemaId: z.uuid(),
+    key: z.string().min(1).optional(),
+    label: z.string().min(1).optional(),
+    name: z.string().min(1).optional(),
+    description: z.string().optional(),
+    type: fieldTypeSchema,
+    refSchemaId: z.uuid().nullable().optional(),
+    isList: z.boolean().optional(),
+    required: z.boolean().optional(),
+    config: jsonObjectSchema.nullable().optional(),
+    sortOrder: z.number().int().optional(),
+  })
+  .refine((input) => Boolean(input.label || input.name), { message: "label or name is required" });
 
 export const modelFieldUpdateInputSchema = z.object({
   id: z.uuid(),

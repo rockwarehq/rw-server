@@ -141,8 +141,7 @@ export function validateInstanceValues(
 
   for (const field of activeFields) {
     const fieldKey = field.key ?? field.name;
-    const hasValue =
-      Object.hasOwn(values, fieldKey) && values[fieldKey] !== undefined && values[fieldKey] !== null;
+    const hasValue = Object.hasOwn(values, fieldKey) && values[fieldKey] !== undefined && values[fieldKey] !== null;
     if (!hasValue) {
       if (field.required) errors.push(`field "${fieldKey}" is required`);
       continue;

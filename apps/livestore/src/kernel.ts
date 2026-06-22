@@ -220,11 +220,16 @@ export class GraphKernel {
     const current = { ...definition.property, current: previous?.current ?? definition.property.current };
     this.properties.set(current.id, current);
     if (!node.propertyIds.includes(current.id)) node.propertyIds.push(current.id);
-    node.propertyIds.sort((a, b) => (this.properties.get(a)?.name ?? a).localeCompare(this.properties.get(b)?.name ?? b));
+    node.propertyIds.sort((a, b) =>
+      (this.properties.get(a)?.name ?? a).localeCompare(this.properties.get(b)?.name ?? b),
+    );
 
     this.replacePersistedEdges([current.id], definition.edges, []);
     this.dependencyGraph.upsertProperties([current]);
-    this.dependencyGraph.replaceEdges({ targetPropertyIds: [current.id], edges: [...definition.edges, ...this.rollupEdges] });
+    this.dependencyGraph.replaceEdges({
+      targetPropertyIds: [current.id],
+      edges: [...definition.edges, ...this.rollupEdges],
+    });
 
     return { upsertedProperties: [{ previous: previousSnapshot, current }], removedProperties: [] };
   }

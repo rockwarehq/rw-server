@@ -65,17 +65,8 @@ export class GraphRuntime {
     this.kernel = new GraphKernel(options.prisma, this.cvg, options.logger);
     this.tagResolver = new TagResolver(options.nc, this, options.logger);
     this.metricResolver = new MetricResolver(options.nc, this, options.logger);
-    this.hookManager = new HookManager(
-      options.prisma,
-      options.jetstream,
-      options.jetstreamManager,
-      options.logger,
-    );
-    this.windowResolver = new WindowResolver(
-      new AggStateStore(options.aggKv),
-      this,
-      options.logger,
-    );
+    this.hookManager = new HookManager(options.prisma, options.jetstream, options.jetstreamManager, options.logger);
+    this.windowResolver = new WindowResolver(new AggStateStore(options.aggKv), this, options.logger);
     this.definitionConsumer = new GraphDefinitionConsumer(
       options.jetstream,
       options.jetstreamManager,
@@ -132,22 +123,17 @@ export class GraphRuntime {
         .map((dep) => ({
           current: dep.current,
           weight: resolver.weightBy
-            ? deps.find(
-                (weight) =>
-                  weight.nodeId === dep.nodeId && weight.name === resolver.weightBy,
-              )?.current
+            ? deps.find((weight) => weight.nodeId === dep.nodeId && weight.name === resolver.weightBy)?.current
             : undefined,
         }));
       const envelope = evaluateRollup(resolver, children);
       await this.commitValue(propertyId, envelope, "rollup");
     } else if (isExprResolverConfig(property.resolver)) {
       if (this.sampleGate.shouldDefer(propertyId, property.sampleRateMs)) return;
-      const deps = this.kernel
-        .getDependencies(propertyId)
-        .map((id) => ({
-          id,
-          current: this.kernel.getCurrent(id) ?? staleEnvelope(),
-        }));
+      const deps = this.kernel.getDependencies(propertyId).map((id) => ({
+        id,
+        current: this.kernel.getCurrent(id) ?? staleEnvelope(),
+      }));
       const envelope = evaluateExpr(property.resolver.expression, deps, {
         logger: this.options.logger,
       });
@@ -159,20 +145,14 @@ export class GraphRuntime {
   async start(): Promise<void> {
     await this.kernel.load();
 
-    const rollupEdges = await buildRollupEdges(
-      this.options.prisma,
-      this.kernel,
-      this.options.logger,
-    );
+    const rollupEdges = await buildRollupEdges(this.options.prisma, this.kernel, this.options.logger);
     this.kernel.applyRollupEdges(rollupEdges);
 
     await this.hookManager.start();
 
     // Windows rehydrate before input subscriptions open, so no live sample can
     // arrive ahead of the resolver's source index.
-    await this.windowResolver.start(this.kernel.listProperties(), (id) =>
-      this.kernel.getProperty(id),
-    );
+    await this.windowResolver.start(this.kernel.listProperties(), (id) => this.kernel.getProperty(id));
 
     this.tagResolver.start(this.kernel.listProperties());
     this.metricResolver.start(this.buildMetricSubscriptions());
@@ -187,11 +167,7 @@ export class GraphRuntime {
 
     const computedIds = this.kernel
       .listProperties()
-      .filter(
-        (property) =>
-          isRollupResolverConfig(property.resolver) ||
-          isExprResolverConfig(property.resolver),
-      )
+      .filter((property) => isRollupResolverConfig(property.resolver) || isExprResolverConfig(property.resolver))
       .map((property) => property.id);
     if (computedIds.length > 0) this.scheduler.markDirtyMany(computedIds);
   }
@@ -233,10 +209,7 @@ export class GraphRuntime {
 
     const run = () => this.applyDefinitionChanges(events);
     this.definitionApplyChain = this.definitionApplyChain.then(run, run);
-    this.definitionApplyChain.then(
-      () => waiters.forEach((waiter) => waiter.resolve()),
-      (err) => waiters.forEach((waiter) => waiter.reject(err)),
-    );
+    for (const waiter of waiters) this.definitionApplyChain.then(waiter.resolve, waiter.reject);
   }
 
   private async reconcileDefinitionChanges(): Promise<void> {
@@ -309,14 +282,18 @@ export class GraphRuntime {
 
       if (event.entity === "node") {
         const definition = event.action === "deleted" ? null : await this.kernel.loadNodeDefinition(event.entityId);
-        const result = definition ? this.kernel.applyNodeDefinition(definition) : this.kernel.removeNode(event.entityId);
+        const result = definition
+          ? this.kernel.applyNodeDefinition(definition)
+          : this.kernel.removeNode(event.entityId);
         touched.push(...result.upsertedProperties);
         removed.push(...result.removedProperties);
         continue;
       }
 
       const definition = event.action === "deleted" ? null : await this.kernel.loadPropertyDefinition(event.entityId);
-      const result = definition ? this.kernel.applyPropertyDefinition(definition) : this.kernel.removeProperty(event.entityId);
+      const result = definition
+        ? this.kernel.applyPropertyDefinition(definition)
+        : this.kernel.removeProperty(event.entityId);
       touched.push(...result.upsertedProperties);
       removed.push(...result.removedProperties);
     }
@@ -334,11 +311,7 @@ export class GraphRuntime {
       }
     }
 
-    const rollupEdges = await buildRollupEdges(
-      this.options.prisma,
-      this.kernel,
-      this.options.logger,
-    );
+    const rollupEdges = await buildRollupEdges(this.options.prisma, this.kernel, this.options.logger);
     this.kernel.applyRollupEdges(rollupEdges);
     for (const property of this.kernel.listProperties()) {
       if (isRollupResolverConfig(property.resolver)) dirty.add(property.id);
@@ -365,17 +338,10 @@ export class GraphRuntime {
     await this.windowResolver.removeProperty(property.id);
   }
 
-  async commitValue(
-    propertyId: string,
-    envelope: ValueEnvelope,
-    source: CommitSource,
-  ): Promise<void> {
+  async commitValue(propertyId: string, envelope: ValueEnvelope, source: CommitSource): Promise<void> {
     const property = this.kernel.getProperty(propertyId);
     if (!property) {
-      this.options.logger.warn(
-        { propertyId, source },
-        "livestore commit ignored for unknown property",
-      );
+      this.options.logger.warn({ propertyId, source }, "livestore commit ignored for unknown property");
       return;
     }
 

@@ -52,7 +52,9 @@ async function validateRefModel(refSchemaId: string | null, scope: EntityScope) 
 
 async function validateDisplayField(schemaId: string, displayFieldKey: string | null | undefined) {
   if (!displayFieldKey) return null;
-  const field = await prisma.objectSchemaField.findFirst({ where: { schemaId, key: displayFieldKey, isDeleted: false } });
+  const field = await prisma.objectSchemaField.findFirst({
+    where: { schemaId, key: displayFieldKey, isDeleted: false },
+  });
   return field ? null : errorResult("DISPLAY_FIELD_NOT_FOUND", "Display field was not found on this model");
 }
 
@@ -72,7 +74,13 @@ export async function create(input: CreateObjectModelInput, scope: EntityScope):
   if (existing) {
     const schema = await prisma.objectSchema.update({
       where: { id: existing.id },
-      data: { label, name: label, description: input.description ?? null, displayFieldKey: input.displayFieldKey ?? null, isDeleted: false },
+      data: {
+        label,
+        name: label,
+        description: input.description ?? null,
+        displayFieldKey: input.displayFieldKey ?? null,
+        isDeleted: false,
+      },
       include: modelInclude,
     });
     return { data: schema };
