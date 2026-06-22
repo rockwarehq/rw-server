@@ -201,7 +201,7 @@ function printSummary(
   if (missingGraphTags.length > 0) {
     console.warn(`warning: ${missingGraphTags.length} matched tag(s) do not have active graph tag properties yet`);
     console.warn("create graph tag properties in the UI, then restart LiveStore if it was already running");
-    console.warn("resolver shape: { type: \"tag\", deviceId: datasource.id, tagPath: point.id }");
+    console.warn('resolver shape: { type: "tag", deviceId: datasource.id, tagPath: point.id }');
     for (const target of missingGraphTags.slice(0, 5)) {
       console.warn(`  missing graph tag: ${target.datasource.name} / ${target.point.name}`);
     }

@@ -71,7 +71,11 @@ async function resolveBinding(
     if (document.schema.source !== "DOCUMENT") {
       return errorResult("INVALID_SCHEMA_SOURCE", "documentId must reference a DOCUMENT schema");
     }
-    if (document.schema.workspaceId !== scope.workspaceId || document.schema.siteId !== scope.siteId || document.siteId !== scope.siteId) {
+    if (
+      document.schema.workspaceId !== scope.workspaceId ||
+      document.schema.siteId !== scope.siteId ||
+      document.siteId !== scope.siteId
+    ) {
       return errorResult("SITE_MISMATCH", "Document does not belong to this site");
     }
     if (input.schemaId && input.schemaId !== document.schemaId) {

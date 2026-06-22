@@ -11,7 +11,18 @@ import { errorResult, type EntityScope, type ListResult, type ServiceResult } fr
 import { asValueRecord, validateInstanceValues } from "./validation.js";
 
 const instanceInclude = {
-  schema: { select: { id: true, key: true, label: true, name: true, source: true, workspaceId: true, siteId: true, version: true } },
+  schema: {
+    select: {
+      id: true,
+      key: true,
+      label: true,
+      name: true,
+      source: true,
+      workspaceId: true,
+      siteId: true,
+      version: true,
+    },
+  },
 };
 
 async function getSchemaWithFields(schemaId: string, scope: EntityScope) {
@@ -208,7 +219,11 @@ export async function list(
 export async function getById(id: string, scope: EntityScope): Promise<ServiceResult<unknown> | null> {
   const instance = await prisma.objectInstance.findUnique({ where: { id }, include: instanceInclude });
   if (!instance) return null;
-  if (instance.schema.workspaceId !== scope.workspaceId || instance.schema.siteId !== scope.siteId || instance.siteId !== scope.siteId)
+  if (
+    instance.schema.workspaceId !== scope.workspaceId ||
+    instance.schema.siteId !== scope.siteId ||
+    instance.siteId !== scope.siteId
+  )
     return errorResult("SITE_MISMATCH", "Instance does not belong to this site");
   if (instance.schema.source !== "DOCUMENT")
     return errorResult("SCHEMA_SOURCE_INVALID", "Only DOCUMENT schemas have documents");
@@ -226,7 +241,11 @@ export async function update(
     include: { schema: { include: { fields: { where: { isDeleted: false } } } } },
   });
   if (!current) return errorResult("INSTANCE_NOT_FOUND", "Instance not found");
-  if (current.schema.workspaceId !== scope.workspaceId || current.schema.siteId !== scope.siteId || current.siteId !== scope.siteId)
+  if (
+    current.schema.workspaceId !== scope.workspaceId ||
+    current.schema.siteId !== scope.siteId ||
+    current.siteId !== scope.siteId
+  )
     return errorResult("SITE_MISMATCH", "Instance does not belong to this site");
   if (current.schema.source !== "DOCUMENT")
     return errorResult("SCHEMA_SOURCE_INVALID", "Only DOCUMENT schemas have documents");
@@ -250,7 +269,11 @@ export async function update(
 export async function remove(id: string, scope: EntityScope): Promise<ServiceResult<{ success: true }>> {
   const current = await prisma.objectInstance.findUnique({ where: { id }, include: { schema: true } });
   if (!current) return errorResult("INSTANCE_NOT_FOUND", "Instance not found");
-  if (current.schema.workspaceId !== scope.workspaceId || current.schema.siteId !== scope.siteId || current.siteId !== scope.siteId)
+  if (
+    current.schema.workspaceId !== scope.workspaceId ||
+    current.schema.siteId !== scope.siteId ||
+    current.siteId !== scope.siteId
+  )
     return errorResult("SITE_MISMATCH", "Instance does not belong to this site");
   if (current.schema.source !== "DOCUMENT")
     return errorResult("SCHEMA_SOURCE_INVALID", "Only DOCUMENT schemas have documents");

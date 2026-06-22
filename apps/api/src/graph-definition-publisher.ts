@@ -33,7 +33,10 @@ export async function startGraphDefinitionPublisher(): Promise<() => Promise<voi
   try {
     await ensureGraphDefinitionStream(jsm);
   } catch (err) {
-    console.error("[graph-definition-publisher] could not ensure JetStream stream, graph definition events disabled", err);
+    console.error(
+      "[graph-definition-publisher] could not ensure JetStream stream, graph definition events disabled",
+      err,
+    );
     await nc.drain();
     return async () => {};
   }
