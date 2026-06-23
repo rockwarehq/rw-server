@@ -178,9 +178,13 @@ function deploy(outPath: string, dockerfile: string, target: DeployApp, remote: 
   // fails with "exec format error" unless qemu emulation is installed.
   const builder = remote ? "--remote-only" : "--local-only";
   console.log(`\nDeploying to Fly.io (${remote ? "remote" : "local"} build)...\n`);
-  execSync(`flyctl deploy ${builder} -c ${outPath} --dockerfile ${dockerfile} --build-target ${target} ${ROOT_DIR}`, {
-    stdio: "inherit",
-  });
+  // Image pulls in iad have been observed taking 14+ min, which blows past
+  // flyctl's default release_command/machine wait. Give it generous headroom.
+  const waitTimeout = "--wait-timeout 20m";
+  execSync(
+    `flyctl deploy ${builder} ${waitTimeout} -c ${outPath} --dockerfile ${dockerfile} --build-target ${target} ${ROOT_DIR}`,
+    { stdio: "inherit" },
+  );
 }
 
 function getFlagValue(args: string[], name: string): string | undefined {
