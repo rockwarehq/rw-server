@@ -6,13 +6,12 @@ import { getGraphNodeForSite, getGraphPropertyForSite, getGraphPropertySiteId, g
 import { publishGraphDefinitionEvent } from "./definition-events.js";
 import { errorResult, type GraphScope, type ListResult, type ServiceResult } from "./types.js";
 import { isRecordResolver, validateAcyclicStaticEdges, validateResolverConfig } from "./validation.js";
-import { fieldBindingPath } from "./records.js";
 import { activeHookIdsForProperties } from "./hooks.js";
 
 export interface CreateGraphPropertyInput {
   nodeId: string;
-  name?: string;
-  schemaFieldId?: string | null;
+  name: string;
+  typeFieldKey?: string | null;
   resolverType?: string;
   resolver?: Record<string, unknown>;
   sampleRateMs?: number | null;
@@ -20,7 +19,7 @@ export interface CreateGraphPropertyInput {
 
 export interface UpdateGraphPropertyInput {
   name?: string;
-  schemaFieldId?: string | null;
+  typeFieldKey?: string | null;
   resolverType?: string;
   resolver?: Record<string, unknown>;
   sampleRateMs?: number | null;
@@ -38,63 +37,16 @@ export interface ValidateGraphPropertyInput extends CreateGraphPropertyInput {
   id?: string;
 }
 
-function documentEntityResolver(args: { schemaId: string; documentId: string; schemaFieldId: string; path: string }) {
-  return {
-    type: "entity",
-    backend: "jsonb",
-    schemaId: args.schemaId,
-    documentId: args.documentId,
-    schemaFieldId: args.schemaFieldId,
-    path: args.path,
-  };
-}
-
-async function resolveSchemaField(args: { schemaFieldId?: string | null; node: { schemaId: string | null } }) {
-  if (!args.schemaFieldId) return { data: null };
-  if (!args.node.schemaId) return errorResult("NODE_SCHEMA_REQUIRED", "Graph node has no schema for schemaFieldId");
-  const field = await prisma.objectSchemaField.findUnique({ where: { id: args.schemaFieldId } });
-  if (!field || field.isDeleted) return errorResult("SCHEMA_FIELD_NOT_FOUND", "Schema field not found");
-  if (field.schemaId !== args.node.schemaId)
-    return errorResult("SCHEMA_FIELD_MISMATCH", "Schema field does not belong to the graph node schema");
-  return { data: field };
-}
-
-function resolveName(inputName: string | undefined, field: { name: string } | null) {
-  const name = inputName !== undefined ? inputName.trim() : field?.name;
-  return name?.trim() ? name.trim() : null;
-}
-
 async function buildResolver(args: {
-  node: {
-    schemaId: string | null;
-    documentId: string | null;
-    recordId: string | null;
-    schema?: { meta: unknown } | null;
-  };
-  field: { id: string; name: string; config: unknown } | null;
   resolverType?: string;
   resolver?: Record<string, unknown>;
   scope: GraphScope;
 }) {
-  let resolverType = args.resolverType;
-  let resolver = args.resolver;
+  const resolverType = args.resolverType;
+  const resolver = args.resolver;
 
-  if (!resolver && args.field && args.node.schemaId && args.node.documentId) {
-    resolverType = "entity";
-    resolver = documentEntityResolver({
-      schemaId: args.node.schemaId,
-      documentId: args.node.documentId,
-      schemaFieldId: args.field.id,
-      path: fieldBindingPath(args.field),
-    });
-  }
-
-  if (!resolverType || !resolver || !isRecordResolver(resolver)) {
-    return errorResult(
-      "RESOLVER_REQUIRED",
-      "resolverType and resolver are required unless schemaFieldId can infer an object-backed resolver",
-    );
-  }
+  if (!resolverType || !resolver || !isRecordResolver(resolver))
+    return errorResult("RESOLVER_REQUIRED", "resolverType and resolver are required");
 
   return validateResolverConfig({ resolverType, resolver, scope: args.scope });
 }
@@ -110,13 +62,8 @@ export async function create(input: CreateGraphPropertyInput, scope: GraphScope)
   const nodeResult = await getGraphNodeForSite(input.nodeId, scope);
   if (!nodeResult) return errorResult("GRAPH_NODE_NOT_FOUND", "Graph node not found");
   if ("error" in nodeResult) return nodeResult;
-  const node = nodeResult.data;
 
-  const fieldResult = await resolveSchemaField({ schemaFieldId: input.schemaFieldId, node });
-  if ("error" in fieldResult) return fieldResult;
-  const field = fieldResult.data;
-
-  const name = resolveName(input.name, field);
+  const name = input.name.trim();
   if (!name) return errorResult("INVALID_NAME", "Graph property name is required");
 
   const sampleRateError = validateSampleRate(input.sampleRateMs);
@@ -127,8 +74,6 @@ export async function create(input: CreateGraphPropertyInput, scope: GraphScope)
     return errorResult("GRAPH_PROPERTY_NAME_EXISTS", "Graph property name already exists on this node");
 
   const resolverResult = await buildResolver({
-    node,
-    field,
     resolverType: input.resolverType,
     resolver: input.resolver,
     scope,
@@ -149,7 +94,7 @@ export async function create(input: CreateGraphPropertyInput, scope: GraphScope)
           data: {
             nodeId: input.nodeId,
             name,
-            schemaFieldId: field?.id ?? null,
+            typeFieldKey: input.typeFieldKey ?? null,
             resolverType: resolverResult.data.resolver.type as string,
             resolver: resolverResult.data.resolver as Prisma.InputJsonValue,
             sampleRateMs: input.sampleRateMs ?? null,
@@ -161,7 +106,7 @@ export async function create(input: CreateGraphPropertyInput, scope: GraphScope)
             id: propertyId,
             nodeId: input.nodeId,
             name,
-            schemaFieldId: field?.id ?? null,
+            typeFieldKey: input.typeFieldKey ?? null,
             resolverType: resolverResult.data.resolver.type as string,
             resolver: resolverResult.data.resolver as Prisma.InputJsonValue,
             sampleRateMs: input.sampleRateMs ?? null,
@@ -200,16 +145,8 @@ export async function update(
   if (!currentResult) return errorResult("GRAPH_PROPERTY_NOT_FOUND", "Graph property not found");
   if ("error" in currentResult) return currentResult;
   const current = currentResult.data;
-  const node = current.node;
 
-  const fieldResult = await resolveSchemaField({
-    schemaFieldId: input.schemaFieldId !== undefined ? input.schemaFieldId : current.schemaFieldId,
-    node,
-  });
-  if ("error" in fieldResult) return fieldResult;
-  const field = fieldResult.data;
-
-  const name = resolveName(input.name ?? current.name, field);
+  const name = (input.name ?? current.name).trim();
   if (!name) return errorResult("INVALID_NAME", "Graph property name is required");
   if (name !== current.name) {
     const conflict = await prisma.graphProperty.findUnique({
@@ -224,8 +161,6 @@ export async function update(
 
   const currentResolver = isRecordResolver(current.resolver) ? current.resolver : { type: current.resolverType };
   const resolverResult = await buildResolver({
-    node,
-    field,
     resolverType: input.resolverType ?? current.resolverType,
     resolver: input.resolver ?? currentResolver,
     scope,
@@ -243,7 +178,7 @@ export async function update(
       where: { id },
       data: {
         name,
-        schemaFieldId: field?.id ?? null,
+        ...(input.typeFieldKey !== undefined ? { typeFieldKey: input.typeFieldKey } : {}),
         resolverType: resolverResult.data.resolver.type as string,
         resolver: resolverResult.data.resolver as Prisma.InputJsonValue,
         sampleRateMs,
@@ -323,15 +258,8 @@ export async function validate(input: ValidateGraphPropertyInput, scope: GraphSc
   const nodeResult = await getGraphNodeForSite(input.nodeId, scope);
   if (!nodeResult) return errorResult("GRAPH_NODE_NOT_FOUND", "Graph node not found");
   if ("error" in nodeResult) return nodeResult;
-  const node = nodeResult.data;
-
-  const fieldResult = await resolveSchemaField({ schemaFieldId: input.schemaFieldId, node });
-  if ("error" in fieldResult) return fieldResult;
-  const field = fieldResult.data;
 
   const resolverResult = await buildResolver({
-    node,
-    field,
     resolverType: input.resolverType,
     resolver: input.resolver,
     scope,
@@ -375,7 +303,7 @@ export async function list(filter: ListGraphPropertiesFilter, scope: GraphScope)
     prisma.graphProperty.findMany({
       where,
       include: {
-        node: { select: { id: true, name: true, siteId: true, schemaId: true, documentId: true, recordId: true } },
+        node: { select: { id: true, name: true, siteId: true, typeRef: true, typeContext: true } },
       },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
       skip: Number(offset),

@@ -14,6 +14,7 @@ import { MIRRORED_GRANULARITY, MIRRORED_METRIC_KEYS, type MirroredMetricKey } fr
 //             none today — see the boot assertion's DEFERRED set.
 export type MetricRole = "additive" | "ratio" | "display";
 export type MetricUnit = "count" | "seconds" | "ratio";
+type MirroredCounterMetricKey = Exclude<MirroredMetricKey, "oee">;
 
 export interface MetricField {
   key: string; // MetricBucket column, e.g. "goodItems", "oee"
@@ -33,7 +34,7 @@ export const metricPropertyName = (key: string): string => `${MIRRORED_GRANULARI
 const ALL_KINDS = ["Site", "Workcenter", "Station"];
 const G = [MIRRORED_GRANULARITY];
 
-const COUNTER_UNITS: Record<MirroredMetricKey, MetricUnit> = {
+const COUNTER_UNITS: Record<MirroredCounterMetricKey, MetricUnit> = {
   totalCycles: "count",
   goodCycles: "count",
   badCycles: "count",
@@ -54,7 +55,11 @@ const COUNTER_UNITS: Record<MirroredMetricKey, MetricUnit> = {
   elapsedPlannedProductionSeconds: "seconds",
 };
 
-const counter = (key: MirroredMetricKey): MetricField => ({
+const MIRRORED_COUNTER_KEYS = MIRRORED_METRIC_KEYS.filter(
+  (key): key is MirroredCounterMetricKey => key !== "oee",
+);
+
+const counter = (key: MirroredCounterMetricKey): MetricField => ({
   key,
   unit: COUNTER_UNITS[key],
   role: "additive",
@@ -73,7 +78,7 @@ const ratio = (key: string, deps: string[], formula: string): MetricField => ({
 });
 
 export const METRIC_FIELDS: MetricField[] = [
-  ...MIRRORED_METRIC_KEYS.map(counter),
+  ...MIRRORED_COUNTER_KEYS.map(counter),
   ratio(
     "availability",
     ["runSeconds", "elapsedPlannedProductionSeconds"],

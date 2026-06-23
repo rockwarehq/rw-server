@@ -82,6 +82,19 @@ export const router = {
       update: graph.nodeUpdate,
       delete: graph.nodeDelete,
     },
+    type: {
+      catalog: graph.typeCatalog,
+      create: graph.typeCreate,
+      list: graph.typeList,
+      get: graph.typeGet,
+      update: graph.typeUpdate,
+      delete: graph.typeDelete,
+      field: {
+        create: graph.typeFieldCreate,
+        update: graph.typeFieldUpdate,
+        delete: graph.typeFieldDelete,
+      },
+    },
     property: {
       create: graph.propertyCreate,
       list: graph.propertyList,

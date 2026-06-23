@@ -1,50 +1,86 @@
 model GraphNode {
-  id         String  @id @default(uuid()) @db.Uuid
-  name       String
-  siteId     String  @db.Uuid
-  schemaId   String? @db.Uuid
-  documentId String? @db.Uuid
-  recordId   String? @db.Uuid
-  isDeleted  Boolean @default(false)
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  siteId      String  @db.Uuid
+  typeRef     String?
+  typeContext Json    @default("{}")
+  isDeleted   Boolean @default(false)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   properties GraphProperty[]
   site       Site            @relation(fields: [siteId], references: [id], onDelete: Cascade)
-  schema     ObjectSchema?   @relation(fields: [schemaId], references: [id], onDelete: SetNull)
-  document   ObjectInstance? @relation(fields: [documentId], references: [id], onDelete: SetNull)
 
   @@unique([siteId, name])
   @@index([siteId])
-  @@index([schemaId])
-  @@index([documentId])
-  @@index([recordId])
-  @@index([schemaId, recordId])
+  @@index([siteId, typeRef])
   @@index([isDeleted])
 }
 
 model GraphProperty {
-  id            String  @id @default(uuid()) @db.Uuid
-  nodeId        String  @db.Uuid
-  schemaFieldId String? @db.Uuid
-  name          String
-  resolverType  String
-  resolver      Json
-  sampleRateMs  Int?
-  isDeleted     Boolean @default(false)
+  id           String  @id @default(uuid()) @db.Uuid
+  nodeId       String  @db.Uuid
+  typeFieldKey String?
+  name         String
+  resolverType String
+  resolver     Json
+  sampleRateMs Int?
+  isDeleted    Boolean @default(false)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  node        GraphNode          @relation(fields: [nodeId], references: [id], onDelete: Cascade)
-  schemaField ObjectSchemaField? @relation(fields: [schemaFieldId], references: [id], onDelete: SetNull)
-  edgesIn     GraphEdge[]        @relation("ToProperty")
-  edgesOut    GraphEdge[]        @relation("FromProperty")
+  node     GraphNode   @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  edgesIn  GraphEdge[] @relation("ToProperty")
+  edgesOut GraphEdge[] @relation("FromProperty")
 
   @@unique([nodeId, name])
-  @@index([schemaFieldId])
+  @@index([nodeId, typeFieldKey])
   @@index([resolverType])
+  @@index([isDeleted])
+}
+
+model GraphNodeType {
+  id          String  @id @default(uuid()) @db.Uuid
+  siteId      String  @db.Uuid
+  key         String
+  label       String
+  description String?
+  isDeleted   Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  site   Site                 @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  fields GraphNodeTypeField[]
+
+  @@unique([siteId, key])
+  @@index([siteId])
+  @@index([isDeleted])
+}
+
+model GraphNodeTypeField {
+  id           String  @id @default(uuid()) @db.Uuid
+  typeId       String  @db.Uuid
+  key          String
+  label        String
+  description  String?
+  valueType    String
+  required     Boolean @default(false)
+  resolverType String
+  resolver     Json
+  sampleRateMs Int?
+  sortOrder    Int     @default(0)
+  isDeleted    Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  type GraphNodeType @relation(fields: [typeId], references: [id], onDelete: Cascade)
+
+  @@unique([typeId, key])
+  @@index([typeId])
   @@index([isDeleted])
 }
 

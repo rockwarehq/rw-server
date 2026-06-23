@@ -10,6 +10,7 @@
     "./graph-subjects": "./dist/graph-subjects.js",
     "./graph-definitions": "./dist/graph-definitions.js",
     "./livestore-events": "./dist/livestore-events.js",
+    "./livestore-graph-types": "./dist/livestore-graph-types.js",
     "./livestore-hooks": "./dist/livestore-hooks.js",
     "./events-bus": "./dist/events-bus.js",
     "./bullmq-config": "./dist/bullmq-config.js",

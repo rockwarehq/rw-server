@@ -1,6 +1,5 @@
 import prisma from "@rw/db";
 
-import { fieldBindingPath } from "./records.js";
 import { graphNodeSiteWhere } from "./scope.js";
 import { errorResult, type GraphScope } from "./types.js";
 
@@ -59,7 +58,13 @@ async function assertKnownEntityInSite(entityType: string, entityId: string, sco
     });
     return station ? null : errorResult("ENTITY_SITE_MISMATCH", "Metric entity is outside this graph site");
   }
-  return errorResult("INVALID_RESOLVER", "metric resolver entityType must be Site, Workcenter, or Station");
+  if (type === "JOB") {
+    const job = await prisma.job.findFirst({
+      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId } },
+    });
+    return job ? null : errorResult("ENTITY_SITE_MISMATCH", "Metric entity is outside this graph site");
+  }
+  return errorResult("INVALID_RESOLVER", "resolver entityType must be Site, Workcenter, Station, or Job");
 }
 
 async function validateRollupParent(parent: unknown, scope: GraphScope) {
@@ -110,37 +115,16 @@ export async function validateResolverConfig(args: {
   }
 
   if (resolverType === "entity") {
-    if (resolver.backend === "jsonb") {
-      if (
-        typeof resolver.documentId !== "string" ||
-        typeof resolver.schemaFieldId !== "string" ||
-        typeof resolver.path !== "string"
-      ) {
-        return errorResult("INVALID_RESOLVER", "jsonb entity resolver requires documentId, schemaFieldId, and path");
-      }
-      const document = await prisma.objectInstance.findUnique({
-        where: { id: resolver.documentId },
-        include: { schema: true },
-      });
-      if (!document || document.isDeleted || document.schema.isDeleted)
-        return errorResult("DOCUMENT_NOT_FOUND", "Document not found");
-      if (document.schema.source !== "DOCUMENT")
-        return errorResult("INVALID_SCHEMA_SOURCE", "jsonb entity resolver requires a DOCUMENT schema");
-      if (
-        document.schema.workspaceId !== args.scope.workspaceId ||
-        document.schema.siteId !== args.scope.siteId ||
-        document.siteId !== args.scope.siteId
-      )
-        return errorResult("SITE_MISMATCH", "Document is outside this site");
-      const field = await prisma.objectSchemaField.findUnique({ where: { id: resolver.schemaFieldId } });
-      if (!field || field.isDeleted || field.schemaId !== document.schemaId)
-        return errorResult("SCHEMA_FIELD_NOT_FOUND", "Schema field not found on this document schema");
-      if (fieldBindingPath(field) !== resolver.path)
-        return errorResult("INVALID_RESOLVER", "entity resolver path must match the schema field binding path");
-      return { data: { resolver: { ...resolver, schemaId: document.schemaId }, dependencyIds: [] } };
+    if (
+      typeof resolver.entityType !== "string" ||
+      typeof resolver.entityId !== "string" ||
+      typeof resolver.path !== "string"
+    ) {
+      return errorResult("INVALID_RESOLVER", "entity resolver requires entityType, entityId, and path");
     }
-
-    return errorResult("INVALID_RESOLVER", "entity resolver backend must be jsonb");
+    const entityError = await assertKnownEntityInSite(resolver.entityType, resolver.entityId, args.scope);
+    if (entityError) return entityError;
+    return { data: { resolver, dependencyIds: [] } };
   }
 
   if (resolverType === "expr") {

@@ -35,7 +35,6 @@ model ObjectSchema {
   fields             ObjectSchemaField[] @relation("SchemaFields")
   referencedByFields ObjectSchemaField[] @relation("FieldRefSchema")
   instances          ObjectInstance[]
-  graphNodes         GraphNode[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -67,8 +66,6 @@ model ObjectSchemaField {
   sortOrder   Int             @default(0)
   isDeleted   Boolean         @default(false)
 
-  graphProperties GraphProperty[]
-
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
@@ -90,8 +87,6 @@ model ObjectInstance {
   name      String
   values    Json    @default("{}")
   isDeleted Boolean @default(false)
-
-  graphNodes GraphNode[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
