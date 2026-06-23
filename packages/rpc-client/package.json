@@ -1,6 +1,6 @@
 {
   "name": "@rockwarehq/rpc-client",
-  "version": "0.15.2",
+  "version": "0.16.0",
   "description": "oRPC client for Rockware API",
   "type": "module",
   "main": "dist/index.js",
