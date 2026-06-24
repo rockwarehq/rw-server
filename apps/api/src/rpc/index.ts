@@ -78,6 +78,7 @@ export const router = {
     node: {
       create: graph.nodeCreate,
       list: graph.nodeList,
+      query: graph.nodeQuery,
       get: graph.nodeGet,
       update: graph.nodeUpdate,
       delete: graph.nodeDelete,
@@ -89,6 +90,16 @@ export const router = {
       get: graph.typeGet,
       update: graph.typeUpdate,
       delete: graph.typeDelete,
+      input: {
+        create: graph.typeInputCreate,
+        update: graph.typeInputUpdate,
+        delete: graph.typeInputDelete,
+      },
+      facet: {
+        create: graph.typeFacetCreate,
+        update: graph.typeFacetUpdate,
+        delete: graph.typeFacetDelete,
+      },
       field: {
         create: graph.typeFieldCreate,
         update: graph.typeFieldUpdate,

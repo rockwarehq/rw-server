@@ -4,7 +4,21 @@ const SCOPED_GRAPH_TYPE_REF_PATTERN = /^@([a-z0-9][a-z0-9_-]*)\/([a-z0-9][a-z0-9
 export const GRAPH_TYPE_VALUE_TYPES = ["string", "number", "percent", "boolean", "object", "json", "date"] as const;
 export type GraphTypeValueType = (typeof GRAPH_TYPE_VALUE_TYPES)[number];
 
+export const GRAPH_TYPE_INPUT_VALUE_TYPES = [...GRAPH_TYPE_VALUE_TYPES, "entityRef"] as const;
+export type GraphTypeInputValueType = (typeof GRAPH_TYPE_INPUT_VALUE_TYPES)[number];
+
 const GRAPH_TYPE_VALUE_TYPE_SET: ReadonlySet<string> = new Set(GRAPH_TYPE_VALUE_TYPES);
+const GRAPH_TYPE_INPUT_VALUE_TYPE_SET: ReadonlySet<string> = new Set(GRAPH_TYPE_INPUT_VALUE_TYPES);
+
+export interface LivestoreGraphTypeInputSchema {
+  key: string;
+  label: string;
+  valueType: GraphTypeInputValueType;
+  description?: string;
+  required?: boolean;
+  entityKey?: string;
+  sortOrder?: number;
+}
 
 export interface LivestoreGraphTypeFieldSchema {
   key: string;
@@ -18,10 +32,23 @@ export interface LivestoreGraphTypeFieldSchema {
   sortOrder?: number;
 }
 
+export interface LivestoreGraphTypeFacetSchema {
+  key: string;
+  label: string;
+  valueType?: GraphTypeValueType;
+  resolverType: string;
+  resolver: Record<string, unknown>;
+  description?: string;
+  required?: boolean;
+  sortOrder?: number;
+}
+
 export interface LivestoreGraphTypeSchema {
   key: string;
   label: string;
   description?: string;
+  inputs?: readonly LivestoreGraphTypeInputSchema[];
+  facets?: readonly LivestoreGraphTypeFacetSchema[];
   fields: readonly LivestoreGraphTypeFieldSchema[];
 }
 
@@ -49,6 +76,30 @@ export const IMM_GRAPH_TYPE_NAMESPACE = {
       key: "station",
       label: "Station",
       description: "IMM station with live shift metrics.",
+      inputs: [
+        {
+          key: "stationId",
+          label: "Station",
+          description: "Station entity instance backing this graph node.",
+          valueType: "entityRef",
+          entityKey: "imm.station",
+          required: true,
+          sortOrder: 10,
+        },
+      ],
+      facets: [
+        entityFacet("stationId", "Station", "Station entity id", "imm.station", "$input.stationId", "id", true, 10),
+        entityFacet(
+          "workcenterId",
+          "Workcenter",
+          "Workcenter containing the station",
+          "imm.station",
+          "$input.stationId",
+          "workcenter",
+          false,
+          20,
+        ),
+      ],
       fields: [
         metricField("oee", "OEE", "Overall equipment effectiveness ratio", "oee", "percent", 10),
         metricField(
@@ -85,6 +136,34 @@ export const LIVESTORE_GRAPH_TYPE_NAMESPACES = [
   IMM_GRAPH_TYPE_NAMESPACE,
 ] as const satisfies readonly LivestoreGraphTypeNamespaceSchema[];
 
+function entityFacet(
+  key: string,
+  label: string,
+  description: string,
+  entityKey: string,
+  entityId: string,
+  path: string,
+  required: boolean,
+  sortOrder: number,
+): LivestoreGraphTypeFacetSchema {
+  return {
+    key,
+    label,
+    description,
+    required,
+    resolverType: "entity",
+    resolver: {
+      type: "entity",
+      entityRef: {
+        key: entityKey,
+        id: entityId,
+      },
+      path,
+    },
+    sortOrder,
+  };
+}
+
 function metricField(
   key: string,
   label: string,
@@ -102,7 +181,7 @@ function metricField(
     resolver: {
       type: "metric",
       entityType: "STATION",
-      entityId: "$context.stationId",
+      entityId: "$input.stationId",
       granularity: "SHIFT",
       metricKey,
     },
@@ -129,10 +208,22 @@ export function isGraphTypeValueType(value: unknown): value is GraphTypeValueTyp
   return typeof value === "string" && GRAPH_TYPE_VALUE_TYPE_SET.has(value);
 }
 
+export function isGraphTypeInputValueType(value: unknown): value is GraphTypeInputValueType {
+  return typeof value === "string" && GRAPH_TYPE_INPUT_VALUE_TYPE_SET.has(value);
+}
+
 export function normalizeGraphTypeValueType(value: string): GraphTypeValueType {
   const token = normalizeGraphTypeToken(value);
   if (!isGraphTypeValueType(token)) {
     throw new Error(`Graph type valueType must be one of: ${GRAPH_TYPE_VALUE_TYPES.join(", ")}`);
+  }
+  return token;
+}
+
+export function normalizeGraphTypeInputValueType(value: string): GraphTypeInputValueType {
+  const token = normalizeGraphTypeToken(value);
+  if (!isGraphTypeInputValueType(token)) {
+    throw new Error(`Graph type input valueType must be one of: ${GRAPH_TYPE_INPUT_VALUE_TYPES.join(", ")}`);
   }
   return token;
 }
@@ -168,6 +259,8 @@ for (const namespace of LIVESTORE_GRAPH_TYPE_NAMESPACES) {
   normalizeGraphTypeToken(namespace.namespace);
   for (const type of namespace.types) {
     normalizeGraphTypeToken(type.key);
+    for (const input of type.inputs ?? []) normalizeGraphTypeToken(input.key);
+    for (const facet of type.facets ?? []) normalizeGraphTypeToken(facet.key);
     for (const field of type.fields) normalizeGraphTypeToken(field.key);
   }
 }

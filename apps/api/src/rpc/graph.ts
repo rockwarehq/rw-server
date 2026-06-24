@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { GRAPH_TYPE_VALUE_TYPES } from "@rw/runtime/livestore-graph-types";
+import { GRAPH_TYPE_INPUT_VALUE_TYPES, GRAPH_TYPE_VALUE_TYPES } from "@rw/runtime/livestore-graph-types";
 import { z } from "zod";
 import * as graph from "@rw/services/graph/index";
 import { hasPermission, type Permission } from "@rw/services/iam/index";
@@ -25,6 +25,11 @@ const nodeListInputSchema = z.object({
   name: z.string().optional(),
   limit: z.number().int().min(0).default(50),
   offset: z.number().int().min(0).default(0),
+});
+
+const nodeQueryInputSchema = nodeListInputSchema.extend({
+  facets: jsonObjectSchema.optional(),
+  properties: z.array(z.string().min(1)).optional(),
 });
 
 const nodeUpdateInputSchema = z.object({
@@ -65,6 +70,27 @@ const propertyListInputSchema = z
 
 const propertyValidateInputSchema = propertyCreateInputSchema.extend({ id: z.uuid().optional() });
 
+const graphTypeInputInputSchema = z.object({
+  key: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string().nullable().optional(),
+  valueType: z.enum(GRAPH_TYPE_INPUT_VALUE_TYPES),
+  entityKey: z.string().min(1).nullable().optional(),
+  required: z.boolean().optional(),
+  sortOrder: z.number().int().optional(),
+});
+
+const graphTypeFacetInputSchema = z.object({
+  key: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string().nullable().optional(),
+  valueType: z.enum(GRAPH_TYPE_VALUE_TYPES).nullable().optional(),
+  required: z.boolean().optional(),
+  resolverType: z.string().min(1),
+  resolver: jsonObjectSchema,
+  sortOrder: z.number().int().optional(),
+});
+
 const graphTypeFieldInputSchema = z.object({
   key: z.string().min(1),
   label: z.string().min(1),
@@ -82,6 +108,8 @@ const typeCreateInputSchema = z.object({
   key: z.string().min(1),
   label: z.string().min(1),
   description: z.string().nullable().optional(),
+  inputs: z.array(graphTypeInputInputSchema).optional(),
+  facets: z.array(graphTypeFacetInputSchema).optional(),
   fields: z.array(graphTypeFieldInputSchema).optional(),
 });
 
@@ -99,6 +127,14 @@ const typeUpdateInputSchema = z.object({
   label: z.string().min(1).optional(),
   description: z.string().nullable().optional(),
 });
+
+const typeInputCreateInputSchema = graphTypeInputInputSchema.extend({ typeId: z.uuid() });
+
+const typeInputUpdateInputSchema = graphTypeInputInputSchema.partial().extend({ id: z.uuid() });
+
+const typeFacetCreateInputSchema = graphTypeFacetInputSchema.extend({ typeId: z.uuid() });
+
+const typeFacetUpdateInputSchema = graphTypeFacetInputSchema.partial().extend({ id: z.uuid() });
 
 const typeFieldCreateInputSchema = graphTypeFieldInputSchema.extend({ typeId: z.uuid() });
 
@@ -206,6 +242,26 @@ async function assertTypeFieldPermission(
   return assertSitePermission(context, permission, siteId);
 }
 
+async function assertTypeInputPermission(
+  context: AuthContext,
+  permission: Permission,
+  inputId: string,
+): Promise<GraphScope> {
+  const workspaceId = requireWorkspaceId(context);
+  const siteId = unwrap(await graph.nodeTypes.getInputSiteId(inputId, workspaceId));
+  return assertSitePermission(context, permission, siteId);
+}
+
+async function assertTypeFacetPermission(
+  context: AuthContext,
+  permission: Permission,
+  facetId: string,
+): Promise<GraphScope> {
+  const workspaceId = requireWorkspaceId(context);
+  const siteId = unwrap(await graph.nodeTypes.getFacetSiteId(facetId, workspaceId));
+  return assertSitePermission(context, permission, siteId);
+}
+
 export const nodeCreate = authRequired.input(nodeCreateInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...nodeInput } = input;
   const scope = await assertSitePermission(context, "graph:write", siteId);
@@ -216,6 +272,12 @@ export const nodeList = authRequired.input(nodeListInputSchema).handler(async ({
   const { siteId, ...filter } = input;
   const scope = await assertSitePermission(context, "graph:read", siteId);
   return graph.nodes.list(filter, scope);
+});
+
+export const nodeQuery = authRequired.input(nodeQueryInputSchema).handler(async ({ input, context }) => {
+  const { siteId, ...filter } = input;
+  const scope = await assertSitePermission(context, "graph:read", siteId);
+  return graph.nodes.query(filter, scope);
 });
 
 export const nodeGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
@@ -265,6 +327,38 @@ export const typeUpdate = authRequired.input(typeUpdateInputSchema).handler(asyn
 export const typeDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = await assertTypePermission(context, "graph:write", input.id);
   return unwrap(await graph.nodeTypes.remove(input.id, scope));
+});
+
+export const typeInputCreate = authRequired.input(typeInputCreateInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertTypePermission(context, "graph:write", input.typeId);
+  return unwrap(await graph.nodeTypes.createInput(input, scope));
+});
+
+export const typeInputUpdate = authRequired.input(typeInputUpdateInputSchema).handler(async ({ input, context }) => {
+  const { id, ...updates } = input;
+  const scope = await assertTypeInputPermission(context, "graph:write", id);
+  return unwrap(await graph.nodeTypes.updateInput(id, updates, scope));
+});
+
+export const typeInputDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertTypeInputPermission(context, "graph:write", input.id);
+  return unwrap(await graph.nodeTypes.removeInput(input.id, scope));
+});
+
+export const typeFacetCreate = authRequired.input(typeFacetCreateInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertTypePermission(context, "graph:write", input.typeId);
+  return unwrap(await graph.nodeTypes.createFacet(input, scope));
+});
+
+export const typeFacetUpdate = authRequired.input(typeFacetUpdateInputSchema).handler(async ({ input, context }) => {
+  const { id, ...updates } = input;
+  const scope = await assertTypeFacetPermission(context, "graph:write", id);
+  return unwrap(await graph.nodeTypes.updateFacet(id, updates, scope));
+});
+
+export const typeFacetDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertTypeFacetPermission(context, "graph:write", input.id);
+  return unwrap(await graph.nodeTypes.removeFacet(input.id, scope));
 });
 
 export const typeFieldCreate = authRequired.input(typeFieldCreateInputSchema).handler(async ({ input, context }) => {
