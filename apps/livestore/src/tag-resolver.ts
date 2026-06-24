@@ -1,4 +1,15 @@
-import type { NatsConnection, Subscription } from "@nats-io/nats-core";
+import {
+  AckPolicy,
+  DeliverPolicy,
+  DiscardPolicy,
+  ReplayPolicy,
+  RetentionPolicy,
+  StorageType,
+  type ConsumerMessages,
+  type JetStreamClient,
+  type JetStreamManager,
+  type StreamSource,
+} from "@nats-io/jetstream";
 
 import { deriveTagSubject } from "@rw/runtime/graph-subjects";
 import {
@@ -13,25 +24,49 @@ export interface CommitSink {
   commitValue(propertyId: string, envelope: ValueEnvelope, source: "tag"): Promise<void>;
 }
 
+// Tags flow gateway -> edge JetStream -> (sourced) cloud RW_TAGS -> this durable
+// consumer -> cvg. A single durable consumer over tags.> keeps livestore's
+// position across restarts, so values published while livestore is down are
+// drained on reconnect rather than dropped (which a core subscribe would do).
+const TAGS_STREAM = "RW_TAGS";
+const TAGS_DURABLE = "rw-livestore-tags";
+const TAGS_SUBJECT_FILTER = "tags.>";
+
+const DAY_NANOS = 24 * 60 * 60 * 1_000_000_000;
+const ACK_WAIT_NANOS = 30 * 1_000_000_000;
+const TAGS_MAX_AGE_NANOS = 7 * DAY_NANOS;
+
 const decoder = new TextDecoder();
 
 export class TagResolver {
-  private readonly subscriptions = new Map<string, Subscription>();
   private readonly bySubject = new Map<string, Set<string>>();
   private readonly propertySubjects = new Map<string, string>();
+  private messages: ConsumerMessages | null = null;
 
   constructor(
-    private readonly nc: NatsConnection,
+    private readonly js: JetStreamClient,
+    private readonly jsm: JetStreamManager,
     private readonly sink: CommitSink,
     private readonly logger: LivestoreLogger,
   ) {}
 
-  start(properties: Iterable<PropertyRuntime>): void {
+  async start(properties: Iterable<PropertyRuntime>): Promise<void> {
     for (const property of properties) {
       this.upsertProperty(property);
     }
+
+    await this.ensureStream();
+    await this.ensureConsumer();
+
+    const consumer = await this.js.consumers.get(TAGS_STREAM, TAGS_DURABLE);
+    this.messages = await consumer.consume({ max_messages: 100 });
+    void this.consume(this.messages);
+    this.logger.info({ stream: TAGS_STREAM, durable: TAGS_DURABLE }, "livestore tag consumer started");
   }
 
+  // Subject routing is now pure bookkeeping — the single consumer already
+  // receives every tags.> message, so adding/removing a property only changes
+  // which committed properties a subject fans out to. No NATS churn.
   upsertProperty(property: PropertyRuntime): void {
     if (!isTagResolverConfig(property.resolver)) {
       this.removeProperty(property.id);
@@ -46,13 +81,6 @@ export class TagResolver {
     propertyIds.add(property.id);
     this.bySubject.set(subject, propertyIds);
     this.propertySubjects.set(property.id, subject);
-
-    if (!this.subscriptions.has(subject)) {
-      const subscription = this.nc.subscribe(subject);
-      this.subscriptions.set(subject, subscription);
-      void this.consume(subscription, subject, propertyIds);
-      this.logger.info({ subject, propertyCount: propertyIds.size }, "livestore tag subscription started");
-    }
   }
 
   removeProperty(propertyId: string): void {
@@ -63,45 +91,53 @@ export class TagResolver {
     const propertyIds = this.bySubject.get(subject);
     if (!propertyIds) return;
     propertyIds.delete(propertyId);
-    if (propertyIds.size > 0) return;
-
-    this.bySubject.delete(subject);
-    this.subscriptions.get(subject)?.unsubscribe();
-    this.subscriptions.delete(subject);
+    if (propertyIds.size === 0) this.bySubject.delete(subject);
   }
 
   stop(): void {
-    for (const subscription of this.subscriptions.values()) {
-      subscription.unsubscribe();
-    }
-    this.subscriptions.clear();
+    this.messages?.stop();
+    this.messages = null;
     this.bySubject.clear();
     this.propertySubjects.clear();
   }
 
   subscriptionCount(): number {
-    return this.subscriptions.size;
+    return this.bySubject.size;
   }
 
-  private async consume(subscription: Subscription, subject: string, propertyIds: Set<string>): Promise<void> {
+  private async consume(messages: ConsumerMessages): Promise<void> {
     try {
-      for await (const message of subscription) {
+      for await (const message of messages) {
         const envelope = this.parseMessage(message.data);
         if (!envelope) {
-          this.logger.warn({ subject }, "livestore tag message ignored because payload is not a ValueEnvelope");
+          this.logger.warn({ subject: message.subject }, "livestore tag message ignored: not a ValueEnvelope");
+          message.ack();
           continue;
         }
 
+        const propertyIds = this.bySubject.get(message.subject);
+        if (!propertyIds || propertyIds.size === 0) {
+          // No property is bound to this tag (yet). Live values are last-write-
+          // wins, so there's nothing to replay later — ack and move on.
+          message.ack();
+          continue;
+        }
+
+        let failed = false;
         for (const propertyId of propertyIds) {
           try {
             await this.sink.commitValue(propertyId, envelope, "tag");
           } catch (err) {
-            this.logger.error({ err, subject, propertyId }, "livestore tag commit failed");
+            failed = true;
+            this.logger.error({ err, subject: message.subject, propertyId }, "livestore tag commit failed");
           }
         }
+
+        if (failed) message.nak(1_000);
+        else message.ack();
       }
     } catch (err) {
-      this.logger.error({ err, subject }, "livestore tag subscription failed");
+      this.logger.error({ err }, "livestore tag consumer stopped");
     }
   }
 
@@ -110,6 +146,53 @@ export class TagResolver {
       return parseValueEnvelope(JSON.parse(decoder.decode(data)));
     } catch {
       return null;
+    }
+  }
+
+  private async ensureStream(): Promise<void> {
+    try {
+      await this.jsm.streams.info(TAGS_STREAM);
+      return;
+    } catch {
+      // In production the gateway publishes into its local edge-domain stream
+      // and the cloud RW_TAGS *sources* it across the leaf (durable store-and-
+      // forward).
+      const sourceDomain = process.env.NATS_TAGS_SOURCE_DOMAIN?.trim();
+      const sourceStream = process.env.NATS_TAGS_SOURCE_STREAM?.trim() || "TAGS";
+
+      const base = {
+        name: TAGS_STREAM,
+        retention: RetentionPolicy.Limits,
+        storage: StorageType.File,
+        discard: DiscardPolicy.Old,
+        max_age: TAGS_MAX_AGE_NANOS,
+      };
+
+      if (sourceDomain) {
+        const sources: StreamSource[] = [{ name: sourceStream, domain: sourceDomain }];
+        await this.jsm.streams.add({ ...base, sources });
+      } else {
+        await this.jsm.streams.add({ ...base, subjects: [TAGS_SUBJECT_FILTER] });
+      }
+    }
+  }
+
+  private async ensureConsumer(): Promise<void> {
+    try {
+      await this.jsm.consumers.info(TAGS_STREAM, TAGS_DURABLE);
+    } catch {
+      await this.jsm.consumers.add(TAGS_STREAM, {
+        durable_name: TAGS_DURABLE,
+        ack_policy: AckPolicy.Explicit,
+        // New on first creation only: don't replay the whole retained backlog
+        // into cvg on first boot. Across restarts the durable resumes from its
+        // last ack, so in-flight values during downtime are still delivered.
+        deliver_policy: DeliverPolicy.New,
+        replay_policy: ReplayPolicy.Instant,
+        filter_subject: TAGS_SUBJECT_FILTER,
+        ack_wait: ACK_WAIT_NANOS,
+        max_ack_pending: 1_000,
+      });
     }
   }
 }

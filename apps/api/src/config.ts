@@ -67,10 +67,17 @@ if (!env.isDevelopment && !processorConfig.sharedSecret) {
 // Re-exported from the shared runtime package.
 export { bullmqConfig } from "@rw/runtime/bullmq-config";
 
-export const gatewayMqttConfig = {
-  mqttUrl: process.env.MQTT_GATEWAY_REALY_URL,
-  mqttUser: process.env.MQTT_GATEWAY_REALY_USER,
-  mqttPassword: process.env.MQTT_GATEWAY_REALY_PASSWORD,
+// NATS relay credentials handed to a gateway in the /edge/connect response.
+// The gateway connects its local leaf node out to the cloud cluster using
+// these and publishes tags.> over the leaf. Single shared user/pass for now
+// (see gateway applyNatsCredentials, which expects { servers, user, pass }).
+export const gatewayNatsConfig = {
+  servers: (process.env.NATS_GATEWAY_RELAY_SERVERS ?? "")
+    .split(",")
+    .map((server) => server.trim())
+    .filter(Boolean),
+  user: process.env.NATS_GATEWAY_RELAY_USER,
+  pass: process.env.NATS_GATEWAY_RELAY_PASS,
 };
 
 export const storageConfig = {

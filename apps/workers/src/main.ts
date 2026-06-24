@@ -1,4 +1,4 @@
-// Workers binary. Dispatches on --worker flag to one of three modules.
+// Workers binary. Dispatches on --worker flag to a worker module.
 
 process.env.TZ = "UTC";
 
@@ -6,8 +6,8 @@ import "dotenv/config";
 import { startHostServer, onShutdown } from "@rw/runtime";
 import { createPrismaClient } from "@rw/db";
 
-type WorkerName = "rollups" | "processor" | "processor-consumer";
-const WORKER_NAMES: readonly WorkerName[] = ["rollups", "processor", "processor-consumer"];
+type WorkerName = "rollups";
+const WORKER_NAMES: readonly WorkerName[] = ["rollups"];
 
 function parseFlag(flag: string): string | null {
   const idx = process.argv.indexOf(flag);
@@ -20,14 +20,6 @@ async function loadWorker(name: WorkerName): Promise<{ start: () => Promise<void
     case "rollups": {
       const m = await import("./rollups.js");
       return { start: m.startRollups, stop: m.stopRollups };
-    }
-    case "processor": {
-      const m = await import("./processor/index.js");
-      return { start: m.startProcessor, stop: m.stopProcessor };
-    }
-    case "processor-consumer": {
-      const m = await import("./processor-consumer.js");
-      return { start: m.startProcessorConsumer, stop: m.stopProcessorConsumer };
     }
   }
 }
@@ -45,8 +37,7 @@ async function main(): Promise<void> {
   // Per-mode DATABASE_URL override. Rollups want a DIRECT (port 5432, not
   // pgbouncer at 6432) connection because the rollup tick runs long CTE
   // queries that pgbouncer transaction-mode either breaks or holds open for
-  // the whole transaction (defeating the pool). Other modes (processor,
-  // processor-consumer) keep using the shared pooled DATABASE_URL.
+  // the whole transaction (defeating the pool).
   //
   // If DATABASE_URL_ROLLUPS is unset, rollups falls back to DATABASE_URL —
   // fine for local dev where both endpoints are the same Postgres.

@@ -4,7 +4,7 @@ import type { FastifyRequest, FastifyReply } from "fastify";
 import { gateway } from "./services/device/index.js";
 import prisma from "@rw/db";
 import { errorSchema, successResponseSchema } from "./api/schemas.js";
-import { gatewayMqttConfig } from "./config.js";
+import { gatewayNatsConfig } from "./config.js";
 
 async function validateGatewayToken(request: FastifyRequest, reply: FastifyReply) {
   const authHeader = request.headers.authorization;
@@ -100,12 +100,12 @@ const connectResponseSchema = {
     serialNumber: { type: "string" },
     status: { type: "string" },
     connectedAt: { type: "string", format: "date-time" },
-    relayMqtt: {
+    nats: {
       type: "object",
       properties: {
-        url: { type: "string" },
+        servers: { type: "array", items: { type: "string" } },
         user: { type: "string" },
-        password: { type: "string" },
+        pass: { type: "string" },
       },
     },
   },
@@ -228,10 +228,10 @@ export default async function edge(fastify: FastifyTypedInstance) {
         serialNumber: gw.serialNumber,
         status: gw.status,
         connectedAt,
-        relayMqtt: {
-          url: gatewayMqttConfig.mqttUrl,
-          user: gatewayMqttConfig.mqttUser,
-          password: gatewayMqttConfig.mqttPassword,
+        nats: {
+          servers: gatewayNatsConfig.servers,
+          user: gatewayNatsConfig.user,
+          pass: gatewayNatsConfig.pass,
         },
       };
     },

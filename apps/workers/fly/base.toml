@@ -11,12 +11,10 @@ primary_region = 'iad'
 [deploy]
 release_command = 'pnpm -w db:migrate'
 
-# Three process groups — scale independently with:
-#   fly scale count -a <tenant>-workers rollups=1 processor=1 processor_consumer=2
+# Single process group — scale with:
+#   fly scale count -a <tenant>-workers rollups=1
 [processes]
-rollups            = 'node dist/main.js --worker rollups'
-processor          = 'node dist/main.js --worker processor'
-processor_consumer = 'node dist/main.js --worker processor-consumer'
+rollups = 'node dist/main.js --worker rollups'
 
 [env]
 NODE_ENV = 'production'
@@ -29,7 +27,7 @@ PORT = '9465'
 [[services]]
 internal_port = 9465
 protocol = 'tcp'
-processes = ['rollups', 'processor', 'processor_consumer']
+processes = ['rollups']
 
   [[services.tcp_checks]]
   interval = '15s'
