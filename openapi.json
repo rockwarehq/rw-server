@@ -11779,16 +11779,19 @@
                       "type": "string",
                       "format": "date-time"
                     },
-                    "relayMqtt": {
+                    "nats": {
                       "type": "object",
                       "properties": {
-                        "url": {
-                          "type": "string"
+                        "servers": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
                         },
                         "user": {
                           "type": "string"
                         },
-                        "password": {
+                        "pass": {
                           "type": "string"
                         }
                       }

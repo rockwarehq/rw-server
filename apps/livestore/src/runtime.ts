@@ -63,7 +63,7 @@ export class GraphRuntime {
   constructor(private readonly options: GraphRuntimeOptions) {
     this.cvg = new CvgStore(options.kv);
     this.kernel = new GraphKernel(options.prisma, this.cvg, options.logger);
-    this.tagResolver = new TagResolver(options.nc, this, options.logger);
+    this.tagResolver = new TagResolver(options.jetstream, options.jetstreamManager, this, options.logger);
     this.metricResolver = new MetricResolver(options.nc, this, options.logger);
     this.hookManager = new HookManager(options.prisma, options.jetstream, options.jetstreamManager, options.logger);
     this.windowResolver = new WindowResolver(new AggStateStore(options.aggKv), this, options.logger);
@@ -154,7 +154,7 @@ export class GraphRuntime {
     // arrive ahead of the resolver's source index.
     await this.windowResolver.start(this.kernel.listProperties(), (id) => this.kernel.getProperty(id));
 
-    this.tagResolver.start(this.kernel.listProperties());
+    await this.tagResolver.start(this.kernel.listProperties());
     this.metricResolver.start(this.buildMetricSubscriptions());
     await this.definitionConsumer.start();
     this.lastDefinitionReconcileAt = new Date();
