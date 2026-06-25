@@ -15,9 +15,3 @@ export interface ListResult<T> {
 export function errorResult(code: string, error: string): { error: string; code: string } {
   return { error, code };
 }
-
-export interface GraphResolverInput {
-  resolverType?: string;
-  resolver?: Record<string, unknown>;
-  schemaFieldId?: string | null;
-}

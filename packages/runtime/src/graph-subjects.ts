@@ -21,6 +21,7 @@ export const MIRRORED_METRIC_KEYS = [
   "elapsedExpectedCycles",
   "elapsedExpectedItems",
   "elapsedPlannedProductionSeconds",
+  "oee",
 ] as const;
 
 export type MirroredMetricKey = (typeof MIRRORED_METRIC_KEYS)[number];

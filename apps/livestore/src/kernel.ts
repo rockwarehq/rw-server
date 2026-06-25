@@ -74,9 +74,8 @@ export class GraphKernel {
       const runtimeNode: NodeRuntime = {
         id: node.id,
         name: node.name,
-        schemaId: node.schemaId,
-        documentId: node.documentId,
-        recordId: node.recordId,
+        typeRef: node.typeRef,
+        typeContext: parseTypeContext(node.typeContext),
         propertyIds: [],
       };
       this.nodes.set(node.id, runtimeNode);
@@ -138,9 +137,8 @@ export class GraphKernel {
       node: {
         id: node.id,
         name: node.name,
-        schemaId: node.schemaId,
-        documentId: node.documentId,
-        recordId: node.recordId,
+        typeRef: node.typeRef,
+        typeContext: parseTypeContext(node.typeContext),
         propertyIds: properties.map((property) => property.id),
       },
       properties,
@@ -161,9 +159,8 @@ export class GraphKernel {
       node: {
         id: property.node.id,
         name: property.node.name,
-        schemaId: property.node.schemaId,
-        documentId: property.node.documentId,
-        recordId: property.node.recordId,
+        typeRef: property.node.typeRef,
+        typeContext: parseTypeContext(property.node.typeContext),
         propertyIds: [],
       },
       property: runtimeProperty,
@@ -210,9 +207,8 @@ export class GraphKernel {
   applyPropertyDefinition(definition: LoadedPropertyDefinition): KernelPatchResult {
     const node = this.nodes.get(definition.node.id) ?? { ...definition.node, propertyIds: [] };
     node.name = definition.node.name;
-    node.schemaId = definition.node.schemaId;
-    node.documentId = definition.node.documentId;
-    node.recordId = definition.node.recordId;
+    node.typeRef = definition.node.typeRef;
+    node.typeContext = definition.node.typeContext;
     this.nodes.set(node.id, node);
 
     const previous = this.properties.get(definition.property.id);
@@ -328,9 +324,8 @@ export class GraphKernel {
     return {
       id: node.id,
       name: node.name,
-      schemaId: node.schemaId,
-      documentId: node.documentId,
-      recordId: node.recordId,
+      typeRef: node.typeRef,
+      typeContext: node.typeContext,
       properties,
     };
   }
@@ -387,4 +382,8 @@ export class GraphKernel {
   private cloneProperty(property: PropertyRuntime): PropertyRuntime {
     return { ...property, current: property.current };
   }
+}
+
+function parseTypeContext(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }

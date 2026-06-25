@@ -1,4 +1,6 @@
 import prisma from "@rw/db";
+import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
+import { refreshFacetsForEntity } from "../../graph/nodes.js";
 
 export interface CreateStationInput {
   name: string;
@@ -74,6 +76,23 @@ const BLOB_FIELDS = [
 /** Check if any blob config fields are provided in input */
 function hasBlobFields(input: Record<string, unknown>): boolean {
   return BLOB_FIELDS.some((key) => input[key] !== undefined);
+}
+
+async function refreshStationGraphFacets(args: {
+  stationId: string;
+  siteId: string;
+  workspaceId: string;
+}): Promise<void> {
+  try {
+    const result = await refreshFacetsForEntity({
+      entityKey: SYSTEM_ENTITY_KEYS.Station,
+      entityId: args.stationId,
+      scope: { workspaceId: args.workspaceId, siteId: args.siteId },
+    });
+    if ("error" in result) console.error("[station] graph facet refresh failed", result);
+  } catch (err) {
+    console.error("[station] graph facet refresh failed", err);
+  }
 }
 
 /**
@@ -181,6 +200,8 @@ export async function create(input: CreateStationInput) {
       });
     });
 
+    await refreshStationGraphFacets({ stationId: station.id, siteId: station.siteId, workspaceId: site.workspaceId });
+
     return { data: station };
   }
 
@@ -195,6 +216,8 @@ export async function create(input: CreateStationInput) {
     },
     include: stationInclude,
   });
+
+  await refreshStationGraphFacets({ stationId: station.id, siteId: station.siteId, workspaceId: site.workspaceId });
 
   return { data: station };
 }
@@ -382,6 +405,12 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
       });
     });
 
+    await refreshStationGraphFacets({
+      stationId: station.id,
+      siteId: station.siteId,
+      workspaceId: current.site.workspaceId,
+    });
+
     return { data: station };
   }
 
@@ -390,6 +419,12 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
     where: { id },
     data: stationUpdateData,
     include: stationInclude,
+  });
+
+  await refreshStationGraphFacets({
+    stationId: station.id,
+    siteId: station.siteId,
+    workspaceId: current.site.workspaceId,
   });
 
   return { data: station };
@@ -445,6 +480,12 @@ export async function move(id: string, newWorkcenterId: string | null, workspace
     where: { id },
     data: { workcenterId: newWorkcenterId },
     include: stationInclude,
+  });
+
+  await refreshStationGraphFacets({
+    stationId: station.id,
+    siteId: station.siteId,
+    workspaceId: current.site.workspaceId,
   });
 
   return { data: station };

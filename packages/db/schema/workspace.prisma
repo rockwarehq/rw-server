@@ -105,6 +105,7 @@ model Site {
   materialLedgerEntries  MaterialLedgerEntry[]
   materialShiftUsage     MaterialShiftUsage[]
   graphNodes             GraphNode[]
+  graphNodeTypes         GraphNodeType[]
   graphHooks             GraphHook[]
   objectSchemas          ObjectSchema[]
   objectInstances        ObjectInstance[]

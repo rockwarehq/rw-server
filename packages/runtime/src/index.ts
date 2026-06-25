@@ -1,6 +1,7 @@
 export * from "./events-bus.js";
 export * from "./graph-definitions.js";
 export * from "./livestore-events.js";
+export * from "./livestore-graph-types.js";
 export * from "./livestore-hooks.js";
 export * from "./bullmq-config.js";
 export * from "./logger.js";
