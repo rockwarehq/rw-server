@@ -1,5 +1,7 @@
 import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
+import { publishEntityEvent } from "../entity/events.js";
+import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 
 // ============================================================================
 // Types
@@ -138,7 +140,7 @@ export async function create(input: CreateOrderInput) {
 
   const site = await prisma.site.findUnique({
     where: { id: siteId },
-    select: { id: true, attrs: true },
+    select: { id: true, attrs: true, workspaceId: true },
   });
 
   if (!site) {
@@ -209,6 +211,24 @@ export async function create(input: CreateOrderInput) {
     include: orderInclude,
   });
 
+  publishEntityEvent({
+    action: "created",
+    entityKey: SYSTEM_ENTITY_KEYS.Order,
+    entityId: order.id,
+    siteId: order.siteId,
+    workspaceId: site.workspaceId,
+  });
+  for (const lineItem of order.lineItems) {
+    publishEntityEvent({
+      action: "updated",
+      entityKey: SYSTEM_ENTITY_KEYS.Product,
+      entityId: lineItem.product.id,
+      siteId: order.siteId,
+      workspaceId: site.workspaceId,
+      changedFields: ["orders"],
+    });
+  }
+
   return { data: order };
 }
 
@@ -271,7 +291,7 @@ export async function get(id: string) {
 export async function update(id: string, input: UpdateOrderInput) {
   const order = await prisma.order.findUnique({
     where: { id },
-    select: { id: true, siteId: true, status: true, deletedAt: true },
+    select: { id: true, siteId: true, status: true, deletedAt: true, site: { select: { workspaceId: true } } },
   });
 
   if (!order || order.deletedAt) {
@@ -312,13 +332,22 @@ export async function update(id: string, input: UpdateOrderInput) {
     include: orderInclude,
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Order,
+    entityId: updated.id,
+    siteId: updated.siteId,
+    workspaceId: order.site.workspaceId,
+    changedFields: Object.keys(input),
+  });
+
   return { data: updated };
 }
 
 export async function remove(id: string) {
   const order = await prisma.order.findUnique({
     where: { id },
-    select: { id: true, status: true, deletedAt: true },
+    select: { id: true, siteId: true, status: true, deletedAt: true, site: { select: { workspaceId: true } } },
   });
 
   if (!order || order.deletedAt) {
@@ -334,6 +363,14 @@ export async function remove(id: string) {
     data: { deletedAt: new Date() },
   });
 
+  publishEntityEvent({
+    action: "deleted",
+    entityKey: SYSTEM_ENTITY_KEYS.Order,
+    entityId: order.id,
+    siteId: order.siteId,
+    workspaceId: order.site.workspaceId,
+  });
+
   return { success: true };
 }
 
@@ -344,7 +381,15 @@ export async function remove(id: string) {
 export async function transitionStatus(id: string, targetStatus: OrderStatus) {
   const order = await prisma.order.findUnique({
     where: { id },
-    select: { id: true, siteId: true, status: true, previousStatus: true, deletedAt: true, sequence: true },
+    select: {
+      id: true,
+      siteId: true,
+      status: true,
+      previousStatus: true,
+      deletedAt: true,
+      sequence: true,
+      site: { select: { workspaceId: true } },
+    },
   });
 
   if (!order || order.deletedAt) {
@@ -388,6 +433,15 @@ export async function transitionStatus(id: string, targetStatus: OrderStatus) {
     include: orderInclude,
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Order,
+    entityId: updated.id,
+    siteId: updated.siteId,
+    workspaceId: order.site.workspaceId,
+    changedFields: Object.keys(updateData),
+  });
+
   return { data: updated };
 }
 
@@ -398,7 +452,7 @@ export async function transitionStatus(id: string, targetStatus: OrderStatus) {
 export async function addLineItem(orderId: string, input: { productId: string; targetQuantity: number }) {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
-    select: { id: true, status: true, deletedAt: true },
+    select: { id: true, siteId: true, status: true, deletedAt: true, site: { select: { workspaceId: true } } },
   });
 
   if (!order || order.deletedAt) {
@@ -437,13 +491,35 @@ export async function addLineItem(orderId: string, input: { productId: string; t
     },
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Order,
+    entityId: order.id,
+    siteId: order.siteId,
+    workspaceId: order.site.workspaceId,
+    changedFields: ["products"],
+  });
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Product,
+    entityId: lineItem.product.id,
+    siteId: order.siteId,
+    workspaceId: order.site.workspaceId,
+    changedFields: ["orders"],
+  });
+
   return { data: lineItem };
 }
 
 export async function updateLineItem(lineItemId: string, input: { targetQuantity?: number }) {
   const lineItem = await prisma.orderLineItem.findUnique({
     where: { id: lineItemId },
-    select: { id: true, orderId: true },
+    select: {
+      id: true,
+      orderId: true,
+      productId: true,
+      order: { select: { siteId: true, site: { select: { workspaceId: true } } } },
+    },
   });
 
   if (!lineItem) {
@@ -470,13 +546,35 @@ export async function updateLineItem(lineItemId: string, input: { targetQuantity
     },
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Order,
+    entityId: lineItem.orderId,
+    siteId: lineItem.order.siteId,
+    workspaceId: lineItem.order.site.workspaceId,
+    changedFields: ["products"],
+  });
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Product,
+    entityId: lineItem.productId,
+    siteId: lineItem.order.siteId,
+    workspaceId: lineItem.order.site.workspaceId,
+    changedFields: ["orders"],
+  });
+
   return { data: updated };
 }
 
 export async function removeLineItem(lineItemId: string) {
   const lineItem = await prisma.orderLineItem.findUnique({
     where: { id: lineItemId },
-    select: { id: true, orderId: true },
+    select: {
+      id: true,
+      orderId: true,
+      productId: true,
+      order: { select: { siteId: true, site: { select: { workspaceId: true } } } },
+    },
   });
 
   if (!lineItem) {
@@ -494,6 +592,23 @@ export async function removeLineItem(lineItemId: string) {
     where: { id: lineItemId },
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Order,
+    entityId: lineItem.orderId,
+    siteId: lineItem.order.siteId,
+    workspaceId: lineItem.order.site.workspaceId,
+    changedFields: ["products"],
+  });
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Product,
+    entityId: lineItem.productId,
+    siteId: lineItem.order.siteId,
+    workspaceId: lineItem.order.site.workspaceId,
+    changedFields: ["orders"],
+  });
+
   return { success: true };
 }
 
@@ -502,6 +617,10 @@ export async function removeLineItem(lineItemId: string) {
 // ============================================================================
 
 export async function reorder(_siteId: string, orderedIds: string[]) {
+  const orders = await prisma.order.findMany({
+    where: { id: { in: orderedIds } },
+    select: { id: true, siteId: true, site: { select: { workspaceId: true } } },
+  });
   await prisma.$transaction(
     orderedIds.map((id, index) =>
       prisma.order.update({
@@ -510,6 +629,17 @@ export async function reorder(_siteId: string, orderedIds: string[]) {
       }),
     ),
   );
+
+  for (const order of orders) {
+    publishEntityEvent({
+      action: "updated",
+      entityKey: SYSTEM_ENTITY_KEYS.Order,
+      entityId: order.id,
+      siteId: order.siteId,
+      workspaceId: order.site.workspaceId,
+      changedFields: ["sequence"],
+    });
+  }
 
   return { success: true };
 }

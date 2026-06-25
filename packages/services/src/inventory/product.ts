@@ -2,6 +2,8 @@ import prisma from "@rw/db";
 import type { Prisma, WeightUnit } from "@rw/db";
 
 import * as storage from "@rw/runtime/storage";
+import { publishEntityEvent } from "../entity/events.js";
+import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 
 // ============================================================================
 // Types - Product CRUD
@@ -92,7 +94,7 @@ export async function create(input: CreateProductInput) {
   // Verify site exists
   const site = await prisma.site.findUnique({
     where: { id: siteId },
-    select: { id: true },
+    select: { id: true, workspaceId: true },
   });
 
   if (!site) {
@@ -132,6 +134,14 @@ export async function create(input: CreateProductInput) {
         _count: { select: { materials: true, jobProducts: true, blobs: true, pictures: true } },
       },
     });
+  });
+
+  publishEntityEvent({
+    action: "created",
+    entityKey: SYSTEM_ENTITY_KEYS.Product,
+    entityId: product.id,
+    siteId: product.siteId,
+    workspaceId: site.workspaceId,
   });
 
   return { data: product };
@@ -268,7 +278,7 @@ export async function update(id: string, input: UpdateProductInput) {
   // Get current product with blob
   const current = await prisma.product.findUnique({
     where: { id },
-    include: { currentBlob: true },
+    include: { currentBlob: true, site: { select: { workspaceId: true } } },
   });
 
   if (!current) {
@@ -322,6 +332,17 @@ export async function update(id: string, input: UpdateProductInput) {
     });
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Product,
+    entityId: product.id,
+    siteId: product.siteId,
+    workspaceId: current.site.workspaceId,
+    changedFields: Object.entries({ sku, name, description, externalSku, weight, weightUnits })
+      .filter(([, value]) => value !== undefined)
+      .map(([key]) => key),
+  });
+
   return { data: product };
 }
 
@@ -332,6 +353,7 @@ export async function remove(id: string) {
   const product = await prisma.product.findUnique({
     where: { id },
     include: {
+      site: { select: { workspaceId: true } },
       _count: { select: { jobProducts: true } },
     },
   });
@@ -354,6 +376,14 @@ export async function remove(id: string) {
   await prisma.product.update({
     where: { id },
     data: { deletedAt: new Date() },
+  });
+
+  publishEntityEvent({
+    action: "deleted",
+    entityKey: SYSTEM_ENTITY_KEYS.Product,
+    entityId: product.id,
+    siteId: product.siteId,
+    workspaceId: product.site.workspaceId,
   });
 
   return { success: true };
@@ -406,7 +436,7 @@ export async function getVersionHistory(id: string) {
 export async function archive(id: string) {
   const product = await prisma.product.findUnique({
     where: { id },
-    select: { id: true, deletedAt: true, archivedAt: true },
+    select: { id: true, siteId: true, deletedAt: true, archivedAt: true, site: { select: { workspaceId: true } } },
   });
 
   if (!product) {
@@ -431,6 +461,15 @@ export async function archive(id: string) {
     },
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Product,
+    entityId: updated.id,
+    siteId: updated.siteId,
+    workspaceId: product.site.workspaceId,
+    changedFields: ["archivedAt"],
+  });
+
   return { data: updated };
 }
 
@@ -440,7 +479,7 @@ export async function archive(id: string) {
 export async function unarchive(id: string) {
   const product = await prisma.product.findUnique({
     where: { id },
-    select: { id: true, deletedAt: true, archivedAt: true },
+    select: { id: true, siteId: true, deletedAt: true, archivedAt: true, site: { select: { workspaceId: true } } },
   });
 
   if (!product) {
@@ -465,6 +504,15 @@ export async function unarchive(id: string) {
     },
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Product,
+    entityId: updated.id,
+    siteId: updated.siteId,
+    workspaceId: product.site.workspaceId,
+    changedFields: ["archivedAt"],
+  });
+
   return { data: updated };
 }
 
@@ -487,6 +535,7 @@ export async function duplicate(input: DuplicateProductInput) {
         },
       },
       pictures: true,
+      site: { select: { workspaceId: true } },
     },
   });
 
@@ -595,6 +644,16 @@ export async function duplicate(input: DuplicateProductInput) {
     });
   });
 
+  if (product) {
+    publishEntityEvent({
+      action: "created",
+      entityKey: SYSTEM_ENTITY_KEYS.Product,
+      entityId: product.id,
+      siteId: product.siteId,
+      workspaceId: source.site.workspaceId,
+    });
+  }
+
   return { data: product };
 }
 
@@ -611,7 +670,7 @@ export async function addMaterial(input: AddMaterialInput) {
   // Verify product exists and is not deleted
   const product = await prisma.product.findUnique({
     where: { id: productId },
-    select: { id: true, siteId: true, deletedAt: true, currentBlobId: true },
+    select: { id: true, siteId: true, deletedAt: true, currentBlobId: true, site: { select: { workspaceId: true } } },
   });
 
   if (!product) {
@@ -691,6 +750,23 @@ export async function addMaterial(input: AddMaterialInput) {
     });
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Product,
+    entityId: product.id,
+    siteId: product.siteId,
+    workspaceId: product.site.workspaceId,
+    changedFields: ["materials"],
+  });
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Material,
+    entityId: material.id,
+    siteId: material.siteId,
+    workspaceId: product.site.workspaceId,
+    changedFields: ["products"],
+  });
+
   return { data: productMaterial };
 }
 
@@ -705,8 +781,8 @@ export async function updateMaterial(input: UpdateMaterialInput) {
     where: { productId_materialId: { productId, materialId } },
     include: {
       currentBlob: true,
-      product: { select: { currentBlobId: true } },
-      material: { select: { currentBlobId: true } },
+      product: { select: { id: true, siteId: true, currentBlobId: true, site: { select: { workspaceId: true } } } },
+      material: { select: { id: true, currentBlobId: true } },
     },
   });
 
@@ -764,6 +840,23 @@ export async function updateMaterial(input: UpdateMaterialInput) {
     });
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Product,
+    entityId: existing.product.id,
+    siteId: existing.product.siteId,
+    workspaceId: existing.product.site.workspaceId,
+    changedFields: ["materials"],
+  });
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Material,
+    entityId: existing.material.id,
+    siteId: existing.product.siteId,
+    workspaceId: existing.product.site.workspaceId,
+    changedFields: ["products"],
+  });
+
   return { data: productMaterial };
 }
 
@@ -791,8 +884,11 @@ export async function removeMaterial(
     where: { productId_materialId: { productId, materialId } },
     select: {
       id: true,
+      productId: true,
+      materialId: true,
       altGroupId: true,
       activeOfAltGroup: { select: { id: true } },
+      product: { select: { siteId: true, site: { select: { workspaceId: true } } } },
     },
   });
 
@@ -845,6 +941,23 @@ export async function removeMaterial(
       // Last member deleted — clean up the now-empty group row.
       await tx.productMaterialAltGroup.delete({ where: { id: altGroupId } });
     }
+  });
+
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Product,
+    entityId: existing.productId,
+    siteId: existing.product.siteId,
+    workspaceId: existing.product.site.workspaceId,
+    changedFields: ["materials"],
+  });
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Material,
+    entityId: existing.materialId,
+    siteId: existing.product.siteId,
+    workspaceId: existing.product.site.workspaceId,
+    changedFields: ["products"],
   });
 
   return { success: true };

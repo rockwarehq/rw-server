@@ -2,6 +2,7 @@ export * as models from "./model.js";
 export * as instances from "./instances.js";
 export * as catalog from "./catalog.js";
 export * as registry from "./registry.js";
+export { publishEntityEvent, setEntityEventSink } from "./events.js";
 export { validateInstanceValues, validateAndNormalizeFieldConfig } from "./validation.js";
 export type * from "./catalog.types.js";
 export type * from "./instances.types.js";

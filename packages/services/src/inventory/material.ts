@@ -1,5 +1,7 @@
 import prisma from "@rw/db";
 import { Prisma, type WeightUnit } from "@rw/db";
+import { publishEntityEvent } from "../entity/events.js";
+import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 
 // ============================================================================
 // Types
@@ -52,7 +54,7 @@ export async function create(input: CreateMaterialInput) {
   // Verify site exists
   const site = await prisma.site.findUnique({
     where: { id: siteId },
-    select: { id: true },
+    select: { id: true, workspaceId: true },
   });
 
   if (!site) {
@@ -92,6 +94,14 @@ export async function create(input: CreateMaterialInput) {
         _count: { select: { products: true, blobs: true } },
       },
     });
+  });
+
+  publishEntityEvent({
+    action: "created",
+    entityKey: SYSTEM_ENTITY_KEYS.Material,
+    entityId: material.id,
+    siteId: material.siteId,
+    workspaceId: site.workspaceId,
   });
 
   return { data: material };
@@ -200,7 +210,7 @@ export async function update(id: string, input: UpdateMaterialInput) {
   // Get current material with blob
   const current = await prisma.material.findUnique({
     where: { id },
-    include: { currentBlob: true },
+    include: { currentBlob: true, site: { select: { workspaceId: true } } },
   });
 
   if (!current) {
@@ -255,6 +265,17 @@ export async function update(id: string, input: UpdateMaterialInput) {
     });
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Material,
+    entityId: material.id,
+    siteId: material.siteId,
+    workspaceId: current.site.workspaceId,
+    changedFields: Object.entries({ materialNumber, name, shortCode, description, externalNumber, weightUnits })
+      .filter(([, value]) => value !== undefined)
+      .map(([key]) => key),
+  });
+
   return { data: material };
 }
 
@@ -265,6 +286,7 @@ export async function remove(id: string) {
   const material = await prisma.material.findUnique({
     where: { id },
     include: {
+      site: { select: { workspaceId: true } },
       _count: { select: { products: true } },
     },
   });
@@ -287,6 +309,14 @@ export async function remove(id: string) {
   await prisma.material.update({
     where: { id },
     data: { deletedAt: new Date() },
+  });
+
+  publishEntityEvent({
+    action: "deleted",
+    entityKey: SYSTEM_ENTITY_KEYS.Material,
+    entityId: material.id,
+    siteId: material.siteId,
+    workspaceId: material.site.workspaceId,
   });
 
   return { success: true };

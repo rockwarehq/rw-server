@@ -1,4 +1,6 @@
 import prisma from "@rw/db";
+import { publishEntityEvent } from "../../entity/events.js";
+import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { seedDefaults as seedDefaultRoles } from "../../employee/role.js";
 
 export interface CreateSiteInput {
@@ -45,6 +47,14 @@ export async function create(input: CreateSiteInput) {
 
   // Seed default employee roles for the new site
   await seedDefaultRoles(site.id);
+
+  publishEntityEvent({
+    action: "created",
+    entityKey: SYSTEM_ENTITY_KEYS.Site,
+    entityId: site.id,
+    siteId: site.id,
+    workspaceId,
+  });
 
   return { data: site };
 }
@@ -186,6 +196,15 @@ export async function update(id: string, input: UpdateSiteInput, workspaceId?: s
     },
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Site,
+    entityId: site.id,
+    siteId: site.id,
+    workspaceId: site.workspaceId,
+    changedFields: Object.keys(updateData),
+  });
+
   return { data: site };
 }
 
@@ -231,6 +250,14 @@ export async function remove(id: string, workspaceId?: string) {
   }
 
   await prisma.site.delete({ where: { id } });
+
+  publishEntityEvent({
+    action: "deleted",
+    entityKey: SYSTEM_ENTITY_KEYS.Site,
+    entityId: site.id,
+    siteId: site.id,
+    workspaceId: site.workspaceId,
+  });
 
   return { success: true };
 }

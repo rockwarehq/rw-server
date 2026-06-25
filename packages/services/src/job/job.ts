@@ -1,5 +1,7 @@
 import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
+import { publishEntityEvent } from "../entity/events.js";
+import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 
 // ============================================================================
 // Types - Job
@@ -75,7 +77,7 @@ export async function create(input: CreateJobInput) {
   // Verify site exists
   const site = await prisma.site.findUnique({
     where: { id: siteId },
-    select: { id: true },
+    select: { id: true, workspaceId: true },
   });
 
   if (!site) {
@@ -112,6 +114,14 @@ export async function create(input: CreateJobInput) {
         _count: { select: { tools: true, jobProducts: true, orders: true, blobs: true } },
       },
     });
+  });
+
+  publishEntityEvent({
+    action: "created",
+    entityKey: SYSTEM_ENTITY_KEYS.Job,
+    entityId: job.id,
+    siteId: job.siteId,
+    workspaceId: site.workspaceId,
   });
 
   return { data: job };
@@ -282,7 +292,7 @@ export async function update(id: string, input: UpdateJobInput) {
   // Get current job with blob
   const current = await prisma.job.findUnique({
     where: { id },
-    include: { currentBlob: true },
+    include: { currentBlob: true, site: { select: { workspaceId: true } } },
   });
 
   if (!current) {
@@ -333,6 +343,17 @@ export async function update(id: string, input: UpdateJobInput) {
     });
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Job,
+    entityId: job.id,
+    siteId: job.siteId,
+    workspaceId: current.site.workspaceId,
+    changedFields: Object.entries({ name, description, standardCycle, productsPerCycle })
+      .filter(([, value]) => value !== undefined)
+      .map(([key]) => key),
+  });
+
   return { data: job };
 }
 
@@ -343,6 +364,7 @@ export async function remove(id: string) {
   const job = await prisma.job.findUnique({
     where: { id },
     include: {
+      site: { select: { workspaceId: true } },
       _count: { select: { orders: true } },
     },
   });
@@ -365,6 +387,14 @@ export async function remove(id: string) {
   await prisma.job.update({
     where: { id },
     data: { deletedAt: new Date() },
+  });
+
+  publishEntityEvent({
+    action: "deleted",
+    entityKey: SYSTEM_ENTITY_KEYS.Job,
+    entityId: job.id,
+    siteId: job.siteId,
+    workspaceId: job.site.workspaceId,
   });
 
   return { success: true };
@@ -394,7 +424,7 @@ export async function addTool(input: AddToolInput) {
   // Verify job exists and is not deleted
   const job = await prisma.job.findUnique({
     where: { id: jobId },
-    select: { id: true, siteId: true, deletedAt: true },
+    select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } },
   });
 
   if (!job) {
@@ -471,6 +501,23 @@ export async function addTool(input: AddToolInput) {
     });
   }
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Job,
+    entityId: job.id,
+    siteId: job.siteId,
+    workspaceId: job.site.workspaceId,
+    changedFields: ["tools"],
+  });
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Tool,
+    entityId: tool.id,
+    siteId: tool.siteId,
+    workspaceId: job.site.workspaceId,
+    changedFields: ["jobs"],
+  });
+
   return { data: jobTool };
 }
 
@@ -480,6 +527,7 @@ export async function addTool(input: AddToolInput) {
 export async function removeTool(jobId: string, toolId: string) {
   const jobTool = await prisma.jobTool.findUnique({
     where: { jobId_toolId: { jobId, toolId } },
+    include: { job: { include: { site: { select: { workspaceId: true } } } }, tool: true },
   });
 
   if (!jobTool) {
@@ -493,6 +541,23 @@ export async function removeTool(jobId: string, toolId: string) {
   await prisma.jobTool.update({
     where: { id: jobTool.id },
     data: { deletedAt: new Date() },
+  });
+
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Job,
+    entityId: jobTool.jobId,
+    siteId: jobTool.job.siteId,
+    workspaceId: jobTool.job.site.workspaceId,
+    changedFields: ["tools"],
+  });
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Tool,
+    entityId: jobTool.toolId,
+    siteId: jobTool.tool.siteId,
+    workspaceId: jobTool.job.site.workspaceId,
+    changedFields: ["jobs"],
   });
 
   return { success: true };
@@ -549,7 +614,7 @@ export async function addItem(input: AddItemInput) {
   // Verify job exists and is not deleted
   const job = await prisma.job.findUnique({
     where: { id: jobId },
-    select: { id: true, siteId: true, deletedAt: true },
+    select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } },
   });
 
   if (!job) {
@@ -662,6 +727,23 @@ export async function addItem(input: AddItemInput) {
     });
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Job,
+    entityId: job.id,
+    siteId: job.siteId,
+    workspaceId: job.site.workspaceId,
+    changedFields: ["products"],
+  });
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Product,
+    entityId: product.id,
+    siteId: product.siteId,
+    workspaceId: job.site.workspaceId,
+    changedFields: ["jobs"],
+  });
+
   return { data: jobProduct };
 }
 
@@ -676,7 +758,7 @@ export async function updateItem(itemId: string, input: UpdateItemInput) {
     where: { id: itemId },
     include: {
       currentBlob: true,
-      job: { select: { id: true, siteId: true, deletedAt: true } },
+      job: { select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } } },
     },
   });
 
@@ -782,6 +864,23 @@ export async function updateItem(itemId: string, input: UpdateItemInput) {
     });
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Job,
+    entityId: current.jobId,
+    siteId: current.job.siteId,
+    workspaceId: current.job.site.workspaceId,
+    changedFields: ["products"],
+  });
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Product,
+    entityId: current.productId,
+    siteId: current.job.siteId,
+    workspaceId: current.job.site.workspaceId,
+    changedFields: ["jobs"],
+  });
+
   return { data: jobProduct };
 }
 
@@ -791,6 +890,7 @@ export async function updateItem(itemId: string, input: UpdateItemInput) {
 export async function removeItem(itemId: string) {
   const item = await prisma.jobProduct.findUnique({
     where: { id: itemId },
+    include: { job: { include: { site: { select: { workspaceId: true } } } } },
   });
 
   if (!item) {
@@ -804,6 +904,23 @@ export async function removeItem(itemId: string) {
   await prisma.jobProduct.update({
     where: { id: itemId },
     data: { deletedAt: new Date() },
+  });
+
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Job,
+    entityId: item.jobId,
+    siteId: item.job.siteId,
+    workspaceId: item.job.site.workspaceId,
+    changedFields: ["products"],
+  });
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Product,
+    entityId: item.productId,
+    siteId: item.job.siteId,
+    workspaceId: item.job.site.workspaceId,
+    changedFields: ["jobs"],
   });
 
   return { success: true };

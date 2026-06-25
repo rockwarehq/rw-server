@@ -151,6 +151,22 @@ function jsonRecord(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {};
 }
 
+function entityValue(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(entityValue);
+  return value;
+}
+
+function valueAtPath(record: Record<string, unknown>, path: string): unknown {
+  const parts = path.split(".").filter(Boolean);
+  let value: unknown = record;
+  for (const part of parts) {
+    if (!isRecord(value)) return null;
+    value = value[part];
+  }
+  return entityValue(value ?? null);
+}
+
 function inputMatchesValueType(value: unknown, valueType: string): boolean {
   if (valueType === "string" || valueType === "entityRef" || valueType === "date") return typeof value === "string";
   if (valueType === "number" || valueType === "percent") return typeof value === "number" && Number.isFinite(value);
@@ -166,29 +182,9 @@ async function validateEntityRef(
 ): Promise<{ success: true } | { error: string; code: string }> {
   if (!entityId) return errorResult("ENTITY_REF_REQUIRED", "Entity reference id is required");
 
-  if (entityKey === SYSTEM_ENTITY_KEYS.Site) {
-    if (entityId !== scope.siteId) return errorResult("ENTITY_SITE_MISMATCH", "Entity reference is outside this site");
-    const site = await prisma.site.findFirst({
-      where: { id: entityId, workspaceId: scope.workspaceId },
-      select: { id: true },
-    });
-    return site ? { success: true } : errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
-  }
-
-  if (entityKey === SYSTEM_ENTITY_KEYS.Workcenter) {
-    const workcenter = await prisma.workcenter.findFirst({
-      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId } },
-      select: { id: true },
-    });
-    return workcenter ? { success: true } : errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
-  }
-
-  if (entityKey === SYSTEM_ENTITY_KEYS.Station) {
-    const station = await prisma.station.findFirst({
-      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId } },
-      select: { id: true },
-    });
-    return station ? { success: true } : errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
+  if (systemEntityCatalogEntryByKey(entityKey, false)) {
+    const record = await resolveSystemEntityRecord(entityKey, entityId, scope);
+    return "error" in record ? record : { success: true };
   }
 
   const schema = await prisma.objectSchema.findFirst({
@@ -278,60 +274,225 @@ async function entityCatalogField(
   };
 }
 
+async function resolveSystemEntityRecord(
+  entityKey: string,
+  entityId: string,
+  scope: GraphScope,
+): Promise<ServiceResult<Record<string, unknown>>> {
+  if (entityKey === SYSTEM_ENTITY_KEYS.Site) {
+    const site = await prisma.site.findFirst({
+      where: { id: entityId, workspaceId: scope.workspaceId },
+      include: {
+        workcenters: { select: { id: true } },
+        stations: { where: { deletedAt: null }, select: { id: true } },
+      },
+    });
+    if (!site || site.id !== scope.siteId) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
+    return { data: { ...site, workcenters: site.workcenters.map((row) => row.id), stations: site.stations.map((row) => row.id) } };
+  }
+
+  if (entityKey === SYSTEM_ENTITY_KEYS.Workcenter) {
+    const workcenter = await prisma.workcenter.findFirst({
+      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId } },
+      include: {
+        children: { select: { id: true } },
+        stations: { where: { deletedAt: null }, select: { id: true } },
+      },
+    });
+    if (!workcenter) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
+    return {
+      data: {
+        ...workcenter,
+        site: workcenter.siteId,
+        parent: workcenter.parentId,
+        children: workcenter.children.map((row) => row.id),
+        stations: workcenter.stations.map((row) => row.id),
+      },
+    };
+  }
+
+  if (entityKey === SYSTEM_ENTITY_KEYS.Station) {
+    const station = await prisma.station.findFirst({
+      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null },
+      include: { currentBlob: true },
+    });
+    if (!station) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
+    return {
+      data: {
+        ...station,
+        site: station.siteId,
+        workcenter: station.workcenterId,
+        currentJob: station.currentJobId,
+        currentBlob: station.currentBlob
+          ? {
+              ...station.currentBlob,
+              standardCycle: station.currentBlob.standardCycle?.toNumber() ?? null,
+              downtimeDetect: station.currentBlob.downtimeDetect?.toNumber() ?? null,
+              slowDetect: station.currentBlob.slowDetect?.toNumber() ?? null,
+            }
+          : null,
+      },
+    };
+  }
+
+  if (entityKey === SYSTEM_ENTITY_KEYS.Job) {
+    const job = await prisma.job.findFirst({
+      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null },
+      include: {
+        currentBlob: true,
+        currentOfStations: { where: { deletedAt: null }, select: { id: true } },
+        jobProducts: { where: { deletedAt: null, product: { deletedAt: null } }, select: { productId: true } },
+        tools: { where: { deletedAt: null, tool: { deletedAt: null } }, select: { toolId: true } },
+      },
+    });
+    if (!job) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
+    return {
+      data: {
+        ...job,
+        site: job.siteId,
+        stations: job.currentOfStations.map((row) => row.id),
+        products: job.jobProducts.map((row) => row.productId),
+        tools: job.tools.map((row) => row.toolId),
+        currentBlob: job.currentBlob
+          ? { ...job.currentBlob, standardCycle: job.currentBlob.standardCycle?.toNumber() ?? null }
+          : null,
+      },
+    };
+  }
+
+  if (entityKey === SYSTEM_ENTITY_KEYS.Product) {
+    const product = await prisma.product.findFirst({
+      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null },
+      include: {
+        currentBlob: true,
+        materials: { where: { archivedAt: null, material: { deletedAt: null } }, select: { materialId: true } },
+        jobProducts: { where: { deletedAt: null, job: { deletedAt: null } }, select: { jobId: true } },
+        workOrders: { where: { deletedAt: null }, select: { id: true } },
+      },
+    });
+    if (!product) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
+    return {
+      data: {
+        ...product,
+        site: product.siteId,
+        materials: product.materials.map((row) => row.materialId),
+        jobs: product.jobProducts.map((row) => row.jobId),
+        workOrders: product.workOrders.map((row) => row.id),
+        currentBlob: product.currentBlob
+          ? { ...product.currentBlob, weight: product.currentBlob.weight?.toNumber() ?? null }
+          : null,
+      },
+    };
+  }
+
+  if (entityKey === SYSTEM_ENTITY_KEYS.Material) {
+    const material = await prisma.material.findFirst({
+      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null },
+      include: {
+        currentBlob: true,
+        products: { where: { archivedAt: null, product: { deletedAt: null } }, select: { productId: true } },
+      },
+    });
+    if (!material) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
+    return {
+      data: {
+        ...material,
+        site: material.siteId,
+        products: material.products.map((row) => row.productId),
+      },
+    };
+  }
+
+  if (entityKey === SYSTEM_ENTITY_KEYS.Tool) {
+    const tool = await prisma.tool.findFirst({
+      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null },
+      include: {
+        currentBlob: true,
+        jobs: { where: { deletedAt: null, job: { deletedAt: null } }, select: { jobId: true } },
+      },
+    });
+    if (!tool) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
+    return { data: { ...tool, site: tool.siteId, jobs: tool.jobs.map((row) => row.jobId) } };
+  }
+
+  if (entityKey === SYSTEM_ENTITY_KEYS.Customer) {
+    const customer = await prisma.customer.findFirst({
+      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null },
+      include: { orders: { where: { deletedAt: null }, select: { id: true } } },
+    });
+    if (!customer) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
+    return { data: { ...customer, site: customer.siteId, orders: customer.orders.map((row) => row.id) } };
+  }
+
+  if (entityKey === SYSTEM_ENTITY_KEYS.Order) {
+    const order = await prisma.order.findFirst({
+      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null },
+      include: { lineItems: { where: { product: { deletedAt: null } }, select: { productId: true } } },
+    });
+    if (!order) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
+    return {
+      data: { ...order, site: order.siteId, customer: order.customerId, products: order.lineItems.map((row) => row.productId) },
+    };
+  }
+
+  if (entityKey === SYSTEM_ENTITY_KEYS.WorkOrder) {
+    const order = await prisma.workOrder.findFirst({
+      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null },
+    });
+    if (!order) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
+    return { data: { ...order, site: order.siteId, job: order.jobId, product: order.productId } };
+  }
+
+  if (entityKey === SYSTEM_ENTITY_KEYS.Employee) {
+    const employee = await prisma.employee.findFirst({
+      where: {
+        id: entityId,
+        workspaceId: scope.workspaceId,
+        siteAccess: { some: { siteId: scope.siteId, status: "ACTIVE" } },
+      },
+      include: { version: true, siteAccess: { where: { status: "ACTIVE" }, select: { siteId: true } } },
+    });
+    if (!employee) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
+    return { data: { ...employee, sites: employee.siteAccess.map((row) => row.siteId) } };
+  }
+
+  if (entityKey === SYSTEM_ENTITY_KEYS.ShiftInstance) {
+    const shift = await prisma.shiftInstance.findFirst({
+      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId } },
+    });
+    if (!shift) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
+    return { data: { ...shift, site: shift.siteId, workcenter: shift.workCenterId } };
+  }
+
+  if (entityKey === SYSTEM_ENTITY_KEYS.StatusReason) {
+    const reason = await prisma.statusReason.findFirst({
+      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, archivedAt: null },
+    });
+    if (!reason) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
+    return { data: { ...reason, site: reason.siteId, category: reason.categoryId } };
+  }
+
+  if (entityKey === SYSTEM_ENTITY_KEYS.StatusCategory) {
+    const category = await prisma.statusCategory.findFirst({
+      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null },
+      include: { statusReasons: { where: { archivedAt: null }, select: { id: true } } },
+    });
+    if (!category) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
+    return { data: { ...category, site: category.siteId, statusReasons: category.statusReasons.map((row) => row.id) } };
+  }
+
+  return errorResult("ENTITY_REF_SCHEMA_NOT_FOUND", "Entity reference schema was not found");
+}
+
 async function resolveSystemEntityValue(
   entityKey: string,
   entityId: string,
   path: string,
   scope: GraphScope,
 ): Promise<ServiceResult<unknown>> {
-  if (entityKey === SYSTEM_ENTITY_KEYS.Site) {
-    const site = await prisma.site.findFirst({
-      where: { id: entityId, workspaceId: scope.workspaceId },
-      select: { id: true, name: true, description: true, timezone: true, attrs: true },
-    });
-    if (!site || site.id !== scope.siteId) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
-    if (path === "workcenters") {
-      const workcenters = await prisma.workcenter.findMany({ where: { siteId: site.id }, select: { id: true } });
-      return { data: workcenters.map((workcenter) => workcenter.id) };
-    }
-    if (path === "stations") {
-      const stations = await prisma.station.findMany({ where: { siteId: site.id }, select: { id: true } });
-      return { data: stations.map((station) => station.id) };
-    }
-    return { data: jsonRecord(site)[path] ?? null };
-  }
-
-  if (entityKey === SYSTEM_ENTITY_KEYS.Workcenter) {
-    const workcenter = await prisma.workcenter.findFirst({
-      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId } },
-      select: { id: true, name: true, description: true, attrs: true, siteId: true, parentId: true },
-    });
-    if (!workcenter) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
-    if (path === "site") return { data: workcenter.siteId };
-    if (path === "parent") return { data: workcenter.parentId };
-    if (path === "children") {
-      const children = await prisma.workcenter.findMany({ where: { parentId: workcenter.id }, select: { id: true } });
-      return { data: children.map((child) => child.id) };
-    }
-    if (path === "stations") {
-      const stations = await prisma.station.findMany({ where: { workcenterId: workcenter.id }, select: { id: true } });
-      return { data: stations.map((station) => station.id) };
-    }
-    return { data: jsonRecord(workcenter)[path] ?? null };
-  }
-
-  if (entityKey === SYSTEM_ENTITY_KEYS.Station) {
-    const station = await prisma.station.findFirst({
-      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId } },
-      select: { id: true, name: true, description: true, attrs: true, siteId: true, workcenterId: true },
-    });
-    if (!station) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
-    if (path === "site") return { data: station.siteId };
-    if (path === "workcenter") return { data: station.workcenterId };
-    return { data: jsonRecord(station)[path] ?? null };
-  }
-
-  return errorResult("ENTITY_REF_SCHEMA_NOT_FOUND", "Entity reference schema was not found");
+  const record = await resolveSystemEntityRecord(entityKey, entityId, scope);
+  if ("error" in record) return record;
+  return { data: valueAtPath(record.data, path) };
 }
 
 async function resolveUserEntityValue(

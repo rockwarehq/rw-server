@@ -3,6 +3,8 @@ import prisma from "@rw/db";
 import { recalcAll } from "../../../metrics/recalc.js";
 import { ensureBuckets } from "../../../metrics/bucket.js";
 import { jobEntityId } from "../../../metrics/cascade.js";
+import { publishEntityEvent } from "../../../entity/events.js";
+import { SYSTEM_ENTITY_KEYS } from "../../../entity/registry.js";
 import { publishStationCurrentJobMetric, publishStationStandardCycleMetric } from "../state.js";
 import type { StationActionDefinition } from "./types.js";
 
@@ -78,6 +80,7 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
           id: true,
           siteId: true,
           currentJobId: true,
+          site: { select: { workspaceId: true } },
         },
       });
 
@@ -138,6 +141,15 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
     });
 
     const { station, closedLogs } = result;
+
+    publishEntityEvent({
+      action: "updated",
+      entityKey: SYSTEM_ENTITY_KEYS.Station,
+      entityId: station.id,
+      siteId: station.siteId,
+      workspaceId: station.site.workspaceId,
+      changedFields: ["currentJobId"],
+    });
 
     // ── Fire-and-forget side effects after the transaction commits ──
     // Recompute KPIs for each closed log's time range.

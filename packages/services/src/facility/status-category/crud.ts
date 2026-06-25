@@ -1,4 +1,6 @@
 import prisma from "@rw/db";
+import { publishEntityEvent } from "../../entity/events.js";
+import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 
 export interface CreateStatusCategoryInput {
   name: string;
@@ -24,7 +26,7 @@ export async function create(input: CreateStatusCategoryInput) {
 
   const site = await prisma.site.findUnique({
     where: { id: siteId },
-    select: { id: true },
+    select: { id: true, workspaceId: true },
   });
 
   if (!site) {
@@ -46,6 +48,14 @@ export async function create(input: CreateStatusCategoryInput) {
     include: {
       _count: { select: { statusReasons: true } },
     },
+  });
+
+  publishEntityEvent({
+    action: "created",
+    entityKey: SYSTEM_ENTITY_KEYS.StatusCategory,
+    entityId: category.id,
+    siteId: category.siteId,
+    workspaceId: site.workspaceId,
   });
 
   return { data: category };
@@ -119,7 +129,7 @@ export async function update(id: string, input: UpdateStatusCategoryInput) {
 
   const current = await prisma.statusCategory.findUnique({
     where: { id },
-    select: { id: true, siteId: true, deletedAt: true },
+    select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } },
   });
 
   if (!current || current.deletedAt) {
@@ -148,6 +158,15 @@ export async function update(id: string, input: UpdateStatusCategoryInput) {
     },
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.StatusCategory,
+    entityId: category.id,
+    siteId: category.siteId,
+    workspaceId: current.site.workspaceId,
+    changedFields: Object.keys(updateData),
+  });
+
   return { data: category };
 }
 
@@ -158,6 +177,7 @@ export async function remove(id: string) {
   const category = await prisma.statusCategory.findUnique({
     where: { id },
     include: {
+      site: { select: { workspaceId: true } },
       _count: { select: { statusReasons: true } },
     },
   });
@@ -176,6 +196,14 @@ export async function remove(id: string) {
   await prisma.statusCategory.update({
     where: { id },
     data: { deletedAt: new Date() },
+  });
+
+  publishEntityEvent({
+    action: "deleted",
+    entityKey: SYSTEM_ENTITY_KEYS.StatusCategory,
+    entityId: category.id,
+    siteId: category.siteId,
+    workspaceId: category.site.workspaceId,
   });
 
   return { success: true };

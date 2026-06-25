@@ -3,6 +3,8 @@ import { recalcAll } from "../../metrics/recalc.js";
 import { ensureBuckets } from "../../metrics/bucket.js";
 import { jobEntityId } from "../../metrics/cascade.js";
 import { publishStationCurrentJobMetric, publishStationStandardCycleMetric } from "./state.js";
+import { publishEntityEvent } from "../../entity/events.js";
+import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 
 type ChangeJobResult =
   | {
@@ -71,6 +73,7 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
         siteId: true,
         currentJobId: true,
         workcenterId: true,
+        site: { select: { workspaceId: true } },
         workcenter: { select: { name: true } },
       },
     });
@@ -135,6 +138,15 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
   }
 
   const { station, previousJobId, openLogs } = result;
+
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Station,
+    entityId: station.id,
+    siteId: station.siteId,
+    workspaceId: station.site.workspaceId,
+    changedFields: ["currentJobId"],
+  });
 
   // Fire-and-forget side effects after the transaction commits
   for (const log of openLogs) {

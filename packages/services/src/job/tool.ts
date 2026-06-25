@@ -1,5 +1,7 @@
 import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
+import { publishEntityEvent } from "../entity/events.js";
+import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 
 // ============================================================================
 // Types - Tool
@@ -55,7 +57,7 @@ export async function create(input: CreateToolInput) {
   // Verify site exists
   const site = await prisma.site.findUnique({
     where: { id: siteId },
-    select: { id: true },
+    select: { id: true, workspaceId: true },
   });
 
   if (!site) {
@@ -91,6 +93,14 @@ export async function create(input: CreateToolInput) {
         _count: { select: { toolCavities: true, jobs: true, blobs: true } },
       },
     });
+  });
+
+  publishEntityEvent({
+    action: "created",
+    entityKey: SYSTEM_ENTITY_KEYS.Tool,
+    entityId: tool.id,
+    siteId: tool.siteId,
+    workspaceId: site.workspaceId,
   });
 
   return { data: tool };
@@ -180,7 +190,7 @@ export async function update(id: string, input: UpdateToolInput) {
   // Get current tool with blob
   const current = await prisma.tool.findUnique({
     where: { id },
-    include: { currentBlob: true },
+    include: { currentBlob: true, site: { select: { workspaceId: true } } },
   });
 
   if (!current) {
@@ -230,6 +240,17 @@ export async function update(id: string, input: UpdateToolInput) {
     });
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Tool,
+    entityId: tool.id,
+    siteId: tool.siteId,
+    workspaceId: current.site.workspaceId,
+    changedFields: Object.entries({ name, description, cavityCount })
+      .filter(([, value]) => value !== undefined)
+      .map(([key]) => key),
+  });
+
   return { data: tool };
 }
 
@@ -240,6 +261,7 @@ export async function remove(id: string) {
   const tool = await prisma.tool.findUnique({
     where: { id },
     include: {
+      site: { select: { workspaceId: true } },
       _count: { select: { jobs: true, jobProducts: true } },
     },
   });
@@ -271,6 +293,14 @@ export async function remove(id: string) {
     data: { deletedAt: new Date() },
   });
 
+  publishEntityEvent({
+    action: "deleted",
+    entityKey: SYSTEM_ENTITY_KEYS.Tool,
+    entityId: tool.id,
+    siteId: tool.siteId,
+    workspaceId: tool.site.workspaceId,
+  });
+
   return { success: true };
 }
 
@@ -298,7 +328,7 @@ export async function addCavity(input: AddCavityInput) {
   // Verify tool exists and is not deleted
   const tool = await prisma.tool.findUnique({
     where: { id: toolId },
-    select: { id: true, deletedAt: true },
+    select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } },
   });
 
   if (!tool) {
@@ -336,6 +366,15 @@ export async function addCavity(input: AddCavityInput) {
     });
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Tool,
+    entityId: tool.id,
+    siteId: tool.siteId,
+    workspaceId: tool.site.workspaceId,
+    changedFields: ["cavities"],
+  });
+
   return { data: cavity };
 }
 
@@ -348,7 +387,7 @@ export async function updateCavity(cavityId: string, input: UpdateCavityInput) {
   // Get current cavity with blob
   const current = await prisma.toolCavity.findUnique({
     where: { id: cavityId },
-    include: { currentBlob: true, tool: { select: { id: true, deletedAt: true } } },
+    include: { currentBlob: true, tool: { select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } } } },
   });
 
   if (!current) {
@@ -398,6 +437,15 @@ export async function updateCavity(cavityId: string, input: UpdateCavityInput) {
     });
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Tool,
+    entityId: current.tool.id,
+    siteId: current.tool.siteId,
+    workspaceId: current.tool.site.workspaceId,
+    changedFields: ["cavities"],
+  });
+
   return { data: cavity };
 }
 
@@ -408,7 +456,7 @@ export async function removeCavity(cavityId: string) {
   const cavity = await prisma.toolCavity.findUnique({
     where: { id: cavityId },
     include: {
-      tool: { select: { id: true, deletedAt: true } },
+      tool: { select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } } },
       _count: { select: { jobProducts: true } },
     },
   });
@@ -431,6 +479,15 @@ export async function removeCavity(cavityId: string) {
   await prisma.toolCavity.update({
     where: { id: cavityId },
     data: { deletedAt: new Date() },
+  });
+
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Tool,
+    entityId: cavity.tool.id,
+    siteId: cavity.tool.siteId,
+    workspaceId: cavity.tool.site.workspaceId,
+    changedFields: ["cavities"],
   });
 
   return { success: true };

@@ -17,6 +17,8 @@
 //   3. Batch insert all new ShiftInstance rows
 
 import prisma from "@rw/db";
+import { publishEntityEvent } from "../../entity/events.js";
+import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { getSiteTimezone, getLocalCalendarDate } from "../../metrics/bucket.js";
 
 const MS_PER_DAY = 86_400_000;
@@ -94,6 +96,12 @@ interface ReservedWindow {
   endMs: number;
 }
 
+interface ShiftInstanceEventRow {
+  id: string;
+  siteId: string;
+  site: { workspaceId: string };
+}
+
 // ── Include used to fetch assignments with everything we need ────
 
 const assignmentIncludeForMaterialize = {
@@ -163,10 +171,15 @@ export async function materializeShiftInstances(options?: { lookaheadDays?: numb
     return { created: 0, candidates };
   }
 
+  const existingKeys = await findExistingShiftInstanceKeys(allRows);
   const result = await prisma.shiftInstance.createMany({
     data: allRows,
     skipDuplicates: true,
   });
+
+  if (result.count > 0) {
+    await publishCreatedShiftInstanceEvents(allRows, existingKeys);
+  }
 
   return { created: result.count, candidates };
 }
@@ -240,6 +253,8 @@ export async function reconcileShiftInstances(assignmentId: string): Promise<Rec
       },
       select: {
         id: true,
+        siteId: true,
+        site: { select: { workspaceId: true } },
         startTime: true,
         endTime: true,
       },
@@ -271,6 +286,10 @@ export async function reconcileShiftInstances(assignmentId: string): Promise<Rec
           where: { id: { in: toDelete } },
         });
         deleted = deleteResult.count;
+        publishShiftInstanceEvents(
+          "deleted",
+          oldInstances.filter((instance) => toDelete.includes(instance.id)),
+        );
       }
     }
   }
@@ -282,11 +301,15 @@ export async function reconcileShiftInstances(assignmentId: string): Promise<Rec
 
   let created = 0;
   if (rows.length > 0) {
+    const existingKeys = await findExistingShiftInstanceKeys(rows);
     const result = await prisma.shiftInstance.createMany({
       data: rows,
       skipDuplicates: true,
     });
     created = result.count;
+    if (created > 0) {
+      await publishCreatedShiftInstanceEvents(rows, existingKeys);
+    }
   }
 
   return { created, deleted, preserved };
@@ -424,6 +447,68 @@ async function findInUseShiftInstanceIds(instanceIds: string[]): Promise<Set<str
   for (const row of dispositionRefs) inUse.add(row.shiftInstanceId);
 
   return inUse;
+}
+
+async function findExistingShiftInstanceKeys(rows: readonly InstanceRow[]): Promise<Set<string>> {
+  if (rows.length === 0) return new Set();
+
+  const rowKeys = new Set(rows.map(shiftInstanceUniqueKey));
+  const startTimesByMs = new Map(rows.map((row) => [row.startTime.getTime(), row.startTime]));
+  const existing = await prisma.shiftInstance.findMany({
+    where: {
+      assignmentId: { in: [...new Set(rows.map((row) => row.assignmentId))] },
+      startTime: { in: [...startTimesByMs.values()] },
+    },
+    select: { assignmentId: true, startTime: true },
+  });
+
+  return new Set(
+    existing
+      .map(shiftInstanceUniqueKey)
+      .filter((key) => rowKeys.has(key)),
+  );
+}
+
+async function publishCreatedShiftInstanceEvents(rows: readonly InstanceRow[], existingKeys: Set<string>) {
+  const createdRows = rows.filter((row) => !existingKeys.has(shiftInstanceUniqueKey(row)));
+  if (createdRows.length === 0) return;
+
+  const rowKeys = new Set(createdRows.map(shiftInstanceUniqueKey));
+  const startTimesByMs = new Map(createdRows.map((row) => [row.startTime.getTime(), row.startTime]));
+  const instances = await prisma.shiftInstance.findMany({
+    where: {
+      assignmentId: { in: [...new Set(createdRows.map((row) => row.assignmentId))] },
+      startTime: { in: [...startTimesByMs.values()] },
+    },
+    select: {
+      id: true,
+      assignmentId: true,
+      startTime: true,
+      siteId: true,
+      site: { select: { workspaceId: true } },
+    },
+  });
+
+  publishShiftInstanceEvents(
+    "created",
+    instances.filter((instance) => rowKeys.has(shiftInstanceUniqueKey(instance))),
+  );
+}
+
+function publishShiftInstanceEvents(action: "created" | "deleted", instances: readonly ShiftInstanceEventRow[]) {
+  for (const instance of instances) {
+    publishEntityEvent({
+      action,
+      entityKey: SYSTEM_ENTITY_KEYS.ShiftInstance,
+      entityId: instance.id,
+      siteId: instance.siteId,
+      workspaceId: instance.site.workspaceId,
+    });
+  }
+}
+
+function shiftInstanceUniqueKey(row: { assignmentId: string; startTime: Date }) {
+  return `${row.assignmentId}:${row.startTime.getTime()}`;
 }
 
 /**
