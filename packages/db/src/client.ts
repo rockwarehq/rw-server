@@ -10,7 +10,7 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "./generated/client.js";
 
-export type DbRole = "api" | "rollups" | "processor" | "processor-consumer" | "livestore";
+export type DbRole = "api" | "rollups" | "processor" | "processor-consumer" | "livestore" | "imm-events";
 
 const DEFAULT_POOL: Record<DbRole, number> = {
   api: 5,
@@ -18,6 +18,7 @@ const DEFAULT_POOL: Record<DbRole, number> = {
   processor: 5,
   "processor-consumer": 10,
   livestore: 5,
+  "imm-events": 5,
 };
 
 let cached: PrismaClient | null = null;

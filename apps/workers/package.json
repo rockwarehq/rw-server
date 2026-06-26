@@ -6,9 +6,13 @@
   "scripts": {
     "build": "tsc -b",
     "start:rollups": "node dist/main.js --worker rollups",
-    "dev:rollups": "tsx watch src/main.ts --worker rollups"
+    "dev:rollups": "tsx watch src/main.ts --worker rollups",
+    "start:imm-events": "node dist/main.js --worker imm-events",
+    "dev:imm-events": "tsx watch src/main.ts --worker imm-events"
   },
   "dependencies": {
+    "@nats-io/jetstream": "^3.4.0",
+    "@nats-io/nats-core": "^3.4.0",
     "@nats-io/transport-node": "^3.4.0",
     "@orpc/client": "^1.14.3",
     "@orpc/server": "^1.14.0",

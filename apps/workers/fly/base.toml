@@ -11,10 +11,12 @@ primary_region = 'iad'
 [deploy]
 release_command = 'pnpm -w db:migrate'
 
-# Single process group — scale with:
-#   fly scale count -a <tenant>-workers rollups=1
+# Process groups — scale independently, e.g.:
+#   fly scale count -a <tenant>-workers rollups=1 imm-events=1
 [processes]
 rollups = 'node dist/main.js --worker rollups'
+# Records cycles from livestore imm events; pooled (pgbouncer) DATABASE_URL.
+imm-events = 'node dist/main.js --worker imm-events'
 
 [env]
 NODE_ENV = 'production'
@@ -27,7 +29,7 @@ PORT = '9465'
 [[services]]
 internal_port = 9465
 protocol = 'tcp'
-processes = ['rollups']
+processes = ['rollups', 'imm-events']
 
   [[services.tcp_checks]]
   interval = '15s'
