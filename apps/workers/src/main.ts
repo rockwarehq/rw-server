@@ -6,8 +6,8 @@ import "dotenv/config";
 import { startHostServer, onShutdown } from "@rw/runtime";
 import { createPrismaClient } from "@rw/db";
 
-type WorkerName = "rollups";
-const WORKER_NAMES: readonly WorkerName[] = ["rollups"];
+type WorkerName = "rollups" | "imm-events";
+const WORKER_NAMES: readonly WorkerName[] = ["rollups", "imm-events"];
 
 function parseFlag(flag: string): string | null {
   const idx = process.argv.indexOf(flag);
@@ -20,6 +20,10 @@ async function loadWorker(name: WorkerName): Promise<{ start: () => Promise<void
     case "rollups": {
       const m = await import("./rollups.js");
       return { start: m.startRollups, stop: m.stopRollups };
+    }
+    case "imm-events": {
+      const m = await import("./imm-events.js");
+      return { start: m.startImmEvents, stop: m.stopImmEvents };
     }
   }
 }

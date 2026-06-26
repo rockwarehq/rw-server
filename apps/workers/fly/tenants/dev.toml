@@ -10,7 +10,8 @@ app = 'dev-processor'
 #                           bypass pgbouncer to avoid tx-mode connection-hold
 # - DATABASE_URL_MIGRATION (direct,  port 5432) — used by [deploy] release_command
 #                           (can be the same value as DATABASE_URL_ROLLUPS)
-# - REDIS_URL
+# - REDIS_URL              (rollups dirty-buckets; imm-events cycle post-commit)
+# - NATS_URL               (imm-events event source; rollups graph bridge)
 # - PROCESSOR_SHARED_SECRET (must match rw-dev-api's value)
 # - MQTT_PASSWORD (broker URL + username are non-sensitive, in [env] below)
 [_meta]
@@ -19,6 +20,7 @@ required_secrets = [
   'DATABASE_URL_ROLLUPS',
   'DATABASE_URL_MIGRATION',
   'REDIS_URL',
+  'NATS_URL',
   'PROCESSOR_SHARED_SECRET',
   'MQTT_PASSWORD',
 ]
