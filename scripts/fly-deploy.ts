@@ -181,8 +181,12 @@ function deploy(outPath: string, dockerfile: string, target: DeployApp, remote: 
   // Image pulls in iad have been observed taking 14+ min, which blows past
   // flyctl's default release_command/machine wait. Give it generous headroom.
   const waitTimeout = "--wait-timeout 20m";
+  // Workers are singletons (imm-events records cycles, rollups runs ticks) — never
+  // an HA pair, or duplicate consumers double-record. --ha=false makes deploy create
+  // one machine per process group instead of the default two. api/livestore keep HA.
+  const ha = target === "workers" ? "--ha=false" : "";
   execSync(
-    `flyctl deploy ${builder} ${waitTimeout} -c ${outPath} --dockerfile ${dockerfile} --build-target ${target} ${ROOT_DIR}`,
+    `flyctl deploy ${builder} ${ha} ${waitTimeout} -c ${outPath} --dockerfile ${dockerfile} --build-target ${target} ${ROOT_DIR}`,
     { stdio: "inherit" },
   );
 }
