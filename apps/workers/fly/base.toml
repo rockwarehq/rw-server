@@ -11,7 +11,10 @@ primary_region = 'iad'
 [deploy]
 release_command = 'pnpm -w db:migrate'
 
-# Process groups — scale independently, e.g.:
+# Process groups — keep each at exactly ONE machine. These are singletons:
+# imm-events records cycles, so a second consumer would double-record. The
+# deploy script passes --ha=false for workers (one machine per group, not the
+# default HA pair); never scale a group above 1:
 #   fly scale count -a <tenant>-workers rollups=1 imm-events=1
 [processes]
 rollups = 'node dist/main.js --worker rollups'
