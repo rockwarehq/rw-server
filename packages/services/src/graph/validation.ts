@@ -1,5 +1,6 @@
 import prisma from "@rw/db";
 
+import { systemEntityCatalogEntryByKey } from "../entity/registry.js";
 import { graphNodeSiteWhere } from "./scope.js";
 import { errorResult, type GraphScope } from "./types.js";
 
@@ -122,7 +123,12 @@ export async function validateResolverConfig(args: {
     ) {
       return errorResult("INVALID_RESOLVER", "entity resolver requires entityType, entityId, and path");
     }
-    const entityError = await assertKnownEntityInSite(resolver.entityType, resolver.entityId, args.scope);
+    // entityType is an entity catalog key (e.g. "imm.station"), aligning with facet resolvers.
+    const entry = systemEntityCatalogEntryByKey(resolver.entityType, false);
+    if (!entry?.model) {
+      return errorResult("INVALID_RESOLVER", `entity resolver entityType must be a system entity catalog key: ${resolver.entityType}`);
+    }
+    const entityError = await assertKnownEntityInSite(entry.model, resolver.entityId, args.scope);
     if (entityError) return entityError;
     return { data: { resolver, dependencyIds: [] } };
   }

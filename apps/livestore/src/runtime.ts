@@ -7,6 +7,8 @@ import type { GraphDefinitionEvent } from "@rw/runtime/graph-definitions";
 import { AggStateStore } from "./agg-store.js";
 import { CvgStore } from "./cvg-store.js";
 import { GraphDefinitionConsumer } from "./definition-consumer.js";
+import { EntityEventConsumer } from "./entity-event-consumer.js";
+import { EntityResolver } from "./entity-resolver.js";
 import { evaluateExpr } from "./expr.js";
 import { HookManager } from "./hook-manager.js";
 import { GraphKernel } from "./kernel.js";
@@ -47,9 +49,11 @@ export class GraphRuntime {
   private readonly kernel: GraphKernel;
   private readonly tagResolver: TagResolver;
   private readonly metricResolver: MetricResolver;
+  private readonly entityResolver: EntityResolver;
   private readonly windowResolver: WindowResolver;
   private readonly hookManager: HookManager;
   private readonly definitionConsumer: GraphDefinitionConsumer;
+  private readonly entityEventConsumer: EntityEventConsumer;
   private readonly scheduler: Scheduler;
   private readonly sampleGate: SampleGate;
   private ready = false;
@@ -65,12 +69,19 @@ export class GraphRuntime {
     this.kernel = new GraphKernel(options.prisma, this.cvg, options.logger);
     this.tagResolver = new TagResolver(options.jetstream, options.jetstreamManager, this, options.logger);
     this.metricResolver = new MetricResolver(options.nc, this, options.logger);
+    this.entityResolver = new EntityResolver(options.prisma, this, options.logger, (id) => this.kernel.getProperty(id));
     this.hookManager = new HookManager(options.prisma, options.jetstream, options.jetstreamManager, options.logger);
     this.windowResolver = new WindowResolver(new AggStateStore(options.aggKv), this, options.logger);
     this.definitionConsumer = new GraphDefinitionConsumer(
       options.jetstream,
       options.jetstreamManager,
       this,
+      options.logger,
+    );
+    this.entityEventConsumer = new EntityEventConsumer(
+      options.jetstream,
+      options.jetstreamManager,
+      this.entityResolver,
       options.logger,
     );
     this.scheduler = new Scheduler(
@@ -156,7 +167,9 @@ export class GraphRuntime {
 
     await this.tagResolver.start(this.kernel.listProperties());
     this.metricResolver.start(this.buildMetricSubscriptions());
+    await this.entityResolver.start(this.kernel.listProperties());
     await this.definitionConsumer.start();
+    await this.entityEventConsumer.start();
     this.lastDefinitionReconcileAt = new Date();
     this.definitionReconcileTimer = setInterval(() => {
       void this.reconcileDefinitionChanges().catch((err) => {
@@ -177,6 +190,7 @@ export class GraphRuntime {
     this.tagResolver.stop();
     this.metricResolver.stop();
     this.definitionConsumer.stop();
+    this.entityEventConsumer.stop();
     if (this.definitionFlushTimer) clearTimeout(this.definitionFlushTimer);
     if (this.definitionReconcileTimer) clearInterval(this.definitionReconcileTimer);
     this.definitionFlushTimer = null;
@@ -330,11 +344,13 @@ export class GraphRuntime {
     if (metricSub) this.metricResolver.upsertSubscription(metricSub);
     else this.metricResolver.removeProperty(property.id);
     await this.windowResolver.upsertProperty(property, (id) => this.kernel.getProperty(id));
+    await this.entityResolver.upsertProperty(property);
   }
 
   private async unconfigureProperty(property: PropertyRuntime): Promise<void> {
     this.tagResolver.removeProperty(property.id);
     this.metricResolver.removeProperty(property.id);
+    this.entityResolver.removeProperty(property.id);
     await this.windowResolver.removeProperty(property.id);
   }
 
