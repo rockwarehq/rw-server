@@ -495,18 +495,16 @@ async function resolveSystemEntityValue(
   return { data: valueAtPath(record.data, path) };
 }
 
-// Read one field off a system entity instance for a property-level `entity` resolver. entityType is
-// the catalog key (e.g. "imm.station") — same identifier the facets use, sharing resolveSystemEntityValue.
 export async function readEntityFieldValue(args: {
   entityType: string;
   entityId: string;
   path: string;
   scope: GraphScope;
 }): Promise<ServiceResult<unknown>> {
-  if (!systemEntityCatalogEntryByKey(args.entityType, false)) {
-    return errorResult("ENTITY_REF_SCHEMA_NOT_FOUND", `Unknown entity catalog key: ${args.entityType}`);
+  if (systemEntityCatalogEntryByKey(args.entityType, false)) {
+    return resolveSystemEntityValue(args.entityType, args.entityId, args.path, args.scope);
   }
-  return resolveSystemEntityValue(args.entityType, args.entityId, args.path, args.scope);
+  return resolveUserEntityValue(args.entityType, args.entityId, args.path, args.scope);
 }
 
 async function resolveUserEntityValue(
