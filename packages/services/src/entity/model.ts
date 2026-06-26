@@ -9,6 +9,7 @@ import type {
   UpdateObjectModelInput,
 } from "./model.types.js";
 import { errorResult, type EntityScope, type ListResult, normalizeEntityKey, type ServiceResult } from "./types.js";
+import { publishEntityEvent } from "./events.js";
 import { validateAndNormalizeFieldConfig } from "./validation.js";
 
 const modelInclude = {
@@ -184,11 +185,26 @@ export async function remove(id: string, scope: EntityScope): Promise<ServiceRes
   if (current.source !== "DOCUMENT")
     return errorResult("SCHEMA_READ_ONLY", "Only user-authored models can be deleted through this API");
 
+  const activeInstances = await prisma.objectInstance.findMany({
+    where: { schemaId: id, siteId: scope.siteId, isDeleted: false },
+    select: { id: true },
+  });
+
   await prisma.$transaction([
     prisma.objectSchema.update({ where: { id }, data: { isDeleted: true } }),
     prisma.objectSchemaField.updateMany({ where: { schemaId: id }, data: { isDeleted: true } }),
     prisma.objectInstance.updateMany({ where: { schemaId: id }, data: { isDeleted: true } }),
   ]);
+
+  for (const instance of activeInstances) {
+    publishEntityEvent({
+      action: "deleted",
+      entityKey: current.key,
+      entityId: instance.id,
+      siteId: scope.siteId,
+      workspaceId: scope.workspaceId,
+    });
+  }
 
   return { data: { success: true } };
 }

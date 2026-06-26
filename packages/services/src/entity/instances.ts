@@ -7,6 +7,7 @@ import type {
   UpdateObjectInstanceInput,
 } from "./instances.types.js";
 import { SYSTEM_ENTITY_KEYS } from "./registry.js";
+import { publishEntityEvent } from "./events.js";
 import { errorResult, type EntityScope, type ListResult, type ServiceResult } from "./types.js";
 import { asValueRecord, validateInstanceValues } from "./validation.js";
 
@@ -97,7 +98,6 @@ async function listSystemInstances(
           name: site.name,
           description: site.description,
           timezone: site.timezone,
-          attrs: site.attrs,
         }),
       ),
       total,
@@ -122,7 +122,6 @@ async function listSystemInstances(
           id: workcenter.id,
           name: workcenter.name,
           description: workcenter.description,
-          attrs: workcenter.attrs,
           siteId: workcenter.siteId,
           parentId: workcenter.parentId,
         }),
@@ -137,6 +136,7 @@ async function listSystemInstances(
     const where = {
       siteId: scope.siteId,
       site: { workspaceId: scope.workspaceId },
+      deletedAt: null,
       ...(name ? { name: { contains: name, mode: "insensitive" as const } } : {}),
     };
     const [stations, total] = await Promise.all([
@@ -149,9 +149,444 @@ async function listSystemInstances(
           id: station.id,
           name: station.name,
           description: station.description,
-          attrs: station.attrs,
           siteId: station.siteId,
           workcenterId: station.workcenterId,
+          currentJobId: station.currentJobId,
+          createdAt: station.createdAt,
+          updatedAt: station.updatedAt,
+          deletedAt: station.deletedAt,
+          archivedAt: station.archivedAt,
+        }),
+      ),
+      total,
+      limit: Number(limit),
+      offset: Number(offset),
+    };
+  }
+
+  if (key === SYSTEM_ENTITY_KEYS.Job) {
+    const where = {
+      siteId: scope.siteId,
+      site: { workspaceId: scope.workspaceId },
+      deletedAt: null,
+      ...(name ? { currentBlob: { is: { name: { contains: name, mode: "insensitive" as const } } } } : {}),
+    };
+    const [jobs, total] = await Promise.all([
+      prisma.job.findMany({
+        where,
+        include: { currentBlob: true },
+        ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
+        skip: Number(offset),
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.job.count({ where }),
+    ]);
+    return {
+      data: jobs.map((job) =>
+        systemInstance(key, { id: job.id, name: job.currentBlob?.name ?? job.id }, {
+          id: job.id,
+          name: job.currentBlob?.name ?? null,
+          description: job.currentBlob?.description ?? null,
+          standardCycle: job.currentBlob?.standardCycle != null ? Number(job.currentBlob.standardCycle) : null,
+          standardCycleUnit: job.currentBlob?.standardCycleUnit ?? null,
+          productsPerCycle: job.currentBlob?.productsPerCycle ?? null,
+          siteId: job.siteId,
+          createdAt: job.createdAt,
+          updatedAt: job.updatedAt,
+          deletedAt: job.deletedAt,
+          archivedAt: job.archivedAt,
+        }),
+      ),
+      total,
+      limit: Number(limit),
+      offset: Number(offset),
+    };
+  }
+
+  if (key === SYSTEM_ENTITY_KEYS.Product) {
+    const where = {
+      siteId: scope.siteId,
+      site: { workspaceId: scope.workspaceId },
+      deletedAt: null,
+      ...(name
+        ? {
+            OR: [
+              { currentBlob: { is: { name: { contains: name, mode: "insensitive" as const } } } },
+              { currentBlob: { is: { sku: { contains: name, mode: "insensitive" as const } } } },
+            ],
+          }
+        : {}),
+    };
+    const [products, total] = await Promise.all([
+      prisma.product.findMany({
+        where,
+        include: { currentBlob: true },
+        ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
+        skip: Number(offset),
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.product.count({ where }),
+    ]);
+    return {
+      data: products.map((product) =>
+        systemInstance(key, { id: product.id, name: product.currentBlob?.name ?? product.currentBlob?.sku ?? product.id }, {
+          id: product.id,
+          sku: product.currentBlob?.sku ?? null,
+          name: product.currentBlob?.name ?? null,
+          description: product.currentBlob?.description ?? null,
+          externalSku: product.currentBlob?.externalSku ?? null,
+          weight: product.currentBlob?.weight != null ? Number(product.currentBlob.weight) : null,
+          weightUnits: product.currentBlob?.weightUnits ?? null,
+          siteId: product.siteId,
+          createdAt: product.createdAt,
+          updatedAt: product.updatedAt,
+          deletedAt: product.deletedAt,
+          archivedAt: product.archivedAt,
+        }),
+      ),
+      total,
+      limit: Number(limit),
+      offset: Number(offset),
+    };
+  }
+
+  if (key === SYSTEM_ENTITY_KEYS.Material) {
+    const where = {
+      siteId: scope.siteId,
+      site: { workspaceId: scope.workspaceId },
+      deletedAt: null,
+      ...(name
+        ? {
+            OR: [
+              { currentBlob: { is: { name: { contains: name, mode: "insensitive" as const } } } },
+              { currentBlob: { is: { materialNumber: { contains: name, mode: "insensitive" as const } } } },
+              { currentBlob: { is: { shortCode: { contains: name, mode: "insensitive" as const } } } },
+            ],
+          }
+        : {}),
+    };
+    const [materials, total] = await Promise.all([
+      prisma.material.findMany({
+        where,
+        include: { currentBlob: true },
+        ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
+        skip: Number(offset),
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.material.count({ where }),
+    ]);
+    return {
+      data: materials.map((material) =>
+        systemInstance(
+          key,
+          { id: material.id, name: material.currentBlob?.name ?? material.currentBlob?.materialNumber ?? material.id },
+          {
+            id: material.id,
+            materialNumber: material.currentBlob?.materialNumber ?? null,
+            shortCode: material.currentBlob?.shortCode ?? null,
+            name: material.currentBlob?.name ?? null,
+            classification: material.currentBlob?.classification ?? null,
+            description: material.currentBlob?.description ?? null,
+            externalNumber: material.currentBlob?.externalNumber ?? null,
+            weightUnits: material.currentBlob?.weightUnits ?? null,
+            siteId: material.siteId,
+            createdAt: material.createdAt,
+            updatedAt: material.updatedAt,
+            deletedAt: material.deletedAt,
+            archivedAt: material.archivedAt,
+          },
+        ),
+      ),
+      total,
+      limit: Number(limit),
+      offset: Number(offset),
+    };
+  }
+
+  if (key === SYSTEM_ENTITY_KEYS.Tool) {
+    const where = {
+      siteId: scope.siteId,
+      site: { workspaceId: scope.workspaceId },
+      deletedAt: null,
+      ...(name ? { currentBlob: { is: { name: { contains: name, mode: "insensitive" as const } } } } : {}),
+    };
+    const [tools, total] = await Promise.all([
+      prisma.tool.findMany({
+        where,
+        include: { currentBlob: true },
+        ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
+        skip: Number(offset),
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.tool.count({ where }),
+    ]);
+    return {
+      data: tools.map((tool) =>
+        systemInstance(key, { id: tool.id, name: tool.currentBlob?.name ?? tool.id }, {
+          id: tool.id,
+          name: tool.currentBlob?.name ?? null,
+          description: tool.currentBlob?.description ?? null,
+          pmLimit: tool.currentBlob?.pmLimit ?? null,
+          pmWarn: tool.currentBlob?.pmWarn ?? null,
+          cavityCount: tool.currentBlob?.cavityCount ?? null,
+          pmCount: tool.pmCount,
+          lifeCount: tool.lifeCount,
+          siteId: tool.siteId,
+          createdAt: tool.createdAt,
+          updatedAt: tool.updatedAt,
+          deletedAt: tool.deletedAt,
+          archivedAt: tool.archivedAt,
+        }),
+      ),
+      total,
+      limit: Number(limit),
+      offset: Number(offset),
+    };
+  }
+
+  if (key === SYSTEM_ENTITY_KEYS.Customer) {
+    const where = {
+      siteId: scope.siteId,
+      site: { workspaceId: scope.workspaceId },
+      deletedAt: null,
+      ...(name ? { name: { contains: name, mode: "insensitive" as const } } : {}),
+    };
+    const [customers, total] = await Promise.all([
+      prisma.customer.findMany({ where, ...pagination }),
+      prisma.customer.count({ where }),
+    ]);
+    return {
+      data: customers.map((customer) =>
+        systemInstance(key, customer, {
+          id: customer.id,
+          name: customer.name,
+          siteId: customer.siteId,
+          createdAt: customer.createdAt,
+          updatedAt: customer.updatedAt,
+          deletedAt: customer.deletedAt,
+        }),
+      ),
+      total,
+      limit: Number(limit),
+      offset: Number(offset),
+    };
+  }
+
+  if (key === SYSTEM_ENTITY_KEYS.Order) {
+    const where = {
+      siteId: scope.siteId,
+      site: { workspaceId: scope.workspaceId },
+      deletedAt: null,
+      ...(name ? { orderNumber: { contains: name, mode: "insensitive" as const } } : {}),
+    };
+    const [orders, total] = await Promise.all([
+      prisma.order.findMany({
+        where,
+        ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
+        skip: Number(offset),
+        orderBy: { orderNumber: "asc" },
+      }),
+      prisma.order.count({ where }),
+    ]);
+    return {
+      data: orders.map((order) =>
+        systemInstance(key, { id: order.id, name: order.orderNumber }, {
+          id: order.id,
+          orderNumber: order.orderNumber,
+          status: order.status,
+          previousStatus: order.previousStatus,
+          sequence: order.sequence,
+          priority: order.priority,
+          defaultTargetQuantity: order.defaultTargetQuantity,
+          startDate: order.startDate,
+          dueDate: order.dueDate,
+          siteId: order.siteId,
+          customerId: order.customerId,
+          createdAt: order.createdAt,
+          updatedAt: order.updatedAt,
+          deletedAt: order.deletedAt,
+        }),
+      ),
+      total,
+      limit: Number(limit),
+      offset: Number(offset),
+    };
+  }
+
+  if (key === SYSTEM_ENTITY_KEYS.WorkOrder) {
+    const where = {
+      siteId: scope.siteId,
+      site: { workspaceId: scope.workspaceId },
+      deletedAt: null,
+      ...(name ? { orderNumber: { contains: name, mode: "insensitive" as const } } : {}),
+    };
+    const [orders, total] = await Promise.all([
+      prisma.workOrder.findMany({
+        where,
+        ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
+        skip: Number(offset),
+        orderBy: { orderNumber: "asc" },
+      }),
+      prisma.workOrder.count({ where }),
+    ]);
+    return {
+      data: orders.map((order) =>
+        systemInstance(key, { id: order.id, name: order.orderNumber }, {
+          id: order.id,
+          orderNumber: order.orderNumber,
+          status: order.status,
+          targetQuantity: order.targetQuantity,
+          completedQuantity: order.completedQuantity,
+          scrapQuantity: order.scrapQuantity,
+          dueDate: order.dueDate,
+          priority: order.priority,
+          siteId: order.siteId,
+          jobId: order.jobId,
+          productId: order.productId,
+          createdAt: order.createdAt,
+          updatedAt: order.updatedAt,
+          deletedAt: order.deletedAt,
+        }),
+      ),
+      total,
+      limit: Number(limit),
+      offset: Number(offset),
+    };
+  }
+
+  if (key === SYSTEM_ENTITY_KEYS.Employee) {
+    const where = {
+      workspaceId: scope.workspaceId,
+      siteAccess: { some: { siteId: scope.siteId, status: "ACTIVE" as const } },
+      ...(name
+        ? {
+            OR: [
+              { version: { firstName: { contains: name, mode: "insensitive" as const } } },
+              { version: { lastName: { contains: name, mode: "insensitive" as const } } },
+              { version: { employeeNumber: { contains: name, mode: "insensitive" as const } } },
+            ],
+          }
+        : {}),
+    };
+    const [employees, total] = await Promise.all([
+      prisma.employee.findMany({
+        where,
+        include: { version: true },
+        ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
+        skip: Number(offset),
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.employee.count({ where }),
+    ]);
+    return {
+      data: employees.map((employee) =>
+        systemInstance(
+          key,
+          {
+            id: employee.id,
+            name: [employee.version?.firstName, employee.version?.lastName].filter(Boolean).join(" ") || employee.id,
+          },
+          {
+            id: employee.id,
+            status: employee.status,
+            firstName: employee.version?.firstName ?? null,
+            lastName: employee.version?.lastName ?? null,
+            employeeNumber: employee.version?.employeeNumber ?? null,
+            createdAt: employee.createdAt,
+            updatedAt: employee.updatedAt,
+          },
+        ),
+      ),
+      total,
+      limit: Number(limit),
+      offset: Number(offset),
+    };
+  }
+
+  if (key === SYSTEM_ENTITY_KEYS.ShiftInstance) {
+    const where = {
+      siteId: scope.siteId,
+      site: { workspaceId: scope.workspaceId },
+      ...(name ? { shiftName: { contains: name, mode: "insensitive" as const } } : {}),
+    };
+    const [instances, total] = await Promise.all([
+      prisma.shiftInstance.findMany({
+        where,
+        ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
+        skip: Number(offset),
+        orderBy: { startTime: "asc" },
+      }),
+      prisma.shiftInstance.count({ where }),
+    ]);
+    return {
+      data: instances.map((instance) =>
+        systemInstance(key, { id: instance.id, name: instance.shiftName }, {
+          id: instance.id,
+          shiftName: instance.shiftName,
+          businessDate: instance.businessDate,
+          startTime: instance.startTime,
+          endTime: instance.endTime,
+          siteId: instance.siteId,
+          workcenterId: instance.workCenterId,
+        }),
+      ),
+      total,
+      limit: Number(limit),
+      offset: Number(offset),
+    };
+  }
+
+  if (key === SYSTEM_ENTITY_KEYS.StatusReason) {
+    const where = {
+      siteId: scope.siteId,
+      site: { workspaceId: scope.workspaceId },
+      archivedAt: null,
+      ...(name ? { name: { contains: name, mode: "insensitive" as const } } : {}),
+    };
+    const [reasons, total] = await Promise.all([
+      prisma.statusReason.findMany({ where, ...pagination }),
+      prisma.statusReason.count({ where }),
+    ]);
+    return {
+      data: reasons.map((reason) =>
+        systemInstance(key, reason, {
+          id: reason.id,
+          name: reason.name,
+          isPlannedDown: reason.isPlannedDown,
+          siteId: reason.siteId,
+          categoryId: reason.categoryId,
+          createdAt: reason.createdAt,
+          updatedAt: reason.updatedAt,
+          archivedAt: reason.archivedAt,
+        }),
+      ),
+      total,
+      limit: Number(limit),
+      offset: Number(offset),
+    };
+  }
+
+  if (key === SYSTEM_ENTITY_KEYS.StatusCategory) {
+    const where = {
+      siteId: scope.siteId,
+      site: { workspaceId: scope.workspaceId },
+      deletedAt: null,
+      ...(name ? { name: { contains: name, mode: "insensitive" as const } } : {}),
+    };
+    const [categories, total] = await Promise.all([
+      prisma.statusCategory.findMany({ where, ...pagination }),
+      prisma.statusCategory.count({ where }),
+    ]);
+    return {
+      data: categories.map((category) =>
+        systemInstance(key, category, {
+          id: category.id,
+          name: category.name,
+          siteId: category.siteId,
+          createdAt: category.createdAt,
+          updatedAt: category.updatedAt,
+          deletedAt: category.deletedAt,
+          archivedAt: category.archivedAt,
         }),
       ),
       total,
@@ -180,6 +615,13 @@ export async function create(input: CreateObjectInstanceInput, scope: EntityScop
       values: validation.values as Prisma.InputJsonValue,
     },
     include: instanceInclude,
+  });
+  publishEntityEvent({
+    action: "created",
+    entityKey: instance.schema.key,
+    entityId: instance.id,
+    siteId: scope.siteId,
+    workspaceId: scope.workspaceId,
   });
   return { data: instance };
 }
@@ -263,6 +705,14 @@ export async function update(
   }
 
   const instance = await prisma.objectInstance.update({ where: { id }, data: updateData, include: instanceInclude });
+  publishEntityEvent({
+    action: "updated",
+    entityKey: instance.schema.key,
+    entityId: instance.id,
+    siteId: scope.siteId,
+    workspaceId: scope.workspaceId,
+    changedFields: input.values ? Object.keys(input.values) : undefined,
+  });
   return { data: instance };
 }
 
@@ -280,5 +730,12 @@ export async function remove(id: string, scope: EntityScope): Promise<ServiceRes
   if (current.isDeleted) return { data: { success: true } };
 
   await prisma.objectInstance.update({ where: { id }, data: { isDeleted: true } });
+  publishEntityEvent({
+    action: "deleted",
+    entityKey: current.schema.key,
+    entityId: current.id,
+    siteId: scope.siteId,
+    workspaceId: scope.workspaceId,
+  });
   return { data: { success: true } };
 }

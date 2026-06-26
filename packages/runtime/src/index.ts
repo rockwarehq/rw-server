@@ -1,4 +1,5 @@
 export * from "./events-bus.js";
+export * from "./entity-events.js";
 export * from "./graph-definitions.js";
 export * from "./livestore-events.js";
 export * from "./livestore-graph-types.js";

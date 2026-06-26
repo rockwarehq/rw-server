@@ -1,6 +1,6 @@
 import prisma from "@rw/db";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
-import { refreshFacetsForEntity } from "../../graph/nodes.js";
+import { publishEntityEvent } from "../../entity/events.js";
 
 export interface CreateStationInput {
   name: string;
@@ -78,21 +78,21 @@ function hasBlobFields(input: Record<string, unknown>): boolean {
   return BLOB_FIELDS.some((key) => input[key] !== undefined);
 }
 
-async function refreshStationGraphFacets(args: {
+function publishStationEntityEvent(args: {
+  action: "created" | "updated" | "deleted";
   stationId: string;
   siteId: string;
   workspaceId: string;
-}): Promise<void> {
-  try {
-    const result = await refreshFacetsForEntity({
-      entityKey: SYSTEM_ENTITY_KEYS.Station,
-      entityId: args.stationId,
-      scope: { workspaceId: args.workspaceId, siteId: args.siteId },
-    });
-    if ("error" in result) console.error("[station] graph facet refresh failed", result);
-  } catch (err) {
-    console.error("[station] graph facet refresh failed", err);
-  }
+  changedFields?: string[];
+}): void {
+  publishEntityEvent({
+    action: args.action,
+    entityKey: SYSTEM_ENTITY_KEYS.Station,
+    entityId: args.stationId,
+    siteId: args.siteId,
+    workspaceId: args.workspaceId,
+    changedFields: args.changedFields,
+  });
 }
 
 /**
@@ -200,7 +200,12 @@ export async function create(input: CreateStationInput) {
       });
     });
 
-    await refreshStationGraphFacets({ stationId: station.id, siteId: station.siteId, workspaceId: site.workspaceId });
+    publishStationEntityEvent({
+      action: "created",
+      stationId: station.id,
+      siteId: station.siteId,
+      workspaceId: site.workspaceId,
+    });
 
     return { data: station };
   }
@@ -217,7 +222,12 @@ export async function create(input: CreateStationInput) {
     include: stationInclude,
   });
 
-  await refreshStationGraphFacets({ stationId: station.id, siteId: station.siteId, workspaceId: site.workspaceId });
+  publishStationEntityEvent({
+    action: "created",
+    stationId: station.id,
+    siteId: station.siteId,
+    workspaceId: site.workspaceId,
+  });
 
   return { data: station };
 }
@@ -405,10 +415,17 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
       });
     });
 
-    await refreshStationGraphFacets({
+    publishStationEntityEvent({
+      action: "updated",
       stationId: station.id,
       siteId: station.siteId,
       workspaceId: current.site.workspaceId,
+      changedFields: [
+        ...Object.keys(stationUpdateData),
+        ...Object.entries(blobInput)
+          .filter(([, value]) => value !== undefined)
+          .map(([key]) => key),
+      ],
     });
 
     return { data: station };
@@ -421,10 +438,12 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
     include: stationInclude,
   });
 
-  await refreshStationGraphFacets({
+  publishStationEntityEvent({
+    action: "updated",
     stationId: station.id,
     siteId: station.siteId,
     workspaceId: current.site.workspaceId,
+    changedFields: Object.keys(stationUpdateData),
   });
 
   return { data: station };
@@ -482,10 +501,12 @@ export async function move(id: string, newWorkcenterId: string | null, workspace
     include: stationInclude,
   });
 
-  await refreshStationGraphFacets({
+  publishStationEntityEvent({
+    action: "updated",
     stationId: station.id,
     siteId: station.siteId,
     workspaceId: current.site.workspaceId,
+    changedFields: ["workcenterId"],
   });
 
   return { data: station };
@@ -514,6 +535,13 @@ export async function remove(id: string, workspaceId?: string) {
   }
 
   await prisma.station.delete({ where: { id } });
+
+  publishStationEntityEvent({
+    action: "deleted",
+    stationId: station.id,
+    siteId: station.siteId,
+    workspaceId: station.site.workspaceId,
+  });
 
   return { success: true };
 }

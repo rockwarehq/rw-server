@@ -7,6 +7,7 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": "./dist/index.js",
+    "./entity-events": "./dist/entity-events.js",
     "./graph-subjects": "./dist/graph-subjects.js",
     "./graph-definitions": "./dist/graph-definitions.js",
     "./livestore-events": "./dist/livestore-events.js",

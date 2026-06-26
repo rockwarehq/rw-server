@@ -1,4 +1,6 @@
 import prisma from "@rw/db";
+import { publishEntityEvent } from "../../entity/events.js";
+import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 
 export interface CreateWorkcenterInput {
   name: string;
@@ -77,6 +79,14 @@ export async function create(input: CreateWorkcenterInput) {
         select: { children: true, stations: true },
       },
     },
+  });
+
+  publishEntityEvent({
+    action: "created",
+    entityKey: SYSTEM_ENTITY_KEYS.Workcenter,
+    entityId: workcenter.id,
+    siteId: workcenter.siteId,
+    workspaceId: workcenter.site.workspaceId,
   });
 
   return { data: workcenter };
@@ -234,6 +244,15 @@ export async function update(id: string, input: UpdateWorkcenterInput, workspace
     },
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Workcenter,
+    entityId: workcenter.id,
+    siteId: workcenter.siteId,
+    workspaceId: workcenter.site.workspaceId,
+    changedFields: Object.keys(updateData),
+  });
+
   return { data: workcenter };
 }
 
@@ -326,6 +345,15 @@ export async function move(id: string, newParentId: string | null, workspaceId?:
     },
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Workcenter,
+    entityId: workcenter.id,
+    siteId: workcenter.siteId,
+    workspaceId: workcenter.site.workspaceId,
+    changedFields: ["parentId"],
+  });
+
   return { data: workcenter };
 }
 
@@ -367,6 +395,14 @@ export async function remove(id: string, workspaceId?: string) {
   }
 
   await prisma.workcenter.delete({ where: { id } });
+
+  publishEntityEvent({
+    action: "deleted",
+    entityKey: SYSTEM_ENTITY_KEYS.Workcenter,
+    entityId: workcenter.id,
+    siteId: workcenter.siteId,
+    workspaceId: workcenter.site.workspaceId,
+  });
 
   return { success: true };
 }

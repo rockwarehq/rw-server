@@ -1,4 +1,6 @@
 import prisma from "@rw/db";
+import { publishEntityEvent } from "../entity/events.js";
+import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 
 // ============================================================================
 // Types
@@ -29,7 +31,7 @@ export async function create(input: CreateCustomerInput) {
 
   const site = await prisma.site.findUnique({
     where: { id: siteId },
-    select: { id: true },
+    select: { id: true, workspaceId: true },
   });
 
   if (!site) {
@@ -47,6 +49,14 @@ export async function create(input: CreateCustomerInput) {
 
   const customer = await prisma.customer.create({
     data: { name, siteId },
+  });
+
+  publishEntityEvent({
+    action: "created",
+    entityKey: SYSTEM_ENTITY_KEYS.Customer,
+    entityId: customer.id,
+    siteId: customer.siteId,
+    workspaceId: site.workspaceId,
   });
 
   return { data: customer };
@@ -93,7 +103,7 @@ export async function getById(id: string) {
 export async function update(id: string, input: UpdateCustomerInput) {
   const customer = await prisma.customer.findUnique({
     where: { id },
-    select: { id: true, siteId: true, deletedAt: true },
+    select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } },
   });
 
   if (!customer || customer.deletedAt) {
@@ -115,13 +125,28 @@ export async function update(id: string, input: UpdateCustomerInput) {
     data: input,
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Customer,
+    entityId: updated.id,
+    siteId: updated.siteId,
+    workspaceId: customer.site.workspaceId,
+    changedFields: Object.keys(input),
+  });
+
   return { data: updated };
 }
 
 export async function remove(id: string) {
   const customer = await prisma.customer.findUnique({
     where: { id },
-    select: { id: true, deletedAt: true, _count: { select: { orders: { where: { deletedAt: null } } } } },
+    select: {
+      id: true,
+      siteId: true,
+      deletedAt: true,
+      site: { select: { workspaceId: true } },
+      _count: { select: { orders: { where: { deletedAt: null } } } },
+    },
   });
 
   if (!customer || customer.deletedAt) {
@@ -135,6 +160,14 @@ export async function remove(id: string) {
   await prisma.customer.update({
     where: { id },
     data: { deletedAt: new Date() },
+  });
+
+  publishEntityEvent({
+    action: "deleted",
+    entityKey: SYSTEM_ENTITY_KEYS.Customer,
+    entityId: customer.id,
+    siteId: customer.siteId,
+    workspaceId: customer.site.workspaceId,
   });
 
   return { success: true };

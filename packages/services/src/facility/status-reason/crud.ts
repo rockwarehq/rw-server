@@ -1,4 +1,6 @@
 import prisma from "@rw/db";
+import { publishEntityEvent } from "../../entity/events.js";
+import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 
 export interface CreateStatusReasonInput {
   name: string;
@@ -29,7 +31,7 @@ export async function create(input: CreateStatusReasonInput) {
 
   const site = await prisma.site.findUnique({
     where: { id: siteId },
-    select: { id: true },
+    select: { id: true, workspaceId: true },
   });
 
   if (!site) {
@@ -74,6 +76,14 @@ export async function create(input: CreateStatusReasonInput) {
         select: { id: true, name: true },
       },
     },
+  });
+
+  publishEntityEvent({
+    action: "created",
+    entityKey: SYSTEM_ENTITY_KEYS.StatusReason,
+    entityId: reason.id,
+    siteId: reason.siteId,
+    workspaceId: site.workspaceId,
   });
 
   return { data: reason };
@@ -150,7 +160,7 @@ export async function update(id: string, input: UpdateStatusReasonInput) {
 
   const current = await prisma.statusReason.findUnique({
     where: { id },
-    select: { id: true, siteId: true, archivedAt: true },
+    select: { id: true, siteId: true, archivedAt: true, site: { select: { workspaceId: true } } },
   });
 
   if (!current || current.archivedAt) {
@@ -200,6 +210,15 @@ export async function update(id: string, input: UpdateStatusReasonInput) {
     },
   });
 
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.StatusReason,
+    entityId: reason.id,
+    siteId: reason.siteId,
+    workspaceId: current.site.workspaceId,
+    changedFields: Object.keys(updateData),
+  });
+
   return { data: reason };
 }
 
@@ -209,7 +228,7 @@ export async function update(id: string, input: UpdateStatusReasonInput) {
 export async function remove(id: string) {
   const reason = await prisma.statusReason.findUnique({
     where: { id },
-    select: { id: true, archivedAt: true },
+    select: { id: true, siteId: true, archivedAt: true, site: { select: { workspaceId: true } } },
   });
 
   if (!reason || reason.archivedAt) {
@@ -219,6 +238,14 @@ export async function remove(id: string) {
   await prisma.statusReason.update({
     where: { id },
     data: { archivedAt: new Date() },
+  });
+
+  publishEntityEvent({
+    action: "deleted",
+    entityKey: SYSTEM_ENTITY_KEYS.StatusReason,
+    entityId: reason.id,
+    siteId: reason.siteId,
+    workspaceId: reason.site.workspaceId,
   });
 
   return { success: true };
