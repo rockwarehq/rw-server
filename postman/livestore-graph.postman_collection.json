@@ -1,0 +1,1875 @@
+{
+  "info": {
+    "_postman_id": "58d4a86f-b1fa-4c65-8798-27f5a5da6e4b",
+    "name": "Rockware LiveStore + Graph",
+    "description": "Import this collection with the companion environment `livestore-local.postman_environment.json`. Graph authoring is implemented as oRPC under `{{apiBaseUrl}}/rpc`; request bodies must be wrapped as `{ \"json\": <input> }` and responses are returned as `{ \"json\": <output> }`. LiveStore runtime reads are direct HTTP/WebSocket calls under `{{livestoreBaseUrl}}` and `{{livestoreWsUrl}}`. Set `email` and `password`, run Auth / Login, select or set `siteId`, then run Auth / Switch Site before graph requests.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Auth + Context",
+      "description": "REST endpoints used to establish JWT workspace/site context for graph oRPC calls.",
+      "item": [
+        {
+          "name": "API Health",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{apiBaseUrl}}/health"
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function decodeJwt(token) {",
+                  "  const part = token && token.split('.')[1];",
+                  "  if (!part) return null;",
+                  "  const base64 = part.replace(/-/g, '+').replace(/_/g, '/');",
+                  "  const padded = base64.padEnd(base64.length + ((4 - base64.length % 4) % 4), '=');",
+                  "  return JSON.parse(atob(padded));",
+                  "}",
+                  "function saveToken(token) {",
+                  "  if (!token) return;",
+                  "  pm.environment.set('accessToken', token);",
+                  "  try {",
+                  "    const payload = decodeJwt(token);",
+                  "    if (payload.workspaceId) pm.environment.set('workspaceId', payload.workspaceId);",
+                  "    if (payload.siteId) pm.environment.set('siteId', payload.siteId);",
+                  "    if (payload.id) pm.environment.set('userId', payload.id);",
+                  "  } catch (e) {}",
+                  "}",
+                  "const body = pm.response.json();",
+                  "saveToken(body.accessToken);",
+                  "if (body.refreshToken) pm.environment.set('refreshToken', body.refreshToken);",
+                  "if (body.expiresAt) pm.environment.set('accessTokenExpiresAt', body.expiresAt);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/auth/login",
+            "description": "Saves accessToken, refreshToken, workspaceId, siteId, and userId when available."
+          }
+        },
+        {
+          "name": "Refresh Session",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function decodeJwt(token) {",
+                  "  const part = token && token.split('.')[1];",
+                  "  if (!part) return null;",
+                  "  const base64 = part.replace(/-/g, '+').replace(/_/g, '/');",
+                  "  const padded = base64.padEnd(base64.length + ((4 - base64.length % 4) % 4), '=');",
+                  "  return JSON.parse(atob(padded));",
+                  "}",
+                  "function saveToken(token) {",
+                  "  if (!token) return;",
+                  "  pm.environment.set('accessToken', token);",
+                  "  try {",
+                  "    const payload = decodeJwt(token);",
+                  "    if (payload.workspaceId) pm.environment.set('workspaceId', payload.workspaceId);",
+                  "    if (payload.siteId) pm.environment.set('siteId', payload.siteId);",
+                  "    if (payload.id) pm.environment.set('userId', payload.id);",
+                  "  } catch (e) {}",
+                  "}",
+                  "const body = pm.response.json();",
+                  "saveToken(body.accessToken);",
+                  "if (body.refreshToken) pm.environment.set('refreshToken', body.refreshToken);",
+                  "if (body.expiresAt) pm.environment.set('accessTokenExpiresAt', body.expiresAt);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\",\n  \"siteId\": \"{{siteId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/auth/refresh",
+            "description": "Refreshes both access and refresh tokens. Include siteId to force the new JWT into that site context."
+          }
+        },
+        {
+          "name": "List Workspaces",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (Array.isArray(body) && body[0] && body[0].id) pm.environment.set('workspaceId', body[0].id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{apiBaseUrl}}/workspaces",
+            "description": "Saves the first workspace id to workspaceId if present."
+          }
+        },
+        {
+          "name": "Switch Workspace",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function decodeJwt(token) {",
+                  "  const part = token && token.split('.')[1];",
+                  "  if (!part) return null;",
+                  "  const base64 = part.replace(/-/g, '+').replace(/_/g, '/');",
+                  "  const padded = base64.padEnd(base64.length + ((4 - base64.length % 4) % 4), '=');",
+                  "  return JSON.parse(atob(padded));",
+                  "}",
+                  "const body = pm.response.json();",
+                  "if (body.accessToken) {",
+                  "  pm.environment.set('accessToken', body.accessToken);",
+                  "  try {",
+                  "    const payload = decodeJwt(body.accessToken);",
+                  "    if (payload.workspaceId) pm.environment.set('workspaceId', payload.workspaceId);",
+                  "    if (payload.siteId) pm.environment.set('siteId', payload.siteId);",
+                  "  } catch (e) {}",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"workspaceId\": \"{{workspaceId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/auth/switch-workspace"
+          }
+        },
+        {
+          "name": "List Sites",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && Array.isArray(body.data) && body.data[0] && body.data[0].id) pm.environment.set('siteId', body.data[0].id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{apiBaseUrl}}/sites?limit=50&offset=0",
+            "description": "Saves the first accessible site id to siteId if present."
+          }
+        },
+        {
+          "name": "Switch Site",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function decodeJwt(token) {",
+                  "  const part = token && token.split('.')[1];",
+                  "  if (!part) return null;",
+                  "  const base64 = part.replace(/-/g, '+').replace(/_/g, '/');",
+                  "  const padded = base64.padEnd(base64.length + ((4 - base64.length % 4) % 4), '=');",
+                  "  return JSON.parse(atob(padded));",
+                  "}",
+                  "const body = pm.response.json();",
+                  "if (body.accessToken) {",
+                  "  pm.environment.set('accessToken', body.accessToken);",
+                  "  try {",
+                  "    const payload = decodeJwt(body.accessToken);",
+                  "    if (payload.workspaceId) pm.environment.set('workspaceId', payload.workspaceId);",
+                  "    if (payload.siteId) pm.environment.set('siteId', payload.siteId);",
+                  "  } catch (e) {}",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"siteId\": \"{{siteId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/auth/switch-site",
+            "description": "Graph procedures require the JWT to include workspaceId and a site the user can access."
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/auth/logout"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Discovery",
+      "description": "Catalog and hierarchy calls used to find site, station, entity, metric, datasource, and point values needed by graph resolvers.",
+      "item": [
+        {
+          "name": "Site Tree (REST)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{apiBaseUrl}}/sites/tree"
+          }
+        },
+        {
+          "name": "Site Tree (oRPC)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"siteId\": \"{{siteId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/site/tree"
+          }
+        },
+        {
+          "name": "Get Site Detail (REST)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{apiBaseUrl}}/sites/{{siteId}}"
+          }
+        },
+        {
+          "name": "Device Tree (oRPC)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "const gateways = Array.isArray(value) ? value : (value && Array.isArray(value.gateways) ? value.gateways : []);",
+                  "for (const gateway of gateways) {",
+                  "  const datasources = gateway.datasources || gateway.dataSources || [];",
+                  "  if (Array.isArray(datasources) && datasources[0] && datasources[0].id) {",
+                  "    pm.environment.set('datasourceId', datasources[0].id);",
+                  "    break;",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"siteId\": \"{{siteId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/site/deviceTree",
+            "description": "Returns gateways with assigned datasources. Saves the first datasource id to datasourceId when present."
+          }
+        },
+        {
+          "name": "List Datasources (REST)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && Array.isArray(body.data) && body.data[0] && body.data[0].id) pm.environment.set('datasourceId', body.data[0].id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{apiBaseUrl}}/datasources?siteId={{siteId}}&limit=50&offset=0",
+            "description": "Saves the first datasource id to datasourceId if present."
+          }
+        },
+        {
+          "name": "List Datasource Points (REST)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const points = Array.isArray(body) ? body : (body && Array.isArray(body.data) ? body.data : []);",
+                  "if (points[0] && points[0].id) pm.environment.set('pointId', points[0].id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{apiBaseUrl}}/datasources/{{datasourceId}}/points",
+            "description": "Saves the first point id to pointId for tag resolver examples."
+          }
+        },
+        {
+          "name": "Entity Catalog List",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"includeFields\": true,\n    \"limit\": 100,\n    \"offset\": 0\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/entity/catalog/list",
+            "description": "System entity keys include imm.site, imm.workcenter, imm.station, imm.job, imm.product, imm.material, imm.tool, imm.customer, imm.order, imm.workOrder, imm.employee, imm.shiftInstance, imm.statusReason, and imm.statusCategory."
+          }
+        },
+        {
+          "name": "Entity Catalog Get",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"key\": \"{{entityCatalogKey}}\",\n    \"includeFields\": true\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/entity/catalog/get"
+          }
+        },
+        {
+          "name": "Entity Instance List",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "if (value && Array.isArray(value.data) && value.data[0] && value.data[0].id) pm.environment.set('entityInstanceId', value.data[0].id);",
+                  "if (pm.environment.get('entityCatalogKey') === 'imm.station' && value && Array.isArray(value.data) && value.data[0] && value.data[0].id) pm.environment.set('stationId', value.data[0].id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"key\": \"{{entityCatalogKey}}\",\n    \"limit\": 50,\n    \"offset\": 0\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/entity/instance/list",
+            "description": "Set entityCatalogKey to imm.station to capture stationId from the first result."
+          }
+        },
+        {
+          "name": "Metric Catalog List",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"siteId\": \"{{siteId}}\",\n    \"entityType\": \"STATION\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/metricCatalog/list",
+            "description": "Metric entityType values: STATION, WORKCENTER, SITE, JOB. Granularities: MINUTE, HOUR, SHIFT, DAY, LIVE."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Graph Types (oRPC)",
+      "description": "Graph type catalog and site-authored type CRUD. Integration type refs use @namespace/key, for example @imm/station.",
+      "item": [
+        {
+          "name": "Type Catalog",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"siteId\": \"{{siteId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/type/catalog"
+          }
+        },
+        {
+          "name": "Create Site Graph Type",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "if (value && value.id) pm.environment.set('graphTypeId', value.id);",
+                  "if (value && value.key) pm.environment.set('graphTypeRef', value.key);",
+                  "if (value && Array.isArray(value.inputs) && value.inputs[0]) pm.environment.set('graphTypeInputId', value.inputs[0].id);",
+                  "if (value && Array.isArray(value.facets) && value.facets[0]) pm.environment.set('graphTypeFacetId', value.facets[0].id);",
+                  "if (value && Array.isArray(value.fields) && value.fields[0]) pm.environment.set('graphTypeFieldId', value.fields[0].id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"siteId\": \"{{siteId}}\",\n    \"key\": \"postman_station_summary\",\n    \"label\": \"Postman Station Summary\",\n    \"description\": \"Site-authored graph type example.\",\n    \"inputs\": [\n      {\n        \"key\": \"stationId\",\n        \"label\": \"Station\",\n        \"description\": \"Station backing this node.\",\n        \"valueType\": \"entityRef\",\n        \"entityKey\": \"imm.station\",\n        \"required\": true,\n        \"sortOrder\": 10\n      }\n    ],\n    \"facets\": [\n      {\n        \"key\": \"workcenterId\",\n        \"label\": \"Workcenter\",\n        \"valueType\": \"string\",\n        \"resolverType\": \"entity\",\n        \"resolver\": {\n          \"type\": \"entity\",\n          \"entityRef\": {\n            \"key\": \"imm.station\",\n            \"id\": \"$input.stationId\"\n          },\n          \"path\": \"workcenter\"\n        },\n        \"sortOrder\": 10\n      }\n    ],\n    \"fields\": [\n      {\n        \"key\": \"goodItems\",\n        \"label\": \"Good Items\",\n        \"valueType\": \"number\",\n        \"resolverType\": \"metric\",\n        \"resolver\": {\n          \"type\": \"metric\",\n          \"entityType\": \"STATION\",\n          \"entityId\": \"$input.stationId\",\n          \"granularity\": \"SHIFT\",\n          \"metricKey\": \"goodItems\"\n        },\n        \"sortOrder\": 10\n      }\n    ]\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/type/create"
+          }
+        },
+        {
+          "name": "List Site Graph Types",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"siteId\": \"{{siteId}}\",\n    \"limit\": 50,\n    \"offset\": 0\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/type/list"
+          }
+        },
+        {
+          "name": "Get Graph Type",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphTypeId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/type/get"
+          }
+        },
+        {
+          "name": "Update Graph Type",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphTypeId}}\",\n    \"label\": \"Postman Station Summary Updated\",\n    \"description\": \"Updated from Postman.\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/type/update"
+          }
+        },
+        {
+          "name": "Create Type Input",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "if (value && value.id) pm.environment.set('graphTypeInputId', value.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"typeId\": \"{{graphTypeId}}\",\n    \"key\": \"stationId\",\n    \"label\": \"Station\",\n    \"valueType\": \"entityRef\",\n    \"entityKey\": \"imm.station\",\n    \"required\": true,\n    \"sortOrder\": 10\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/type/input/create"
+          }
+        },
+        {
+          "name": "Update Type Input",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphTypeInputId}}\",\n    \"label\": \"Station Entity\",\n    \"required\": true\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/type/input/update"
+          }
+        },
+        {
+          "name": "Create Type Facet",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "if (value && value.id) pm.environment.set('graphTypeFacetId', value.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"typeId\": \"{{graphTypeId}}\",\n    \"key\": \"workcenterId\",\n    \"label\": \"Workcenter\",\n    \"valueType\": \"string\",\n    \"resolverType\": \"entity\",\n    \"resolver\": {\n      \"type\": \"entity\",\n      \"entityRef\": {\n        \"key\": \"imm.station\",\n        \"id\": \"$input.stationId\"\n      },\n      \"path\": \"workcenter\"\n    },\n    \"sortOrder\": 10\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/type/facet/create"
+          }
+        },
+        {
+          "name": "Update Type Facet",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphTypeFacetId}}\",\n    \"label\": \"Workcenter Entity Id\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/type/facet/update"
+          }
+        },
+        {
+          "name": "Create Type Field",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "if (value && value.id) pm.environment.set('graphTypeFieldId', value.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"typeId\": \"{{graphTypeId}}\",\n    \"key\": \"totalItems\",\n    \"label\": \"Total Items\",\n    \"valueType\": \"number\",\n    \"resolverType\": \"metric\",\n    \"resolver\": {\n      \"type\": \"metric\",\n      \"entityType\": \"STATION\",\n      \"entityId\": \"$input.stationId\",\n      \"granularity\": \"SHIFT\",\n      \"metricKey\": \"totalItems\"\n    },\n    \"sortOrder\": 20\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/type/field/create"
+          }
+        },
+        {
+          "name": "Update Type Field",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphTypeFieldId}}\",\n    \"label\": \"Total Items Updated\",\n    \"sampleRateMs\": null\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/type/field/update"
+          }
+        },
+        {
+          "name": "Delete Type Field",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphTypeFieldId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/type/field/delete"
+          }
+        },
+        {
+          "name": "Delete Type Facet",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphTypeFacetId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/type/facet/delete"
+          }
+        },
+        {
+          "name": "Delete Type Input",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphTypeInputId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/type/input/delete"
+          }
+        },
+        {
+          "name": "Delete Graph Type",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphTypeId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/type/delete",
+            "description": "Will fail with GRAPH_TYPE_HAS_NODES if active nodes still use this site graph type."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Graph Nodes (oRPC)",
+      "description": "Node CRUD and query. Node writes emit graph definition events consumed by LiveStore for hot patching.",
+      "item": [
+        {
+          "name": "Create IMM Station Node",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "if (value && value.id) pm.environment.set('graphNodeId', value.id);",
+                  "if (value && Array.isArray(value.properties) && value.properties[0]) pm.environment.set('graphPropertyId', value.properties[0].id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"siteId\": \"{{siteId}}\",\n    \"name\": \"Postman IMM Station Node\",\n    \"typeRef\": \"@imm/station\",\n    \"typeContext\": {\n      \"stationId\": \"{{stationId}}\"\n    },\n    \"materializeTypeFields\": true\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/node/create",
+            "description": "Requires stationId to reference an existing imm.station entity. Built-in @imm/station fields are materialized as properties."
+          }
+        },
+        {
+          "name": "Create Untyped Node",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "if (value && value.id) pm.environment.set('graphNodeId', value.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"siteId\": \"{{siteId}}\",\n    \"name\": \"Postman Untyped Node\",\n    \"typeRef\": null,\n    \"typeContext\": {}\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/node/create"
+          }
+        },
+        {
+          "name": "List Nodes",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "if (value && Array.isArray(value.data) && value.data[0]) pm.environment.set('graphNodeId', value.data[0].id);",
+                  "if (value && Array.isArray(value.data) && value.data[0] && Array.isArray(value.data[0].properties) && value.data[0].properties[0]) pm.environment.set('graphPropertyId', value.data[0].properties[0].id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"siteId\": \"{{siteId}}\",\n    \"limit\": 50,\n    \"offset\": 0\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/node/list"
+          }
+        },
+        {
+          "name": "Query Nodes By Type Facets Properties",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"siteId\": \"{{siteId}}\",\n    \"typeRef\": \"@imm/station\",\n    \"facets\": {},\n    \"properties\": [\"oee\", \"goodItems\"],\n    \"limit\": 50,\n    \"offset\": 0\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/node/query",
+            "description": "Returns requestedProperties keyed by requested property key when properties are supplied."
+          }
+        },
+        {
+          "name": "Get Node",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphNodeId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/node/get"
+          }
+        },
+        {
+          "name": "Update Node",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphNodeId}}\",\n    \"name\": \"Postman Updated Node\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/node/update"
+          }
+        },
+        {
+          "name": "Delete Node",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphNodeId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/node/delete",
+            "description": "Fails when node properties have external dependents or active hooks."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Graph Properties (oRPC)",
+      "description": "Property resolver CRUD. Supported resolverType values are tag, metric, entity, expr, window, and rollup.",
+      "item": [
+        {
+          "name": "Create Tag Property",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "if (value && value.id) {",
+                  "  pm.environment.set('graphPropertyId', value.id);",
+                  "  pm.environment.set('graphSourcePropertyId', value.id);",
+                  "  pm.environment.set('graphSourcePropertySymbol', 'p_' + value.id.replace(/-/g, '_'));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"nodeId\": \"{{graphNodeId}}\",\n    \"name\": \"postman_tag_value\",\n    \"resolverType\": \"tag\",\n    \"resolver\": {\n      \"type\": \"tag\",\n      \"deviceId\": \"{{datasourceId}}\",\n      \"tagPath\": \"{{pointId}}\"\n    },\n    \"sampleRateMs\": null\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/property/create",
+            "description": "LiveStore subscribes to tags.<deviceId>.<tagPath> for tag properties. datasourceId and pointId are the expected local values."
+          }
+        },
+        {
+          "name": "Create Metric Property",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "if (value && value.id) pm.environment.set('graphPropertyId', value.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"nodeId\": \"{{graphNodeId}}\",\n    \"name\": \"postman_shift_good_items\",\n    \"resolverType\": \"metric\",\n    \"resolver\": {\n      \"type\": \"metric\",\n      \"entityType\": \"STATION\",\n      \"entityId\": \"{{stationId}}\",\n      \"granularity\": \"SHIFT\",\n      \"metricKey\": \"goodItems\"\n    },\n    \"sampleRateMs\": null\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/property/create"
+          }
+        },
+        {
+          "name": "Create Entity Property",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "if (value && value.id) pm.environment.set('graphPropertyId', value.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"nodeId\": \"{{graphNodeId}}\",\n    \"name\": \"postman_station_name\",\n    \"resolverType\": \"entity\",\n    \"resolver\": {\n      \"type\": \"entity\",\n      \"entityType\": \"STATION\",\n      \"entityId\": \"{{stationId}}\",\n      \"path\": \"name\"\n    },\n    \"sampleRateMs\": null\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/property/create"
+          }
+        },
+        {
+          "name": "Create Expr Property",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "if (value && value.id) {",
+                  "  pm.environment.set('graphPropertyId', value.id);",
+                  "  pm.environment.set('graphDependentPropertyId', value.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"nodeId\": \"{{graphNodeId}}\",\n    \"name\": \"postman_expr_scaled\",\n    \"resolverType\": \"expr\",\n    \"resolver\": {\n      \"type\": \"expr\",\n      \"expression\": \"{{graphSourcePropertySymbol}} * 100\"\n    },\n    \"sampleRateMs\": 1000\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/property/create",
+            "description": "Expressions reference dependencies as p_<property_uuid_with_underscores>. The Create Tag Property script sets graphSourcePropertySymbol."
+          }
+        },
+        {
+          "name": "Create Window Property (EWMA)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "if (value && value.id) pm.environment.set('graphPropertyId', value.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"nodeId\": \"{{graphNodeId}}\",\n    \"name\": \"postman_ewma\",\n    \"resolverType\": \"window\",\n    \"resolver\": {\n      \"type\": \"window\",\n      \"sourcePropertyId\": \"{{graphSourcePropertyId}}\",\n      \"kind\": \"ewma\",\n      \"aggregation\": \"avg\",\n      \"alpha\": 0.3\n    },\n    \"sampleRateMs\": null\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/property/create"
+          }
+        },
+        {
+          "name": "Create Window Property (Tumbling)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "if (value && value.id) pm.environment.set('graphPropertyId', value.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"nodeId\": \"{{graphNodeId}}\",\n    \"name\": \"postman_tumbling_avg\",\n    \"resolverType\": \"window\",\n    \"resolver\": {\n      \"type\": \"window\",\n      \"sourcePropertyId\": \"{{graphSourcePropertyId}}\",\n      \"kind\": \"tumbling\",\n      \"aggregation\": \"avg\",\n      \"windowMs\": 60000,\n      \"alignToMs\": 0\n    },\n    \"sampleRateMs\": null\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/property/create"
+          }
+        },
+        {
+          "name": "Create Rollup Property",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "if (value && value.id) pm.environment.set('graphPropertyId', value.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"nodeId\": \"{{graphNodeId}}\",\n    \"name\": \"postman_rollup_good_items\",\n    \"resolverType\": \"rollup\",\n    \"resolver\": {\n      \"type\": \"rollup\",\n      \"childKind\": \"Station\",\n      \"relation\": \"stations\",\n      \"childProperty\": \"goodItems\",\n      \"aggregation\": \"sum\"\n    },\n    \"sampleRateMs\": null\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/property/create",
+            "description": "Rollup membership is resolved by LiveStore from the domain hierarchy at runtime. Optional resolver.parent can be { model, id }."
+          }
+        },
+        {
+          "name": "List Properties By Site",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "if (value && Array.isArray(value.data) && value.data[0]) pm.environment.set('graphPropertyId', value.data[0].id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"siteId\": \"{{siteId}}\",\n    \"limit\": 50,\n    \"offset\": 0\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/property/list"
+          }
+        },
+        {
+          "name": "List Properties By Node",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"nodeId\": \"{{graphNodeId}}\",\n    \"limit\": 50,\n    \"offset\": 0\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/property/list"
+          }
+        },
+        {
+          "name": "Get Property",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphPropertyId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/property/get"
+          }
+        },
+        {
+          "name": "Update Property",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphPropertyId}}\",\n    \"sampleRateMs\": null\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/property/update"
+          }
+        },
+        {
+          "name": "Validate Property Config",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"nodeId\": \"{{graphNodeId}}\",\n    \"name\": \"dry_run_expr\",\n    \"resolverType\": \"expr\",\n    \"resolver\": {\n      \"type\": \"expr\",\n      \"expression\": \"{{graphSourcePropertySymbol}} + 1\"\n    },\n    \"sampleRateMs\": null\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/property/validate",
+            "description": "Dry-run resolver validation and dependency extraction without persistence."
+          }
+        },
+        {
+          "name": "Property Dependents",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphSourcePropertyId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/property/dependents"
+          }
+        },
+        {
+          "name": "Delete Property",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphPropertyId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/property/delete",
+            "description": "Fails when the property has active dependents or is used by active hooks."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Graph Hooks (oRPC)",
+      "description": "Hooks emit LiveStore NATS events when property conditions match. They do not produce graph values.",
+      "item": [
+        {
+          "name": "Hook Event Catalog",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/hook/eventCatalog",
+            "description": "Current catalog includes livestore.hook_triggered@1 and imm.cycle_completed@1."
+          }
+        },
+        {
+          "name": "Create Generic Hook",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "if (value && value.id) pm.environment.set('graphHookId', value.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"siteId\": \"{{siteId}}\",\n    \"name\": \"Postman Generic Hook\",\n    \"enabled\": true,\n    \"condition\": {\n      \"source\": {\n        \"type\": \"property\",\n        \"propertyId\": \"{{graphSourcePropertyId}}\"\n      },\n      \"operator\": \"changed\"\n    },\n    \"eventNamespace\": \"livestore\",\n    \"eventName\": \"hook_triggered\",\n    \"eventVersion\": \"1\",\n    \"eventPayload\": {\n      \"source\": \"postman\"\n    },\n    \"eventContext\": {}\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/hook/create"
+          }
+        },
+        {
+          "name": "Create IMM Cycle Completed Hook",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const value = body && Object.prototype.hasOwnProperty.call(body, 'json') ? body.json : body;",
+                  "if (value && value.id) pm.environment.set('graphHookId', value.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"siteId\": \"{{siteId}}\",\n    \"name\": \"Postman IMM Cycle Hook\",\n    \"enabled\": true,\n    \"condition\": {\n      \"source\": {\n        \"type\": \"property\",\n        \"propertyId\": \"{{graphSourcePropertyId}}\"\n      },\n      \"operator\": \"crossesAbove\",\n      \"threshold\": 1\n    },\n    \"eventNamespace\": \"imm\",\n    \"eventName\": \"cycle_completed\",\n    \"eventVersion\": \"1\",\n    \"eventPayload\": {\n      \"source\": \"postman\"\n    },\n    \"eventContext\": {\n      \"stationId\": {\n        \"source\": {\n          \"type\": \"property\",\n          \"propertyId\": \"{{graphSourcePropertyId}}\"\n        }\n      }\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/hook/create",
+            "description": "imm.cycle_completed requires stationId context. Bind it to a string-valued property in real usage."
+          }
+        },
+        {
+          "name": "List Hooks",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"siteId\": \"{{siteId}}\",\n    \"limit\": 50,\n    \"offset\": 0\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/hook/list"
+          }
+        },
+        {
+          "name": "Get Hook",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphHookId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/hook/get"
+          }
+        },
+        {
+          "name": "Update Hook",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphHookId}}\",\n    \"enabled\": false\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/hook/update"
+          }
+        },
+        {
+          "name": "Delete Hook",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"json\": {\n    \"id\": \"{{graphHookId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{apiBaseUrl}}/rpc/graph/hook/delete"
+          }
+        }
+      ]
+    },
+    {
+      "name": "LiveStore Runtime",
+      "description": "Direct LiveStore service calls. These expose the runtime snapshot and readiness, not graph authoring writes.",
+      "item": [
+        {
+          "name": "LiveStore Health",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{livestoreBaseUrl}}/health"
+          }
+        },
+        {
+          "name": "LiveStore Liveness",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{livestoreBaseUrl}}/healthz"
+          }
+        },
+        {
+          "name": "LiveStore Readiness",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{livestoreBaseUrl}}/readyz"
+          }
+        },
+        {
+          "name": "List Runtime Nodes",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && Array.isArray(body.data) && body.data[0]) pm.environment.set('livestoreNodeId', body.data[0].id);",
+                  "if (body && Array.isArray(body.data) && body.data[0] && Array.isArray(body.data[0].properties) && body.data[0].properties[0]) {",
+                  "  pm.environment.set('livestorePropertyId', body.data[0].properties[0].id);",
+                  "  pm.environment.set('graphPropertyId', body.data[0].properties[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{livestoreBaseUrl}}/graph/nodes",
+            "description": "Returns runtime nodes with properties and current ValueEnvelope values. Saves livestoreNodeId and livestorePropertyId from the first result."
+          }
+        },
+        {
+          "name": "Get Runtime Node",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{livestoreBaseUrl}}/graph/nodes/{{livestoreNodeId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "LiveStore WebSocket",
+      "description": "Postman can open WebSocket requests in recent versions. If this imports as a plain GET, create a new WebSocket request manually and paste `{{livestoreWsUrl}}/ws/graph`. Client messages: `{ \"op\": \"subscribe\", \"propertyIds\": [\"{{livestorePropertyId}}\"] }` and `{ \"op\": \"unsubscribe\", \"propertyIds\": [\"{{livestorePropertyId}}\"] }`. Server messages: `{ \"op\": \"value\", \"propertyId\": \"...\", \"envelope\": { \"value\": 18.2, \"quality\": \"good\", \"timestamp\": 1730000000000 } }`.",
+      "item": [
+        {
+          "name": "Open /ws/graph",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{livestoreWsUrl}}/ws/graph",
+            "description": "Send this after connecting: { \"op\": \"subscribe\", \"propertyIds\": [\"{{livestorePropertyId}}\"] }. LiveStore sends initial value and updates as { op, propertyId, envelope }."
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "apiBaseUrl",
+      "value": "http://localhost:30000"
+    },
+    {
+      "key": "livestoreBaseUrl",
+      "value": "http://localhost:30100"
+    },
+    {
+      "key": "livestoreWsUrl",
+      "value": "ws://localhost:30100"
+    }
+  ]
+}
