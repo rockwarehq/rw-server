@@ -6,6 +6,7 @@ import { errorResult, type GraphScope } from "./types.js";
 
 const AGGREGATIONS = new Set(["sum", "avg", "count", "min", "max"]);
 const PREFIXED_UUID_PATTERN = /\bp_([0-9a-f]{8}_[0-9a-f]{4}_[1-8][0-9a-f]{3}_[89ab][0-9a-f]{3}_[0-9a-f]{12})\b/gi;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -68,6 +69,26 @@ async function assertKnownEntityInSite(entityType: string, entityId: string, sco
   return errorResult("INVALID_RESOLVER", "resolver entityType must be Site, Workcenter, Station, or Job");
 }
 
+// User-defined (jsonb) entity: the catalog key is an ObjectSchema, entityId an ObjectInstance.
+async function assertKnownUserEntityInSite(entityKey: string, entityId: string, scope: GraphScope) {
+  const schema = await prisma.objectSchema.findFirst({
+    where: {
+      workspaceId: scope.workspaceId,
+      siteId: scope.siteId,
+      source: "DOCUMENT",
+      isDeleted: false,
+      OR: [...(UUID_PATTERN.test(entityKey) ? [{ id: entityKey }] : []), { key: entityKey }],
+    },
+    select: { id: true },
+  });
+  if (!schema) return errorResult("INVALID_RESOLVER", `entity resolver entityType is not a known entity: ${entityKey}`);
+  const instance = await prisma.objectInstance.findFirst({
+    where: { id: entityId, schemaId: schema.id, siteId: scope.siteId, isDeleted: false },
+    select: { id: true },
+  });
+  return instance ? null : errorResult("ENTITY_REF_NOT_FOUND", "entity resolver entityId was not found in this site");
+}
+
 async function validateRollupParent(parent: unknown, scope: GraphScope) {
   if (parent === undefined) return null;
   if (!isRecord(parent) || typeof parent.model !== "string" || typeof parent.id !== "string") {
@@ -123,12 +144,11 @@ export async function validateResolverConfig(args: {
     ) {
       return errorResult("INVALID_RESOLVER", "entity resolver requires entityType, entityId, and path");
     }
-    // entityType is an entity catalog key (e.g. "imm.station"), aligning with facet resolvers.
+
     const entry = systemEntityCatalogEntryByKey(resolver.entityType, false);
-    if (!entry?.model) {
-      return errorResult("INVALID_RESOLVER", `entity resolver entityType must be a system entity catalog key: ${resolver.entityType}`);
-    }
-    const entityError = await assertKnownEntityInSite(entry.model, resolver.entityId, args.scope);
+    const entityError = entry?.model
+      ? await assertKnownEntityInSite(entry.model, resolver.entityId, args.scope)
+      : await assertKnownUserEntityInSite(resolver.entityType, resolver.entityId, args.scope);
     if (entityError) return entityError;
     return { data: { resolver, dependencyIds: [] } };
   }
