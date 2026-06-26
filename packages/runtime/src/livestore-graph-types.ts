@@ -101,7 +101,9 @@ export const IMM_GRAPH_TYPE_NAMESPACE = {
         ),
       ],
       fields: [
-        entityField("stationId", "Station Id", "Station entity id", "id", "string", 5),
+        entityField("stationId", "Station Id", "Station entity id", "imm.station", "$input.stationId", "id", "string", 5),
+        entityField("name", "Name", "Station name", "imm.station", "$input.stationId", "name", "string", 6),
+        entityField("currentJobId", "Current Job", "Current job id on the station", "imm.station", "$input.stationId", "currentJob", "string", 7),
         metricField("oee", "OEE", "Overall equipment effectiveness ratio", "oee", "percent", 10),
         metricField(
           "goodItems",
@@ -128,6 +130,29 @@ export const IMM_GRAPH_TYPE_NAMESPACE = {
           "number",
           50,
         ),
+      ],
+    },
+    {
+      key: "workcenter",
+      label: "Workcenter",
+      description: "IMM workcenter.",
+      inputs: [
+        {
+          key: "workcenterId",
+          label: "Workcenter",
+          description: "Workcenter entity instance backing this graph node.",
+          valueType: "entityRef",
+          entityKey: "imm.workcenter",
+          required: true,
+          sortOrder: 10,
+        },
+      ],
+      facets: [
+        entityFacet("workcenterId", "Workcenter", "Workcenter entity id", "imm.workcenter", "$input.workcenterId", "id", true, 10),
+      ],
+      fields: [
+        entityField("workcenterId", "Workcenter Id", "Workcenter entity id", "imm.workcenter", "$input.workcenterId", "id", "string", 5),
+        entityField("name", "Name", "Workcenter name", "imm.workcenter", "$input.workcenterId", "name", "string", 6),
       ],
     },
   ],
@@ -169,6 +194,8 @@ function entityField(
   key: string,
   label: string,
   description: string,
+  entityType: string,
+  entityId: string,
   path: string,
   valueType: GraphTypeValueType,
   sortOrder: number,
@@ -181,8 +208,8 @@ function entityField(
     resolverType: "entity",
     resolver: {
       type: "entity",
-      entityType: "imm.station",
-      entityId: "$input.stationId",
+      entityType,
+      entityId,
       path,
     },
     sortOrder,
