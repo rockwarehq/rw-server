@@ -101,6 +101,7 @@ export const IMM_GRAPH_TYPE_NAMESPACE = {
         ),
       ],
       fields: [
+        entityField("stationId", "Station Id", "Station entity id", "id", "string", 5),
         metricField("oee", "OEE", "Overall equipment effectiveness ratio", "oee", "percent", 10),
         metricField(
           "goodItems",
@@ -158,6 +159,30 @@ function entityFacet(
         key: entityKey,
         id: entityId,
       },
+      path,
+    },
+    sortOrder,
+  };
+}
+
+function entityField(
+  key: string,
+  label: string,
+  description: string,
+  path: string,
+  valueType: GraphTypeValueType,
+  sortOrder: number,
+): LivestoreGraphTypeFieldSchema {
+  return {
+    key,
+    label,
+    description,
+    valueType,
+    resolverType: "entity",
+    resolver: {
+      type: "entity",
+      entityType: "imm.station",
+      entityId: "$input.stationId",
       path,
     },
     sortOrder,

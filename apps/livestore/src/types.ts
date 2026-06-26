@@ -56,11 +56,19 @@ export interface ExprResolverConfig {
   expression: string;
 }
 
+export interface EntityResolverConfig {
+  type: "entity";
+  entityType: string;
+  entityId: string;
+  path: string;
+}
+
 export type GraphResolver =
   | TagResolverConfig
   | RollupResolverConfig
   | MetricResolverConfig
   | ExprResolverConfig
+  | EntityResolverConfig
   | WindowResolverConfig
   | ({ type: string } & Record<string, unknown>);
 
@@ -184,6 +192,15 @@ export function isMetricResolver(value: GraphResolver): value is MetricResolverC
     typeof (value as MetricResolverConfig).entityId === "string" &&
     typeof (value as MetricResolverConfig).granularity === "string" &&
     typeof (value as MetricResolverConfig).metricKey === "string"
+  );
+}
+
+export function isEntityResolver(value: GraphResolver): value is EntityResolverConfig {
+  return (
+    value.type === "entity" &&
+    typeof (value as EntityResolverConfig).entityType === "string" &&
+    typeof (value as EntityResolverConfig).entityId === "string" &&
+    typeof (value as EntityResolverConfig).path === "string"
   );
 }
 
