@@ -1,4 +1,4 @@
-import { MIRRORED_METRIC_KEYS } from "@rw/runtime/graph-subjects";
+import { MIRRORED_CONTEXT_KEYS, MIRRORED_METRIC_KEYS } from "@rw/runtime/graph-subjects";
 import { describe, expect, it } from "vitest";
 
 import type { MetricChangeEvent } from "../rpc/metrics-bus.js";
@@ -22,26 +22,52 @@ const change = (overrides: Partial<MetricChangeEvent> = {}): MetricChangeEvent =
 });
 
 describe("metricChangeToGraphPublishes", () => {
-  it("expands a STATION SHIFT change into one publish per mirrored key", () => {
+  it("expands a STATION SHIFT change into one publish per mirrored metric + context key", () => {
     const publishes = metricChangeToGraphPublishes(change(), 1000);
     expect(publishes).toContainEqual({
       subject: "metrics.stn-25.SHIFT.goodItems",
       envelope: { value: 42, quality: "good", timestamp: 1000 },
     });
-    // Every other mirrored key is absent from the snapshot, so it publishes stale.
-    for (const p of publishes.filter((p) => !p.subject.endsWith(".goodItems"))) {
-      expect(p.envelope).toEqual({ value: null, quality: "stale", timestamp: 1000 });
-    }
-    expect(publishes).toHaveLength(MIRRORED_METRIC_KEYS.length);
+    expect(publishes).toHaveLength(MIRRORED_METRIC_KEYS.length + MIRRORED_CONTEXT_KEYS.length);
   });
 
   it("emits a stale envelope when the snapshot value is missing", () => {
     const snapshot = {} as unknown as MetricChangeEvent["snapshot"];
-    expect(metricChangeToGraphPublishes(change({ snapshot }), 1000)[0]?.envelope).toEqual({
+    const publishes = metricChangeToGraphPublishes(change({ snapshot }), 1000);
+    expect(publishes.find((p) => p.subject === "metrics.stn-25.SHIFT.goodItems")?.envelope).toEqual({
       value: null,
       quality: "stale",
       timestamp: 1000,
     });
+  });
+
+  it("mirrors context columns from the snapshot and startTime from the change", () => {
+    const snapshot = {
+      goodItems: 42,
+      businessShift: "Shift 1",
+      businessDate: "2026-06-30",
+      currentJobName: "Job A",
+      currentStandardCycle: 12.5,
+    } as unknown as MetricChangeEvent["snapshot"];
+    const publishes = metricChangeToGraphPublishes(change({ snapshot, startTime: new Date(1000) }), 1000);
+    const envelopeFor = (key: string) => publishes.find((p) => p.subject === `metrics.stn-25.SHIFT.${key}`)?.envelope;
+
+    expect(envelopeFor("businessShift")).toEqual({ value: "Shift 1", quality: "good", timestamp: 1000 });
+    expect(envelopeFor("businessDate")).toEqual({ value: "2026-06-30", quality: "good", timestamp: 1000 });
+    expect(envelopeFor("currentJobName")).toEqual({ value: "Job A", quality: "good", timestamp: 1000 });
+    expect(envelopeFor("currentStandardCycle")).toEqual({ value: 12.5, quality: "good", timestamp: 1000 });
+    expect(envelopeFor("startTime")).toEqual({
+      value: "1970-01-01T00:00:01.000Z",
+      quality: "good",
+      timestamp: 1000,
+    });
+  });
+
+  it("emits stale context envelopes when columns are null", () => {
+    const publishes = metricChangeToGraphPublishes(change({ startTime: null as unknown as Date }), 1000);
+    const envelopeFor = (key: string) => publishes.find((p) => p.subject === `metrics.stn-25.SHIFT.${key}`)?.envelope;
+    expect(envelopeFor("businessShift")).toEqual({ value: null, quality: "stale", timestamp: 1000 });
+    expect(envelopeFor("startTime")).toEqual({ value: null, quality: "stale", timestamp: 1000 });
   });
 
   it("ignores non-STATION entities (graph rolls those up itself)", () => {

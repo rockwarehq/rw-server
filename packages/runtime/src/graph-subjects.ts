@@ -26,6 +26,18 @@ export const MIRRORED_METRIC_KEYS = [
 
 export type MirroredMetricKey = (typeof MIRRORED_METRIC_KEYS)[number];
 
+// Non-KPI context columns the bridge mirrors for the Station node; kept out of
+// MIRRORED_METRIC_KEYS so the rollup metric catalog's typing is unaffected.
+export const MIRRORED_CONTEXT_KEYS = [
+  "businessDate",
+  "businessShift",
+  "currentStandardCycle",
+  "currentJobName",
+  "startTime",
+] as const;
+
+export type MirroredContextKey = (typeof MIRRORED_CONTEXT_KEYS)[number];
+
 function sanitizeSubjectToken(value: string): string {
   const token = value.trim().replaceAll("/", ".").replaceAll("\\", ".").replace(/\s+/g, "_");
   return token

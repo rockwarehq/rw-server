@@ -8,7 +8,12 @@
     "start:rollups": "node dist/main.js --worker rollups",
     "dev:rollups": "tsx watch src/main.ts --worker rollups",
     "start:imm-events": "node dist/main.js --worker imm-events",
-    "dev:imm-events": "tsx watch src/main.ts --worker imm-events"
+    "dev:imm-events": "tsx watch src/main.ts --worker imm-events",
+    "publish:cycles": "tsx scripts/publish-cycles.ts",
+    "seed:station": "tsx scripts/seed-station.ts",
+    "seed:rollup-set": "tsx scripts/seed-rollup-set.ts",
+    "reseed:graph": "tsx scripts/reseed-graph.ts",
+    "publish:counter": "tsx scripts/publish-counter.ts"
   },
   "dependencies": {
     "@nats-io/jetstream": "^3.4.0",

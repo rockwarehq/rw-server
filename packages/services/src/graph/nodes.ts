@@ -16,7 +16,7 @@ import {
   getGraphSiteForWorkspace,
 } from "./scope.js";
 import { errorResult, type GraphScope, type ListResult, type ServiceResult } from "./types.js";
-import { validateAcyclicStaticEdges, validateResolverConfig } from "./validation.js";
+import { prefixedPropertyId, validateAcyclicStaticEdges, validateResolverConfig } from "./validation.js";
 
 export interface CreateGraphNodeInput {
   name: string;
@@ -125,6 +125,26 @@ function expandTemplate(value: unknown, context: Record<string, unknown>): unkno
 
 function isServiceError(value: unknown): value is { error: string; code: string } {
   return isRecord(value) && typeof value.error === "string" && typeof value.code === "string";
+}
+
+const FIELD_REF_PATTERN = /\$field\.([a-zA-Z0-9_-]+)/g;
+
+// Expand `$field.<key>` tokens to the prefixed property ids of sibling fields.
+export function expandExpressionFieldRefs(
+  expression: string,
+  idByFieldKey: Map<string, string>,
+): string | { error: string; code: string } {
+  let missing: string | null = null;
+  const expanded = expression.replace(FIELD_REF_PATTERN, (match, key: string) => {
+    const id = idByFieldKey.get(key);
+    if (!id) {
+      missing ??= key;
+      return match;
+    }
+    return prefixedPropertyId(id);
+  });
+  if (missing) return errorResult("INVALID_RESOLVER", `expr field references unknown sibling field: ${missing}`);
+  return expanded;
 }
 
 function isPresent(value: unknown): boolean {
@@ -288,7 +308,13 @@ async function resolveSystemEntityRecord(
       },
     });
     if (!site || site.id !== scope.siteId) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
-    return { data: { ...site, workcenters: site.workcenters.map((row) => row.id), stations: site.stations.map((row) => row.id) } };
+    return {
+      data: {
+        ...site,
+        workcenters: site.workcenters.map((row) => row.id),
+        stations: site.stations.map((row) => row.id),
+      },
+    };
   }
 
   if (entityKey === SYSTEM_ENTITY_KEYS.Workcenter) {
@@ -431,7 +457,12 @@ async function resolveSystemEntityRecord(
     });
     if (!order) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
     return {
-      data: { ...order, site: order.siteId, customer: order.customerId, products: order.lineItems.map((row) => row.productId) },
+      data: {
+        ...order,
+        site: order.siteId,
+        customer: order.customerId,
+        products: order.lineItems.map((row) => row.productId),
+      },
     };
   }
 
@@ -592,6 +623,13 @@ async function prepareTypeFields(args: {
   });
   const existingByName = new Map(existingProperties.map((property) => [property.name, property.id]));
 
+  // Assign property ids up front so expr fields can reference siblings by key.
+  const idByFieldKey = new Map<string, string>();
+  for (const field of typeResult.data.fields) {
+    idByFieldKey.set(field.key, existingByName.get(field.key) ?? randomUUID());
+  }
+  const knownPropertyIds = new Set(idByFieldKey.values());
+
   const prepared: PreparedTypeField[] = [];
   for (const field of typeResult.data.fields) {
     const expanded = expandTemplate(field.resolver, args.typeContext);
@@ -599,14 +637,21 @@ async function prepareTypeFields(args: {
     if (!isRecord(expanded))
       return errorResult("INVALID_RESOLVER", `Graph type field resolver is invalid: ${field.key}`);
 
+    if (field.resolverType === "expr" && typeof expanded.expression === "string") {
+      const exprResult = expandExpressionFieldRefs(expanded.expression, idByFieldKey);
+      if (isServiceError(exprResult)) return exprResult;
+      expanded.expression = exprResult;
+    }
+
     const resolverResult = await validateResolverConfig({
       resolverType: field.resolverType,
       resolver: expanded,
       scope: args.scope,
+      knownPropertyIds,
     });
     if ("error" in resolverResult) return resolverResult;
 
-    const propertyId = existingByName.get(field.key) ?? randomUUID();
+    const propertyId = idByFieldKey.get(field.key) ?? randomUUID();
     const cycleResult = await validateAcyclicStaticEdges({
       propertyId,
       dependencyIds: resolverResult.data.dependencyIds,
@@ -687,8 +732,9 @@ export async function create(input: CreateGraphNodeInput, scope: GraphScope): Pr
           },
         });
 
+    // Upsert all properties before edges: an edge may point at an in-batch sibling.
     for (const field of fieldsResult.data) {
-      const property = await tx.graphProperty.upsert({
+      await tx.graphProperty.upsert({
         where: { nodeId_name: { nodeId: next.id, name: field.name } },
         create: {
           id: field.id,
@@ -707,12 +753,15 @@ export async function create(input: CreateGraphNodeInput, scope: GraphScope): Pr
           isDeleted: false,
         },
       });
-      await tx.graphEdge.deleteMany({ where: { toPropertyId: property.id } });
+    }
+
+    for (const field of fieldsResult.data) {
+      await tx.graphEdge.deleteMany({ where: { toPropertyId: field.id } });
       if (field.dependencyIds.length > 0) {
         await tx.graphEdge.createMany({
           data: [...new Set(field.dependencyIds)].map((dependencyId) => ({
             fromPropertyId: dependencyId,
-            toPropertyId: property.id,
+            toPropertyId: field.id,
           })),
           skipDuplicates: true,
         });
