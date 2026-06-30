@@ -37,11 +37,7 @@ export interface ValidateGraphPropertyInput extends CreateGraphPropertyInput {
   id?: string;
 }
 
-async function buildResolver(args: {
-  resolverType?: string;
-  resolver?: Record<string, unknown>;
-  scope: GraphScope;
-}) {
+async function buildResolver(args: { resolverType?: string; resolver?: Record<string, unknown>; scope: GraphScope }) {
   const resolverType = args.resolverType;
   const resolver = args.resolver;
 

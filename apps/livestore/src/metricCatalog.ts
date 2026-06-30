@@ -55,9 +55,7 @@ const COUNTER_UNITS: Record<MirroredCounterMetricKey, MetricUnit> = {
   elapsedPlannedProductionSeconds: "seconds",
 };
 
-const MIRRORED_COUNTER_KEYS = MIRRORED_METRIC_KEYS.filter(
-  (key): key is MirroredCounterMetricKey => key !== "oee",
-);
+const MIRRORED_COUNTER_KEYS = MIRRORED_METRIC_KEYS.filter((key): key is MirroredCounterMetricKey => key !== "oee");
 
 const counter = (key: MirroredCounterMetricKey): MetricField => ({
   key,

@@ -12,5 +12,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Only run from src — never the tsc-compiled copies under dist.
+    include: ["src/**/*.test.ts"],
   },
 });

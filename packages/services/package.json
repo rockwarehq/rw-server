@@ -33,6 +33,7 @@
   },
   "scripts": {
     "build": "tsc -b",
+    "test": "vitest run --exclude '**/document/document.test.ts'",
     "test:document": "vitest run src/document/document.test.ts"
   },
   "dependencies": {

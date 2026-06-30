@@ -35,9 +35,15 @@ const event = (overrides: Partial<EntityEvent> = {}): EntityEvent => ({
   ...overrides,
 });
 
-function harness(node: { siteId: string; site: { workspaceId: string } } | null = { siteId: "site-1", site: { workspaceId: "ws-1" } }) {
+function harness(
+  node: { siteId: string; site: { workspaceId: string } } | null = { siteId: "site-1", site: { workspaceId: "ws-1" } },
+) {
   const commits: Array<{ propertyId: string; envelope: ValueEnvelope; source: string }> = [];
-  const sink = { commitValue: vi.fn(async (propertyId, envelope, source) => { commits.push({ propertyId, envelope, source }); }) };
+  const sink = {
+    commitValue: vi.fn(async (propertyId, envelope, source) => {
+      commits.push({ propertyId, envelope, source });
+    }),
+  };
   const prisma = { graphNode: { findUnique: vi.fn(async () => node) } } as never;
   const properties = new Map<string, PropertyRuntime>();
   const getProperty = (id: string) => properties.get(id) ?? null;
@@ -62,7 +68,11 @@ describe("EntityResolver", () => {
       path: "id",
       scope: { workspaceId: "ws-1", siteId: "site-1" },
     });
-    expect(commits[0]).toMatchObject({ propertyId: "prop-1", source: "entity", envelope: { value: "station-7", quality: "good" } });
+    expect(commits[0]).toMatchObject({
+      propertyId: "prop-1",
+      source: "entity",
+      envelope: { value: "station-7", quality: "good" },
+    });
   });
 
   it("commits stale when the node scope is not found", async () => {
@@ -93,9 +103,9 @@ describe("EntityResolver", () => {
     const { resolver, commits, properties } = harness();
     const property = entityProperty();
     properties.set(property.id, property);
-    await resolver.upsertProperty(property);          // index + initial resolve (1 commit)
+    await resolver.upsertProperty(property); // index + initial resolve (1 commit)
 
-    await resolver.handleEntityEvent(event());        // re-resolve (2nd commit)
+    await resolver.handleEntityEvent(event()); // re-resolve (2nd commit)
 
     expect(commits).toHaveLength(2);
     expect(commits.every((c) => c.propertyId === "prop-1")).toBe(true);
@@ -103,7 +113,7 @@ describe("EntityResolver", () => {
 
   it("handleEntityEvent skips a property whose flat field isn't in changedFields", async () => {
     const { resolver, commits, properties } = harness();
-    const property = entityProperty();                // path: "id"
+    const property = entityProperty(); // path: "id"
     properties.set(property.id, property);
     await resolver.upsertProperty(property);
     commits.length = 0;
@@ -115,7 +125,7 @@ describe("EntityResolver", () => {
 
   it("handleEntityEvent re-resolves when the field is in changedFields", async () => {
     const { resolver, commits, properties } = harness();
-    const property = entityProperty();                // path: "id"
+    const property = entityProperty(); // path: "id"
     properties.set(property.id, property);
     await resolver.upsertProperty(property);
     commits.length = 0;
@@ -127,7 +137,9 @@ describe("EntityResolver", () => {
 
   it("handleEntityEvent always re-resolves nested paths (changedFields can't be trusted)", async () => {
     const { resolver, commits, properties } = harness();
-    const property = entityProperty({ resolver: { type: "entity", entityType: "imm.station", entityId: "station-7", path: "currentBlob.standardCycle" } });
+    const property = entityProperty({
+      resolver: { type: "entity", entityType: "imm.station", entityId: "station-7", path: "currentBlob.standardCycle" },
+    });
     properties.set(property.id, property);
     await resolver.upsertProperty(property);
     commits.length = 0;
