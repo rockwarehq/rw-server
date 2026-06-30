@@ -13,6 +13,7 @@
     "seed:station": "tsx scripts/seed-station.ts",
     "seed:rollup-set": "tsx scripts/seed-rollup-set.ts",
     "reseed:graph": "tsx scripts/reseed-graph.ts",
+    "add:cycle-hooks": "tsx scripts/add-cycle-hooks.ts",
     "publish:counter": "tsx scripts/publish-counter.ts"
   },
   "dependencies": {
