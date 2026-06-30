@@ -1,5 +1,10 @@
 import { connect } from "@nats-io/transport-node";
-import { deriveMetricSubject, MIRRORED_GRANULARITY, MIRRORED_METRIC_KEYS } from "@rw/runtime/graph-subjects";
+import {
+  deriveMetricSubject,
+  MIRRORED_CONTEXT_KEYS,
+  MIRRORED_GRANULARITY,
+  MIRRORED_METRIC_KEYS,
+} from "@rw/runtime/graph-subjects";
 
 import { setGraphMetricSink, type MetricChangeEvent } from "../rpc/metrics-bus.js";
 
@@ -21,14 +26,32 @@ export function metricChangeToGraphPublishes(
   if (change.granularity !== MIRRORED_GRANULARITY) return [];
 
   const snapshot = change.snapshot as unknown as Record<string, number | string | boolean | null | undefined>;
-  return MIRRORED_METRIC_KEYS.map((metricKey) => {
-    const value = snapshot[metricKey] ?? null;
-    const envelope: ValueEnvelope =
-      value == null
-        ? { value: null, quality: "stale", timestamp: observedAtMs }
-        : { value, quality: "good", timestamp: observedAtMs };
-    return { subject: deriveMetricSubject(change.entityId, change.granularity, metricKey), envelope };
-  });
+
+  // Context columns live on the snapshot except startTime, which is on the change.
+  const contextValues: Record<string, unknown> = {
+    businessDate: snapshot.businessDate ?? null,
+    businessShift: snapshot.businessShift ?? null,
+    currentStandardCycle: snapshot.currentStandardCycle ?? null,
+    currentJobName: snapshot.currentJobName ?? null,
+    startTime: change.startTime ? change.startTime.toISOString() : null,
+  };
+
+  const toEnvelope = (value: unknown): ValueEnvelope =>
+    value == null
+      ? { value: null, quality: "stale", timestamp: observedAtMs }
+      : { value, quality: "good", timestamp: observedAtMs };
+
+  const metricPublishes = MIRRORED_METRIC_KEYS.map((metricKey) => ({
+    subject: deriveMetricSubject(change.entityId, change.granularity, metricKey),
+    envelope: toEnvelope(snapshot[metricKey] ?? null),
+  }));
+
+  const contextPublishes = MIRRORED_CONTEXT_KEYS.map((contextKey) => ({
+    subject: deriveMetricSubject(change.entityId, change.granularity, contextKey),
+    envelope: toEnvelope(contextValues[contextKey] ?? null),
+  }));
+
+  return [...metricPublishes, ...contextPublishes];
 }
 
 export interface GraphNatsBridgeOptions {

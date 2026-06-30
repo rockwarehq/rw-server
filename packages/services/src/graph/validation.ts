@@ -101,6 +101,8 @@ export async function validateResolverConfig(args: {
   resolverType: string;
   resolver: Record<string, unknown>;
   scope: GraphScope;
+  // In-batch sibling ids: dependencies on these skip the "exists in site" check.
+  knownPropertyIds?: ReadonlySet<string>;
 }): Promise<
   { data: { resolver: Record<string, unknown>; dependencyIds: string[] } } | { error: string; code: string }
 > {
@@ -158,7 +160,9 @@ export async function validateResolverConfig(args: {
       return errorResult("INVALID_RESOLVER", "expr resolver requires expression");
     }
     const dependencyIds = extractExpressionDependencyIds(resolver.expression);
-    const dependencyResult = await assertPropertiesInSite(dependencyIds, args.scope);
+    const known = args.knownPropertyIds;
+    const toCheck = known ? dependencyIds.filter((id) => !known.has(id)) : dependencyIds;
+    const dependencyResult = await assertPropertiesInSite(toCheck, args.scope);
     if (dependencyResult && "error" in dependencyResult) return dependencyResult;
     return { data: { resolver, dependencyIds } };
   }

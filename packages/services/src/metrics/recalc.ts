@@ -1028,10 +1028,12 @@ export async function updateTimeBased(
     Array<{
       currentJobId: string | null;
       currentJobName: string | null;
+      jobStandardCycle: number | null;
     }>
   >`
     SELECT s."currentJobId",
-           jb.name AS "currentJobName"
+           jb.name AS "currentJobName",
+           jb."standardCycle"::float8 AS "jobStandardCycle"
     FROM "Station" s
     LEFT JOIN "Job" j ON j.id = s."currentJobId"
     LEFT JOIN "JobBlob" jb ON jb.id = j."currentBlobId"
@@ -1039,6 +1041,9 @@ export async function updateTimeBased(
   `;
   const currentJobId = stationJobRows3[0]?.currentJobId ?? null;
   const currentJobName = stationJobRows3[0]?.currentJobName ?? null;
+  // Standard cycle of whatever job is current — populates currentStandardCycle
+  // (and expected-cycle calcs) the same way currentJobName is sourced.
+  const currentJobStandardCycle = stationJobRows3[0]?.jobStandardCycle ?? null;
 
   // Recompute duration KPIs for each affected base bucket.
   // Uses computeDurationsForBucket which only queries state logs —
@@ -1050,7 +1055,7 @@ export async function updateTimeBased(
     // Resolve standardCycle and itemsPerCycle for this bucket.
     // When not provided by the caller, fall back to the existing
     // bucket's values (set by the most recent updateCountBased call).
-    let stdCycle = standardCycleSeconds ?? null;
+    let stdCycle = standardCycleSeconds ?? currentJobStandardCycle ?? null;
     let ipc = itemsPerCycle ?? 1;
     if (stdCycle == null || itemsPerCycle == null) {
       const existingRows = await prisma.$queryRaw<

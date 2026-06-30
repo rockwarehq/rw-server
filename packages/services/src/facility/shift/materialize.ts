@@ -462,11 +462,7 @@ async function findExistingShiftInstanceKeys(rows: readonly InstanceRow[]): Prom
     select: { assignmentId: true, startTime: true },
   });
 
-  return new Set(
-    existing
-      .map(shiftInstanceUniqueKey)
-      .filter((key) => rowKeys.has(key)),
-  );
+  return new Set(existing.map(shiftInstanceUniqueKey).filter((key) => rowKeys.has(key)));
 }
 
 async function publishCreatedShiftInstanceEvents(rows: readonly InstanceRow[], existingKeys: Set<string>) {

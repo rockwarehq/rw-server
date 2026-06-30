@@ -216,7 +216,9 @@ async function validateEntityCatalogKey(entityKey: string, scope: GraphScope) {
     },
     select: { id: true },
   });
-  return schema ? { data: entityKey } : errorResult("ENTITY_CATALOG_NOT_FOUND", `Entity catalog key not found: ${entityKey}`);
+  return schema
+    ? { data: entityKey }
+    : errorResult("ENTITY_CATALOG_NOT_FOUND", `Entity catalog key not found: ${entityKey}`);
 }
 
 async function validateEntityCatalogPath(entityKey: string, path: string, scope: GraphScope) {
@@ -800,9 +802,9 @@ export async function create(input: CreateGraphNodeTypeInput, scope: GraphScope)
           where: { id: existing.id },
           data: { label, description: input.description ?? null, isDeleted: false },
         })
-        : await tx.graphNodeType.create({
-            data: { siteId: scope.siteId, key, label, description: input.description ?? null },
-          });
+      : await tx.graphNodeType.create({
+          data: { siteId: scope.siteId, key, label, description: input.description ?? null },
+        });
 
     for (const typeInput of normalizedInputs) {
       await tx.graphNodeTypeInput.upsert({
@@ -1094,7 +1096,10 @@ export async function updateInput(
     if (conflict) return errorResult("GRAPH_TYPE_INPUT_KEY_EXISTS", "Graph type input key already exists");
   }
 
-  const normalizedInputs = await normalizedInputsForType(current.typeId, { replaceId: id, replacement: normalized.data });
+  const normalizedInputs = await normalizedInputsForType(current.typeId, {
+    replaceId: id,
+    replacement: normalized.data,
+  });
   if ("error" in normalizedInputs) return normalizedInputs;
   const facetValidation = await validateExistingFacetsForInputs(current.typeId, normalizedInputs.data, scope);
   if ("error" in facetValidation) return facetValidation;

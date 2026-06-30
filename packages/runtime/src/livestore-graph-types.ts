@@ -66,6 +66,130 @@ export interface ParsedGraphTypeRef {
   typeRef: string;
 }
 
+interface CounterSpec {
+  key: string;
+  label: string;
+  description: string;
+  // MetricBucket column / NATS subject token, when it differs from the displayed key.
+  metricKey?: string;
+}
+
+interface DerivedSpec {
+  key: string;
+  label: string;
+  description: string;
+  expression: string;
+  valueType: GraphTypeValueType;
+}
+
+// Additive counters: mirrored on Station, summed (rollup) on Workcenter/Site.
+const BASE_COUNTERS: CounterSpec[] = [
+  { key: "totalCycles", label: "Total Cycles", description: "Total cycle count" },
+  { key: "expectedCycles", label: "Expected Cycles", description: "Expected cycle count" },
+  { key: "totalItems", label: "Total Items", description: "Total produced item count" },
+  { key: "badItems", label: "Bad Items", description: "Bad produced item count" },
+  { key: "expectedItems", label: "Expected Items", description: "Expected produced item count" },
+  { key: "runSeconds", label: "Run Seconds", description: "Running time" },
+  // Downtime split: OEE-exempt (planned) vs counted (unplanned). The bucket's
+  // total `downSeconds` column is intentionally not surfaced.
+  {
+    key: "oeeExemptDownSeconds",
+    label: "OEE Exempt Down Seconds",
+    description: "OEE-exempt (planned) downtime",
+    metricKey: "plannedDownSeconds",
+  },
+  { key: "downSeconds", label: "Down Seconds", description: "Unplanned downtime", metricKey: "unplannedDownSeconds" },
+  { key: "plannedProductionSeconds", label: "Planned Production Seconds", description: "Planned production time" },
+  {
+    key: "netRunSeconds",
+    label: "Net Run Seconds",
+    description: "Cycle count × standard cycle, summed (expected/ideal run time)",
+    metricKey: "idealCycleSeconds",
+  },
+  { key: "elapsedExpectedCycles", label: "Elapsed Expected Cycles", description: "Elapsed expected cycle count" },
+  { key: "elapsedExpectedItems", label: "Elapsed Expected Items", description: "Elapsed expected item count" },
+  {
+    key: "elapsedPlannedProductionSeconds",
+    label: "Elapsed Planned Production Seconds",
+    description: "Elapsed planned production time",
+  },
+];
+
+// Derived KPIs computed by expression at every level over the base counters.
+const DERIVED_FIELDS: DerivedSpec[] = [
+  {
+    key: "goodItems",
+    label: "Good Items",
+    description: "Good produced item count (totalItems − badItems)",
+    valueType: "number",
+    expression: "$field.totalItems - $field.badItems",
+  },
+  {
+    key: "availability",
+    label: "Availability",
+    description: "Availability ratio (runSeconds / elapsedPlannedProductionSeconds)",
+    valueType: "percent",
+    expression: "$field.runSeconds / $field.elapsedPlannedProductionSeconds",
+  },
+  {
+    key: "performance",
+    label: "Performance",
+    description: "Performance ratio (netRunSeconds / runSeconds)",
+    valueType: "percent",
+    expression: "$field.netRunSeconds / $field.runSeconds",
+  },
+  {
+    key: "quality",
+    label: "Quality",
+    description: "Quality ratio ((totalItems − badItems) / totalItems)",
+    valueType: "percent",
+    expression: "($field.totalItems - $field.badItems) / $field.totalItems",
+  },
+  {
+    key: "oee",
+    label: "OEE",
+    description: "Overall equipment effectiveness ratio",
+    valueType: "percent",
+    expression:
+      "($field.netRunSeconds * ($field.totalItems - $field.badItems)) / ($field.elapsedPlannedProductionSeconds * $field.totalItems)",
+  },
+];
+
+const counterMetricFields = (startSort: number): LivestoreGraphTypeFieldSchema[] =>
+  BASE_COUNTERS.map((c, i) =>
+    metricField(
+      c.key,
+      c.label,
+      `${c.description} for the current shift`,
+      c.metricKey ?? c.key,
+      "number",
+      startSort + i * 10,
+    ),
+  );
+
+const counterRollupFields = (
+  childKind: string,
+  relation: string,
+  parentModel: string,
+  parentInputKey: string,
+  startSort: number,
+): LivestoreGraphTypeFieldSchema[] =>
+  BASE_COUNTERS.map((c, i) =>
+    rollupField(
+      c.key,
+      c.label,
+      `${c.description} summed across ${relation}`,
+      childKind,
+      relation,
+      parentModel,
+      parentInputKey,
+      startSort + i * 10,
+    ),
+  );
+
+const derivedExprFields = (startSort: number): LivestoreGraphTypeFieldSchema[] =>
+  DERIVED_FIELDS.map((d, i) => exprField(d.key, d.label, d.description, d.expression, d.valueType, startSort + i * 10));
+
 export const IMM_GRAPH_TYPE_NAMESPACE = {
   namespace: "imm",
   displayName: "IMM",
@@ -101,41 +225,66 @@ export const IMM_GRAPH_TYPE_NAMESPACE = {
         ),
       ],
       fields: [
-        entityField("stationId", "Station Id", "Station entity id", "imm.station", "$input.stationId", "id", "string", 5),
+        entityField(
+          "stationId",
+          "Station Id",
+          "Station entity id",
+          "imm.station",
+          "$input.stationId",
+          "id",
+          "string",
+          5,
+        ),
         entityField("name", "Name", "Station name", "imm.station", "$input.stationId", "name", "string", 6),
-        entityField("currentJobId", "Current Job", "Current job id on the station", "imm.station", "$input.stationId", "currentJob", "string", 7),
-        metricField("oee", "OEE", "Overall equipment effectiveness ratio", "oee", "percent", 10),
+        entityField(
+          "currentJobId",
+          "Current Job",
+          "Current job id on the station",
+          "imm.station",
+          "$input.stationId",
+          "currentJob",
+          "string",
+          7,
+        ),
+
+        // Mirrored counters (NATS metric subjects, SHIFT granularity)
+        ...counterMetricFields(100),
+        // Derived KPIs (expressions over the counters)
+        ...derivedExprFields(300),
+
+        // Mirrored context (NATS metric subjects, non-KPI values)
         metricField(
-          "goodItems",
-          "Good Items",
-          "Good produced item count for the current shift",
-          "goodItems",
+          "shiftStartTime",
+          "Shift Start",
+          "Start time of the current shift bucket",
+          "startTime",
+          "date",
+          400,
+        ),
+        metricField("businessDate", "Business Date", "Business date of the current shift", "businessDate", "date", 410),
+        metricField("businessShift", "Business Shift", "Human-readable shift name", "businessShift", "string", 420),
+        metricField(
+          "currentStandardCycle",
+          "Standard Cycle",
+          "Current job's standard cycle (seconds)",
+          "currentStandardCycle",
           "number",
-          20,
+          430,
         ),
         metricField(
-          "totalItems",
-          "Total Items",
-          "Total produced item count for the current shift",
-          "totalItems",
-          "number",
-          30,
-        ),
-        metricField("goodCycles", "Good Cycles", "Good cycle count for the current shift", "goodCycles", "number", 40),
-        metricField(
-          "totalCycles",
-          "Total Cycles",
-          "Total cycle count for the current shift",
-          "totalCycles",
-          "number",
-          50,
+          "currentJobName",
+          "Current Job Name",
+          "Name of the current job on the station",
+          "currentJobName",
+          "string",
+          440,
         ),
       ],
     },
     {
       key: "workcenter",
       label: "Workcenter",
-      description: "IMM workcenter.",
+      description: "IMM workcenter rolling up its stations.",
       inputs: [
         {
           key: "workcenterId",
@@ -148,15 +297,58 @@ export const IMM_GRAPH_TYPE_NAMESPACE = {
         },
       ],
       facets: [
-        entityFacet("workcenterId", "Workcenter", "Workcenter entity id", "imm.workcenter", "$input.workcenterId", "id", true, 10),
+        entityFacet(
+          "workcenterId",
+          "Workcenter",
+          "Workcenter entity id",
+          "imm.workcenter",
+          "$input.workcenterId",
+          "id",
+          true,
+          10,
+        ),
       ],
       fields: [
-        entityField("workcenterId", "Workcenter Id", "Workcenter entity id", "imm.workcenter", "$input.workcenterId", "id", "string", 5),
+        entityField(
+          "workcenterId",
+          "Workcenter Id",
+          "Workcenter entity id",
+          "imm.workcenter",
+          "$input.workcenterId",
+          "id",
+          "string",
+          5,
+        ),
         entityField("name", "Name", "Workcenter name", "imm.workcenter", "$input.workcenterId", "name", "string", 6),
+        ...counterRollupFields("Station", "stations", "Workcenter", "workcenterId", 100),
+        ...derivedExprFields(300),
+      ],
+    },
+    {
+      key: "site",
+      label: "Site",
+      description: "IMM site rolling up its workcenters.",
+      inputs: [
+        {
+          key: "siteId",
+          label: "Site",
+          description: "Site entity instance backing this graph node.",
+          valueType: "entityRef",
+          entityKey: "imm.site",
+          required: true,
+          sortOrder: 10,
+        },
+      ],
+      facets: [entityFacet("siteId", "Site", "Site entity id", "imm.site", "$input.siteId", "id", true, 10)],
+      fields: [
+        entityField("siteId", "Site Id", "Site entity id", "imm.site", "$input.siteId", "id", "string", 5),
+        entityField("name", "Name", "Site name", "imm.site", "$input.siteId", "name", "string", 6),
+        ...counterRollupFields("Workcenter", "workcenters", "Site", "siteId", 100),
+        ...derivedExprFields(300),
       ],
     },
   ],
-} as const satisfies LivestoreGraphTypeNamespaceSchema;
+} satisfies LivestoreGraphTypeNamespaceSchema;
 
 export const LIVESTORE_GRAPH_TYPE_NAMESPACES = [
   IMM_GRAPH_TYPE_NAMESPACE,
@@ -232,10 +424,62 @@ function metricField(
     resolverType: "metric",
     resolver: {
       type: "metric",
-      entityType: "STATION",
+      entityType: "Station",
       entityId: "$input.stationId",
       granularity: "SHIFT",
       metricKey,
+    },
+    sortOrder,
+  };
+}
+
+// Rollup field; sums a child kind's matching property over `relation`.
+function rollupField(
+  key: string,
+  label: string,
+  description: string,
+  childKind: string,
+  relation: string,
+  parentModel: string,
+  parentInputKey: string,
+  sortOrder: number,
+): LivestoreGraphTypeFieldSchema {
+  return {
+    key,
+    label,
+    description,
+    valueType: "number",
+    resolverType: "rollup",
+    resolver: {
+      type: "rollup",
+      childKind,
+      relation,
+      childProperty: key,
+      aggregation: "sum",
+      parent: { model: parentModel, id: `$input.${parentInputKey}` },
+    },
+    sortOrder,
+  };
+}
+
+// Expression field; references sibling fields via `$field.<key>` tokens.
+function exprField(
+  key: string,
+  label: string,
+  description: string,
+  expression: string,
+  valueType: GraphTypeValueType,
+  sortOrder: number,
+): LivestoreGraphTypeFieldSchema {
+  return {
+    key,
+    label,
+    description,
+    valueType,
+    resolverType: "expr",
+    resolver: {
+      type: "expr",
+      expression,
     },
     sortOrder,
   };

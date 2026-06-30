@@ -387,7 +387,10 @@ export async function updateCavity(cavityId: string, input: UpdateCavityInput) {
   // Get current cavity with blob
   const current = await prisma.toolCavity.findUnique({
     where: { id: cavityId },
-    include: { currentBlob: true, tool: { select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } } } },
+    include: {
+      currentBlob: true,
+      tool: { select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } } },
+    },
   });
 
   if (!current) {

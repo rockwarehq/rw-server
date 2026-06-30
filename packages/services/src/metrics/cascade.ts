@@ -868,7 +868,14 @@ export async function cascadeStationShiftDay(stationId: string, siteId: string, 
         SUM(mb."expectedCycles")::int AS "expectedCycles", SUM(mb."expectedItems")::int AS "expectedItems",
         SUM(mb."elapsedExpectedCycles")::int AS "elapsedExpectedCycles", SUM(mb."elapsedExpectedItems")::int AS "elapsedExpectedItems",
         SUM(mb."elapsedPlannedProductionSeconds")::int AS "elapsedPlannedProductionSeconds",
-        SUM(mb."durationSeconds")::int AS "durationSeconds"
+        SUM(mb."durationSeconds")::int AS "durationSeconds",
+        (SELECT mb2."currentStandardCycle" FROM "MetricBucket" mb2, shift_info si2
+           WHERE mb2."entityType" = 'STATION'::"BucketEntityType"
+             AND mb2."entityId" = (SELECT station_id FROM params)
+             AND mb2.granularity = 'HOUR'::"BucketGranularity"
+             AND mb2."startTime" >= si2.shift_start AND mb2."startTime" < si2.shift_end
+             AND mb2."currentStandardCycle" IS NOT NULL
+           ORDER BY mb2."startTime" DESC LIMIT 1) AS "currentStandardCycle"
       FROM "MetricBucket" mb, shift_info si
       WHERE mb."entityType" = 'STATION'::"BucketEntityType"
         AND mb."entityId" = (SELECT station_id FROM params)
@@ -885,6 +892,7 @@ export async function cascadeStationShiftDay(stationId: string, siteId: string, 
           "expectedCycles" = ss."expectedCycles", "expectedItems" = ss."expectedItems",
           "elapsedExpectedCycles" = ss."elapsedExpectedCycles", "elapsedExpectedItems" = ss."elapsedExpectedItems",
           "elapsedPlannedProductionSeconds" = ss."elapsedPlannedProductionSeconds",
+          "currentStandardCycle" = ss."currentStandardCycle",
           "durationSeconds" = ss."durationSeconds", "updatedAt" = NOW()
       FROM shift_sums ss, shift_info si
       WHERE mb."entityType" = 'STATION'::"BucketEntityType"
@@ -907,6 +915,7 @@ export async function cascadeStationShiftDay(stationId: string, siteId: string, 
           mb."elapsedExpectedCycles"           IS DISTINCT FROM ss."elapsedExpectedCycles" OR
           mb."elapsedExpectedItems"            IS DISTINCT FROM ss."elapsedExpectedItems" OR
           mb."elapsedPlannedProductionSeconds" IS DISTINCT FROM ss."elapsedPlannedProductionSeconds" OR
+          mb."currentStandardCycle"            IS DISTINCT FROM ss."currentStandardCycle" OR
           mb."durationSeconds"                 IS DISTINCT FROM ss."durationSeconds"
         )
       RETURNING mb.*
@@ -922,7 +931,15 @@ export async function cascadeStationShiftDay(stationId: string, siteId: string, 
         SUM(mb."expectedCycles")::int AS "expectedCycles", SUM(mb."expectedItems")::int AS "expectedItems",
         SUM(mb."elapsedExpectedCycles")::int AS "elapsedExpectedCycles", SUM(mb."elapsedExpectedItems")::int AS "elapsedExpectedItems",
         SUM(mb."elapsedPlannedProductionSeconds")::int AS "elapsedPlannedProductionSeconds",
-        SUM(mb."durationSeconds")::int AS "durationSeconds"
+        SUM(mb."durationSeconds")::int AS "durationSeconds",
+        (SELECT mb2."currentStandardCycle" FROM "MetricBucket" mb2
+           WHERE mb2."entityType" = 'STATION'::"BucketEntityType"
+             AND mb2."entityId" = (SELECT station_id FROM params)
+             AND mb2.granularity = 'HOUR'::"BucketGranularity"
+             AND mb2."startTime" >= date_trunc('day', (SELECT bucket_ts FROM params) AT TIME ZONE (SELECT tz FROM params)) AT TIME ZONE (SELECT tz FROM params)
+             AND mb2."startTime" < (date_trunc('day', (SELECT bucket_ts FROM params) AT TIME ZONE (SELECT tz FROM params)) + INTERVAL '1 day') AT TIME ZONE (SELECT tz FROM params)
+             AND mb2."currentStandardCycle" IS NOT NULL
+           ORDER BY mb2."startTime" DESC LIMIT 1) AS "currentStandardCycle"
       FROM "MetricBucket" mb, params p
       WHERE mb."entityType" = 'STATION'::"BucketEntityType"
         AND mb."entityId" = (SELECT station_id FROM params)
@@ -940,6 +957,7 @@ export async function cascadeStationShiftDay(stationId: string, siteId: string, 
           "expectedCycles" = ds."expectedCycles", "expectedItems" = ds."expectedItems",
           "elapsedExpectedCycles" = ds."elapsedExpectedCycles", "elapsedExpectedItems" = ds."elapsedExpectedItems",
           "elapsedPlannedProductionSeconds" = ds."elapsedPlannedProductionSeconds",
+          "currentStandardCycle" = ds."currentStandardCycle",
           "durationSeconds" = ds."durationSeconds", "updatedAt" = NOW()
       FROM day_sums ds, params p
       WHERE mb."entityType" = 'STATION'::"BucketEntityType"
@@ -962,6 +980,7 @@ export async function cascadeStationShiftDay(stationId: string, siteId: string, 
           mb."elapsedExpectedCycles"           IS DISTINCT FROM ds."elapsedExpectedCycles" OR
           mb."elapsedExpectedItems"            IS DISTINCT FROM ds."elapsedExpectedItems" OR
           mb."elapsedPlannedProductionSeconds" IS DISTINCT FROM ds."elapsedPlannedProductionSeconds" OR
+          mb."currentStandardCycle"            IS DISTINCT FROM ds."currentStandardCycle" OR
           mb."durationSeconds"                 IS DISTINCT FROM ds."durationSeconds"
         )
       RETURNING mb.*
