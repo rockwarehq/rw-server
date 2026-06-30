@@ -266,7 +266,7 @@ export const IMM_GRAPH_TYPE_NAMESPACE = {
         metricField(
           "currentStandardCycle",
           "Standard Cycle",
-          "Standard cycle time in effect for the current shift",
+          "Current job's standard cycle (seconds)",
           "currentStandardCycle",
           "number",
           430,
