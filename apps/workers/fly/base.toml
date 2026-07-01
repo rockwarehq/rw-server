@@ -12,14 +12,19 @@ primary_region = 'iad'
 release_command = 'pnpm -w db:migrate'
 
 # Process groups — keep each at exactly ONE machine. These are singletons:
-# imm-events records cycles, so a second consumer would double-record. The
-# deploy script passes --ha=false for workers (one machine per group, not the
-# default HA pair); never scale a group above 1:
-#   fly scale count -a <tenant>-workers rollups=1 imm-events=1
+# imm-events records cycles, so a second consumer would double-record; a second
+# gateway-health would emit duplicate metric series. The deploy script passes
+# --ha=false (one machine per group) AND reconciles every group to =1 after each
+# workers deploy (see scripts/fly-deploy.ts pinWorkerScale), so no manual
+# `fly scale count` is needed. Never scale a group above 1.
 [processes]
 rollups = 'node dist/main.js --worker rollups'
 # Records cycles from livestore imm events; pooled (pgbouncer) DATABASE_URL.
 imm-events = 'node dist/main.js --worker imm-events'
+# Mirrors gateway.health.* NATS reports into prom-client gauges at /metrics.
+# Needs only NATS_URL. Keep at 1 machine: extra instances just emit duplicate
+# series (distinguished by Fly's instance label) — harmless but noisy.
+gateway-health = 'node dist/main.js --worker gateway-health'
 
 [env]
 NODE_ENV = 'production'
@@ -28,11 +33,18 @@ PORT = '9465'
 # Default 5000; raise to reduce Redis pub/sub bandwidth at the cost of staler KPIs.
 # COMBINED_TICK_MS = '5000'
 
+# Fly's managed Prometheus scrapes this app-wide on every worker machine. Each
+# worker serves default process metrics; gateway-health additionally serves the
+# gateway_* gauges. -> Grafana (fly-metrics.net).
+[metrics]
+port = 9465
+path = '/metrics'
+
 # Internal-only healthcheck (no public HTTP).
 [[services]]
 internal_port = 9465
 protocol = 'tcp'
-processes = ['rollups', 'imm-events']
+processes = ['rollups', 'imm-events', 'gateway-health']
 
   [[services.tcp_checks]]
   interval = '15s'

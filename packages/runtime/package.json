@@ -9,6 +9,8 @@
     ".": "./dist/index.js",
     "./entity-events": "./dist/entity-events.js",
     "./graph-subjects": "./dist/graph-subjects.js",
+    "./command-subjects": "./dist/command-subjects.js",
+    "./gateway-subjects": "./dist/gateway-subjects.js",
     "./graph-definitions": "./dist/graph-definitions.js",
     "./livestore-events": "./dist/livestore-events.js",
     "./livestore-graph-types": "./dist/livestore-graph-types.js",

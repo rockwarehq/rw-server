@@ -3,7 +3,7 @@ import type { FastifyTypedInstance } from "./types/fastify.js";
 import type { FastifyRequest, FastifyReply } from "fastify";
 import { gateway } from "./services/device/index.js";
 import prisma from "@rw/db";
-import { errorSchema, successResponseSchema } from "./api/schemas.js";
+import { errorSchema } from "./api/schemas.js";
 import { gatewayNatsConfig } from "./config.js";
 
 async function validateGatewayToken(request: FastifyRequest, reply: FastifyReply) {
@@ -56,22 +56,6 @@ const syncBodySchema = {
   },
 } as const satisfies JSONSchema;
 
-const cmdIdParamsSchema = {
-  type: "object",
-  properties: { id: { type: "string", format: "uuid" } },
-  required: ["id"],
-} as const satisfies JSONSchema;
-
-const cmdResultBodySchema = {
-  type: "object",
-  properties: {
-    success: { type: "boolean" },
-    result: { type: "object", additionalProperties: true },
-    error: { type: "string" },
-  },
-  required: ["success"],
-} as const satisfies JSONSchema;
-
 const disconnectBodySchema = {
   type: "object",
   properties: { reason: { type: "string" } },
@@ -117,17 +101,6 @@ const syncResponseSchema = {
     version: { type: "number" },
     spec: { type: "object", additionalProperties: true },
     upToDate: { type: "boolean" },
-    commands: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          id: { type: "string", format: "uuid" },
-          command: { type: "string" },
-          payload: { type: "object", additionalProperties: true },
-        },
-      },
-    },
   },
 } as const satisfies JSONSchema;
 
@@ -265,9 +238,6 @@ export default async function edge(fastify: FastifyTypedInstance) {
         ...(metrics && { metrics }),
       });
 
-      // Get pending commands
-      const pendingCommands = await gateway.commands.getPending(auth.gateway.id);
-
       // Check if spec is up to date
       const gw = await prisma.gateway.findUnique({
         where: { id: auth.gateway.id },
@@ -279,74 +249,13 @@ export default async function edge(fastify: FastifyTypedInstance) {
       // Only compute spec if gateway needs it
       const spec = isUpToDate ? undefined : await gateway.buildSpec(auth.gateway.id);
 
+      // Commands no longer ride the sync poll — they are delivered over
+      // JetStream (RW_COMMANDS) and ack/result flow back over core NATS.
+      // See apps/api/src/command-bus.ts.
       return {
         version: gw?.specVersion,
         ...(isUpToDate ? { upToDate: true } : { spec }),
-        commands: pendingCommands,
       };
-    },
-  });
-
-  // Command ack
-  fastify.route({
-    method: "POST",
-    url: "/cmds/:id/ack",
-    schema: {
-      tags: ["edge"],
-      security: [{ bearerAuth: [] }],
-      headers: authHeaderSchema,
-      params: cmdIdParamsSchema,
-      response: {
-        200: successResponseSchema,
-        401: errorSchema,
-        404: errorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      const auth = await validateGatewayToken(request, reply);
-      if (!auth) return;
-
-      const result = await gateway.commands.ack(auth.gateway.id, request.params.id);
-      if (!result) {
-        return reply.status(404).send({ error: "Command not found" });
-      }
-
-      return { success: true };
-    },
-  });
-
-  // Command result
-  fastify.route({
-    method: "POST",
-    url: "/cmds/:id/result",
-    schema: {
-      tags: ["edge"],
-      security: [{ bearerAuth: [] }],
-      headers: authHeaderSchema,
-      params: cmdIdParamsSchema,
-      body: cmdResultBodySchema,
-      response: {
-        200: successResponseSchema,
-        401: errorSchema,
-        404: errorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      const auth = await validateGatewayToken(request, reply);
-      if (!auth) return;
-
-      const { success, result, error } = request.body;
-      const cmdResult = await gateway.commands.complete(auth.gateway.id, request.params.id, {
-        success,
-        data: result,
-        error,
-      });
-
-      if (!cmdResult) {
-        return reply.status(404).send({ error: "Command not found" });
-      }
-
-      return { success: true };
     },
   });
 

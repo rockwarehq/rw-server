@@ -191,6 +191,29 @@ function deploy(outPath: string, dockerfile: string, target: DeployApp, remote: 
   );
 }
 
+// Every worker process group is a singleton (see apps/workers/fly/base.toml):
+// imm-events would double-record cycles, gateway-health would emit duplicate
+// metric series. --ha=false already creates one machine per group on deploy,
+// but that's a deploy-time flag, not a durable guarantee — a stray `fly deploy`
+// without it, or manual scaling, can drift a group to 2. So after every workers
+// deploy we reconcile each group back to exactly 1. Group list is read from the
+// generated [processes] table, so new singleton workers are pinned automatically.
+function pinWorkerScale(appName: string, config: TomlObject): void {
+  const processes = config.processes;
+  if (typeof processes !== "object" || processes === null || Array.isArray(processes)) return;
+  const groups = Object.keys(processes);
+  if (groups.length === 0) return;
+  const spec = groups.map((g) => `${g}=1`).join(" ");
+  console.log(`\nPinning worker scale to one machine per group: ${spec}`);
+  try {
+    execSync(`flyctl scale count -a ${appName} ${spec} --yes`, { stdio: "inherit" });
+  } catch {
+    console.warn(
+      `Warning: could not pin worker scale for ${appName}. Run manually: flyctl scale count -a ${appName} ${spec} --yes`,
+    );
+  }
+}
+
 function getFlagValue(args: string[], name: string): string | undefined {
   const idx = args.indexOf(name);
   return idx !== -1 ? args[idx + 1] : undefined;
@@ -244,6 +267,7 @@ function main(): void {
 
   const { dockerfile } = appPaths(app);
   deploy(outPath, dockerfile, app, remote);
+  if (app === "workers") pinWorkerScale(appName, config);
   console.log("\nDeployment complete!");
 }
 
