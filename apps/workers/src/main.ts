@@ -5,9 +5,10 @@ process.env.TZ = "UTC";
 import "dotenv/config";
 import { startHostServer, onShutdown } from "@rw/runtime";
 import { createPrismaClient } from "@rw/db";
+import client from "prom-client";
 
-type WorkerName = "rollups" | "imm-events";
-const WORKER_NAMES: readonly WorkerName[] = ["rollups", "imm-events"];
+type WorkerName = "rollups" | "imm-events" | "gateway-health";
+const WORKER_NAMES: readonly WorkerName[] = ["rollups", "imm-events", "gateway-health"];
 
 function parseFlag(flag: string): string | null {
   const idx = process.argv.indexOf(flag);
@@ -24,6 +25,10 @@ async function loadWorker(name: WorkerName): Promise<{ start: () => Promise<void
     case "imm-events": {
       const m = await import("./imm-events.js");
       return { start: m.startImmEvents, stop: m.stopImmEvents };
+    }
+    case "gateway-health": {
+      const m = await import("./gateway-health.js");
+      return { start: m.startGatewayHealth, stop: m.stopGatewayHealth };
     }
   }
 }
@@ -58,17 +63,26 @@ async function main(): Promise<void> {
   // worker module. The worker imports @rw/services transitively, which calls
   // createPrismaClient("api") at module-eval. The first call wins on pool
   // sizing, so we have to win the race here with the actual role.
-  createPrismaClient(name);
+  //
+  // gateway-health touches no Postgres (NATS -> prom-client only), so it skips
+  // Prisma entirely rather than opening an idle pool.
+  if (name !== "gateway-health") createPrismaClient(name);
 
   const entry = await loadWorker(name);
 
   const port = Number.parseInt(process.env.PORT ?? "", 10) || 9465;
   let ready = false;
 
+  // Default process metrics for every worker; the gateway-health worker also
+  // registers its gateway_* gauges on this default registry. Fly's managed
+  // Prometheus scrapes /metrics app-wide (see fly [metrics]).
+  client.collectDefaultMetrics();
+
   const host = startHostServer({
     port,
     isReady: () => ready,
     isHealthy: () => true,
+    getMetrics: () => client.register.metrics(),
   });
 
   console.log(`[workers] starting ${name} on port ${port}`);

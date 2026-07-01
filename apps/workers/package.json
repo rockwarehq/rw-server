@@ -9,6 +9,8 @@
     "dev:rollups": "tsx watch src/main.ts --worker rollups",
     "start:imm-events": "node dist/main.js --worker imm-events",
     "dev:imm-events": "tsx watch src/main.ts --worker imm-events",
+    "start:gateway-health": "node dist/main.js --worker gateway-health",
+    "dev:gateway-health": "tsx watch src/main.ts --worker gateway-health",
     "publish:cycles": "tsx scripts/publish-cycles.ts",
     "seed:station": "tsx scripts/seed-station.ts",
     "seed:rollup-set": "tsx scripts/seed-rollup-set.ts",
