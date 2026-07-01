@@ -6,6 +6,7 @@
  *   pnpm fly:generate --app api|workers|livestore <tenant>     # write fly.generated.toml
  *   pnpm fly:deploy   --app api|workers|livestore <tenant>     # generate + validate + deploy (local build)
  *   pnpm fly:deploy   --app ... <tenant> --remote             # build on Fly's remote builder (use on arm64 hosts)
+ *   pnpm fly:deploy   --app workers <tenant> --groups gateway-health  # roll only these worker process groups
  *
  * Tenant configs live at:
  *   apps/api/fly/base.toml      + apps/api/fly/tenants/<tenant>.toml
@@ -172,7 +173,7 @@ function ensureCertificate(appName: string, domain: string): void {
   }
 }
 
-function deploy(outPath: string, dockerfile: string, target: DeployApp, remote: boolean): void {
+function deploy(outPath: string, dockerfile: string, target: DeployApp, remote: boolean, groups?: string[]): void {
   // Local build by default. Pass --remote to use Fly's amd64 remote builder
   // instead — needed on non-amd64 hosts (e.g. arm64), where a local amd64 build
   // fails with "exec format error" unless qemu emulation is installed.
@@ -185,8 +186,13 @@ function deploy(outPath: string, dockerfile: string, target: DeployApp, remote: 
   // an HA pair, or duplicate consumers double-record. --ha=false makes deploy create
   // one machine per process group instead of the default two. api/livestore keep HA.
   const ha = target === "workers" ? "--ha=false" : "";
+  // Scope the rollout to specific process groups (workers only). The image is
+  // still built once; only the named groups' machines are updated/restarted, so
+  // e.g. `--groups gateway-health` leaves the stateful rollups/imm-events
+  // singletons running untouched. Empty = roll all groups.
+  const only = groups && groups.length > 0 ? `--process-groups ${groups.join(",")}` : "";
   execSync(
-    `flyctl deploy ${builder} ${ha} ${waitTimeout} -c ${outPath} --dockerfile ${dockerfile} --build-target ${target} ${ROOT_DIR}`,
+    `flyctl deploy ${builder} ${ha} ${only} ${waitTimeout} -c ${outPath} --dockerfile ${dockerfile} --build-target ${target} ${ROOT_DIR}`,
     { stdio: "inherit" },
   );
 }
@@ -198,10 +204,12 @@ function deploy(outPath: string, dockerfile: string, target: DeployApp, remote: 
 // without it, or manual scaling, can drift a group to 2. So after every workers
 // deploy we reconcile each group back to exactly 1. Group list is read from the
 // generated [processes] table, so new singleton workers are pinned automatically.
-function pinWorkerScale(appName: string, config: TomlObject): void {
+function pinWorkerScale(appName: string, config: TomlObject, only?: string[]): void {
   const processes = config.processes;
   if (typeof processes !== "object" || processes === null || Array.isArray(processes)) return;
-  const groups = Object.keys(processes);
+  // On a targeted deploy, only reconcile the groups that were rolled — leave
+  // untargeted groups' scale untouched.
+  const groups = only && only.length > 0 ? only : Object.keys(processes);
   if (groups.length === 0) return;
   const spec = groups.map((g) => `${g}=1`).join(" ");
   console.log(`\nPinning worker scale to one machine per group: ${spec}`);
@@ -232,16 +240,29 @@ function main(): void {
   const app = appArg;
 
   const flagValues = new Set<string>();
-  for (const flag of ["--app"]) {
+  for (const flag of ["--app", "--groups"]) {
     const v = getFlagValue(args, flag);
     if (v !== undefined) flagValues.add(v);
   }
   const tenant = args.find((a) => !a.startsWith("--") && !flagValues.has(a));
 
+  // --groups <a,b> restricts the rollout to specific worker process groups.
+  // Empty (e.g. from an unfilled CI input) means "all groups".
+  const groups = (getFlagValue(args, "--groups") ?? "")
+    .split(",")
+    .map((g) => g.trim())
+    .filter(Boolean);
+  if (groups.length > 0 && app !== "workers") {
+    console.error(`Error: --groups only applies to --app workers, got --app ${app}`);
+    process.exit(1);
+  }
+
   if (!tenant) {
     const { tenantsDir } = appPaths(app);
     const available = listTenants(tenantsDir);
-    console.error(`Usage: fly-deploy [--generate-only] [--remote] --app api|workers|livestore <tenant>`);
+    console.error(
+      `Usage: fly-deploy [--generate-only] [--remote] [--groups <a,b>] --app api|workers|livestore <tenant>`,
+    );
     console.error(`Available tenants for app=${app}: ${available.join(", ") || "(none)"}`);
     process.exit(1);
   }
@@ -252,6 +273,19 @@ function main(): void {
 
   const { config, meta, outPath } = generate(app, tenant);
   writeGeneratedConfig(config, outPath);
+
+  if (groups.length > 0) {
+    const processes = config.processes;
+    const known =
+      typeof processes === "object" && processes !== null && !Array.isArray(processes) ? Object.keys(processes) : [];
+    const unknown = groups.filter((g) => !known.includes(g));
+    if (unknown.length > 0) {
+      console.error(`Error: unknown process group(s): ${unknown.join(", ")}`);
+      console.error(`Available worker groups: ${known.join(", ") || "(none)"}`);
+      process.exit(1);
+    }
+    console.log(`Process groups: ${groups.join(", ")} (targeted rollout)`);
+  }
 
   if (generateOnly) {
     console.log("\nDone (generate only mode).");
@@ -266,8 +300,8 @@ function main(): void {
   }
 
   const { dockerfile } = appPaths(app);
-  deploy(outPath, dockerfile, app, remote);
-  if (app === "workers") pinWorkerScale(appName, config);
+  deploy(outPath, dockerfile, app, remote, groups);
+  if (app === "workers") pinWorkerScale(appName, config, groups);
   console.log("\nDeployment complete!");
 }
 
