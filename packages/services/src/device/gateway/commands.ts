@@ -10,6 +10,25 @@ export interface QueueCommandInput {
   expiresIn?: number; // seconds
 }
 
+// A queued command handed to the transport (NATS) after it is persisted. The
+// CommandQueue row stays the audit record; the sink delivers it to the gateway.
+export interface QueuedCommand {
+  id: string;
+  gatewayId: string;
+  command: string;
+  payload: Record<string, unknown>;
+}
+
+export type CommandSink = (command: QueuedCommand) => void;
+
+let commandSink: CommandSink | null = null;
+
+// apps/api wires this to the NATS command publisher. Null (workers, tests) just
+// persists the row without publishing.
+export function setCommandSink(sink: CommandSink | null): void {
+  commandSink = sink;
+}
+
 /**
  * Queue a command for a gateway
  */
@@ -18,7 +37,7 @@ export async function queue(input: QueueCommandInput) {
 
   const expiresAt = expiresIn ? new Date(Date.now() + expiresIn * 1000) : null;
 
-  return prisma.commandQueue.create({
+  const created = await prisma.commandQueue.create({
     data: {
       command,
       payload: payload || {},
@@ -26,6 +45,10 @@ export async function queue(input: QueueCommandInput) {
       gatewayId,
     },
   });
+
+  commandSink?.({ id: created.id, gatewayId, command, payload: payload || {} });
+
+  return created;
 }
 
 /**
@@ -41,23 +64,6 @@ export async function list(gatewayId: string, options?: { status?: string; limit
     where,
     orderBy: { createdAt: "desc" },
     take: options?.limit || 50,
-  });
-}
-
-/**
- * Get pending commands for a gateway (used by sync)
- */
-export async function getPending(gatewayId: string) {
-  return prisma.commandQueue.findMany({
-    where: {
-      gatewayId,
-      status: "PENDING",
-    },
-    select: {
-      id: true,
-      command: true,
-      payload: true,
-    },
   });
 }
 

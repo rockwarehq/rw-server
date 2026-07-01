@@ -33,11 +33,13 @@ import { registerReplayReconcileWorker, stopReplayReconcileWorker } from "@rw/se
 import { recoverReplayWindows, cleanup as cleanupReplay } from "@rw/services/cycle/replay";
 import { startGraphDefinitionPublisher } from "./graph-definition-publisher.js";
 import { startEntityEventPublisher } from "./entity-event-publisher.js";
+import { startCommandBus } from "./command-bus.js";
 
 let cleanupBridge: (() => Promise<void>) | null = null;
 let cleanupMetricsBridge: (() => Promise<void>) | null = null;
 let cleanupGraphDefinitionPublisher: (() => Promise<void>) | null = null;
 let cleanupEntityEventPublisher: (() => Promise<void>) | null = null;
+let cleanupCommandBus: (() => Promise<void>) | null = null;
 
 async function main() {
   // Initialize driver registry (load from files and upsert to DB —
@@ -57,6 +59,7 @@ async function main() {
   cleanupMetricsBridge = await initMetricsBridge("both");
   cleanupGraphDefinitionPublisher = await startGraphDefinitionPublisher();
   cleanupEntityEventPublisher = await startEntityEventPublisher();
+  cleanupCommandBus = await startCommandBus();
 
   // Producer-side queues that HTTP/RPC handlers enqueue against. These
   // initialize Queue instances; the workers consuming them run elsewhere
@@ -88,6 +91,7 @@ async function shutdown() {
   if (cleanupMetricsBridge) await cleanupMetricsBridge();
   if (cleanupGraphDefinitionPublisher) await cleanupGraphDefinitionPublisher();
   if (cleanupEntityEventPublisher) await cleanupEntityEventPublisher();
+  if (cleanupCommandBus) await cleanupCommandBus();
   const { createPrismaClient: getClient } = await import("@rw/db");
   await getClient("api").$disconnect();
 }
