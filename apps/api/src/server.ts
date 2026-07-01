@@ -15,6 +15,7 @@ import rateLimitPlugin from "./plugins/ratelimit.js";
 import api from "./api/index.js";
 import edge from "./edge.js";
 import { RPCHandler } from "@orpc/server/fastify";
+import { ORPCError, onError } from "@orpc/server";
 import { router } from "./rpc/index.js";
 
 // Per-request unhandled rejections (most commonly AbortError from clients
@@ -48,8 +49,20 @@ export function createServer(options: IServerOptions) {
   // Edge API (gateway-to-server protocol)
   server.register(edge, { prefix: "/edge" });
 
-  // oRPC handler
-  const rpcHandler = new RPCHandler(router);
+  // oRPC handler. Without an error interceptor, oRPC catches any thrown error
+  // internally and returns an opaque INTERNAL_SERVER_ERROR with nothing logged
+  // (Fastify never sees it), making 500s undiagnosable. Log every unexpected
+  // throw here. Expected client-facing errors (ORPCError, e.g. 4xx from
+  // throwServiceError) and client-disconnect AbortErrors are not faults.
+  const rpcHandler = new RPCHandler(router, {
+    interceptors: [
+      onError((error) => {
+        if (error instanceof ORPCError) return;
+        if ((error as { name?: string })?.name === "AbortError") return;
+        server.log.error({ err: error }, "unhandled RPC error");
+      }),
+    ],
+  });
 
   server.all("/rpc/*", async (req, reply) => {
     try {

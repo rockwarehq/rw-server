@@ -1,5 +1,5 @@
 import prisma from "@rw/db";
-import type { Prisma } from "@rw/db";
+import { Prisma } from "@rw/db";
 
 import type {
   CreateObjectModelFieldInput,
@@ -17,7 +17,7 @@ const modelInclude = {
     where: { isDeleted: false },
     orderBy: [{ sortOrder: "asc" as const }, { name: "asc" as const }],
   },
-  _count: { select: { instances: true, graphNodes: true } },
+  _count: { select: { instances: true } },
 };
 
 function modelLabel(input: { label?: string; name?: string }): string {
@@ -72,34 +72,50 @@ export async function create(input: CreateObjectModelInput, scope: EntityScope):
 
   if (existing && !existing.isDeleted) return errorResult("SCHEMA_KEY_EXISTS", "Model key already exists");
 
-  if (existing) {
-    const schema = await prisma.objectSchema.update({
-      where: { id: existing.id },
+  // ObjectSchema is guarded by both @@unique([siteId, key]) and
+  // @@unique([workspaceId, name]) (soft-deleted rows still occupy the name). We
+  // pre-check siteId_key above; catch the workspaceId_name collision here so it
+  // surfaces as a clean 409 instead of an uncaught Prisma P2002 → 500.
+  try {
+    if (existing) {
+      const schema = await prisma.objectSchema.update({
+        where: { id: existing.id },
+        data: {
+          label,
+          name: label,
+          description: input.description ?? null,
+          displayFieldKey: input.displayFieldKey ?? null,
+          isDeleted: false,
+        },
+        include: modelInclude,
+      });
+      return { data: schema };
+    }
+
+    const schema = await prisma.objectSchema.create({
       data: {
+        workspaceId: scope.workspaceId,
+        siteId: scope.siteId,
+        key,
         label,
         name: label,
         description: input.description ?? null,
         displayFieldKey: input.displayFieldKey ?? null,
-        isDeleted: false,
       },
       include: modelInclude,
     });
     return { data: schema };
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      // The pg adapter doesn't populate meta.target; the violated fields land in
+      // the message, e.g. "Unique constraint failed on the fields: (`workspaceId`, `name`)".
+      // The siteId_key message says `key` (never `name`), so this cleanly separates the two.
+      if (err.message.includes("name"))
+        return errorResult("SCHEMA_NAME_EXISTS", "An entity with this name already exists in this workspace");
+      return errorResult("SCHEMA_KEY_EXISTS", "Model key already exists");
+    }
+    throw err;
   }
-
-  const schema = await prisma.objectSchema.create({
-    data: {
-      workspaceId: scope.workspaceId,
-      siteId: scope.siteId,
-      key,
-      label,
-      name: label,
-      description: input.description ?? null,
-      displayFieldKey: input.displayFieldKey ?? null,
-    },
-    include: modelInclude,
-  });
-  return { data: schema };
 }
 
 export async function list(filter: ListObjectModelsFilter, scope: EntityScope): Promise<ListResult<unknown>> {
