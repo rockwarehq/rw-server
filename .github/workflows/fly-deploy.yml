@@ -32,6 +32,11 @@ on:
           - livestore
           - all
         default: all
+      groups:
+        description: 'Workers only: process group(s) to roll, comma-separated (e.g. gateway-health). Blank = all groups.'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -70,11 +75,14 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: pnpm fly:deploy --app api ${{ inputs.tenant }}
 
+      # `groups` only applies to a workers-only deploy. When app == 'all' the
+      # input is ignored (a targeted roll of one group across a full-stack deploy
+      # doesn't make sense) — pick app == 'workers' to use it.
       - name: Deploy workers
         if: inputs.app == 'workers' || inputs.app == 'all'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: pnpm fly:deploy --app workers ${{ inputs.tenant }}
+        run: pnpm fly:deploy --app workers ${{ inputs.tenant }}${{ (inputs.app == 'workers' && inputs.groups != '') && format(' --groups {0}', inputs.groups) || '' }}
 
       - name: Deploy livestore
         if: inputs.app == 'livestore' || inputs.app == 'all'

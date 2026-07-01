@@ -1,19 +1,22 @@
-// NATS subject + payload conventions for gateway health telemetry.
+// NATS subject + payload contract for gateway health telemetry.
 //
-//   gateway.health.<gatewayId>   periodic health/metrics report (gw -> cloud) — core, best-effort
+//   health.gateway.<gatewayId>   periodic health snapshot (gw -> cloud) — core, best-effort
+//
+// This MIRRORS the gateway's rw-gateway/src/subjects.ts (buildGatewayHealthSubject)
+// and its GatewayHealthPayload (rw-gateway/src/health/gateway-health.ts). The
+// gateway already publishes this every ~5s over the same leaf it uses for tags.>;
+// the cloud `gateway-health` worker subscribes to health.gateway.* and mirrors
+// each snapshot into prom-client gauges scraped by Fly's managed Prometheus.
 //
 // Health is ephemeral, latest-wins telemetry, so it rides core NATS (not
-// JetStream): a missed report just means one stale scrape, and the next report
-// (every ~30s) supersedes it. The gateway publishes over the same leaf node it
-// already uses for tags.>. The cloud `gateway-health` worker subscribes to
-// gateway.health.* and mirrors each report into prom-client gauges scraped by
-// Fly's managed Prometheus at /metrics.
-//
-// The gateway mirrors these exact strings in rw-gateway/src/subjects.ts.
+// JetStream): a missed report just means one stale scrape, superseded by the
+// next. Do NOT change these strings without changing the gateway in lockstep.
 
-export const GATEWAY_HEALTH_SUBJECT_FILTER = "gateway.health.*";
+// health.gateway.<id> is 3 tokens; health.device.<id>.<ds> (4 tokens) is a
+// separate stream and deliberately does not match this filter.
+export const GATEWAY_HEALTH_SUBJECT_FILTER = "health.gateway.*";
 
-// Mirrors graph-subjects.sanitizeSubjectToken and the gateway's sanitizeToken.
+// Mirrors the gateway's sanitizeToken / graph-subjects.sanitizeSubjectToken.
 function sanitizeSubjectToken(value: string): string {
   const token = value.trim().replaceAll("/", ".").replaceAll("\\", ".").replace(/\s+/g, "_");
   return token
@@ -26,41 +29,56 @@ function sanitizeSubjectToken(value: string): string {
 export function deriveGatewayHealthSubject(gatewayId: string): string {
   const token = sanitizeSubjectToken(gatewayId);
   if (!token) throw new Error("gatewayId must produce a non-empty NATS subject token");
-  return `gateway.health.${token}`;
+  return `health.gateway.${token}`;
 }
 
-// Pulls the gatewayId token back out of a gateway.health.<gatewayId> subject.
-// Returns null for anything that doesn't match the 3-token shape.
+// Pulls the gatewayId token back out of a health.gateway.<gatewayId> subject.
+// Returns null for anything that isn't the 3-token gateway-health shape (e.g.
+// the 4-token health.device.* subject).
 export function parseGatewayHealthSubject(subject: string): string | null {
   const parts = subject.split(".");
-  if (parts.length !== 3 || parts[0] !== "gateway" || parts[1] !== "health") return null;
+  if (parts.length !== 3 || parts[0] !== "health" || parts[1] !== "gateway") return null;
   return parts[2] || null;
 }
 
-// Resource snapshot — mirrors the Gateway.health JSON column.
-export interface GatewayHealth {
-  cpu?: number; // cpu load, percent (0-100)
-  memoryPct?: number; // memory used, percent (0-100)
-  diskPct?: number; // disk used, percent (0-100)
-  uptime?: number; // process uptime, seconds
-}
+export type GatewayHealthStatus = "up" | "degraded";
 
-// Throughput snapshot — mirrors the Gateway.metrics JSON column.
-export interface GatewayMetrics {
-  pointsPerSec?: number;
-  messagesPerMin?: number;
-  errorCount?: number;
-}
-
-// gw -> cloud health report published core on gateway.health.<gatewayId>.
-// gatewayId is authoritative from the subject; the optional field is for
-// convenience/debugging. siteId/name are labels the gateway may not know.
-export interface GatewayHealthReport {
-  gatewayId?: string;
-  name?: string;
-  siteId?: string;
+// The exact snapshot the gateway publishes. Kept in sync with rw-gateway's
+// GatewayHealthPayload — all fields optional here so a schema drift on the
+// gateway degrades to missing gauges rather than a hard parse failure.
+export interface GatewayHealthPayload {
+  status?: GatewayHealthStatus;
+  ts?: number; // snapshot time (epoch ms)
+  startedAt?: number; // gateway process start (epoch ms)
+  gateway?: string; // friendly gateway name/slug (subject token is the id)
   version?: string;
-  health?: GatewayHealth;
-  metrics?: GatewayMetrics;
-  ts?: number; // gateway-side emit time (epoch ms)
+  mem?: {
+    rssMb?: number;
+    heapUsedMb?: number;
+    heapTotalMb?: number;
+    externalMb?: number;
+  };
+  cpu?: {
+    userMs?: number; // cumulative user CPU (ms) since process start
+    systemMs?: number; // cumulative system CPU (ms) since process start
+  };
+  eventLoopLagMs?: number;
+  uptimeSec?: number;
+  activeDriverCount?: number;
+  relay?: {
+    connected?: boolean;
+    uptimeSec?: number;
+    reconnectCount?: number;
+  };
+  cloudSync?: {
+    lastSuccessAt?: number | null;
+    consecutiveFailures?: number;
+    syncCount?: number;
+  };
+  messages?: {
+    publishedTotal?: number;
+    publishFailures?: number;
+    bytesPublished?: number;
+    pointsPublished?: number;
+  };
 }
