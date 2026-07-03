@@ -32,9 +32,16 @@ const TAGS_STREAM = "RW_TAGS";
 const TAGS_DURABLE = "rw-livestore-tags";
 const TAGS_SUBJECT_FILTER = "tags.>";
 
-const DAY_NANOS = 24 * 60 * 60 * 1_000_000_000;
+const HOUR_NANOS = 60 * 60 * 1_000_000_000;
 const ACK_WAIT_NANOS = 30 * 1_000_000_000;
-const TAGS_MAX_AGE_NANOS = 7 * DAY_NANOS;
+// RW_TAGS is high-throughput live telemetry, not a system of record: a durable
+// consumer tracks livestore's position, so retention only bounds the replay/
+// backfill window — not correctness. Keep it tight so the in-memory JetStream
+// index (and the boot-time restore) stay small on a memory-constrained NATS node:
+// ~1h of history plus a hard byte ceiling as a runaway backstop. Both overridable
+// per-env (prod may want a longer window / higher cap).
+const TAGS_MAX_AGE_NANOS = Number(process.env.NATS_TAGS_MAX_AGE_NANOS) || HOUR_NANOS;
+const TAGS_MAX_BYTES = Number(process.env.NATS_TAGS_MAX_BYTES) || 128 * 1024 * 1024;
 
 const decoder = new TextDecoder();
 
@@ -150,30 +157,52 @@ export class TagResolver {
   }
 
   private async ensureStream(): Promise<void> {
-    try {
-      await this.jsm.streams.info(TAGS_STREAM);
-      return;
-    } catch {
-      // In production the gateway publishes into its local edge-domain stream
-      // and the cloud RW_TAGS *sources* it across the leaf (durable store-and-
-      // forward).
-      const sourceDomain = process.env.NATS_TAGS_SOURCE_DOMAIN?.trim();
-      const sourceStream = process.env.NATS_TAGS_SOURCE_STREAM?.trim() || "TAGS";
-
-      const base = {
-        name: TAGS_STREAM,
-        retention: RetentionPolicy.Limits,
-        storage: StorageType.File,
-        discard: DiscardPolicy.Old,
-        max_age: TAGS_MAX_AGE_NANOS,
-      };
-
-      if (sourceDomain) {
-        const sources: StreamSource[] = [{ name: sourceStream, domain: sourceDomain }];
-        await this.jsm.streams.add({ ...base, sources });
-      } else {
-        await this.jsm.streams.add({ ...base, subjects: [TAGS_SUBJECT_FILTER] });
+    const existing = await this.streamInfoOrNull(TAGS_STREAM);
+    if (existing) {
+      // Reconcile retention on a pre-existing stream so a redeploy actually
+      // applies tightened limits (and purges the backlog). A plain create()
+      // no-ops when the stream exists, which would leave an old uncapped
+      // RW_TAGS running unbounded.
+      if (
+        existing.config.max_age !== TAGS_MAX_AGE_NANOS ||
+        existing.config.max_bytes !== TAGS_MAX_BYTES
+      ) {
+        await this.jsm.streams.update(TAGS_STREAM, {
+          max_age: TAGS_MAX_AGE_NANOS,
+          max_bytes: TAGS_MAX_BYTES,
+        });
       }
+      return;
+    }
+
+    // In production the gateway publishes into its local edge-domain stream
+    // and the cloud RW_TAGS *sources* it across the leaf (durable store-and-
+    // forward).
+    const sourceDomain = process.env.NATS_TAGS_SOURCE_DOMAIN?.trim();
+    const sourceStream = process.env.NATS_TAGS_SOURCE_STREAM?.trim() || "TAGS";
+
+    const base = {
+      name: TAGS_STREAM,
+      retention: RetentionPolicy.Limits,
+      storage: StorageType.File,
+      discard: DiscardPolicy.Old,
+      max_age: TAGS_MAX_AGE_NANOS,
+      max_bytes: TAGS_MAX_BYTES,
+    };
+
+    if (sourceDomain) {
+      const sources: StreamSource[] = [{ name: sourceStream, domain: sourceDomain }];
+      await this.jsm.streams.add({ ...base, sources });
+    } else {
+      await this.jsm.streams.add({ ...base, subjects: [TAGS_SUBJECT_FILTER] });
+    }
+  }
+
+  private async streamInfoOrNull(name: string) {
+    try {
+      return await this.jsm.streams.info(name);
+    } catch {
+      return null;
     }
   }
 
