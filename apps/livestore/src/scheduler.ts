@@ -11,6 +11,9 @@ export class Scheduler {
   private flushing = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private dirtyPasses = 0;
+  private flushCount = 0;
+  private lastFlushAt: number | null = null;
+  private flushMaxMs = 0;
   private static readonly DELAY_MS = 50;
   private static readonly MAX_DIRTY_PASSES = 25;
 
@@ -47,6 +50,14 @@ export class Scheduler {
     this.timer = null;
   }
 
+  // flushMaxMs is a windowed max: reading it resets the window (worst flush since
+  // the last read). dirtySetSize is the live recompute backlog.
+  flushStats(): { flushCount: number; lastFlushAt: number | null; flushMaxMs: number; dirtySetSize: number } {
+    const flushMaxMs = this.flushMaxMs;
+    this.flushMaxMs = 0;
+    return { flushCount: this.flushCount, lastFlushAt: this.lastFlushAt, flushMaxMs, dirtySetSize: this.dirty.size };
+  }
+
   private enqueueDependents(propertyId: string): void {
     const stack = [...this.getDependents(propertyId)];
     while (stack.length > 0) {
@@ -69,6 +80,7 @@ export class Scheduler {
   private async flush(): Promise<void> {
     if (this.flushing) return;
     this.flushing = true;
+    const startedAt = Date.now();
     let evaluated = 0;
     try {
       for (const id of this.topoOrder()) {
@@ -79,6 +91,10 @@ export class Scheduler {
       }
     } finally {
       this.flushing = false;
+      this.lastFlushAt = Date.now();
+      this.flushCount += 1;
+      const durationMs = this.lastFlushAt - startedAt;
+      if (durationMs > this.flushMaxMs) this.flushMaxMs = durationMs;
     }
     this.logger.info({ evaluated }, "livestore flush complete");
     if (this.dirty.size === 0) {

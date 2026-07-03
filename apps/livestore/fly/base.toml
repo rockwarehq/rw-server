@@ -36,6 +36,13 @@ grace_period = '10s'
 method = 'GET'
 path = '/readyz'
 
+# Fly's managed Prometheus scrapes each machine directly (livestore is a Fly app
+# on the private network) -> Grafana. Served by the Fastify server on the same
+# port as the API. See apps/livestore/src/metrics.ts for the gauges.
+[metrics]
+port = 30100
+path = '/metrics'
+
 [[vm]]
 memory = '512mb'
 cpu_kind = 'shared'

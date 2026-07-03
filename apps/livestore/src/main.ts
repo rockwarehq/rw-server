@@ -5,6 +5,7 @@ import "dotenv/config";
 import { createPrismaClient } from "@rw/db";
 import { onShutdown } from "@rw/runtime";
 
+import { registerMetricsRoute } from "./metrics.js";
 import { connectNatsResources, stopNatsResources } from "./nats.js";
 import { GraphRuntime } from "./runtime.js";
 import { asLivestoreLogger, createLivestoreServer, registerGraphRoutes } from "./server.js";
@@ -28,6 +29,7 @@ async function main(): Promise<void> {
   });
   await runtime.start();
 
+  registerMetricsRoute(server, runtime);
   registerGraphRoutes(server, runtime);
   const port = Number.parseInt(process.env.PORT ?? "", 10) || 30100;
   const host = process.env.HOST || "::";
