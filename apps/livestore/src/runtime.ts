@@ -421,4 +421,14 @@ export class GraphRuntime {
   isReady(): boolean {
     return this.ready && (this.options.isNatsReady?.() ?? true);
   }
+
+  // Health snapshot for the /metrics route. scheduler.flushStats() resets its
+  // windowed flushMaxMs, so this is a sample-once-per-scrape call.
+  healthStats() {
+    return {
+      ready: this.isReady(),
+      engine: { ...this.scheduler.flushStats(), ...this.kernel.counts() },
+      hooks: this.hookManager.hookStats(),
+    };
+  }
 }

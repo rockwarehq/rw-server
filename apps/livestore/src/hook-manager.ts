@@ -69,6 +69,10 @@ export class HookManager {
   private readonly hooks = new Map<string, GraphHookRuntime>();
   private readonly byProperty = new Map<string, Set<string>>();
   private pending: PendingHookEvent[] = [];
+  private matchedTotal = 0;
+  private publishedTotal = 0;
+  private publishFailuresTotal = 0;
+  private lastPublishedAt: number | null = null;
 
   constructor(
     private readonly prisma: PrismaClient,
@@ -127,6 +131,7 @@ export class HookManager {
       if (!hook) continue;
       if (!evaluateHookCondition(hook.condition, args.previous, args.current)) continue;
       this.pending.push({ hook, propertyId: args.propertyId, previous: args.previous, current: args.current });
+      this.matchedTotal += 1;
       queued = true;
     }
     return queued;
@@ -140,7 +145,10 @@ export class HookManager {
     for (const event of pending) {
       try {
         await this.publishHookEvent(event, getCurrent);
+        this.publishedTotal += 1;
+        this.lastPublishedAt = Date.now();
       } catch (err) {
+        this.publishFailuresTotal += 1;
         this.logger.error(
           { err, hookId: event.hook.id, propertyId: event.propertyId },
           "livestore hook event publish failed",
@@ -151,6 +159,22 @@ export class HookManager {
 
   counts(): { hookCount: number } {
     return { hookCount: this.hooks.size };
+  }
+
+  hookStats(): {
+    matchedTotal: number;
+    publishedTotal: number;
+    publishFailuresTotal: number;
+    lastPublishedAt: number | null;
+    hookCount: number;
+  } {
+    return {
+      matchedTotal: this.matchedTotal,
+      publishedTotal: this.publishedTotal,
+      publishFailuresTotal: this.publishFailuresTotal,
+      lastPublishedAt: this.lastPublishedAt,
+      hookCount: this.hooks.size,
+    };
   }
 
   private upsertRow(row: HookRow): void {
