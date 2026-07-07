@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { expandExpressionFieldRefs } from "./nodes.js";
+import { buildRequestedProperties, expandExpressionFieldRefs } from "./nodes.js";
 
 const ids = new Map([
   ["totalItems", "11111111-1111-4111-8111-111111111111"],
@@ -30,5 +30,48 @@ describe("expandExpressionFieldRefs", () => {
 
   it("leaves an expression with no field refs unchanged", () => {
     expect(expandExpressionFieldRefs("1 + 2", ids)).toBe("1 + 2");
+  });
+});
+
+describe("buildRequestedProperties", () => {
+  const goodItems = { id: "prop-1", typeFieldKey: "goodItems", name: "goodItems" };
+  const oee = { id: "prop-2", typeFieldKey: "oee", name: "oee" };
+  const customNamed = { id: "prop-3", typeFieldKey: null, name: "Scrap Rate" };
+  const properties = [goodItems, oee, customNamed];
+
+  it("matches camelCase typeFieldKeys against normalized (lowercased) request keys", () => {
+    const result = buildRequestedProperties(
+      [{ original: "goodItems", normalized: "gooditems" }],
+      properties,
+    );
+    expect(result.goodItems).toBe(goodItems);
+  });
+
+  it("keys the response by the caller's original spelling", () => {
+    const result = buildRequestedProperties(
+      [
+        { original: "goodItems", normalized: "gooditems" },
+        { original: "oee", normalized: "oee" },
+      ],
+      properties,
+    );
+    expect(Object.keys(result)).toEqual(["goodItems", "oee"]);
+    expect(result.oee).toBe(oee);
+  });
+
+  it("matches user-named properties by folded name", () => {
+    const result = buildRequestedProperties(
+      [{ original: "scrap rate", normalized: "scrap_rate" }],
+      properties,
+    );
+    expect(result["scrap rate"]).toBe(customNamed);
+  });
+
+  it("returns null for keys with no matching property", () => {
+    const result = buildRequestedProperties(
+      [{ original: "statusReason", normalized: "statusreason" }],
+      properties,
+    );
+    expect(result.statusReason).toBeNull();
   });
 });

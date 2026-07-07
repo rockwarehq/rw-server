@@ -151,10 +151,46 @@ function isPresent(value: unknown): boolean {
   return value !== undefined && value !== null && value !== "";
 }
 
-function normalizePropertyKeys(properties: string[] | undefined): string[] {
-  const keys = new Set<string>();
-  for (const property of properties ?? []) keys.add(normalizeGraphTypeToken(property));
-  return [...keys];
+interface RequestedPropertyKey {
+  /** Spelling the caller sent; the response map is keyed by this. */
+  original: string;
+  normalized: string;
+}
+
+function normalizePropertyKeys(properties: string[] | undefined): RequestedPropertyKey[] {
+  const byNormalized = new Map<string, RequestedPropertyKey>();
+  for (const property of properties ?? []) {
+    const normalized = normalizeGraphTypeToken(property);
+    if (!byNormalized.has(normalized)) byNormalized.set(normalized, { original: property, normalized });
+  }
+  return [...byNormalized.values()];
+}
+
+// Property names are user-defined and may contain characters that
+// normalizeGraphTypeToken rejects; fold leniently for comparison only.
+function foldPropertyKey(value: string | null | undefined): string {
+  if (!value) return "";
+  try {
+    return normalizeGraphTypeToken(value);
+  } catch {
+    return value.trim().toLowerCase();
+  }
+}
+
+export function buildRequestedProperties<T extends { typeFieldKey: string | null; name: string }>(
+  requestedKeys: readonly RequestedPropertyKey[],
+  properties: readonly T[],
+): Record<string, T | null> {
+  return Object.fromEntries(
+    requestedKeys.map((key) => [
+      key.original,
+      properties.find(
+        (property) =>
+          foldPropertyKey(property.typeFieldKey) === key.normalized ||
+          foldPropertyKey(property.name) === key.normalized,
+      ) ?? null,
+    ]),
+  );
 }
 
 function parseEntityResolver(value: Record<string, unknown>): EntityResolverConfig | null {
@@ -806,7 +842,8 @@ export async function query(filter: QueryGraphNodesFilter, scope: GraphScope): P
   if (typeRef === false) return { data: [], total: 0, limit: Number(limit), offset: Number(offset) };
   const facets = normalizeFacetFilters(filter.facets);
   if (isServiceError(facets)) return { data: [], total: 0, limit: Number(limit), offset: Number(offset) };
-  const propertyKeys = normalizePropertyKeys(filter.properties);
+  const requestedKeys = normalizePropertyKeys(filter.properties);
+  const normalizedKeys = requestedKeys.map((key) => key.normalized);
   const facetFilters: Prisma.GraphNodeWhereInput[] = Object.entries(facets).map(([key, value]) => ({
     facets: { path: [key], equals: value as Prisma.InputJsonValue },
   }));
@@ -817,10 +854,18 @@ export async function query(filter: QueryGraphNodesFilter, scope: GraphScope): P
     ...(facetFilters.length > 0 ? { AND: facetFilters } : {}),
   };
 
+  // Requested keys are normalized to lowercase tokens while stored
+  // typeFieldKey/name keep their original casing (e.g. "goodItems"), so the
+  // match must be case-insensitive on both sides.
   const propertyWhere: Prisma.GraphPropertyWhereInput = {
     isDeleted: false,
-    ...(propertyKeys.length > 0
-      ? { OR: [{ typeFieldKey: { in: propertyKeys } }, { name: { in: propertyKeys } }] }
+    ...(normalizedKeys.length > 0
+      ? {
+          OR: [
+            { typeFieldKey: { in: normalizedKeys, mode: "insensitive" as const } },
+            { name: { in: normalizedKeys, mode: "insensitive" as const } },
+          ],
+        }
       : {}),
   };
 
@@ -845,14 +890,7 @@ export async function query(filter: QueryGraphNodesFilter, scope: GraphScope): P
     data: nodes.map((node) => ({
       ...node,
       requestedProperties:
-        propertyKeys.length > 0
-          ? Object.fromEntries(
-              propertyKeys.map((key) => [
-                key,
-                node.properties.find((property) => property.typeFieldKey === key || property.name === key) ?? null,
-              ]),
-            )
-          : undefined,
+        requestedKeys.length > 0 ? buildRequestedProperties(requestedKeys, node.properties) : undefined,
     })),
     total,
     limit: Number(limit),
