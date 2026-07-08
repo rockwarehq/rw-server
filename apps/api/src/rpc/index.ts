@@ -124,6 +124,10 @@ export const router = {
       delete: graph.hookDelete,
       eventCatalog: graph.hookEventCatalog,
     },
+    introspect: {
+      manifest: graph.introspectManifest,
+      typeSchema: graph.introspectTypeSchema,
+    },
   },
   metrics: {
     stream: metrics.stream,

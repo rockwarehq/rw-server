@@ -1,5 +1,6 @@
 import { ORPCError } from "@orpc/server";
 import { GRAPH_TYPE_INPUT_VALUE_TYPES, GRAPH_TYPE_VALUE_TYPES } from "@rw/livestore/catalog/graph-types";
+import { buildLivestoreCapabilityManifest } from "@rw/livestore/catalog/manifest";
 import { z } from "zod";
 import * as graph from "@rw/livestore/graph/index";
 import { hasPermission, type Permission } from "@rw/auth/iam/index";
@@ -496,3 +497,18 @@ export const hookDelete = authRequired.input(idInputSchema).handler(async ({ inp
 });
 
 export const hookEventCatalog = authRequired.handler(async () => graph.hooks.eventCatalog());
+
+// --- Introspection: read-only views for programmatic builders ---
+
+// Static per deploy: resolver config schemas, hook operators, event catalog,
+// limits. No tenant data, so no site assertion — any graph-read principal.
+export const introspectManifest = graphReadRequired.handler(async () => buildLivestoreCapabilityManifest());
+
+const typeSchemaInputSchema = z.object({ siteId: z.uuid(), typeRef: z.string().min(1) });
+
+export const introspectTypeSchema = graphReadRequired
+  .input(typeSchemaInputSchema)
+  .handler(async ({ input, context }) => {
+    const scope = await assertSiteReadAccess(context, input.siteId);
+    return unwrap(await graph.introspect.typeNodeSchema(input.typeRef, scope));
+  });
