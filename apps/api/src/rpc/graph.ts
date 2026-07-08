@@ -43,6 +43,9 @@ const nodeUpdateInputSchema = z.object({
 });
 
 const propertyCreateInputSchema = z.object({
+  // Client-generated UUID so planned batches can pre-reference the property
+  // (see graph.introspect.plan); server-assigned when omitted.
+  id: z.uuid().optional(),
   nodeId: z.uuid(),
   name: z.string().min(1),
   typeFieldKey: z.string().min(1).nullable().optional(),
@@ -562,6 +565,50 @@ export const introspectExplain = graphReadRequired.input(idInputSchema).handler(
 export const introspectConformance = graphReadRequired.input(siteInputSchema).handler(async ({ input, context }) => {
   const scope = await assertSiteReadAccess(context, input.siteId);
   return unwrap(await graph.introspect.conformance(scope));
+});
+
+const planNodeInputSchema = z.object({
+  ref: z.string().min(1),
+  name: z.string().min(1),
+  typeRef: z.string().min(1).nullable().optional(),
+  typeContext: jsonObjectSchema.optional(),
+  materializeTypeFields: z.boolean().optional(),
+});
+
+const planPropertyInputSchema = z.object({
+  id: z.uuid().optional(),
+  nodeId: z.uuid().optional(),
+  nodeRef: z.string().min(1).optional(),
+  name: z.string().min(1),
+  resolverType: z.string().min(1),
+  resolver: jsonObjectSchema,
+  sampleRateMs: z.number().int().positive().nullable().optional(),
+});
+
+const planHookInputSchema = z.object({
+  name: z.string().min(1),
+  enabled: z.boolean().optional(),
+  condition: jsonObjectSchema,
+  eventNamespace: z.string().min(1),
+  eventName: z.string().min(1),
+  eventVersion: z.string().min(1).optional(),
+  eventPayload: jsonObjectSchema.optional(),
+  eventContext: jsonObjectSchema.optional(),
+});
+
+const planInputSchema = z.object({
+  siteId: z.uuid(),
+  nodes: z.array(planNodeInputSchema).max(50).optional(),
+  properties: z.array(planPropertyInputSchema).max(200).optional(),
+  hooks: z.array(planHookInputSchema).max(50).optional(),
+});
+
+// Dry-run a whole changeset: every issue reported at once, nothing written.
+// Requires graph:write — a plan is a rehearsal of writes and can probe names/ids.
+export const introspectPlan = authRequired.input(planInputSchema).handler(async ({ input, context }) => {
+  const { siteId, ...changeset } = input;
+  const scope = await assertSitePermission(context, "graph:write", siteId);
+  return unwrap(await graph.planner.plan(changeset, scope));
 });
 
 const introspectDiagnosticsInputSchema = z.object({

@@ -133,6 +133,7 @@ export const router = {
       explain: graph.introspectExplain,
       conformance: graph.introspectConformance,
       diagnostics: graph.introspectDiagnostics,
+      plan: graph.introspectPlan,
     },
   },
   metrics: {
