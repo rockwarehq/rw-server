@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ORPCError } from "@orpc/server";
 import { displayRequired } from "./middleware.js";
 import { auth, logon, crud } from "../services/employee/index.js";
+import { throwServiceError } from "./errors.js";
 import prisma from "@rw/db";
 import type { AuthMethod, AuthCredentials } from "../services/employee/auth.js";
 
@@ -228,9 +229,11 @@ export const operatorLogon = displayRequired.input(logonInputSchema).handler(asy
     genericName: input.method === "GENERIC" ? input.credentials.genericName : undefined,
   });
 
-  if ("error" in session) {
-    const code = session.code === "ALREADY_LOGGED_ON" ? "CONFLICT" : "INTERNAL_SERVER_ERROR";
-    throw new ORPCError(code, { message: session.error });
+  if (session.error !== undefined) {
+    // Historical mapping: STATION_NOT_FOUND surfaced as INTERNAL_SERVER_ERROR here
+    // (the station was validated above, so its absence is an invariant failure),
+    // not the shared NOT_FOUND default.
+    throwServiceError(session, { STATION_NOT_FOUND: "INTERNAL_SERVER_ERROR" });
   }
 
   // Return updated session list
@@ -249,9 +252,10 @@ export const operatorLogoff = displayRequired.input(logoffInputSchema).handler(a
   assertDisplayIdentity(input.displayId, context.iam.displayId);
 
   const result = await logon.logoff(input.sessionId, input.displayId);
-  if ("error" in result) {
-    const code = result.code === "NOT_FOUND" ? "NOT_FOUND" : result.code === "FORBIDDEN" ? "FORBIDDEN" : "BAD_REQUEST";
-    throw new ORPCError(code, { message: result.error });
+  if (result.error !== undefined) {
+    // Historical mapping: logging off an already-ended session is BAD_REQUEST
+    // here, not the shared ALREADY_* -> CONFLICT default.
+    throwServiceError(result, { ALREADY_ENDED: "BAD_REQUEST" });
   }
 
   const activeSessions = await logon.getActiveSessions(input.displayId);
