@@ -25,6 +25,13 @@ async function main(): Promise<void> {
   // Build the server first so the engine logs through Fastify's Pino instance.
   const server = await createLivestoreServer();
 
+  // Backstop: without this, any unhandled rejection escalates to
+  // uncaughtException and @rw/runtime's lifecycle handler exits the process
+  // (same rationale as the api server's unhandledRejection logger).
+  process.on("unhandledRejection", (reason) => {
+    server.log.error({ err: reason }, "livestore unhandled promise rejection");
+  });
+
   const runtime = new GraphRuntime({
     prisma,
     nc: nats.nc,
