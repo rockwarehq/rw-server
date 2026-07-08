@@ -404,8 +404,16 @@ export class GraphRuntime {
     return this.kernel.listNodes();
   }
 
+  listNodesForSite(siteId: string) {
+    return this.kernel.listNodesForSite(siteId);
+  }
+
   getNode(nodeId: string) {
     return this.kernel.getNode(nodeId);
+  }
+
+  getPropertySiteId(propertyId: string) {
+    return this.kernel.getPropertySiteId(propertyId);
   }
 
   counts() {

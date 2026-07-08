@@ -98,6 +98,7 @@ export type AggState = TumblingState | EwmaState;
 export interface NodeRuntime {
   id: string;
   name: string;
+  siteId: string;
   typeRef: string | null;
   typeContext: Record<string, unknown>;
   propertyIds: string[];

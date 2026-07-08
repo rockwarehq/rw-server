@@ -8,8 +8,8 @@ const WS_CLOSED = 3;
 
 class FakeSocket implements GraphSocketLike {
   readyState = WS_CONNECTING;
-  sent: Array<{ op: string; propertyIds: string[] }> = [];
-  private listeners = new Map<string, Array<(event: { data: unknown }) => void>>();
+  sent: Array<{ op: string; propertyIds?: string[]; token?: string }> = [];
+  private listeners = new Map<string, Array<(event: { data: unknown; code?: number }) => void>>();
 
   send(data: string): void {
     this.sent.push(JSON.parse(data));
@@ -19,7 +19,10 @@ class FakeSocket implements GraphSocketLike {
     this.emitClose();
   }
 
-  addEventListener(type: "open" | "close" | "error" | "message", listener: (event: { data: unknown }) => void): void {
+  addEventListener(
+    type: "open" | "close" | "error" | "message",
+    listener: (event: { data: unknown; code?: number }) => void,
+  ): void {
     const existing = this.listeners.get(type) ?? [];
     existing.push(listener);
     this.listeners.set(type, existing);
@@ -30,10 +33,10 @@ class FakeSocket implements GraphSocketLike {
     for (const listener of this.listeners.get("open") ?? []) listener({ data: undefined });
   }
 
-  emitClose(): void {
+  emitClose(code?: number): void {
     if (this.readyState === WS_CLOSED) return;
     this.readyState = WS_CLOSED;
-    for (const listener of this.listeners.get("close") ?? []) listener({ data: undefined });
+    for (const listener of this.listeners.get("close") ?? []) listener({ data: undefined, code });
   }
 
   emitMessage(payload: unknown): void {
@@ -49,11 +52,15 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
   }
 }
 
-function makeHarness(onValue: (propertyId: string, envelope: unknown) => void = () => {}) {
+function makeHarness(
+  onValue: (propertyId: string, envelope: unknown) => void = () => {},
+  extra?: { getToken?: () => string | Promise<string> },
+) {
   const sockets: FakeSocket[] = [];
   const client = new ReconnectingGraphSocket({
     url: "ws://test/ws/graph",
     onValue,
+    ...extra,
     webSocketFactory: () => {
       const socket = new FakeSocket();
       sockets.push(socket);
@@ -121,5 +128,78 @@ describe("ReconnectingGraphSocket", () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     expect(sockets).toHaveLength(1);
+  });
+});
+
+describe("ReconnectingGraphSocket auth", () => {
+  it("sends auth first and defers subscribes until ready", async () => {
+    const { sockets, client } = makeHarness(() => {}, { getToken: () => "token-1" });
+    clients.push(client);
+
+    client.subscribe(["a"]);
+    sockets[0].emitOpen();
+    await waitFor(() => sockets[0].sent.length >= 1);
+    expect(sockets[0].sent).toEqual([{ op: "auth", token: "token-1" }]);
+
+    // Subscribes made before ready stay queued.
+    client.subscribe(["b"]);
+    expect(sockets[0].sent).toHaveLength(1);
+
+    sockets[0].emitMessage({ op: "ready", siteId: "site-1", authExpiresAt: null });
+    expect(sockets[0].sent[1]).toEqual({ op: "subscribe", propertyIds: ["a", "b"] });
+  });
+
+  it("re-auths with a fresh token on auth_expiring", async () => {
+    let calls = 0;
+    const { sockets, client } = makeHarness(() => {}, { getToken: () => `token-${++calls}` });
+    clients.push(client);
+
+    sockets[0].emitOpen();
+    await waitFor(() => sockets[0].sent.length >= 1);
+    sockets[0].emitMessage({ op: "ready" });
+
+    sockets[0].emitMessage({ op: "auth_expiring" });
+    await waitFor(() => sockets[0].sent.length >= 2);
+    expect(sockets[0].sent[1]).toEqual({ op: "auth", token: "token-2" });
+  });
+
+  it("reconnects with a fresh token and replays subscriptions after a 4401 close", async () => {
+    let calls = 0;
+    const { sockets, client } = makeHarness(() => {}, { getToken: () => `token-${++calls}` });
+    clients.push(client);
+
+    sockets[0].emitOpen();
+    await waitFor(() => sockets[0].sent.length >= 1);
+    sockets[0].emitMessage({ op: "ready" });
+    client.subscribe(["a"]);
+
+    sockets[0].emitClose(4401);
+    await waitFor(() => sockets.length >= 2);
+    sockets[1].emitOpen();
+    await waitFor(() => sockets[1].sent.length >= 1);
+    expect(sockets[1].sent[0]).toEqual({ op: "auth", token: "token-2" });
+
+    sockets[1].emitMessage({ op: "ready" });
+    expect(sockets[1].sent[1]).toEqual({ op: "subscribe", propertyIds: ["a"] });
+  });
+
+  it("surfaces error codes to onError", () => {
+    const errors: Array<[string, string | undefined]> = [];
+    const sockets: FakeSocket[] = [];
+    const client = new ReconnectingGraphSocket({
+      url: "ws://test/ws/graph",
+      onValue: () => {},
+      onError: (error, code) => errors.push([error, code]),
+      webSocketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    clients.push(client);
+
+    sockets[0].emitOpen();
+    sockets[0].emitMessage({ op: "error", error: "forbidden", code: "FORBIDDEN", propertyIds: ["x"] });
+    expect(errors).toEqual([["forbidden", "FORBIDDEN"]]);
   });
 });

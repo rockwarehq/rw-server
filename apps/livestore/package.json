@@ -17,7 +17,8 @@
     "@rw/db": "workspace:*",
     "@rw/livestore": "workspace:*",
     "@rw/runtime": "workspace:*",
-    "dotenv": "^17.2.3"
+    "dotenv": "^17.2.3",
+    "fastify": "^5.6.2"
   },
   "devDependencies": {
     "@types/node": "^24.10.8",

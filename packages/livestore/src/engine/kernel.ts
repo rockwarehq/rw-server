@@ -74,6 +74,7 @@ export class GraphKernel {
       const runtimeNode: NodeRuntime = {
         id: node.id,
         name: node.name,
+        siteId: node.siteId,
         typeRef: node.typeRef,
         typeContext: parseTypeContext(node.typeContext),
         propertyIds: [],
@@ -137,6 +138,7 @@ export class GraphKernel {
       node: {
         id: node.id,
         name: node.name,
+        siteId: node.siteId,
         typeRef: node.typeRef,
         typeContext: parseTypeContext(node.typeContext),
         propertyIds: properties.map((property) => property.id),
@@ -159,6 +161,7 @@ export class GraphKernel {
       node: {
         id: property.node.id,
         name: property.node.name,
+        siteId: property.node.siteId,
         typeRef: property.node.typeRef,
         typeContext: parseTypeContext(property.node.typeContext),
         propertyIds: [],
@@ -281,9 +284,23 @@ export class GraphKernel {
     return Array.from(this.nodes.values()).map((node) => this.snapshotNode(node));
   }
 
+  listNodesForSite(siteId: string): GraphSnapshotNode[] {
+    return Array.from(this.nodes.values())
+      .filter((node) => node.siteId === siteId)
+      .map((node) => this.snapshotNode(node));
+  }
+
   getNode(nodeId: string): GraphSnapshotNode | null {
     const node = this.nodes.get(nodeId);
     return node ? this.snapshotNode(node) : null;
+  }
+
+  // Tenancy lookup for subscription authorization: property → node → site.
+  // Pure in-memory, O(1); null for unknown properties.
+  getPropertySiteId(propertyId: string): string | null {
+    const property = this.properties.get(propertyId);
+    if (!property) return null;
+    return this.nodes.get(property.nodeId)?.siteId ?? null;
   }
 
   getDependents(propertyId: string): string[] {
@@ -324,6 +341,7 @@ export class GraphKernel {
     return {
       id: node.id,
       name: node.name,
+      siteId: node.siteId,
       typeRef: node.typeRef,
       typeContext: node.typeContext,
       properties,

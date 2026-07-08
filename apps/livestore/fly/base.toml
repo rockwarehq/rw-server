@@ -15,6 +15,7 @@ app = 'node dist/main.js'
 NODE_ENV = 'production'
 HOST = '::'
 PORT = '30100'
+METRICS_PORT = '9091'
 
 [http_service]
 internal_port = 30100
@@ -37,10 +38,11 @@ method = 'GET'
 path = '/readyz'
 
 # Fly's managed Prometheus scrapes each machine directly (livestore is a Fly app
-# on the private network) -> Grafana. Served by the Fastify server on the same
-# port as the API. See apps/livestore/src/metrics.ts for the gauges.
+# on the private network) -> Grafana. Served by a dedicated listener on a port
+# fly-proxy never routes to, so /metrics is unreachable from the internet.
+# See packages/livestore/src/server/metrics.ts for the gauges.
 [metrics]
-port = 30100
+port = 9091
 path = '/metrics'
 
 [[vm]]
