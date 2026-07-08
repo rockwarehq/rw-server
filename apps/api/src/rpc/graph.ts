@@ -6,6 +6,7 @@ import * as graph from "@rw/livestore/graph/index";
 import { hasPermission, type Permission } from "@rw/auth/iam/index";
 import type { GraphScope } from "@rw/livestore/graph/types";
 import { Principal } from "../auth/index.js";
+import { readGraphValues } from "../graph-values.js";
 
 import { authRequired, graphReadRequired } from "./middleware.js";
 
@@ -511,4 +512,95 @@ export const introspectTypeSchema = graphReadRequired
   .handler(async ({ input, context }) => {
     const scope = await assertSiteReadAccess(context, input.siteId);
     return unwrap(await graph.introspect.typeNodeSchema(input.typeRef, scope));
+  });
+
+// Cheap freshness poll: builders compare asOf against a cached snapshot to
+// decide whether to refetch.
+export const introspectVersion = graphReadRequired.input(siteInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertSiteReadAccess(context, input.siteId);
+  return graph.introspect.graphVersion(scope);
+});
+
+export const introspectSnapshot = graphReadRequired.input(siteInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertSiteReadAccess(context, input.siteId);
+  return unwrap(await graph.introspect.snapshot(scope));
+});
+
+const introspectValuesInputSchema = z.object({
+  siteId: z.uuid(),
+  propertyIds: z.array(z.uuid()).min(1).max(200),
+});
+
+export const introspectValues = graphReadRequired
+  .input(introspectValuesInputSchema)
+  .handler(async ({ input, context }) => {
+    const scope = await assertSiteReadAccess(context, input.siteId);
+    const properties = await graph.introspect.verifiedSiteProperties(input.propertyIds, scope);
+    const { available, envelopes } = await readGraphValues(properties.map((p) => p.id));
+    const found = new Set(properties.map((p) => p.id));
+    return {
+      // false when the value store is unreachable — envelopes are null, not stale.
+      valuesAvailable: available,
+      values: properties.map((property) => ({
+        ...property,
+        envelope: envelopes.get(property.id) ?? null,
+      })),
+      unknownPropertyIds: [...new Set(input.propertyIds)].filter((id) => !found.has(id)),
+    };
+  });
+
+export const introspectExplain = graphReadRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertPropertyReadAccess(context, input.id);
+  const explanation = unwrap(await graph.introspect.explain(input.id, scope));
+  const { available, envelopes } = await readGraphValues([input.id]);
+  return {
+    ...explanation,
+    current: { valueAvailable: available, envelope: envelopes.get(input.id) ?? null },
+  };
+});
+
+export const introspectConformance = graphReadRequired.input(siteInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertSiteReadAccess(context, input.siteId);
+  return unwrap(await graph.introspect.conformance(scope));
+});
+
+const introspectDiagnosticsInputSchema = z.object({
+  siteId: z.uuid(),
+  // Bounds the KV scan; sites larger than this report scannedProperties < totalProperties.
+  scanLimit: z.number().int().min(1).max(5000).default(2000),
+});
+
+// Properties whose current value is degraded (quality != good), with the
+// error context the engine attached — the repair entry point for builders.
+export const introspectDiagnostics = graphReadRequired
+  .input(introspectDiagnosticsInputSchema)
+  .handler(async ({ input, context }) => {
+    const scope = await assertSiteReadAccess(context, input.siteId);
+    const snapshot = unwrap(await graph.introspect.snapshot(scope));
+    const scanned = snapshot.properties.slice(0, input.scanLimit);
+    const { available, envelopes } = await readGraphValues(scanned.map((p) => p.id));
+    const nodeNames = new Map(snapshot.nodes.map((node) => [node.id, node.name]));
+    return {
+      graphVersion: snapshot.graphVersion,
+      valuesAvailable: available,
+      totalProperties: snapshot.properties.length,
+      scannedProperties: scanned.length,
+      unhealthy: available
+        ? scanned.flatMap((property) => {
+            const envelope = envelopes.get(property.id);
+            if (envelope && envelope.quality === "good") return [];
+            return [
+              {
+                propertyId: property.id,
+                name: property.name,
+                nodeId: property.nodeId,
+                nodeName: nodeNames.get(property.nodeId) ?? null,
+                resolverType: property.resolverType,
+                // null envelope: never evaluated (or value store missed it).
+                envelope: envelope ?? null,
+              },
+            ];
+          })
+        : [],
+    };
   });

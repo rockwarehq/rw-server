@@ -9,7 +9,9 @@
     ".": "./dist/index.js",
     "./graph/*": "./dist/graph/*.js",
     "./catalog/*": "./dist/catalog/*.js",
-    "./client/*": "./dist/client/*.js"
+    "./client/*": "./dist/client/*.js",
+    "./store/*": "./dist/store/*.js",
+    "./types/*": "./dist/types/*.js"
   },
   "scripts": {
     "build": "tsc -b",

@@ -127,6 +127,12 @@ export const router = {
     introspect: {
       manifest: graph.introspectManifest,
       typeSchema: graph.introspectTypeSchema,
+      version: graph.introspectVersion,
+      snapshot: graph.introspectSnapshot,
+      values: graph.introspectValues,
+      explain: graph.introspectExplain,
+      conformance: graph.introspectConformance,
+      diagnostics: graph.introspectDiagnostics,
     },
   },
   metrics: {
