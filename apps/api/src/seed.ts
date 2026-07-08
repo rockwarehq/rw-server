@@ -1,7 +1,7 @@
 import "dotenv/config";
 import bcrypt from "bcrypt";
 import prisma from "@rw/db";
-import { findSystemRole } from "@rw/services/iam/roles";
+import { findSystemRole } from "@rw/auth/iam/roles";
 import { seedSystemRoles } from "./seed-system-roles.js";
 
 const SALT_ROUNDS = 10;

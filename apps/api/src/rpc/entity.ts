@@ -17,7 +17,7 @@ import {
 import { ORPCError } from "@orpc/server";
 import * as entity from "@rw/services/entity/index";
 import type { EntityScope } from "@rw/services/entity/index";
-import { hasPermission, type Permission } from "@rw/services/iam/index";
+import { hasPermission, type Permission } from "@rw/auth/iam/index";
 
 import { authRequired } from "./middleware.js";
 

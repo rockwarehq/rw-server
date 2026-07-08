@@ -1,10 +1,10 @@
 // Auth service - public API
 // Re-exports all auth-related functionality
 
-export * as tokens from "@rw/services/auth/tokens";
+export * as tokens from "@rw/auth/tokens";
 export * as session from "./session.js";
-export * as displaySession from "@rw/services/auth/display-session";
-export { Principal, type IAMContext, type PrincipalType } from "@rw/services/auth/context";
+export * as displaySession from "@rw/auth/display-session";
+export { Principal, type IAMContext, type PrincipalType } from "@rw/auth/context";
 export { authPlugin } from "./plugin.js";
 
 // Re-export commonly used functions at top level for convenience
@@ -23,7 +23,7 @@ export {
   verifyDisplayRefreshToken,
   revokeDisplayRefreshToken,
   revokeAllDisplayRefreshTokens,
-} from "@rw/services/auth/tokens";
+} from "@rw/auth/tokens";
 
 export {
   login,
@@ -44,4 +44,4 @@ export {
   logoutDisplay,
   type DisplayAuthResult,
   type DisplayTokenPair,
-} from "@rw/services/auth/display-session";
+} from "@rw/auth/display-session";

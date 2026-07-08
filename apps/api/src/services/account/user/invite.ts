@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import prisma from "@rw/db";
 import { securityConfig } from "../../../config.js";
-import { hasOwnerPermission, hasPermission, OWNER_PERMISSION } from "@rw/services/iam/index";
+import { hasOwnerPermission, hasPermission, OWNER_PERMISSION } from "@rw/auth/iam/index";
 import { hashPassword } from "../../auth/session.js";
 import * as employeeService from "../../employee/index.js";
 import { sendInviteEmail } from "@rw/services/email/index";

@@ -2,7 +2,7 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { site } from "@rw/services/facility/index";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
-import { getAccessibleSites, hasPermission } from "@rw/services/iam/index";
+import { getAccessibleSites, hasPermission } from "@rw/auth/iam/index";
 
 // ============================================================================
 // Schemas

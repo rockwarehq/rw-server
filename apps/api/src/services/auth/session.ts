@@ -9,8 +9,8 @@ import {
   revokeRefreshToken,
   revokeAllUserRefreshTokens,
   type AccessTokenPayload,
-} from "@rw/services/auth/tokens";
-import { listAccessibleSites } from "@rw/services/iam/index";
+} from "@rw/auth/tokens";
+import { listAccessibleSites } from "@rw/auth/iam/index";
 
 const SALT_ROUNDS = 10;
 

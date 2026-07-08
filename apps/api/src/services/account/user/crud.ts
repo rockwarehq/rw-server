@@ -1,6 +1,6 @@
 import prisma from "@rw/db";
 import type { UserStatus } from "@rw/db";
-import { getEffectivePermissions, listAccessibleSites, type Permission } from "@rw/services/iam/index";
+import { getEffectivePermissions, listAccessibleSites, type Permission } from "@rw/auth/iam/index";
 import { logEvent } from "@rw/services/audit/index";
 import { getWorkspaceAccessSummaries } from "../workspace/members.js";
 

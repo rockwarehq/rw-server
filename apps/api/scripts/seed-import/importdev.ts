@@ -2,7 +2,7 @@ import "dotenv/config";
 import { createInterface } from "node:readline/promises";
 import bcrypt from "bcrypt";
 import prisma from "@rw/db";
-import { findSystemRole } from "@rw/services/iam/roles";
+import { findSystemRole } from "@rw/auth/iam/roles";
 import { seedSystemRoles } from "./systemRoles.js";
 import config from "./config.js";
 import { IdMap, setDataFile, setDevSeed } from "./utils.js";

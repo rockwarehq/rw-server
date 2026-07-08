@@ -33,6 +33,7 @@
     "@nats-io/jetstream": "^3.4.0",
     "@nats-io/transport-node": "^3.4.0",
     "@orpc/server": "^1.14.0",
+    "@rw/auth": "workspace:*",
     "@rw/db": "workspace:*",
     "@rw/livestore": "workspace:*",
     "@rw/runtime": "workspace:*",

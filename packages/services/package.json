@@ -5,7 +5,6 @@
   "type": "module",
   "exports": {
     "./audit/*": "./dist/audit/*.js",
-    "./auth/*": "./dist/auth/*.js",
     "./automation/*": "./dist/automation/*.js",
     "./config": "./dist/config.js",
     "./cycle/*": "./dist/cycle/*.js",
@@ -16,7 +15,6 @@
     "./email/*": "./dist/email/*.js",
     "./employee/*": "./dist/employee/*.js",
     "./entity/*": "./dist/entity/*.js",
-    "./iam/*": "./dist/iam/*.js",
     "./job/*": "./dist/job/*.js",
     "./facility/*": "./dist/facility/*.js",
     "./inventory/*": "./dist/inventory/*.js",
