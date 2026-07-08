@@ -247,6 +247,11 @@ export function usableValue(env: ValueEnvelope): number | null {
   return Number.isFinite(v) ? v : null;
 }
 
+// Runs on every commit (tag-input rates): decide cheaply where fields allow it
+// and only fall back to structural comparison for object values/contexts.
 export function envelopesEqual(a: ValueEnvelope, b: ValueEnvelope): boolean {
+  if (a === b) return true;
+  if (a.timestamp !== b.timestamp || a.quality !== b.quality) return false;
+  if (a.value === b.value && a.context === undefined && b.context === undefined) return true;
   return JSON.stringify(a) === JSON.stringify(b);
 }

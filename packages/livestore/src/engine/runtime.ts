@@ -44,6 +44,9 @@ export interface GraphRuntimeOptions {
   isNatsReady?: () => boolean;
 }
 
+// Reconcile re-scans this far behind its last cursor (clock skew + commit lag).
+const RECONCILE_OVERLAP_MS = 60_000;
+
 export class GraphRuntime {
   private readonly cvg: CvgStore;
   private readonly kernel: GraphKernel;
@@ -60,6 +63,7 @@ export class GraphRuntime {
   private definitionFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private definitionReconcileTimer: ReturnType<typeof setInterval> | null = null;
   private definitionApplyChain: Promise<void> = Promise.resolve();
+  private reconcileInFlight = false;
   private lastDefinitionReconcileAt = new Date();
   private readonly pendingDefinitionEvents = new Map<string, GraphDefinitionEvent>();
   private definitionWaiters: Array<{ resolve: () => void; reject: (err: unknown) => void }> = [];
@@ -162,6 +166,14 @@ export class GraphRuntime {
   }
 
   async start(): Promise<void> {
+    // Baseline the reconcile window and ensure streams/durables BEFORE the
+    // initial DB load: a DeliverPolicy.New durable created after the load
+    // would permanently miss definition/entity changes made while loading,
+    // and a post-load baseline would hide them from the reconcile too.
+    this.lastDefinitionReconcileAt = new Date();
+    await this.definitionConsumer.ensure();
+    await this.entityEventConsumer.ensure();
+
     await this.kernel.load();
 
     const rollupEdges = await buildRollupEdges(this.options.prisma, this.kernel, this.options.logger);
@@ -178,11 +190,17 @@ export class GraphRuntime {
     await this.entityResolver.start(this.kernel.listProperties());
     await this.definitionConsumer.start();
     await this.entityEventConsumer.start();
-    this.lastDefinitionReconcileAt = new Date();
     this.definitionReconcileTimer = setInterval(() => {
-      void this.reconcileDefinitionChanges().catch((err) => {
-        this.options.logger.error({ err }, "livestore graph definition reconcile failed");
-      });
+      // One reconcile at a time: a slow cycle must not overlap the next tick.
+      if (this.reconcileInFlight) return;
+      this.reconcileInFlight = true;
+      void this.reconcileDefinitionChanges()
+        .catch((err) => {
+          this.options.logger.error({ err }, "livestore graph definition reconcile failed");
+        })
+        .finally(() => {
+          this.reconcileInFlight = false;
+        });
     }, 30_000);
     this.ready = true;
 
@@ -212,12 +230,22 @@ export class GraphRuntime {
       const err = new Error("livestore runtime stopping");
       for (const waiter of waiters) waiter.reject(err);
     }
-    // Let any in-flight definition apply finish before tearing down resolvers.
+    // Let any in-flight definition apply (event-driven or reconcile — both run
+    // on this chain) finish before tearing down resolvers.
     await this.definitionApplyChain.catch(() => {});
+    // Join the in-flight flush and block re-arming before draining producers:
+    // a flush surviving past this point would commit into a torn-down runtime.
+    await this.scheduler.stop();
     await this.windowResolver.stop(); // drains emit chains + flushes agg state to KV
+    // Publish hook events queued by the final commits; the settle-flush that
+    // would have flushed them can no longer run.
+    await this.hookManager.flushPending((id) => this.kernel.getCurrent(id));
     this.sampleGate.stop();
-    this.scheduler.stop();
-    await this.putDrainDone; // flush queued CVG writes before disconnecting NATS
+    // Flush queued CVG writes before disconnecting NATS. Late commits (flush
+    // join, window drain) can restart the drain, so loop until it stays empty.
+    while (this.putDrainRunning || this.pendingPuts.size > 0) {
+      await this.putDrainDone;
+    }
   }
 
   enqueueDefinitionChange(event: GraphDefinitionEvent): Promise<void> {
@@ -247,7 +275,11 @@ export class GraphRuntime {
   }
 
   private async reconcileDefinitionChanges(): Promise<void> {
-    const since = this.lastDefinitionReconcileAt;
+    // Overlap the scan window: updatedAt comes from the writer's clock, and a
+    // transaction can commit after our query ran with an earlier updatedAt.
+    // Applies are idempotent, so re-scanning the lap is safe; skipping a row
+    // once loses it forever.
+    const since = new Date(this.lastDefinitionReconcileAt.getTime() - RECONCILE_OVERLAP_MS);
     const next = new Date();
     const [nodes, properties, hooks] = await Promise.all([
       this.options.prisma.graphNode.findMany({
@@ -293,7 +325,14 @@ export class GraphRuntime {
       })),
     ];
 
-    if (events.length > 0) await this.applyDefinitionChanges(events);
+    if (events.length > 0) {
+      // Serialize through the same chain as event-driven applies: a direct
+      // call here would interleave with a chained apply across its awaits and
+      // corrupt kernel/dependency-graph state.
+      const run = () => this.applyDefinitionChanges(events);
+      this.definitionApplyChain = this.definitionApplyChain.then(run, run);
+      await this.definitionApplyChain;
+    }
     this.lastDefinitionReconcileAt = next;
   }
 
@@ -420,8 +459,13 @@ export class GraphRuntime {
   private async drainPuts(): Promise<void> {
     try {
       while (this.pendingPuts.size > 0) {
-        const batch = [...this.pendingPuts.entries()].slice(0, 16);
-        for (const [propertyId] of batch) this.pendingPuts.delete(propertyId);
+        // Take a batch off the iterator without materializing the whole map —
+        // a copy per batch goes quadratic under backlog.
+        const batch: Array<[string, ValueEnvelope]> = [];
+        for (const entry of this.pendingPuts) {
+          batch.push(entry);
+          if (batch.length === 16) break;
+        }
         await Promise.all(
           batch.map(async ([propertyId, envelope]) => {
             try {
@@ -435,6 +479,11 @@ export class GraphRuntime {
                 { err, propertyId },
                 "livestore CVG put failed — in-memory value retained",
               );
+            } finally {
+              // Remove only after the put settles, and only if no newer
+              // envelope replaced it mid-flight: getCvgValue must keep seeing
+              // the queued value until KV actually holds it.
+              if (this.pendingPuts.get(propertyId) === envelope) this.pendingPuts.delete(propertyId);
             }
           }),
         );
@@ -496,6 +545,10 @@ export class GraphRuntime {
       ready: this.isReady(),
       engine: { ...this.scheduler.flushStats(), ...this.kernel.counts(), kvPutFailures: this.kvPutFailures },
       hooks: this.hookManager.hookStats(),
+      consumers: {
+        definitionRestarts: this.definitionConsumer.stats().restartsTotal,
+        entityEventRestarts: this.entityEventConsumer.stats().restartsTotal,
+      },
     };
   }
 }

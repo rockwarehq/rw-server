@@ -9,6 +9,8 @@ export class Scheduler {
   private readonly dirty = new Set<string>();
   private flushScheduled = false;
   private flushing = false;
+  private stopped = false;
+  private inFlightFlush: Promise<void> | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   // Consecutive flush-ends each id has survived in the dirty set. An id that
   // never settles (cycle, quarantined, or deleted property) gets dropped alone
@@ -49,9 +51,15 @@ export class Scheduler {
     this.schedule();
   }
 
-  stop(): void {
+  // Joins any in-flight flush and blocks re-arming, so once this resolves no
+  // further evaluate/commit activity can originate here — teardown can safely
+  // drain write-behind queues after it.
+  async stop(): Promise<void> {
+    this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    this.flushScheduled = false;
+    await this.inFlightFlush;
   }
 
   // flushMaxMs is a windowed max: reading it resets the window (worst flush since
@@ -85,11 +93,12 @@ export class Scheduler {
   }
 
   private schedule(force = false): void {
-    if (this.flushScheduled || this.flushing || (!force && this.dirty.size === 0)) return;
+    if (this.stopped || this.flushScheduled || this.flushing || (!force && this.dirty.size === 0)) return;
     this.flushScheduled = true;
     this.timer = setTimeout(() => {
       this.flushScheduled = false;
-      void this.flush();
+      // Retained so stop() can join a flush that is mid-evaluate.
+      this.inFlightFlush = this.flush();
     }, Scheduler.DELAY_MS);
   }
 
@@ -123,6 +132,9 @@ export class Scheduler {
       snapshot.sort((a, b) => a.index - b.index);
 
       for (const { id } of snapshot) {
+        // Shutting down: leave the remainder dirty; boot re-marks all computed
+        // properties, so nothing is lost by bailing early.
+        if (this.stopped) break;
         if (!this.dirty.has(id)) continue;
         this.dirty.delete(id);
         try {

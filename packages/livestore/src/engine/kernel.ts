@@ -39,7 +39,6 @@ export class GraphKernel {
   private readonly nodes = new Map<string, NodeRuntime>();
   private readonly properties = new Map<string, PropertyRuntime>();
   private readonly dependencyGraph: DependencyGraph;
-  private persistedEdges: GraphEdgeRuntime[] = [];
   private rollupEdges: GraphEdgeRuntime[] = [];
 
   constructor(
@@ -99,7 +98,6 @@ export class GraphKernel {
       fromPropertyId: edge.fromPropertyId,
       toPropertyId: edge.toPropertyId,
     }));
-    this.persistedEdges = runtimeEdges;
     this.dependencyGraph.rebuild(this.properties.values(), runtimeEdges);
 
     this.logger.info(
@@ -169,7 +167,6 @@ export class GraphKernel {
 
   applyNodeDefinition(definition: LoadedNodeDefinition): KernelPatchResult {
     const previousProperties = this.getNodeProperties(definition.node.id);
-    const previousById = new Map(previousProperties.map((property) => [property.id, this.cloneProperty(property)]));
     const nextIds = new Set(definition.properties.map((property) => property.id));
     const removedProperties = previousProperties
       .filter((property) => !nextIds.has(property.id))
@@ -180,8 +177,16 @@ export class GraphKernel {
 
     const upsertedProperties: KernelPropertyUpsert[] = [];
     for (const property of definition.properties) {
-      const previous = previousById.get(property.id) ?? null;
+      // Look up across ALL nodes, not just this one: a property that moved in
+      // from another node must keep its live value and leave the old node's
+      // membership, or the old node's snapshot lists it forever.
+      const existing = this.properties.get(property.id);
+      const previous = existing ? this.cloneProperty(existing) : null;
       const current = { ...property, current: previous?.current ?? property.current };
+      if (existing && existing.nodeId !== runtimeNode.id) {
+        const oldNode = this.nodes.get(existing.nodeId);
+        if (oldNode) oldNode.propertyIds = oldNode.propertyIds.filter((id) => id !== property.id);
+      }
       runtimeNode.propertyIds.push(current.id);
       this.properties.set(current.id, current);
       upsertedProperties.push({ previous, current });
@@ -191,7 +196,6 @@ export class GraphKernel {
 
     const targetIds = definition.properties.map((property) => property.id);
     const removedIds = removedProperties.map((property) => property.id);
-    this.replacePersistedEdges(targetIds, definition.edges, removedIds);
     this.dependencyGraph.removeProperties(removedIds);
     this.dependencyGraph.upsertProperties(definition.properties);
     this.dependencyGraph.replaceEdges({
@@ -206,6 +210,7 @@ export class GraphKernel {
   applyPropertyDefinition(definition: LoadedPropertyDefinition): KernelPatchResult {
     const node = this.nodes.get(definition.node.id) ?? { ...definition.node, propertyIds: [] };
     node.name = definition.node.name;
+    node.siteId = definition.node.siteId; // feeds subscription auth via getPropertySiteId
     node.typeRef = definition.node.typeRef;
     node.typeContext = definition.node.typeContext;
     this.nodes.set(node.id, node);
@@ -225,7 +230,6 @@ export class GraphKernel {
       (this.properties.get(a)?.name ?? a).localeCompare(this.properties.get(b)?.name ?? b),
     );
 
-    this.replacePersistedEdges([current.id], definition.edges, []);
     this.dependencyGraph.upsertProperties([current]);
     this.dependencyGraph.replaceEdges({
       targetPropertyIds: [current.id],
@@ -240,10 +244,6 @@ export class GraphKernel {
     for (const property of removedProperties) this.properties.delete(property.id);
     this.nodes.delete(nodeId);
     const removedIds = removedProperties.map((property) => property.id);
-    const removedIdSet = new Set(removedIds);
-    this.persistedEdges = this.persistedEdges.filter(
-      (edge) => !removedIdSet.has(edge.fromPropertyId) && !removedIdSet.has(edge.toPropertyId),
-    );
     this.dependencyGraph.removeProperties(removedIds);
     this.dependencyGraph.replaceEdges({ removeIncidentPropertyIds: removedIds, edges: this.rollupEdges });
     return { upsertedProperties: [], removedProperties };
@@ -256,9 +256,6 @@ export class GraphKernel {
     this.properties.delete(propertyId);
     const node = this.nodes.get(previous.nodeId);
     if (node) node.propertyIds = node.propertyIds.filter((id) => id !== propertyId);
-    this.persistedEdges = this.persistedEdges.filter(
-      (edge) => edge.fromPropertyId !== propertyId && edge.toPropertyId !== propertyId,
-    );
     this.dependencyGraph.removeProperties([propertyId]);
     this.dependencyGraph.replaceEdges({ removeIncidentPropertyIds: [propertyId], edges: this.rollupEdges });
     return { upsertedProperties: [], removedProperties: [removed] };
@@ -406,15 +403,6 @@ export class GraphKernel {
       fromPropertyId: edge.fromPropertyId,
       toPropertyId: edge.toPropertyId,
     }));
-  }
-
-  private replacePersistedEdges(targetIds: string[], edges: GraphEdgeRuntime[], removedIds: string[]): void {
-    const targets = new Set(targetIds);
-    const removed = new Set(removedIds);
-    this.persistedEdges = this.persistedEdges.filter(
-      (edge) => !targets.has(edge.toPropertyId) && !removed.has(edge.fromPropertyId) && !removed.has(edge.toPropertyId),
-    );
-    this.persistedEdges.push(...edges);
   }
 
   private getNodeProperties(nodeId: string): PropertyRuntime[] {

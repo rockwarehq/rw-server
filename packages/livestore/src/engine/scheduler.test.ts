@@ -134,6 +134,59 @@ describe("failure containment", () => {
   });
 });
 
+describe("stop", () => {
+  it("joins an in-flight flush before resolving", async () => {
+    let releaseEvaluate: () => void = () => {};
+    const evaluateGate = new Promise<void>((resolve) => {
+      releaseEvaluate = resolve;
+    });
+    const evaluated: string[] = [];
+    const scheduler = new Scheduler(
+      () => [],
+      () => 0,
+      async (id) => {
+        evaluated.push(id);
+        await evaluateGate;
+      },
+      () => false,
+      logger,
+    );
+
+    scheduler.markDirtyMany(["a"]);
+    await vi.advanceTimersByTimeAsync(50); // flush starts, blocks in evaluate
+    expect(evaluated).toEqual(["a"]);
+
+    let stopResolved = false;
+    const stopPromise = scheduler.stop().then(() => {
+      stopResolved = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stopResolved).toBe(false); // still joined to the in-flight flush
+
+    releaseEvaluate();
+    await stopPromise;
+    expect(stopResolved).toBe(true);
+  });
+
+  it("marks after stop never schedule a flush", async () => {
+    const { scheduler, evaluated } = makeScheduler({ dependents: { a: [] }, topo: ["a"] });
+    await scheduler.stop();
+    scheduler.markDirtyMany(["a"]);
+    scheduler.markDirty("a");
+    scheduler.scheduleTerminal();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(evaluated).toEqual([]);
+  });
+
+  it("stopping with a pending timer cancels it without wedging state", async () => {
+    const { scheduler, evaluated } = makeScheduler({ dependents: { a: [] }, topo: ["a"] });
+    scheduler.markDirtyMany(["a"]); // timer armed, flush not yet started
+    await scheduler.stop();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(evaluated).toEqual([]);
+  });
+});
+
 describe("flush leftovers", () => {
   it("reschedules marks that land behind the cursor instead of dropping them", async () => {
     // Topo order puts b before a; evaluating a marks b (simulating an async

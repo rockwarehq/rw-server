@@ -64,7 +64,39 @@ describe("applyNodeDefinition", () => {
   });
 });
 
+describe("applyNodeDefinition property moves", () => {
+  it("a property moved in via a node event leaves the old node's membership and keeps its live value", () => {
+    const kernel = makeKernel();
+    kernel.applyNodeDefinition({ node: node("n1"), properties: [prop("p1", "n1")], edges: [] });
+    kernel.applyNodeDefinition({ node: node("n2"), properties: [], edges: [] });
+    const live: ValueEnvelope = { value: 7, quality: "good", timestamp: 500 };
+    kernel.applyExternalValue("p1", live);
+
+    // Only the destination node's event arrives (e.g. the property event was
+    // coalesced away); p1 now belongs to n2 in the DB.
+    kernel.applyNodeDefinition({ node: node("n2"), properties: [prop("p1", "n2")], edges: [] });
+
+    expect(kernel.getNode("n1")?.properties).toEqual([]);
+    expect(kernel.getNode("n2")?.properties.map((p) => p.id)).toEqual(["p1"]);
+    expect(kernel.getCurrent("p1")).toEqual(live);
+  });
+});
+
 describe("applyPropertyDefinition", () => {
+  it("updates the cached node's siteId (subscription auth)", () => {
+    const kernel = makeKernel();
+    kernel.applyNodeDefinition({ node: node("n1"), properties: [prop("p1", "n1")], edges: [] });
+    expect(kernel.getPropertySiteId("p1")).toBe("site-1");
+
+    kernel.applyPropertyDefinition({
+      node: { ...node("n1"), siteId: "site-2" },
+      property: prop("p1", "n1"),
+      edges: [],
+    });
+
+    expect(kernel.getPropertySiteId("p1")).toBe("site-2");
+  });
+
   it("a property moved between nodes leaves the old node's membership", () => {
     const kernel = makeKernel();
     kernel.applyNodeDefinition({ node: node("n1"), properties: [prop("p1", "n1")], edges: [] });
