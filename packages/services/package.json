@@ -38,6 +38,7 @@
     "@nats-io/nats-core": "^3.4.0",
     "@nats-io/transport-node": "^3.4.0",
     "@orpc/server": "^1.14.0",
+    "@rw/auth": "workspace:*",
     "@rw/automations": "workspace:*",
     "@rw/db": "workspace:*",
     "@rw/runtime": "workspace:*",

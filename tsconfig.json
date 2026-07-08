@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/db" },
+    { "path": "./packages/auth" },
     { "path": "./packages/services" },
     { "path": "./packages/runtime" },
     { "path": "./packages/automations" },
