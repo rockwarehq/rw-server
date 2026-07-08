@@ -1,8 +1,8 @@
 import type { PrismaClient } from "@rw/db";
 import { describe, expect, it } from "vitest";
 
-import type { CvgStore } from "../value/cvg-store.js";
-import type { GraphEdgeRuntime, NodeRuntime, PropertyRuntime, ValueEnvelope } from "../value/types.js";
+import type { CvgStore } from "../store/cvg-store.js";
+import type { GraphEdgeRuntime, NodeRuntime, PropertyRuntime, ValueEnvelope } from "../types/index.js";
 import { GraphKernel } from "./kernel.js";
 
 const logger = { info: () => {}, warn: () => {}, error: () => {} };

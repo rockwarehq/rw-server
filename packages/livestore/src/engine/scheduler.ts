@@ -1,4 +1,4 @@
-import type { LivestoreLogger } from "../value/types.js";
+import type { LivestoreLogger } from "../types/index.js";
 
 // Generic reactive scheduler
 // graph's recalc engine. A value

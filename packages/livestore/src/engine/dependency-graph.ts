@@ -1,6 +1,6 @@
 import graphlib from "graphlib";
 
-import type { GraphEdgeRuntime, LivestoreLogger, PropertyRuntime } from "../value/types.js";
+import type { GraphEdgeRuntime, LivestoreLogger, PropertyRuntime } from "../types/index.js";
 
 // Edge labels hold the SET of logical edge ids sharing a (from, to) pair: a
 // user-drawn persisted edge and a derived rollup edge can coincide, and the

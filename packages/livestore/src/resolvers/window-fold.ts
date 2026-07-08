@@ -1,4 +1,4 @@
-import { usableValue, type EwmaState, type TumblingState, type ValueEnvelope } from "../value/types.js";
+import { usableValue, type EwmaState, type TumblingState, type ValueEnvelope } from "../types/index.js";
 
 // Bucket boundary a timestamp falls in, floored to the windowMs grid anchored at alignToMs.
 export function bucketStartFor(timestamp: number, windowMs: number, alignToMs = 0): number {

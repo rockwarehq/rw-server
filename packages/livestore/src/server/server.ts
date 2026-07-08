@@ -2,9 +2,9 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 
-import { parseEnvelopeText } from "../value/cvg-store.js";
+import { parseEnvelopeText } from "../store/cvg-store.js";
 import type { GraphRuntime } from "../engine/runtime.js";
-import type { LivestoreLogger } from "../value/types.js";
+import type { LivestoreLogger } from "../types/index.js";
 import { bearerFromAuthorizationHeader, type LivestorePrincipal } from "./auth.js";
 
 // Structural so tests (and future transports) can stub it; LivestoreAuthenticator

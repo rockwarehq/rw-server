@@ -6,7 +6,7 @@ import { isExpiredTokenError, verifyAccessToken } from "@rw/auth/verify";
 import { API_TOKEN_PREFIX, touchApiToken, validateApiToken } from "@rw/auth/api-tokens";
 import { hashToken } from "@rw/auth/secrets";
 
-import type { LivestoreLogger } from "../value/types.js";
+import type { LivestoreLogger } from "../types/index.js";
 
 export type LivestorePrincipal =
   | { kind: "user"; userId: string; workspaceId: string; siteId: string; expMs: number }

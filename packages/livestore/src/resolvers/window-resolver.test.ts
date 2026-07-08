@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { initEwmaState, initTumblingState } from "./window-fold.js";
 import { WindowResolver } from "./window-resolver.js";
-import type { AggState, PropertyRuntime, Quality, ValueEnvelope, WindowResolverConfig } from "../value/types.js";
+import type { AggState, PropertyRuntime, Quality, ValueEnvelope, WindowResolverConfig } from "../types/index.js";
 
 const WINDOW_MS = 10_000;
 const T0 = 1_700_000_000_000; // boot time; a realistic epoch ms on the WINDOW_MS grid

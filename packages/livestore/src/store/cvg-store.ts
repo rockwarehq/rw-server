@@ -1,7 +1,7 @@
 import type { KV, KvWatchEntry } from "@nats-io/kv";
 import type { QueuedIterator } from "@nats-io/nats-core";
 
-import { parseValueEnvelope, type ValueEnvelope } from "./types.js";
+import { parseValueEnvelope, type ValueEnvelope } from "../types/index.js";
 
 export const CVG_BUCKET = "cvg";
 

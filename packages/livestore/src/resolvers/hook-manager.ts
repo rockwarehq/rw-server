@@ -26,7 +26,7 @@ import {
 } from "../catalog/hook-conditions.js";
 
 import { evaluateHookCondition } from "./hook-condition.js";
-import { isRecord, type LivestoreLogger, type ValueEnvelope } from "../value/types.js";
+import { isRecord, type LivestoreLogger, type ValueEnvelope } from "../types/index.js";
 
 const encoder = new TextEncoder();
 const WEEK_NANOS = 7 * 24 * 60 * 60 * 1_000_000_000;

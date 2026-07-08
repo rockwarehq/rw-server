@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { GraphEdgeRuntime, PropertyRuntime } from "../value/types.js";
+import type { GraphEdgeRuntime, PropertyRuntime } from "../types/index.js";
 import { DependencyGraph } from "./dependency-graph.js";
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };

@@ -4,8 +4,8 @@ import type { KV } from "@nats-io/kv";
 import type { NatsConnection } from "@nats-io/nats-core";
 import type { GraphDefinitionEvent } from "../catalog/definitions.js";
 
-import { AggStateStore } from "../value/agg-store.js";
-import { CvgStore } from "../value/cvg-store.js";
+import { AggStateStore } from "../store/agg-store.js";
+import { CvgStore } from "../store/cvg-store.js";
 import { GraphDefinitionConsumer } from "./definition-consumer.js";
 import { EntityEventConsumer } from "./entity-event-consumer.js";
 import { EntityResolver } from "../resolvers/entity-resolver.js";
@@ -31,7 +31,7 @@ import {
   type LivestoreLogger,
   type PropertyRuntime,
   type ValueEnvelope,
-} from "../value/types.js";
+} from "../types/index.js";
 
 export interface GraphRuntimeOptions {
   prisma: PrismaClient;

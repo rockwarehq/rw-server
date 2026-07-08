@@ -17,7 +17,7 @@ import {
   type GraphDefinitionEvent,
 } from "../catalog/definitions.js";
 
-import type { LivestoreLogger } from "../value/types.js";
+import type { LivestoreLogger } from "../types/index.js";
 
 const decoder = new TextDecoder();
 const WEEK_NANOS = 7 * 24 * 60 * 60 * 1_000_000_000;

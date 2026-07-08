@@ -1,6 +1,6 @@
 import type { NatsConnection, Subscription } from "@nats-io/nats-core";
 
-import { parseValueEnvelope, type LivestoreLogger, type ValueEnvelope } from "../value/types.js";
+import { parseValueEnvelope, type LivestoreLogger, type ValueEnvelope } from "../types/index.js";
 
 // The MetricResolver listens for metric updates on NATS subjects, and commits them to the store via the provided sink.
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { GraphHookCondition } from "../catalog/hook-conditions.js";
 
 import { evaluateHookCondition } from "./hook-condition.js";
-import type { Quality, ValueEnvelope } from "../value/types.js";
+import type { Quality, ValueEnvelope } from "../types/index.js";
 
 const env = (value: unknown, quality: Quality = "good"): ValueEnvelope => ({
   value,

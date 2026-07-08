@@ -8,7 +8,7 @@ vi.mock("../graph/index.js", () => ({
 }));
 
 const { EntityResolver } = await import("./entity-resolver.js");
-import type { LivestoreLogger, PropertyRuntime, ValueEnvelope } from "../value/types.js";
+import type { LivestoreLogger, PropertyRuntime, ValueEnvelope } from "../types/index.js";
 import type { EntityEvent } from "@rw/runtime/entity-events";
 
 const logger: LivestoreLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };

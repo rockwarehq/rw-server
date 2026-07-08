@@ -1,4 +1,4 @@
-import { usableValue, worse, type Quality, type RollupResolverConfig, type ValueEnvelope } from "../value/types.js";
+import { usableValue, worse, type Quality, type RollupResolverConfig, type ValueEnvelope } from "../types/index.js";
 
 export interface RollupChild {
   current: ValueEnvelope;

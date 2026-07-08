@@ -7,7 +7,7 @@ import {
   isRollupResolverConfig,
   type GraphEdgeRuntime,
   type LivestoreLogger,
-} from "../value/types.js";
+} from "../types/index.js";
 
 interface ChildRow {
   id: string;

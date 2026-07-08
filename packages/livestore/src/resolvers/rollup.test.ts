@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { evaluateRollup, type RollupChild } from "./rollup.js";
-import type { Quality, RollupResolverConfig, ValueEnvelope } from "../value/types.js";
+import type { Quality, RollupResolverConfig, ValueEnvelope } from "../types/index.js";
 
 const env = (value: number | null, quality: Quality = "good", timestamp = 1000): ValueEnvelope => ({
   value,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { bucketStartFor, foldEwmaSample, foldTumblingSample, initEwmaState, initTumblingState } from "./window-fold.js";
-import type { Quality, ValueEnvelope } from "../value/types.js";
+import type { Quality, ValueEnvelope } from "../types/index.js";
 
 const sample = (value: unknown, quality: Quality = "good", timestamp = 1000): ValueEnvelope => ({
   value,

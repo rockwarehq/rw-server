@@ -1,6 +1,6 @@
 import type { KV } from "@nats-io/kv";
 
-import { parseAggState, type AggState } from "./types.js";
+import { parseAggState, type AggState } from "../types/index.js";
 
 // imm_agg_state bucket internal window aggregation state
 // one entry per window property.

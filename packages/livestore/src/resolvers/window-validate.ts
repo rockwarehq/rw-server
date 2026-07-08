@@ -1,4 +1,4 @@
-import { isAggregation, type WindowResolverConfig } from "../value/types.js";
+import { isAggregation, type WindowResolverConfig } from "../types/index.js";
 
 const MIN_WINDOW_MS = 1000;
 

@@ -3,7 +3,7 @@ import type { PrismaClient } from "@rw/db";
 import { createAccessToken } from "@rw/auth/verify";
 import { API_TOKEN_PREFIX } from "@rw/auth/api-tokens";
 
-import type { LivestoreLogger } from "../value/types.js";
+import type { LivestoreLogger } from "../types/index.js";
 import { LivestoreAuthenticator, bearerFromAuthorizationHeader } from "./auth.js";
 
 const logger: LivestoreLogger = { info: () => {}, warn: () => {}, error: () => {} };
