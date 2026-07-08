@@ -7,7 +7,7 @@ import {
   METRIC_CATALOG_VALUE_TYPES,
   listMetrics,
 } from "@rw/services/metric-catalog/index";
-import { Principal } from "../services/auth/index.js";
+import { Principal } from "../auth/index.js";
 import { userOrDisplayRequired } from "./middleware.js";
 
 const metricCatalogItemSchema = z.object({

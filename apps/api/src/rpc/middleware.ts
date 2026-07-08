@@ -1,7 +1,7 @@
 import { os, ORPCError } from "@orpc/server";
 import { timingSafeEqual } from "node:crypto";
 import { processorConfig } from "../config.js";
-import { Principal } from "../services/auth/index.js";
+import { Principal } from "../auth/index.js";
 import type {
   DisplayAuthenticatedRPCContext,
   PrincipalAuthenticatedRPCContext,

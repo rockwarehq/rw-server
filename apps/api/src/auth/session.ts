@@ -1,5 +1,5 @@
 import prisma from "@rw/db";
-import { securityConfig } from "../../config.js";
+import { securityConfig } from "../config.js";
 import { logEvent } from "@rw/services/audit/index";
 import { comparePassword } from "@rw/auth/password";
 import {

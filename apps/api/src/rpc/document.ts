@@ -3,7 +3,7 @@ import { ORPCError } from "@orpc/server";
 import type { DocumentTargetType } from "@rw/db";
 import * as documents from "@rw/services/document/index";
 import { storageConfig } from "../config.js";
-import { Principal } from "../services/auth/index.js";
+import { Principal } from "../auth/index.js";
 import { authRequired, displayRequired, userOrDisplayRequired } from "./middleware.js";
 
 const documentTargetTypeSchema = z.enum(["SITE", "WORKCENTER", "STATION", "JOB", "TOOL", "PRODUCT", "MATERIAL"]);

@@ -7,7 +7,7 @@ import {
   type ValidatePointSiteAccessResult,
   type ValidatePointWorkspaceAccessResult,
 } from "../services/point-value.js";
-import { Principal } from "../services/auth/index.js";
+import { Principal } from "../auth/index.js";
 import { subscribeStreamEvents, type PointValueEvent, type StreamEvent } from "@rw/runtime/events-bus";
 import { userOrDisplayRequired } from "./middleware.js";
 

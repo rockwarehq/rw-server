@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
 import { authRequired, processorRequired, userOrDisplayRequired } from "./middleware.js";
-import { Principal } from "../services/auth/index.js";
+import { Principal } from "../auth/index.js";
 import { station, workcenter } from "@rw/services/facility/index";
 import { getAccessibleSites, hasPermission } from "@rw/auth/iam/index";
 import { getAutomationFramework } from "../automations/index.js";

@@ -4,7 +4,7 @@ import { z } from "zod";
 import * as graph from "@rw/livestore/graph/index";
 import { hasPermission, type Permission } from "@rw/auth/iam/index";
 import type { GraphScope } from "@rw/livestore/graph/types";
-import { Principal } from "../services/auth/index.js";
+import { Principal } from "../auth/index.js";
 
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
 
