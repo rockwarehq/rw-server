@@ -2,6 +2,8 @@ export const Principal = {
   USER: "USER",
   DISPLAY: "DISPLAY",
   WORKER: "WORKER",
+  // Opaque customer/app API token ("rw_app_..."), site-scoped and read-only.
+  APP: "APP",
   UNKNOWN: "UNKNOWN",
 } as const;
 
@@ -61,4 +63,13 @@ export interface DisplayIAMContext extends IAMContext {
   displayId: string;
   siteId: string;
   workspaceId: string;
+}
+
+export interface AppIAMContext extends IAMContext {
+  principal: typeof Principal.APP;
+  validToken: true;
+  apiTokenId: string;
+  siteId: string;
+  workspaceId: string;
+  scopes: string[];
 }

@@ -5,6 +5,8 @@
   "type": "module",
   "exports": {
     "./tokens": "./dist/tokens.js",
+    "./verify": "./dist/verify.js",
+    "./api-tokens": "./dist/api-tokens.js",
     "./secrets": "./dist/secrets.js",
     "./password": "./dist/password.js",
     "./env": "./dist/env.js",

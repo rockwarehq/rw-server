@@ -1,0 +1,29 @@
+// Opaque customer/app API tokens ("rw_app_..."), SHA-256 hashed at rest like
+// GatewayToken. Each token is bound to one workspace + one site and is
+// read-only (scopes fixed to ["graph:read"] in v1).
+model ApiToken {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  tokenHash   String   @unique
+  // "rw_app_" + first 8 chars of the secret, shown in UIs to identify a token
+  // without revealing it.
+  tokenPrefix String
+  scopes      String[] @default(["graph:read"])
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt  DateTime? @db.Timestamptz(3)
+  revokedAt  DateTime? @db.Timestamptz(3)
+  lastUsedAt DateTime? @db.Timestamptz(3)
+
+  workspaceId String    @db.Uuid
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  createdById String? @db.Uuid
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
+  @@index([siteId])
+}
