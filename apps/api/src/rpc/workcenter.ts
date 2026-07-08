@@ -4,6 +4,7 @@ import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import { workcenter } from "@rw/services/facility/index";
 import { getAccessibleSites, hasPermission } from "@rw/auth/iam/index";
 import { Principal } from "../auth/index.js";
+import { throwServiceError } from "./errors.js";
 
 // ============================================================================
 // Input Schemas
@@ -60,25 +61,7 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
   }
 
   const result = await workcenter.create(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SITE_NOT_FOUND" || code === "PARENT_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "SITE_MISMATCH") {
-      throw new ORPCError("CONFLICT", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -110,12 +93,7 @@ export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ i
   if (!result) {
     throw new ORPCError("NOT_FOUND", { message: "Workcenter not found" });
   }
-  if ("error" in result) {
-    throw new ORPCError("FORBIDDEN", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   if (
     context.iam.principal !== Principal.DISPLAY &&
     (!context.iam.id ||
@@ -146,25 +124,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
   }
 
   const result = await workcenter.update(id, updateData, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "WORKCENTER_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -186,31 +146,7 @@ export const move = authRequired.input(moveInputSchema).handler(async ({ input, 
   }
 
   const result = await workcenter.move(input.id, input.parentId, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "WORKCENTER_NOT_FOUND" || code === "PARENT_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "SITE_MISMATCH" || code === "CIRCULAR_REFERENCE") {
-      throw new ORPCError("CONFLICT", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -232,25 +168,7 @@ export const remove = authRequired.input(idInputSchema).handler(async ({ input, 
   }
 
   const result = await workcenter.remove(input.id, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "WORKCENTER_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    // HAS_CHILDREN, HAS_STATIONS
-    throw new ORPCError("CONFLICT", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  // HAS_CHILDREN / HAS_STATIONS map to CONFLICT via the shared table
+  if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
