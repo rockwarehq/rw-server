@@ -28,6 +28,7 @@ import * as workspace from "./workspace.js";
 import * as automations from "./automations.js";
 import * as entity from "./entity.js";
 import * as graph from "./graph.js";
+import * as apiToken from "./api-token.js";
 
 export const router = {
   events: {
@@ -435,6 +436,11 @@ export const router = {
     removeLineItem: order.removeLineItem,
     reorder: order.reorder,
     nextNumber: order.nextNumber,
+  },
+  apiToken: {
+    create: apiToken.create,
+    list: apiToken.list,
+    revoke: apiToken.revoke,
   },
   automations: {
     getCatalog: automations.getCatalog,

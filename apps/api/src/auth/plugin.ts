@@ -2,8 +2,9 @@ import fp from "fastify-plugin";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import createError from "http-errors";
 import { verifyAccessToken, isExpiredTokenError, type DecodedAccessToken } from "@rw/auth/tokens";
+import { API_TOKEN_PREFIX, touchApiToken, validateApiToken } from "@rw/auth/api-tokens";
 import { listAccessibleSites } from "@rw/auth/iam/index";
-import { Principal, type IAMContext, type UnknownIAMContext } from "@rw/auth/context";
+import { Principal, type AppIAMContext, type IAMContext, type UnknownIAMContext } from "@rw/auth/context";
 import prisma from "@rw/db";
 
 const AUTH_HEADER_PREFIX = "Bearer ";
@@ -111,6 +112,12 @@ async function resolveIAM(authHeader: string, log?: RequestLogger): Promise<IAMC
 
   const token = authHeader.substring(AUTH_HEADER_PREFIX.length);
 
+  // Opaque customer/app API tokens are routed by prefix before JWT decoding.
+  // The prefix carries no authority — a forged one just fails the hash lookup.
+  if (token.startsWith(API_TOKEN_PREFIX)) {
+    return resolveAppIAM(token, log);
+  }
+
   let decodedToken: DecodedAccessToken;
   try {
     decodedToken = verifyAccessToken(token);
@@ -130,6 +137,27 @@ async function resolveIAM(authHeader: string, log?: RequestLogger): Promise<IAMC
   }
 
   return resolveUserIAM(decodedToken);
+}
+
+async function resolveAppIAM(token: string, log?: RequestLogger): Promise<IAMContext> {
+  const validated = await validateApiToken(token);
+  if (!validated) {
+    // Unknown, revoked, and expired all look identical to the caller.
+    log?.warn("auth: rejected invalid api token");
+    return { principal: Principal.UNKNOWN, validToken: false };
+  }
+
+  void touchApiToken(validated.id).catch(() => {});
+
+  const iam: AppIAMContext = {
+    principal: Principal.APP,
+    validToken: true,
+    apiTokenId: validated.id,
+    workspaceId: validated.workspaceId,
+    siteId: validated.siteId,
+    scopes: validated.scopes,
+  };
+  return iam;
 }
 
 async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promise<IAMContext> {

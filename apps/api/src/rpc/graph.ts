@@ -6,7 +6,7 @@ import { hasPermission, type Permission } from "@rw/auth/iam/index";
 import type { GraphScope } from "@rw/livestore/graph/types";
 import { Principal } from "../auth/index.js";
 
-import { authRequired, userOrDisplayRequired } from "./middleware.js";
+import { authRequired, graphReadRequired } from "./middleware.js";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const idInputSchema = z.object({ id: z.uuid() });
@@ -203,6 +203,14 @@ async function assertSiteReadAccess(context: AuthContext, siteId: string): Promi
     return { workspaceId, siteId };
   }
 
+  if (context.iam.principal === Principal.APP) {
+    const workspaceId = requireWorkspaceId(context);
+    if (context.iam.siteId !== siteId) {
+      throw new ORPCError("FORBIDDEN", { message: "Token not authorized for this site" });
+    }
+    return { workspaceId, siteId };
+  }
+
   return assertSitePermission(context, "graph:read", siteId);
 }
 
@@ -303,19 +311,19 @@ export const nodeCreate = authRequired.input(nodeCreateInputSchema).handler(asyn
   return unwrap(await graph.nodes.create(nodeInput, scope));
 });
 
-export const nodeList = userOrDisplayRequired.input(nodeListInputSchema).handler(async ({ input, context }) => {
+export const nodeList = graphReadRequired.input(nodeListInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...filter } = input;
   const scope = await assertSiteReadAccess(context, siteId);
   return graph.nodes.list(filter, scope);
 });
 
-export const nodeQuery = userOrDisplayRequired.input(nodeQueryInputSchema).handler(async ({ input, context }) => {
+export const nodeQuery = graphReadRequired.input(nodeQueryInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...filter } = input;
   const scope = await assertSiteReadAccess(context, siteId);
   return graph.nodes.query(filter, scope);
 });
 
-export const nodeGet = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
+export const nodeGet = graphReadRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = await assertNodeReadAccess(context, input.id);
   return unwrap(await graph.nodes.getById(input.id, scope));
 });
@@ -331,7 +339,7 @@ export const nodeDelete = authRequired.input(idInputSchema).handler(async ({ inp
   return unwrap(await graph.nodes.remove(input.id, scope));
 });
 
-export const typeCatalog = userOrDisplayRequired.input(siteInputSchema).handler(async ({ input, context }) => {
+export const typeCatalog = graphReadRequired.input(siteInputSchema).handler(async ({ input, context }) => {
   const scope = await assertSiteReadAccess(context, input.siteId);
   return unwrap(await graph.nodeTypes.catalog(scope));
 });
@@ -342,13 +350,13 @@ export const typeCreate = authRequired.input(typeCreateInputSchema).handler(asyn
   return unwrap(await graph.nodeTypes.create(typeInput, scope));
 });
 
-export const typeList = userOrDisplayRequired.input(typeListInputSchema).handler(async ({ input, context }) => {
+export const typeList = graphReadRequired.input(typeListInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...filter } = input;
   const scope = await assertSiteReadAccess(context, siteId);
   return graph.nodeTypes.list(filter, scope);
 });
 
-export const typeGet = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
+export const typeGet = graphReadRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = await assertTypeReadAccess(context, input.id);
   return unwrap(await graph.nodeTypes.getById(input.id, scope));
 });
@@ -417,7 +425,7 @@ export const propertyCreate = authRequired.input(propertyCreateInputSchema).hand
   return unwrap(await graph.properties.create(input, scope));
 });
 
-export const propertyList = userOrDisplayRequired.input(propertyListInputSchema).handler(async ({ input, context }) => {
+export const propertyList = graphReadRequired.input(propertyListInputSchema).handler(async ({ input, context }) => {
   if (input.nodeId) {
     const scope = await assertNodeReadAccess(context, input.nodeId);
     if (input.siteId && input.siteId !== scope.siteId)
@@ -433,7 +441,7 @@ export const propertyList = userOrDisplayRequired.input(propertyListInputSchema)
   return graph.properties.list(filter, scope);
 });
 
-export const propertyGet = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
+export const propertyGet = graphReadRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = await assertPropertyReadAccess(context, input.id);
   return unwrap(await graph.properties.getById(input.id, scope));
 });
@@ -449,7 +457,7 @@ export const propertyDelete = authRequired.input(idInputSchema).handler(async ({
   return unwrap(await graph.properties.remove(input.id, scope));
 });
 
-export const propertyDependents = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
+export const propertyDependents = graphReadRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = await assertPropertyReadAccess(context, input.id);
   return unwrap(await graph.properties.dependents(input.id, scope));
 });

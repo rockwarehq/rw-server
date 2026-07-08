@@ -4,6 +4,7 @@ import { processorConfig } from "../config.js";
 import { Principal } from "../auth/index.js";
 import type {
   DisplayAuthenticatedRPCContext,
+  GraphReadRPCContext,
   PrincipalAuthenticatedRPCContext,
   RPCContext,
   UserAuthenticatedRPCContext,
@@ -25,15 +26,40 @@ const userMiddleware = os.$context<RPCContext>().middleware(async ({ context, ne
   });
 });
 
-// Any authenticated principal
+// User or display principal. Explicit allowlist — APP (customer API token)
+// principals must NOT pass here; they are only admitted by the graph-read
+// middleware below.
 const principalMiddleware = os.$context<RPCContext>().middleware(async ({ context, next }) => {
-  if (!context.iam?.validToken) {
+  if (
+    !context.iam?.validToken ||
+    (context.iam.principal !== Principal.USER && context.iam.principal !== Principal.DISPLAY)
+  ) {
     throw new ORPCError("UNAUTHORIZED", { message: "Authentication required" });
   }
 
   return next({
     context: {
       iam: context.iam as PrincipalAuthenticatedRPCContext["iam"],
+    },
+  });
+});
+
+// Graph read access: the only middleware that also admits APP principals
+// (site-scoped, read-only customer API tokens). Use exclusively on graph.*
+// read procedures.
+const graphReadPrincipalMiddleware = os.$context<RPCContext>().middleware(async ({ context, next }) => {
+  if (
+    !context.iam?.validToken ||
+    (context.iam.principal !== Principal.USER &&
+      context.iam.principal !== Principal.DISPLAY &&
+      context.iam.principal !== Principal.APP)
+  ) {
+    throw new ORPCError("UNAUTHORIZED", { message: "Authentication required" });
+  }
+
+  return next({
+    context: {
+      iam: context.iam as GraphReadRPCContext["iam"],
     },
   });
 });
@@ -57,8 +83,11 @@ export const userRequired = publicProcedure.use(userMiddleware);
 // Backward-compatible alias for existing user-authenticated procedures
 export const authRequired = userRequired;
 
-// Requires any valid authenticated principal
+// Requires a user or display principal
 export const userOrDisplayRequired = publicProcedure.use(principalMiddleware);
+
+// Requires a user, display, or app principal (graph read surface only)
+export const graphReadRequired = publicProcedure.use(graphReadPrincipalMiddleware);
 
 // Requires valid display authentication
 export const displayRequired = publicProcedure.use(displayMiddleware);
