@@ -252,7 +252,7 @@ export default async function edge(fastify: FastifyTypedInstance) {
 
       // Commands no longer ride the sync poll — they are delivered over
       // JetStream (RW_COMMANDS) and ack/result flow back over core NATS.
-      // See apps/api/src/command-bus.ts.
+      // See apps/api/src/nats/command-bus.ts.
       return {
         version: gw?.specVersion,
         ...(isUpToDate ? { upToDate: true } : { spec }),

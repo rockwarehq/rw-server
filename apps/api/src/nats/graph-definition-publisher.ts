@@ -7,7 +7,8 @@ import {
   type GraphDefinitionEvent,
 } from "@rw/livestore/catalog/definitions";
 import { setGraphDefinitionEventSink } from "@rw/livestore/graph/index";
-import { moduleLogger } from "./logger.js";
+import { moduleLogger } from "../logger.js";
+import { ensureStream, natsServers } from "./util.js";
 
 const log = moduleLogger("graph-definition-publisher");
 
@@ -57,37 +58,15 @@ export async function startGraphDefinitionPublisher(): Promise<() => Promise<voi
   };
 }
 
-async function ensureGraphDefinitionStream(jsm: Awaited<ReturnType<typeof jetstreamManager>>): Promise<void> {
-  try {
-    const info = await jsm.streams.info(GRAPH_DEFINITION_STREAM);
-    const subjects = new Set(info.config.subjects ?? []);
-    if (!subjects.has(GRAPH_DEFINITION_SUBJECT_FILTER)) {
-      await jsm.streams.update(GRAPH_DEFINITION_STREAM, {
-        subjects: [...subjects, GRAPH_DEFINITION_SUBJECT_FILTER],
-      });
-    }
-    return;
-  } catch {
-    await jsm.streams.add({
-      name: GRAPH_DEFINITION_STREAM,
-      subjects: [GRAPH_DEFINITION_SUBJECT_FILTER],
-      retention: RetentionPolicy.Limits,
-      storage: StorageType.File,
-      discard: DiscardPolicy.Old,
-      max_msgs: 100_000,
-      max_age: WEEK_NANOS,
-      duplicate_window: TWO_MINUTES_NANOS,
-    });
-  }
-}
-
-function natsServers(value: string): string | string[] {
-  const servers = value
-    .split(",")
-    .map((server) => server.trim())
-    .filter(Boolean);
-  if (servers.length === 1) return servers[0] as string;
-  return servers;
+function ensureGraphDefinitionStream(jsm: Awaited<ReturnType<typeof jetstreamManager>>): Promise<void> {
+  return ensureStream(jsm, GRAPH_DEFINITION_STREAM, GRAPH_DEFINITION_SUBJECT_FILTER, {
+    retention: RetentionPolicy.Limits,
+    storage: StorageType.File,
+    discard: DiscardPolicy.Old,
+    max_msgs: 100_000,
+    max_age: WEEK_NANOS,
+    duplicate_window: TWO_MINUTES_NANOS,
+  });
 }
 
 export type { GraphDefinitionEvent };

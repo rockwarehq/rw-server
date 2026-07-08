@@ -7,7 +7,7 @@ import * as graph from "@rw/livestore/graph/index";
 import { hasPermission, type Permission } from "@rw/auth/iam/index";
 import type { GraphScope } from "@rw/livestore/graph/types";
 import { Principal } from "../auth/index.js";
-import { readGraphValues } from "../graph-values.js";
+import { readGraphValues } from "../nats/graph-values.js";
 
 import { authRequired, graphReadRequired } from "./middleware.js";
 
