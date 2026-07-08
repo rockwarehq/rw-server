@@ -90,7 +90,7 @@ async function startServer(options?: GraphSocketOptions, auth: GraphAuthenticato
   await server.listen({ port: 0, host: "127.0.0.1" });
   cleanups.push(() => server.close());
   const { port } = server.server.address() as AddressInfo;
-  return { server, wsUrl: `ws://127.0.0.1:${port}/ws/graph` };
+  return { server, wsUrl: `ws://127.0.0.1:${port}/graph/live` };
 }
 
 // The message listener is attached before the handshake resolves so frames the
@@ -184,7 +184,7 @@ describe("http auth", () => {
   });
 });
 
-describe("/ws/graph auth", () => {
+describe("/graph/live auth", () => {
   it("closes 4401 when no auth arrives within the timeout", async () => {
     const { wsUrl } = await startServer({ authTimeoutMs: 50 });
     const { ws } = await openSocket(wsUrl);
@@ -218,6 +218,18 @@ describe("/ws/graph auth", () => {
     const { messages } = await openSocket(wsUrl, { headers: { authorization: `Bearer ${APP_TOKEN_A}` } });
     await waitFor(() => messages.some((m) => m.op === "ready"));
     expect(messages.find((m) => m.op === "ready")).toMatchObject({ siteId: SITE_A, authExpiresAt: null });
+  });
+
+  it("serves the deprecated /ws/graph alias with the same handshake and values", async () => {
+    const { wsUrl } = await startServer();
+    const { ws, messages } = await openSocket(wsUrl.replace("/graph/live", "/ws/graph"));
+
+    ws.send(JSON.stringify({ op: "auth", token: USER_TOKEN_A }));
+    await waitFor(() => messages.some((m) => m.op === "ready"));
+
+    ws.send(JSON.stringify({ op: "subscribe", propertyIds: ["p1"] }));
+    await waitFor(() => messages.some((m) => m.op === "value"));
+    expect(messages.find((m) => m.op === "value")).toEqual({ op: "value", propertyId: "p1", envelope: ENVELOPE });
   });
 
   it("rejects cross-site propertyIds with FORBIDDEN and serves the rest", async () => {
@@ -263,7 +275,7 @@ describe("/ws/graph auth", () => {
   });
 });
 
-describe("/ws/graph", () => {
+describe("/graph/live", () => {
   it("sends the current value on subscribe", async () => {
     const { wsUrl } = await startServer();
     const { ws, messages } = await openAuthedSocket(wsUrl);

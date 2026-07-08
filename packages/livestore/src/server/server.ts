@@ -148,7 +148,7 @@ export function registerGraphRoutes(
     return node;
   });
 
-  server.get("/ws/graph", { websocket: true }, (socket, request) => {
+  const graphSocketHandler = (socket: unknown, request: FastifyRequest) => {
     const ws = socket as WsLike;
     const watchers = new Map<string, { stop: () => void }>();
 
@@ -405,6 +405,15 @@ export function registerGraphRoutes(
       server.log.warn({ err }, "livestore websocket error");
       stopAll();
     });
+  };
+
+  server.get("/graph/live", { websocket: true }, graphSocketHandler);
+
+  // Deprecated alias for clients that predate /graph/live; the warning keeps
+  // remaining traffic visible so the alias can eventually be removed.
+  server.get("/ws/graph", { websocket: true }, (socket, request) => {
+    server.log.warn("deprecated /ws/graph endpoint used; migrate to /graph/live");
+    graphSocketHandler(socket, request);
   });
 }
 

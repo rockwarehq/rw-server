@@ -58,7 +58,7 @@ function makeHarness(
 ) {
   const sockets: FakeSocket[] = [];
   const client = new ReconnectingGraphSocket({
-    url: "ws://test/ws/graph",
+    url: "ws://test/graph/live",
     onValue,
     ...extra,
     webSocketFactory: () => {
@@ -187,7 +187,7 @@ describe("ReconnectingGraphSocket auth", () => {
     const errors: Array<[string, string | undefined]> = [];
     const sockets: FakeSocket[] = [];
     const client = new ReconnectingGraphSocket({
-      url: "ws://test/ws/graph",
+      url: "ws://test/graph/live",
       onValue: () => {},
       onError: (error, code) => errors.push([error, code]),
       webSocketFactory: () => {

@@ -1841,17 +1841,17 @@
     },
     {
       "name": "LiveStore WebSocket",
-      "description": "Postman can open WebSocket requests in recent versions. If this imports as a plain GET, create a new WebSocket request manually and paste `{{livestoreWsUrl}}/ws/graph`. Client messages: `{ \"op\": \"subscribe\", \"propertyIds\": [\"{{livestorePropertyId}}\"] }` and `{ \"op\": \"unsubscribe\", \"propertyIds\": [\"{{livestorePropertyId}}\"] }`. Server messages: `{ \"op\": \"value\", \"propertyId\": \"...\", \"envelope\": { \"value\": 18.2, \"quality\": \"good\", \"timestamp\": 1730000000000 } }`.",
+      "description": "Postman can open WebSocket requests in recent versions. If this imports as a plain GET, create a new WebSocket request manually and paste `{{livestoreWsUrl}}/graph/live`. Client messages: `{ \"op\": \"subscribe\", \"propertyIds\": [\"{{livestorePropertyId}}\"] }` and `{ \"op\": \"unsubscribe\", \"propertyIds\": [\"{{livestorePropertyId}}\"] }`. Server messages: `{ \"op\": \"value\", \"propertyId\": \"...\", \"envelope\": { \"value\": 18.2, \"quality\": \"good\", \"timestamp\": 1730000000000 } }`.",
       "item": [
         {
-          "name": "Open /ws/graph",
+          "name": "Open /graph/live",
           "request": {
             "auth": {
               "type": "noauth"
             },
             "method": "GET",
             "header": [],
-            "url": "{{livestoreWsUrl}}/ws/graph",
+            "url": "{{livestoreWsUrl}}/graph/live",
             "description": "Send this after connecting: { \"op\": \"subscribe\", \"propertyIds\": [\"{{livestorePropertyId}}\"] }. LiveStore sends initial value and updates as { op, propertyId, envelope }."
           }
         }

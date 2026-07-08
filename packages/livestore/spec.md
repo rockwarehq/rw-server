@@ -526,7 +526,7 @@ Emitted event shape:
 }
 ```
 9. WebSocket gateway
-Fastify route `/ws/graph` using `@fastify/websocket`.
+Fastify route `/graph/live` using `@fastify/websocket` (`/ws/graph` is kept as a deprecated alias until clients migrate).
 9.1 Protocol
 Subscriptions are per property, not per node. To subscribe to a whole node, the client subscribes to each of its properties (the editor can do this on the user's behalf when they pick a node).
 Client → server:

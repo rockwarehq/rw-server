@@ -1,4 +1,4 @@
-// Browser-safe reconnecting client for the livestore /ws/graph endpoint.
+// Browser-safe reconnecting client for the livestore /graph/live endpoint.
 // No server imports here — dashboards deep-import this via "@rw/livestore/client/*".
 
 export type GraphSocketState = "connecting" | "open" | "closed";

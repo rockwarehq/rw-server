@@ -32,7 +32,11 @@ health probes (`/health`, `/healthz`, `/readyz`) are public.
 Auth failures always return `401 { "error": "unauthorized" }` with no
 distinction between missing, malformed, expired, or revoked credentials.
 
-## WebSocket: `/ws/graph`
+## WebSocket: `/graph/live`
+
+> `/ws/graph` remains as a deprecated alias with identical behavior so
+> existing clients can migrate independently; it will be removed once client
+> traffic has moved. Use `/graph/live` for all new integrations.
 
 ### Handshake
 

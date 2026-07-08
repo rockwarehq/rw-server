@@ -11,7 +11,7 @@ metrics worker (MetricBucket change)
   -> MetricResolver (UI-authored metric properties)
   -> optional UI-authored rollup / expr properties
   -> NATS KV `cvg` (current value table)
-  -> WebSocket /ws/graph -> dashboards
+  -> WebSocket /graph/live -> dashboards
 
 NATS tag message (tags.<deviceId>.<tagPath>)
   -> TagResolver -> commitValue() -> NATS KV `cvg` -> WebSocket clients
@@ -47,7 +47,7 @@ Requirements: Postgres via `DATABASE_URL`, NATS with JetStream, and a local env 
 ```bash
 docker compose up -d nats            # JetStream-enabled NATS
 pnpm --filter @rw/db db:migrate      # GraphNode / GraphProperty / GraphEdge tables
-pnpm --filter @rw/livestore-app dev      # boots authored graph, opens /ws/graph on :30100
+pnpm --filter @rw/livestore-app dev      # boots authored graph, opens /graph/live on :30100
 ```
 
 Simulate the worker (publishes ramping SHIFT goodItems for a few stations):
@@ -92,7 +92,8 @@ Watch values: `GET /graph/nodes` for ids, then over WS
 | `GET /health`, `/healthz`, `/readyz` | liveness / NATS readiness |
 | `GET /graph/nodes` | nodes + properties + current values |
 | `GET /graph/nodes/:id` | one node |
-| `GET /ws/graph` | WebSocket subscribe/unsubscribe per property |
+| `GET /graph/live` | WebSocket subscribe/unsubscribe per property |
+| `GET /ws/graph` | deprecated alias for `/graph/live` (removal pending client migration) |
 
 ## Tests
 
