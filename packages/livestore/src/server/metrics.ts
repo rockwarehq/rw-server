@@ -29,6 +29,19 @@ const nodeCount = gauge("livestore_graph_node_count", "Graph nodes loaded");
 const propertyCount = gauge("livestore_graph_property_count", "Graph properties loaded");
 const edgeCount = gauge("livestore_graph_edge_count", "Graph edges loaded");
 
+// Write-behind durability — are CVG values reaching KV?
+const kvPutFailures = gauge("livestore_kv_put_failures_total", "Cumulative CVG KV put failures (value retained in memory)");
+
+// Ingestion resilience — a rising restart counter means a consume loop is
+// flapping; a broken consumer that never recovers pins its counter while
+// ingestion is silently dead, so alert on both rate and staleness.
+const definitionRestarts = gauge("livestore_definition_consumer_restarts_total", "Cumulative graph definition consumer restarts");
+const entityEventRestarts = gauge("livestore_entity_event_consumer_restarts_total", "Cumulative entity event consumer restarts");
+const tagRestarts = gauge("livestore_tag_consumer_restarts_total", "Cumulative tag consumer restarts");
+const metricRestarts = gauge("livestore_metric_consumer_restarts_total", "Cumulative metric resolver re-subscribes");
+const tagSubscriptions = gauge("livestore_tag_subscription_count", "Distinct tag subjects fanned out to properties");
+const metricSubscriptions = gauge("livestore_metric_subscription_count", "Active metric NATS subscriptions");
+
 // Hook health — are matched conditions publishing to JetStream?
 const hookMatched = gauge("livestore_hook_matched_total", "Cumulative hook conditions matched + queued");
 const hookPublished = gauge("livestore_hook_published_total", "Cumulative hook events published to JetStream");
@@ -49,7 +62,7 @@ function setSeconds(g: client.Gauge, epochMs: number | null | undefined): void {
 }
 
 function sample(runtime: GraphRuntime): void {
-  const { ready, engine, hooks } = runtime.healthStats();
+  const { ready, engine, hooks, consumers, subscriptions } = runtime.healthStats();
   up.set(ready ? 1 : 0);
 
   setNum(dirtySetSize, engine.dirtySetSize);
@@ -59,6 +72,14 @@ function sample(runtime: GraphRuntime): void {
   setNum(nodeCount, engine.nodeCount);
   setNum(propertyCount, engine.propertyCount);
   setNum(edgeCount, engine.edgeCount);
+
+  setNum(kvPutFailures, engine.kvPutFailures);
+  setNum(definitionRestarts, consumers.definitionRestarts);
+  setNum(entityEventRestarts, consumers.entityEventRestarts);
+  setNum(tagRestarts, consumers.tagRestarts);
+  setNum(metricRestarts, consumers.metricRestarts);
+  setNum(tagSubscriptions, subscriptions.tag);
+  setNum(metricSubscriptions, subscriptions.metric);
 
   setNum(hookMatched, hooks.matchedTotal);
   setNum(hookPublished, hooks.publishedTotal);

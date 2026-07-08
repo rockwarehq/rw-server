@@ -82,6 +82,8 @@ export class GraphRuntime {
   private readonly pendingPuts = new Map<string, ValueEnvelope>();
   private putDrainRunning = false;
   private putDrainDone: Promise<void> = Promise.resolve();
+  // Per-property websocket fan-out listeners (in-process; see subscribeToProperty).
+  private readonly propertyListeners = new Map<string, Set<(envelope: ValueEnvelope) => void>>();
 
   constructor(private readonly options: GraphRuntimeOptions) {
     this.cvg = new CvgStore(options.kv);
@@ -484,6 +486,7 @@ export class GraphRuntime {
       this.enqueuePut(propertyId, envelope);
       const hookQueued = this.hookManager.onPropertyCommitted({ propertyId, previous, current: envelope });
       if (hookQueued) this.scheduler.scheduleTerminal();
+      this.notifyPropertyListeners(propertyId, envelope);
     }
 
     // Per-commit logging runs at tag input rates — debug only. The flush-complete
@@ -552,8 +555,33 @@ export class GraphRuntime {
     return this.cvg.get(propertyId);
   }
 
-  async watchCvgValue(propertyId: string) {
-    return this.cvg.watch(propertyId);
+  // In-process value fan-out for websocket subscribers. This process is the sole
+  // writer of every CVG value (single instance) and already holds current state,
+  // so subscribers listen here instead of each opening a NATS KV watch — which
+  // was one watcher per (connection, property). Returns an unsubscribe handle.
+  subscribeToProperty(propertyId: string, listener: (envelope: ValueEnvelope) => void): () => void {
+    const listeners = this.propertyListeners.get(propertyId) ?? new Set();
+    listeners.add(listener);
+    this.propertyListeners.set(propertyId, listeners);
+    return () => {
+      const set = this.propertyListeners.get(propertyId);
+      if (!set) return;
+      set.delete(listener);
+      if (set.size === 0) this.propertyListeners.delete(propertyId);
+    };
+  }
+
+  private notifyPropertyListeners(propertyId: string, envelope: ValueEnvelope): void {
+    const listeners = this.propertyListeners.get(propertyId);
+    if (!listeners) return;
+    for (const listener of listeners) {
+      // A subscriber (websocket send) must never break the commit loop.
+      try {
+        listener(envelope);
+      } catch (err) {
+        this.options.logger.error({ err, propertyId }, "livestore property listener failed");
+      }
+    }
   }
 
   getCurrentOrStale(propertyId: string): ValueEnvelope {
@@ -600,6 +628,12 @@ export class GraphRuntime {
       consumers: {
         definitionRestarts: this.definitionConsumer.stats().restartsTotal,
         entityEventRestarts: this.entityEventConsumer.stats().restartsTotal,
+        tagRestarts: this.tagResolver.stats().restartsTotal,
+        metricRestarts: this.metricResolver.stats().restartsTotal,
+      },
+      subscriptions: {
+        tag: this.tagResolver.subscriptionCount(),
+        metric: this.metricResolver.subscriptionCount(),
       },
     };
   }

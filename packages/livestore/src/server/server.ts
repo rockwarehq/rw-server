@@ -2,7 +2,6 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 
-import { parseEnvelopeText } from "../store/cvg-store.js";
 import type { GraphRuntime } from "../engine/runtime.js";
 import type { LivestoreLogger, ValueEnvelope } from "../types/index.js";
 import { bearerFromAuthorizationHeader, type LivestorePrincipal } from "./auth.js";
@@ -331,7 +330,7 @@ export function registerGraphRoutes(
     const subscribe = async (propertyIds: string[]) => {
       for (const propertyId of propertyIds) {
         // Re-check after every await: close can land mid-subscribe, and a
-        // watcher created after stopAll would leak untracked.
+        // listener registered after stopAll would leak untracked.
         if (closed) return;
         if (watchers.has(propertyId)) continue;
         if (watchers.size >= opts.maxWatchersPerConnection) {
@@ -339,33 +338,18 @@ export function registerGraphRoutes(
           return;
         }
 
-        const initial = (await runtime.getCvgValue(propertyId)) ?? runtime.getCurrentOrStale(propertyId);
-        if (closed) return;
-        sendValue(propertyId, initial);
+        // Register the in-process listener BEFORE reading the initial value, so
+        // a commit racing the async read isn't missed; the monotonic lastSentTs
+        // guard in sendValue resolves ordering between the two.
+        const unsubscribe = runtime.subscribeToProperty(propertyId, (envelope) => sendValue(propertyId, envelope));
+        watchers.set(propertyId, { stop: unsubscribe });
 
-        const watcher = await runtime.watchCvgValue(propertyId);
+        const initial = (await runtime.getCvgValue(propertyId)) ?? runtime.getCurrentOrStale(propertyId);
         if (closed) {
-          watcher.stop();
+          stopWatcher(propertyId);
           return;
         }
-        const handle = { stop: () => watcher.stop() };
-        watchers.set(propertyId, handle);
-        void (async () => {
-          try {
-            for await (const entry of watcher) {
-              const envelope = parseEnvelopeText(entry.string());
-              if (!envelope) continue;
-              sendValue(propertyId, envelope);
-            }
-          } catch (err) {
-            server.log.warn({ err, propertyId }, "livestore websocket KV watcher stopped");
-          } finally {
-            // Only untrack our own registration: an unsubscribe + resubscribe
-            // replaces the map entry while this loop is still winding down,
-            // and deleting unconditionally would orphan the new watcher.
-            if (watchers.get(propertyId) === handle) watchers.delete(propertyId);
-          }
-        })();
+        sendValue(propertyId, initial);
       }
     };
 

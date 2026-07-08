@@ -267,7 +267,9 @@ async function validateEntityRef(
   return instance ? { success: true } : errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
 }
 
-async function validateTypeInputs(args: {
+// Exported for the batch planner (plan.ts), which validates prospective
+// nodes against their type without writing.
+export async function validateTypeInputs(args: {
   type: ResolvedGraphType | null;
   typeContext: Record<string, unknown>;
   scope: GraphScope;

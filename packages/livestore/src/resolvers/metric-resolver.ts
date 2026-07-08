@@ -18,6 +18,10 @@ export class MetricResolver {
   private readonly subscriptions = new Map<string, Subscription>();
   private readonly bySubject = new Map<string, Set<string>>();
   private readonly propertySubjects = new Map<string, string>();
+  private readonly restartTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly restartAttempts = new Map<string, number>();
+  private stopped = false;
+  private restartsTotal = 0;
 
   constructor(
     private readonly nc: NatsConnection,
@@ -26,6 +30,7 @@ export class MetricResolver {
   ) {}
 
   start(subs: MetricSubscription[]): void {
+    this.stopped = false;
     for (const sub of subs) {
       this.upsertSubscription(sub);
     }
@@ -33,6 +38,10 @@ export class MetricResolver {
       { subjects: this.subscriptions.size, properties: subs.length },
       "livestore metric resolver started",
     );
+  }
+
+  stats(): { restartsTotal: number } {
+    return { restartsTotal: this.restartsTotal };
   }
 
   upsertSubscription(sub: MetricSubscription): void {
@@ -45,9 +54,7 @@ export class MetricResolver {
     this.propertySubjects.set(sub.propertyId, sub.subject);
 
     if (!this.subscriptions.has(sub.subject)) {
-      const subscription = this.nc.subscribe(sub.subject);
-      this.subscriptions.set(sub.subject, subscription);
-      void this.consume(subscription, sub.subject, propertyIds);
+      this.openSubject(sub.subject);
     }
   }
 
@@ -62,11 +69,16 @@ export class MetricResolver {
     if (propertyIds.size > 0) return;
 
     this.bySubject.delete(subject);
+    this.closeSubjectTimers(subject);
     this.subscriptions.get(subject)?.unsubscribe();
     this.subscriptions.delete(subject);
   }
 
   stop(): void {
+    this.stopped = true;
+    for (const timer of this.restartTimers.values()) clearTimeout(timer);
+    this.restartTimers.clear();
+    this.restartAttempts.clear();
     for (const subscription of this.subscriptions.values()) subscription.unsubscribe();
     this.subscriptions.clear();
     this.bySubject.clear();
@@ -77,14 +89,32 @@ export class MetricResolver {
     return this.subscriptions.size;
   }
 
-  private async consume(subscription: Subscription, subject: string, propertyIds: Set<string>): Promise<void> {
+  private openSubject(subject: string): void {
+    const subscription = this.nc.subscribe(subject);
+    this.subscriptions.set(subject, subscription);
+    void this.consume(subscription, subject);
+  }
+
+  private closeSubjectTimers(subject: string): void {
+    const timer = this.restartTimers.get(subject);
+    if (timer) clearTimeout(timer);
+    this.restartTimers.delete(subject);
+    this.restartAttempts.delete(subject);
+  }
+
+  private async consume(subscription: Subscription, subject: string): Promise<void> {
     try {
       for await (const message of subscription) {
+        this.restartAttempts.delete(subject); // healthy delivery resets the backoff
         const envelope = this.parse(message.data);
         if (!envelope) {
           this.logger.warn({ subject }, "livestore metric resolver ignored a non-envelope payload");
           continue;
         }
+        // Read the live binding each message: a property may have been added to
+        // or removed from this subject since the subscription opened.
+        const propertyIds = this.bySubject.get(subject);
+        if (!propertyIds) continue;
         for (const propertyId of propertyIds) {
           try {
             await this.sink.commitValue(propertyId, envelope, "metric");
@@ -96,6 +126,34 @@ export class MetricResolver {
     } catch (err) {
       this.logger.error({ err, subject }, "livestore metric resolver subscription failed");
     }
+    // Iterator ended without an unsubscribe: re-subscribe with backoff as long
+    // as the subject still has bound properties (core subs are not durable, so
+    // a dropped subscription otherwise freezes those metric properties).
+    if (!this.stopped && this.subscriptions.get(subject) === subscription && (this.bySubject.get(subject)?.size ?? 0) > 0) {
+      this.subscriptions.delete(subject);
+      this.scheduleRestart(subject);
+    }
+  }
+
+  private scheduleRestart(subject: string): void {
+    if (this.stopped || this.restartTimers.has(subject)) return;
+    const attempt = (this.restartAttempts.get(subject) ?? 0) + 1;
+    this.restartAttempts.set(subject, attempt);
+    this.restartsTotal += 1;
+    const delayMs = Math.min(30_000, 1_000 * 2 ** Math.min(attempt - 1, 5));
+    this.logger.warn({ subject, delayMs, attempt }, "livestore metric resolver re-subscribing");
+    const timer = setTimeout(() => {
+      this.restartTimers.delete(subject);
+      // The subject may have been fully unsubscribed while we waited.
+      if (this.stopped || (this.bySubject.get(subject)?.size ?? 0) === 0) return;
+      try {
+        this.openSubject(subject);
+      } catch (err) {
+        this.logger.error({ err, subject }, "livestore metric resolver re-subscribe failed");
+        this.scheduleRestart(subject);
+      }
+    }, delayMs);
+    this.restartTimers.set(subject, timer);
   }
 
   // Accept a ValueEnvelope JSON, or a bare number for convenience.

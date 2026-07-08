@@ -124,6 +124,17 @@ export const router = {
       delete: graph.hookDelete,
       eventCatalog: graph.hookEventCatalog,
     },
+    introspect: {
+      manifest: graph.introspectManifest,
+      typeSchema: graph.introspectTypeSchema,
+      version: graph.introspectVersion,
+      snapshot: graph.introspectSnapshot,
+      values: graph.introspectValues,
+      explain: graph.introspectExplain,
+      conformance: graph.introspectConformance,
+      diagnostics: graph.introspectDiagnostics,
+      plan: graph.introspectPlan,
+    },
   },
   metrics: {
     stream: metrics.stream,

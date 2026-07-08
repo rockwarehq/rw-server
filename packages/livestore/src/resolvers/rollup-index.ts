@@ -12,8 +12,11 @@ import {
 interface ChildRow {
   id: string;
 }
-interface UniqueDelegate {
-  findUnique(args: { where: { id: string }; select: Record<string, unknown> }): Promise<Record<string, unknown> | null>;
+interface ManyDelegate {
+  findMany(args: {
+    where: { id: { in: string[] } };
+    select: Record<string, unknown>;
+  }): Promise<Array<Record<string, unknown>>>;
 }
 
 function delegateName(entityType: string): string {
@@ -44,30 +47,54 @@ export async function buildRollupEdges(
   const relationTargets = systemRelationTargets();
   const edges: GraphEdgeRuntime[] = [];
 
-  for (const rollup of kernel.listProperties()) {
+  // First pass: keep rollups whose relation validates against the catalog, and
+  // group their parent ids by (model, relation) so each group is one query.
+  const validRollups = kernel.listProperties().filter((rollup) => {
     const resolver = rollup.resolver;
-    if (!isRollupResolverConfig(resolver)) continue;
-
-    const parent = resolver.parent;
-    if (!parent) continue; // rollup has no explicit source scope — nothing to traverse
-
-    // Validate the relation against the catalog (§18.6): it must point to childKind.
-    const target = relationTargets.get(parent.model)?.get(resolver.relation);
+    if (!isRollupResolverConfig(resolver) || !resolver.parent) return false;
+    const target = relationTargets.get(resolver.parent.model)?.get(resolver.relation);
     if (target !== resolver.childKind) {
       logger.warn(
         { propertyId: rollup.id, relation: resolver.relation, expected: resolver.childKind, got: target ?? null },
         "livestore rollup relation does not resolve to childKind in catalog; skipping",
       );
-      continue;
+      return false;
     }
+    return true;
+  });
 
-    const delegate = (prisma as unknown as Record<string, UniqueDelegate | undefined>)[delegateName(parent.model)];
+  // (model|relation) -> set of parent ids. Batching collapses one findUnique per
+  // rollup property into one findMany per distinct (model, relation) pair —
+  // this runs on boot, on entity-event rebuilds, and in the 30s reconcile.
+  const parentIdsByGroup = new Map<string, { model: string; relation: string; ids: Set<string> }>();
+  for (const rollup of validRollups) {
+    const resolver = rollup.resolver;
+    if (!isRollupResolverConfig(resolver) || !resolver.parent) continue; // narrowing; already filtered
+    const key = `${resolver.parent.model}|${resolver.relation}`;
+    const group = parentIdsByGroup.get(key) ?? { model: resolver.parent.model, relation: resolver.relation, ids: new Set<string>() };
+    group.ids.add(resolver.parent.id);
+    parentIdsByGroup.set(key, group);
+  }
+
+  // (model|relation|parentId) -> child rows.
+  const childrenByParent = new Map<string, ChildRow[]>();
+  for (const group of parentIdsByGroup.values()) {
+    const delegate = (prisma as unknown as Record<string, ManyDelegate | undefined>)[delegateName(group.model)];
     if (!delegate) continue;
-    const row = await delegate.findUnique({
-      where: { id: parent.id },
-      select: { [resolver.relation]: { select: { id: true } } },
+    const rows = await delegate.findMany({
+      where: { id: { in: [...group.ids] } },
+      select: { id: true, [group.relation]: { select: { id: true } } },
     });
-    const children = (row?.[resolver.relation] as ChildRow[] | undefined) ?? [];
+    for (const row of rows) {
+      const parentId = row.id as string;
+      childrenByParent.set(`${group.model}|${group.relation}|${parentId}`, (row[group.relation] as ChildRow[] | undefined) ?? []);
+    }
+  }
+
+  for (const rollup of validRollups) {
+    const resolver = rollup.resolver;
+    if (!isRollupResolverConfig(resolver) || !resolver.parent) continue;
+    const children = childrenByParent.get(`${resolver.parent.model}|${resolver.relation}|${resolver.parent.id}`) ?? [];
 
     for (const child of children) {
       const childNodeId = nodeByEntity.get(`${resolver.childKind}|${child.id}`);

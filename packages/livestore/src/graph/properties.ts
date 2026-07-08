@@ -9,6 +9,9 @@ import { isRecordResolver, validateAcyclicStaticEdges, validateResolverConfig } 
 import { activeHookIdsForProperties } from "./hooks.js";
 
 export interface CreateGraphPropertyInput {
+  // Optional client-generated UUID so a planned batch can reference this
+  // property (expressions, window sources, hook conditions) before it exists.
+  id?: string;
   nodeId: string;
   name: string;
   typeFieldKey?: string | null;
@@ -69,6 +72,19 @@ export async function create(input: CreateGraphPropertyInput, scope: GraphScope)
   if (existing && !existing.isDeleted)
     return errorResult("GRAPH_PROPERTY_NAME_EXISTS", "Graph property name already exists on this node");
 
+  if (input.id) {
+    // A soft-deleted property owns this node/name slot under a different id;
+    // reviving it would silently break references to the requested id.
+    if (existing && existing.id !== input.id)
+      return errorResult(
+        "GRAPH_PROPERTY_ID_CONFLICT",
+        "Graph property name is bound to a previously deleted property with a different id",
+      );
+    const idConflict = await prisma.graphProperty.findUnique({ where: { id: input.id }, select: { id: true } });
+    if (idConflict && idConflict.id !== existing?.id)
+      return errorResult("GRAPH_PROPERTY_ID_CONFLICT", "Graph property id is already in use");
+  }
+
   const resolverResult = await buildResolver({
     resolverType: input.resolverType,
     resolver: input.resolver,
@@ -76,7 +92,7 @@ export async function create(input: CreateGraphPropertyInput, scope: GraphScope)
   });
   if ("error" in resolverResult) return resolverResult;
 
-  const propertyId = existing?.id ?? randomUUID();
+  const propertyId = existing?.id ?? input.id ?? randomUUID();
   const cycleResult = await validateAcyclicStaticEdges({
     propertyId,
     dependencyIds: resolverResult.data.dependencyIds,

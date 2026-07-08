@@ -33,6 +33,25 @@ describe("validateResolverConfig expr", () => {
     });
     expect(result).toMatchObject({ data: { dependencyIds: [id] } });
   });
+
+  it("rejects a disallowed function at save time (sandbox whitelist)", async () => {
+    const result = await validateResolverConfig({
+      resolverType: "expr",
+      resolver: { type: "expr", expression: "sin(1)" },
+      scope,
+    });
+    expect(result).toMatchObject({ code: "INVALID_RESOLVER" });
+    expect((result as { error: string }).error).toContain("validation failed");
+  });
+
+  it("rejects an over-length expression at save time", async () => {
+    const result = await validateResolverConfig({
+      resolverType: "expr",
+      resolver: { type: "expr", expression: `1 + ${"1 + ".repeat(600)}1` },
+      scope,
+    });
+    expect(result).toMatchObject({ code: "INVALID_RESOLVER" });
+  });
 });
 
 describe("validateResolverConfig entity path", () => {

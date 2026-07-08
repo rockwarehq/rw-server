@@ -25,19 +25,6 @@ const APP_TOKEN_A = "rw_app_stub_site_a";
 const NODE_A = { id: "node-a", name: "A", siteId: SITE_A, typeRef: null, typeContext: {}, properties: [] };
 const NODE_B = { id: "node-b", name: "B", siteId: SITE_B, typeRef: null, typeContext: {}, properties: [] };
 
-// KV watcher stub: yields nothing, stays pending until stop() — the route only
-// needs the initial value (from getCvgValue) for these tests.
-function makeWatcher() {
-  let resolveStop!: () => void;
-  const stopped = new Promise<void>((resolve) => (resolveStop = resolve));
-  return {
-    stop: () => resolveStop(),
-    async *[Symbol.asyncIterator]() {
-      await stopped;
-    },
-  };
-}
-
 // Property tenancy: ids prefixed "x-" belong to SITE_B, everything else to
 // SITE_A (unknown ids are indistinguishable from cross-site by design).
 function makeRuntimeStub(): GraphRuntime {
@@ -50,7 +37,7 @@ function makeRuntimeStub(): GraphRuntime {
     getPropertySiteId: (id: string) => (id.startsWith("x-") ? SITE_B : SITE_A),
     getCvgValue: async () => ENVELOPE,
     getCurrentOrStale: () => ENVELOPE,
-    watchCvgValue: async () => makeWatcher(),
+    subscribeToProperty: () => () => {},
   };
   return stub as unknown as GraphRuntime;
 }
@@ -349,50 +336,14 @@ describe("/graph/live", () => {
   });
 });
 
-// Watcher whose lifecycle the test controls: stop() only records the call (the
-// iterator keeps running until end()), and push() delivers KV entries.
-interface TestWatcher {
-  stopCalled: boolean;
-  push: (envelope: unknown) => void;
-  end: () => void;
-  stop: () => void;
-  [Symbol.asyncIterator]: () => AsyncIterator<{ string(): string }>;
-}
-
-function makeTestWatcher(): TestWatcher {
-  const queue: Array<{ string(): string } | null> = [];
-  let wake: (() => void) | null = null;
-  const notify = () => {
-    wake?.();
-    wake = null;
-  };
-  const watcher: TestWatcher = {
-    stopCalled: false,
-    push(envelope) {
-      queue.push({ string: () => JSON.stringify(envelope) });
-      notify();
-    },
-    end() {
-      queue.push(null);
-      notify();
-    },
-    stop() {
-      watcher.stopCalled = true;
-    },
-    async *[Symbol.asyncIterator]() {
-      for (;;) {
-        while (queue.length === 0) await new Promise<void>((resolve) => (wake = resolve));
-        const item = queue.shift();
-        if (item === null || item === undefined) return;
-        yield item;
-      }
-    },
-  };
-  return watcher;
-}
-
+// In-process fan-out stub: records each property's active listeners so a test
+// can assert listener counts and push values the way commitValue would.
 function makeInstrumentedRuntime(overrides?: { getCvgValue?: () => Promise<unknown> }) {
-  const createdWatchers = new Map<string, TestWatcher[]>();
+  const listeners = new Map<string, Set<(env: unknown) => void>>();
+  const push = (propertyId: string, envelope: unknown) => {
+    for (const listener of listeners.get(propertyId) ?? []) listener(envelope);
+  };
+  const listenerCount = (propertyId: string) => listeners.get(propertyId)?.size ?? 0;
   const stub = {
     isReady: () => true,
     counts: () => ({}),
@@ -402,25 +353,29 @@ function makeInstrumentedRuntime(overrides?: { getCvgValue?: () => Promise<unkno
     getPropertySiteId: (id: string) => (id.startsWith("x-") ? SITE_B : SITE_A),
     getCvgValue: overrides?.getCvgValue ?? (async () => ENVELOPE),
     getCurrentOrStale: () => ENVELOPE,
-    watchCvgValue: async (propertyId: string) => {
-      const watcher = makeTestWatcher();
-      const list = createdWatchers.get(propertyId) ?? [];
-      list.push(watcher);
-      createdWatchers.set(propertyId, list);
-      return watcher;
+    subscribeToProperty: (propertyId: string, listener: (env: unknown) => void) => {
+      const set = listeners.get(propertyId) ?? new Set();
+      set.add(listener);
+      listeners.set(propertyId, set);
+      return () => {
+        const s = listeners.get(propertyId);
+        if (!s) return;
+        s.delete(listener);
+        if (s.size === 0) listeners.delete(propertyId);
+      };
     },
   };
-  return { runtime: stub as unknown as GraphRuntime, createdWatchers };
+  return { runtime: stub as unknown as GraphRuntime, push, listenerCount };
 }
 
-describe("/graph/live watcher lifecycle", () => {
-  it("concurrent subscribes for the same property create exactly one watcher", async () => {
+describe("/graph/live fan-out lifecycle", () => {
+  it("concurrent subscribes for the same property register exactly one listener", async () => {
     // Hold the first subscribe open across its initial read so a second
     // subscribe message arrives while it is still in flight.
     let releaseRead: () => void = () => {};
     const readGate = new Promise<void>((resolve) => (releaseRead = resolve));
     let firstRead = true;
-    const { runtime, createdWatchers } = makeInstrumentedRuntime({
+    const { runtime, listenerCount } = makeInstrumentedRuntime({
       getCvgValue: async () => {
         if (firstRead) {
           firstRead = false;
@@ -438,39 +393,45 @@ describe("/graph/live watcher lifecycle", () => {
     releaseRead();
     await waitFor(() => messages.some((m) => m.op === "value"));
 
-    expect(createdWatchers.get("p1") ?? []).toHaveLength(1);
+    expect(listenerCount("p1")).toBe(1);
   });
 
-  it("a winding-down watcher does not untrack its replacement (unsubscribe + resubscribe)", async () => {
-    const { runtime, createdWatchers } = makeInstrumentedRuntime();
+  it("unsubscribe then resubscribe leaves exactly one active listener and keeps delivering", async () => {
+    const { runtime, push, listenerCount } = makeInstrumentedRuntime();
     const { wsUrl } = await startServer(undefined, makeAuthStub(), runtime);
     const { ws, messages } = await openAuthedSocket(wsUrl);
 
     ws.send(JSON.stringify({ op: "subscribe", propertyIds: ["p1"] }));
-    await waitFor(() => (createdWatchers.get("p1") ?? []).length === 1);
-    const first = createdWatchers.get("p1")![0]!;
+    await waitFor(() => listenerCount("p1") === 1);
 
     ws.send(JSON.stringify({ op: "unsubscribe", propertyIds: ["p1"] }));
-    await waitFor(() => first.stopCalled);
+    await waitFor(() => listenerCount("p1") === 0);
 
     ws.send(JSON.stringify({ op: "subscribe", propertyIds: ["p1"] }));
-    await waitFor(() => (createdWatchers.get("p1") ?? []).length === 2);
-    const second = createdWatchers.get("p1")![1]!;
+    await waitFor(() => listenerCount("p1") === 1);
 
-    // The first watcher's loop only now winds down — after the replacement
-    // was registered. It must not delete the replacement's tracking entry.
-    first.end();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    ws.close();
-    await waitFor(() => second.stopCalled);
-    expect(messages.filter((m) => m.op === "value")).toHaveLength(2);
+    push("p1", { value: 5, quality: "good", timestamp: 100 });
+    await waitFor(() => messages.some((m) => (m.envelope as { timestamp?: number })?.timestamp === 100));
+    expect(listenerCount("p1")).toBe(1);
   });
 
-  it("drops watcher deliveries older than the initial value", async () => {
+  it("closing the connection unsubscribes all listeners", async () => {
+    const { runtime, listenerCount } = makeInstrumentedRuntime();
+    const { wsUrl } = await startServer(undefined, makeAuthStub(), runtime);
+    const { ws } = await openAuthedSocket(wsUrl);
+
+    ws.send(JSON.stringify({ op: "subscribe", propertyIds: ["p1", "p2"] }));
+    await waitFor(() => listenerCount("p1") === 1 && listenerCount("p2") === 1);
+
+    ws.close();
+    await waitFor(() => listenerCount("p1") === 0 && listenerCount("p2") === 0);
+  });
+
+  it("drops fan-out deliveries older than the initial value", async () => {
     const newer = { value: 10, quality: "good", timestamp: 100 };
-    const { runtime, createdWatchers } = makeInstrumentedRuntime({
-      // Initial read serves a queued write-behind value newer than KV.
+    const { runtime, push } = makeInstrumentedRuntime({
+      // Initial read serves a queued write-behind value newer than a stale
+      // in-flight commit.
       getCvgValue: async () => newer,
     });
     const { wsUrl } = await startServer(undefined, makeAuthStub(), runtime);
@@ -478,14 +439,32 @@ describe("/graph/live watcher lifecycle", () => {
 
     ws.send(JSON.stringify({ op: "subscribe", propertyIds: ["p1"] }));
     await waitFor(() => messages.some((m) => m.op === "value"));
-    const watcher = createdWatchers.get("p1")![0]!;
 
-    // KV watch replays the older stored value, then a genuinely new one lands.
-    watcher.push({ value: 9, quality: "good", timestamp: 50 });
-    watcher.push({ value: 11, quality: "good", timestamp: 150 });
+    push("p1", { value: 9, quality: "good", timestamp: 50 }); // older — dropped
+    push("p1", { value: 11, quality: "good", timestamp: 150 }); // newer — sent
     await waitFor(() => messages.some((m) => (m.envelope as { timestamp?: number })?.timestamp === 150));
 
-    const timestamps = messages.filter((m) => m.op === "value").map((m) => (m.envelope as { timestamp: number }).timestamp);
+    const timestamps = messages
+      .filter((m) => m.op === "value")
+      .map((m) => (m.envelope as { timestamp: number }).timestamp);
     expect(timestamps).toEqual([100, 150]);
+  });
+
+  it("one commit fans out to multiple connections subscribed to the same property", async () => {
+    const { runtime, push } = makeInstrumentedRuntime();
+    const { wsUrl } = await startServer(undefined, makeAuthStub(), runtime);
+    const a = await openAuthedSocket(wsUrl);
+    const b = await openAuthedSocket(wsUrl);
+
+    a.ws.send(JSON.stringify({ op: "subscribe", propertyIds: ["p1"] }));
+    b.ws.send(JSON.stringify({ op: "subscribe", propertyIds: ["p1"] }));
+    await waitFor(() => a.messages.some((m) => m.op === "value") && b.messages.some((m) => m.op === "value"));
+
+    push("p1", { value: 7, quality: "good", timestamp: 200 });
+    await waitFor(
+      () =>
+        a.messages.some((m) => (m.envelope as { timestamp?: number })?.timestamp === 200) &&
+        b.messages.some((m) => (m.envelope as { timestamp?: number })?.timestamp === 200),
+    );
   });
 });

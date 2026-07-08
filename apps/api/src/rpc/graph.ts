@@ -1,10 +1,12 @@
 import { ORPCError } from "@orpc/server";
 import { GRAPH_TYPE_INPUT_VALUE_TYPES, GRAPH_TYPE_VALUE_TYPES } from "@rw/livestore/catalog/graph-types";
+import { buildLivestoreCapabilityManifest } from "@rw/livestore/catalog/manifest";
 import { z } from "zod";
 import * as graph from "@rw/livestore/graph/index";
 import { hasPermission, type Permission } from "@rw/auth/iam/index";
 import type { GraphScope } from "@rw/livestore/graph/types";
 import { Principal } from "../auth/index.js";
+import { readGraphValues } from "../graph-values.js";
 
 import { authRequired, graphReadRequired } from "./middleware.js";
 
@@ -41,6 +43,9 @@ const nodeUpdateInputSchema = z.object({
 });
 
 const propertyCreateInputSchema = z.object({
+  // Client-generated UUID so planned batches can pre-reference the property
+  // (see graph.introspect.plan); server-assigned when omitted.
+  id: z.uuid().optional(),
   nodeId: z.uuid(),
   name: z.string().min(1),
   typeFieldKey: z.string().min(1).nullable().optional(),
@@ -496,3 +501,153 @@ export const hookDelete = authRequired.input(idInputSchema).handler(async ({ inp
 });
 
 export const hookEventCatalog = authRequired.handler(async () => graph.hooks.eventCatalog());
+
+// --- Introspection: read-only views for programmatic builders ---
+
+// Static per deploy: resolver config schemas, hook operators, event catalog,
+// limits. No tenant data, so no site assertion — any graph-read principal.
+export const introspectManifest = graphReadRequired.handler(async () => buildLivestoreCapabilityManifest());
+
+const typeSchemaInputSchema = z.object({ siteId: z.uuid(), typeRef: z.string().min(1) });
+
+export const introspectTypeSchema = graphReadRequired
+  .input(typeSchemaInputSchema)
+  .handler(async ({ input, context }) => {
+    const scope = await assertSiteReadAccess(context, input.siteId);
+    return unwrap(await graph.introspect.typeNodeSchema(input.typeRef, scope));
+  });
+
+// Cheap freshness poll: builders compare asOf against a cached snapshot to
+// decide whether to refetch.
+export const introspectVersion = graphReadRequired.input(siteInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertSiteReadAccess(context, input.siteId);
+  return graph.introspect.graphVersion(scope);
+});
+
+export const introspectSnapshot = graphReadRequired.input(siteInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertSiteReadAccess(context, input.siteId);
+  return unwrap(await graph.introspect.snapshot(scope));
+});
+
+const introspectValuesInputSchema = z.object({
+  siteId: z.uuid(),
+  propertyIds: z.array(z.uuid()).min(1).max(200),
+});
+
+export const introspectValues = graphReadRequired
+  .input(introspectValuesInputSchema)
+  .handler(async ({ input, context }) => {
+    const scope = await assertSiteReadAccess(context, input.siteId);
+    const properties = await graph.introspect.verifiedSiteProperties(input.propertyIds, scope);
+    const { available, envelopes } = await readGraphValues(properties.map((p) => p.id));
+    const found = new Set(properties.map((p) => p.id));
+    return {
+      // false when the value store is unreachable — envelopes are null, not stale.
+      valuesAvailable: available,
+      values: properties.map((property) => ({
+        ...property,
+        envelope: envelopes.get(property.id) ?? null,
+      })),
+      unknownPropertyIds: [...new Set(input.propertyIds)].filter((id) => !found.has(id)),
+    };
+  });
+
+export const introspectExplain = graphReadRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertPropertyReadAccess(context, input.id);
+  const explanation = unwrap(await graph.introspect.explain(input.id, scope));
+  const { available, envelopes } = await readGraphValues([input.id]);
+  return {
+    ...explanation,
+    current: { valueAvailable: available, envelope: envelopes.get(input.id) ?? null },
+  };
+});
+
+export const introspectConformance = graphReadRequired.input(siteInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertSiteReadAccess(context, input.siteId);
+  return unwrap(await graph.introspect.conformance(scope));
+});
+
+const planNodeInputSchema = z.object({
+  ref: z.string().min(1),
+  name: z.string().min(1),
+  typeRef: z.string().min(1).nullable().optional(),
+  typeContext: jsonObjectSchema.optional(),
+  materializeTypeFields: z.boolean().optional(),
+});
+
+const planPropertyInputSchema = z.object({
+  id: z.uuid().optional(),
+  nodeId: z.uuid().optional(),
+  nodeRef: z.string().min(1).optional(),
+  name: z.string().min(1),
+  resolverType: z.string().min(1),
+  resolver: jsonObjectSchema,
+  sampleRateMs: z.number().int().positive().nullable().optional(),
+});
+
+const planHookInputSchema = z.object({
+  name: z.string().min(1),
+  enabled: z.boolean().optional(),
+  condition: jsonObjectSchema,
+  eventNamespace: z.string().min(1),
+  eventName: z.string().min(1),
+  eventVersion: z.string().min(1).optional(),
+  eventPayload: jsonObjectSchema.optional(),
+  eventContext: jsonObjectSchema.optional(),
+});
+
+const planInputSchema = z.object({
+  siteId: z.uuid(),
+  nodes: z.array(planNodeInputSchema).max(50).optional(),
+  properties: z.array(planPropertyInputSchema).max(200).optional(),
+  hooks: z.array(planHookInputSchema).max(50).optional(),
+});
+
+// Dry-run a whole changeset: every issue reported at once, nothing written.
+// Requires graph:write — a plan is a rehearsal of writes and can probe names/ids.
+export const introspectPlan = authRequired.input(planInputSchema).handler(async ({ input, context }) => {
+  const { siteId, ...changeset } = input;
+  const scope = await assertSitePermission(context, "graph:write", siteId);
+  return unwrap(await graph.planner.plan(changeset, scope));
+});
+
+const introspectDiagnosticsInputSchema = z.object({
+  siteId: z.uuid(),
+  // Bounds the KV scan; sites larger than this report scannedProperties < totalProperties.
+  scanLimit: z.number().int().min(1).max(5000).default(2000),
+});
+
+// Properties whose current value is degraded (quality != good), with the
+// error context the engine attached — the repair entry point for builders.
+export const introspectDiagnostics = graphReadRequired
+  .input(introspectDiagnosticsInputSchema)
+  .handler(async ({ input, context }) => {
+    const scope = await assertSiteReadAccess(context, input.siteId);
+    const snapshot = unwrap(await graph.introspect.snapshot(scope));
+    const scanned = snapshot.properties.slice(0, input.scanLimit);
+    const { available, envelopes } = await readGraphValues(scanned.map((p) => p.id));
+    const nodeNames = new Map(snapshot.nodes.map((node) => [node.id, node.name]));
+    return {
+      graphVersion: snapshot.graphVersion,
+      valuesAvailable: available,
+      totalProperties: snapshot.properties.length,
+      scannedProperties: scanned.length,
+      unhealthy: available
+        ? scanned.flatMap((property) => {
+            const envelope = envelopes.get(property.id);
+            if (envelope && envelope.quality === "good") return [];
+            return [
+              {
+                propertyId: property.id,
+                name: property.name,
+                nodeId: property.nodeId,
+                nodeName: nodeNames.get(property.nodeId) ?? null,
+                resolverType: property.resolverType,
+                // null envelope: never evaluated (or value store missed it).
+                envelope: envelope ?? null,
+              },
+            ];
+          })
+        : [],
+    };
+  });
