@@ -272,7 +272,7 @@ export async function verifiedSiteProperties(
   });
 }
 
-interface ExplainNeighbor {
+export interface ExplainNeighbor {
   propertyId: string;
   name: string;
   nodeId: string;
