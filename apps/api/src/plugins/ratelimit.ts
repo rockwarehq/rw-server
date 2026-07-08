@@ -54,3 +54,16 @@ export const sensitiveRateLimit = {
     timeWindow: "1 minute",
   },
 };
+
+/**
+ * Rate limit for token-refresh endpoints. Looser than the sensitive tier:
+ * refresh tokens are opaque, DB-backed, and rotated on use, so online brute
+ * force is infeasible — but a factory floor of displays plus browsers behind
+ * one NAT IP legitimately refreshes far more often than logins occur.
+ */
+export const refreshRateLimit = {
+  rateLimit: {
+    max: securityConfig.rateLimitRefresh,
+    timeWindow: "1 minute",
+  },
+};

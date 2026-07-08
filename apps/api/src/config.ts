@@ -121,6 +121,7 @@ export const securityConfig = {
 
   // Rate limiting (requests per minute)
   rateLimitSensitive: 5, // For login, invite, reset endpoints
+  rateLimitRefresh: 30, // For token refresh (rotated, DB-backed — see plugins/ratelimit.ts)
   rateLimitDefault: 100, // For general API endpoints
 };
 

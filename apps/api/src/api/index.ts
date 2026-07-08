@@ -18,6 +18,10 @@ export default async function api(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "GET",
     url: "/health",
+    // Liveness probe (fly healthchecks hit this): static on purpose — a
+    // dependency blip must never make the orchestrator kill machines.
+    // Exempt from rate limiting so probes never consume a caller's budget.
+    config: { rateLimit: false },
     schema: {
       tags: ["Health"],
       response: {
