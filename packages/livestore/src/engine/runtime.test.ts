@@ -5,6 +5,7 @@ import type { NatsConnection } from "@nats-io/nats-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GraphRuntime } from "./runtime.js";
+import type { LivestoreLogger } from "../types/index.js";
 
 const logger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
 
@@ -130,6 +131,7 @@ function makeRuntime(overrides?: {
   prisma?: ReturnType<typeof fakePrisma>;
   kv?: ReturnType<typeof fakeKv>;
   calls?: string[];
+  logger?: LivestoreLogger;
 }) {
   const calls = overrides?.calls ?? [];
   const prisma = overrides?.prisma ?? fakePrisma(calls);
@@ -141,7 +143,7 @@ function makeRuntime(overrides?: {
     jetstreamManager: fakeJsm(calls),
     kv,
     aggKv: fakeKv(),
-    logger,
+    logger: overrides?.logger ?? logger,
   });
   return { runtime, prisma, kv, calls };
 }
@@ -238,6 +240,73 @@ describe("write-behind reads", () => {
     await vi.advanceTimersByTimeAsync(0);
     await stopPromise;
     expect(kv.store.get("prop.p1")).toContain('"value":1');
+  });
+});
+
+describe("rollup membership on entity events", () => {
+  it("an entity event for a rollup participant triggers one debounced rebuild; unrelated kinds do not", async () => {
+    const infoMessages: string[] = [];
+    const capturingLogger = {
+      info: (_obj: Record<string, unknown>, msg?: string) => {
+        if (msg) infoMessages.push(msg);
+      },
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
+    };
+    const calls: string[] = [];
+    const prisma = fakePrisma(calls);
+    prisma.graphProperty.findFirst = async () =>
+      ({
+        ...propertyRow("r1", "n1"),
+        resolverType: "rollup",
+        resolver: {
+          type: "rollup",
+          childKind: "Station",
+          relation: "stations",
+          childProperty: "count",
+          aggregation: "sum",
+          parent: { model: "Workcenter", id: "w1" },
+        },
+      }) as never;
+    const { runtime } = makeRuntime({ prisma, calls, logger: capturingLogger });
+    await runtime.start();
+
+    const enqueue = runtime.enqueueDefinitionChange({
+      id: "evt-1",
+      entity: "property",
+      action: "updated",
+      entityId: "r1",
+      nodeId: "n1",
+      siteId: "site-1",
+      emittedAt: new Date().toISOString(),
+    });
+    await vi.advanceTimersByTimeAsync(150);
+    await enqueue;
+
+    const rebuilds = () => infoMessages.filter((msg) => msg === "livestore rollup membership resolved").length;
+    const baseline = rebuilds();
+
+    const entityEvent = {
+      id: "ent-1",
+      action: "updated" as const,
+      entityKey: "Station",
+      entityId: "s1",
+      siteId: "site-1",
+      workspaceId: "ws-1",
+      emittedAt: new Date().toISOString(),
+    };
+    await runtime.handleEntityEvent(entityEvent);
+    await runtime.handleEntityEvent({ ...entityEvent, id: "ent-2", entityId: "s2" });
+    expect(rebuilds()).toBe(baseline); // debounced, not yet run
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(rebuilds()).toBe(baseline + 1); // burst coalesced into one rebuild
+
+    await runtime.handleEntityEvent({ ...entityEvent, id: "ent-3", entityKey: "Job" });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(rebuilds()).toBe(baseline + 1); // unrelated kind: no rebuild
+
+    await runtime.stop();
   });
 });
 

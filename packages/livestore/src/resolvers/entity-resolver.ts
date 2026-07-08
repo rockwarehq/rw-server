@@ -25,7 +25,10 @@ const entityRefKey = (entityKey: string, entityId: string): string => `${entityK
 function pathAffectedByChange(path: string, changedFields: string[] | undefined): boolean {
   if (!changedFields || changedFields.length === 0) return true;
   if (path === "*" || path.includes(".")) return true;
-  return changedFields.includes(path);
+  // Events carry DB column names while entity reads expose relation aliases
+  // (workcenter ← workcenterId, currentJob ← currentJobId, site ← siteId):
+  // match the aliased column too, or aliased paths never re-resolve.
+  return changedFields.includes(path) || changedFields.includes(`${path}Id`);
 }
 
 export class EntityResolver {

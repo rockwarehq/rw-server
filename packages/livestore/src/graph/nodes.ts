@@ -708,6 +708,51 @@ async function prepareTypeFields(args: {
   return { data: prepared };
 }
 
+// Persist materialized type fields: upsert all properties before edges (an
+// edge may point at an in-batch sibling), then replace each field's incoming
+// static edges. Shared by create() and update() so re-materialization on a
+// typeContext change behaves exactly like the original materialization.
+async function applyPreparedTypeFields(
+  tx: Prisma.TransactionClient,
+  nodeId: string,
+  fields: PreparedTypeField[],
+): Promise<void> {
+  for (const field of fields) {
+    await tx.graphProperty.upsert({
+      where: { nodeId_name: { nodeId, name: field.name } },
+      create: {
+        id: field.id,
+        nodeId,
+        name: field.name,
+        typeFieldKey: field.typeFieldKey,
+        resolverType: field.resolverType,
+        resolver: field.resolver as Prisma.InputJsonValue,
+        sampleRateMs: field.sampleRateMs,
+      },
+      update: {
+        typeFieldKey: field.typeFieldKey,
+        resolverType: field.resolverType,
+        resolver: field.resolver as Prisma.InputJsonValue,
+        sampleRateMs: field.sampleRateMs,
+        isDeleted: false,
+      },
+    });
+  }
+
+  for (const field of fields) {
+    await tx.graphEdge.deleteMany({ where: { toPropertyId: field.id } });
+    if (field.dependencyIds.length > 0) {
+      await tx.graphEdge.createMany({
+        data: [...new Set(field.dependencyIds)].map((dependencyId) => ({
+          fromPropertyId: dependencyId,
+          toPropertyId: field.id,
+        })),
+        skipDuplicates: true,
+      });
+    }
+  }
+}
+
 export async function create(input: CreateGraphNodeInput, scope: GraphScope): Promise<ServiceResult<unknown>> {
   const name = input.name.trim();
   if (!name) return errorResult("INVALID_NAME", "Graph node name is required");
@@ -768,41 +813,7 @@ export async function create(input: CreateGraphNodeInput, scope: GraphScope): Pr
           },
         });
 
-    // Upsert all properties before edges: an edge may point at an in-batch sibling.
-    for (const field of fieldsResult.data) {
-      await tx.graphProperty.upsert({
-        where: { nodeId_name: { nodeId: next.id, name: field.name } },
-        create: {
-          id: field.id,
-          nodeId: next.id,
-          name: field.name,
-          typeFieldKey: field.typeFieldKey,
-          resolverType: field.resolverType,
-          resolver: field.resolver as Prisma.InputJsonValue,
-          sampleRateMs: field.sampleRateMs,
-        },
-        update: {
-          typeFieldKey: field.typeFieldKey,
-          resolverType: field.resolverType,
-          resolver: field.resolver as Prisma.InputJsonValue,
-          sampleRateMs: field.sampleRateMs,
-          isDeleted: false,
-        },
-      });
-    }
-
-    for (const field of fieldsResult.data) {
-      await tx.graphEdge.deleteMany({ where: { toPropertyId: field.id } });
-      if (field.dependencyIds.length > 0) {
-        await tx.graphEdge.createMany({
-          data: [...new Set(field.dependencyIds)].map((dependencyId) => ({
-            fromPropertyId: dependencyId,
-            toPropertyId: field.id,
-          })),
-          skipDuplicates: true,
-        });
-      }
-    }
+    await applyPreparedTypeFields(tx, next.id, fieldsResult.data);
 
     return next;
   });
@@ -1021,6 +1032,7 @@ export async function update(
     nextTypeContext = typeContext;
   }
 
+  let preparedFields: PreparedTypeField[] = [];
   if (input.typeRef !== undefined || input.typeContext !== undefined) {
     let resolvedType: ResolvedGraphType | null = null;
     if (nextTypeRef) {
@@ -1034,11 +1046,32 @@ export async function update(
     const facetsResult = await materializeTypeFacets({ type: resolvedType, typeContext: nextTypeContext, scope });
     if ("error" in facetsResult) return facetsResult;
     updateData.facets = facetsResult.data as Prisma.InputJsonValue;
+
+    // Materialized type-field resolvers were expanded from $input.* against
+    // the context at create time; without re-expansion they keep pointing at
+    // the old entities forever.
+    const materializedCount = await prisma.graphProperty.count({
+      where: { nodeId: id, typeFieldKey: { not: null }, isDeleted: false },
+    });
+    if (materializedCount > 0) {
+      const fieldsResult = await prepareTypeFields({
+        nodeId: id,
+        typeRef: nextTypeRef,
+        typeContext: nextTypeContext,
+        scope,
+      });
+      if ("error" in fieldsResult) return fieldsResult;
+      preparedFields = fieldsResult.data;
+    }
   }
 
   if (Object.keys(updateData).length === 0) return { data: current };
 
-  const node = await prisma.graphNode.update({ where: { id }, data: updateData, include: graphNodeInclude });
+  const node = await prisma.$transaction(async (tx) => {
+    const next = await tx.graphNode.update({ where: { id }, data: updateData, include: graphNodeInclude });
+    if (preparedFields.length > 0) await applyPreparedTypeFields(tx, id, preparedFields);
+    return next;
+  });
   publishGraphDefinitionEvent({ entity: "node", action: "updated", entityId: id, siteId: scope.siteId });
   return { data: node };
 }

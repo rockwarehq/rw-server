@@ -135,6 +135,22 @@ describe("EntityResolver", () => {
     expect(commits).toHaveLength(1);
   });
 
+  it("handleEntityEvent re-resolves an aliased path when its DB column changed", async () => {
+    const { resolver, commits, properties } = harness();
+    // Path "currentJob" is served from the raw column currentJobId; events
+    // carry the column name.
+    const property = entityProperty({
+      resolver: { type: "entity", entityType: "imm.station", entityId: "station-7", path: "currentJob" },
+    });
+    properties.set(property.id, property);
+    await resolver.upsertProperty(property);
+    commits.length = 0;
+
+    await resolver.handleEntityEvent(event({ changedFields: ["currentJobId"] }));
+
+    expect(commits).toHaveLength(1);
+  });
+
   it("handleEntityEvent always re-resolves nested paths (changedFields can't be trusted)", async () => {
     const { resolver, commits, properties } = harness();
     const property = entityProperty({

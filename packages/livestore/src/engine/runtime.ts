@@ -2,6 +2,7 @@ import type { PrismaClient } from "@rw/db";
 import type { JetStreamClient, JetStreamManager } from "@nats-io/jetstream";
 import type { KV } from "@nats-io/kv";
 import type { NatsConnection } from "@nats-io/nats-core";
+import type { EntityEvent } from "@rw/runtime/entity-events";
 import type { GraphDefinitionEvent } from "../catalog/definitions.js";
 
 import { AggStateStore } from "../store/agg-store.js";
@@ -47,6 +48,9 @@ export interface GraphRuntimeOptions {
 // Reconcile re-scans this far behind its last cursor (clock skew + commit lag).
 const RECONCILE_OVERLAP_MS = 60_000;
 
+// Coalesce entity-event-driven rollup rebuilds (one DB query per rollup each).
+const ROLLUP_REBUILD_DEBOUNCE_MS = 1_000;
+
 export class GraphRuntime {
   private readonly cvg: CvgStore;
   private readonly kernel: GraphKernel;
@@ -65,6 +69,10 @@ export class GraphRuntime {
   private definitionApplyChain: Promise<void> = Promise.resolve();
   private reconcileInFlight = false;
   private lastDefinitionReconcileAt = new Date();
+  // Entity kinds participating in any rollup (childKind / parent.model);
+  // rebuilt lazily, invalidated on definition changes.
+  private rollupEntityKinds: Set<string> | null = null;
+  private rollupRebuildTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly pendingDefinitionEvents = new Map<string, GraphDefinitionEvent>();
   private definitionWaiters: Array<{ resolve: () => void; reject: (err: unknown) => void }> = [];
   private kvPutFailures = 0;
@@ -92,7 +100,7 @@ export class GraphRuntime {
     this.entityEventConsumer = new EntityEventConsumer(
       options.jetstream,
       options.jetstreamManager,
-      this.entityResolver,
+      this,
       options.logger,
     );
     this.scheduler = new Scheduler(
@@ -219,8 +227,10 @@ export class GraphRuntime {
     this.entityEventConsumer.stop();
     if (this.definitionFlushTimer) clearTimeout(this.definitionFlushTimer);
     if (this.definitionReconcileTimer) clearInterval(this.definitionReconcileTimer);
+    if (this.rollupRebuildTimer) clearTimeout(this.rollupRebuildTimer);
     this.definitionFlushTimer = null;
     this.definitionReconcileTimer = null;
+    this.rollupRebuildTimer = null;
     // Settle enqueueDefinitionChange promises the cleared flush timer would
     // have flushed — a hung waiter leaves its JetStream message un-nak'd.
     const waiters = this.definitionWaiters;
@@ -246,6 +256,47 @@ export class GraphRuntime {
     while (this.putDrainRunning || this.pendingPuts.size > 0) {
       await this.putDrainDone;
     }
+  }
+
+  // EntityChangeSink: resolve entity-bound properties, then rewire rollup
+  // membership when the changed entity kind participates in any rollup — a
+  // relation move (e.g. station → other workcenter) publishes only entity
+  // events, and without a rebuild the parent rollup keeps aggregating its
+  // old children until an unrelated definition change or restart.
+  async handleEntityEvent(event: EntityEvent): Promise<void> {
+    await this.entityResolver.handleEntityEvent(event);
+    if (this.entityKindAffectsRollups(event.entityKey)) this.scheduleRollupRebuild();
+  }
+
+  private entityKindAffectsRollups(entityKey: string): boolean {
+    if (!this.rollupEntityKinds) {
+      const kinds = new Set<string>();
+      for (const property of this.kernel.listProperties()) {
+        const resolver = property.resolver;
+        if (!isRollupResolverConfig(resolver)) continue;
+        kinds.add(resolver.childKind);
+        if (resolver.parent) kinds.add(resolver.parent.model);
+      }
+      this.rollupEntityKinds = kinds;
+    }
+    return this.rollupEntityKinds.has(entityKey);
+  }
+
+  private scheduleRollupRebuild(): void {
+    if (this.rollupRebuildTimer) return;
+    this.rollupRebuildTimer = setTimeout(() => {
+      this.rollupRebuildTimer = null;
+      // Serialize with definition applies: both diff-and-replace rollup edges.
+      const run = async () => {
+        const rollupEdges = await buildRollupEdges(this.options.prisma, this.kernel, this.options.logger);
+        const changedTargets = this.kernel.applyRollupEdges(rollupEdges);
+        if (changedTargets.length > 0) this.scheduler.markDirtyMany(changedTargets);
+      };
+      this.definitionApplyChain = this.definitionApplyChain.then(run, run);
+      this.definitionApplyChain.catch((err) => {
+        this.options.logger.error({ err }, "livestore rollup rebuild failed");
+      });
+    }, ROLLUP_REBUILD_DEBOUNCE_MS);
   }
 
   enqueueDefinitionChange(event: GraphDefinitionEvent): Promise<void> {
@@ -376,6 +427,7 @@ export class GraphRuntime {
       return;
     }
 
+    this.rollupEntityKinds = null; // rollup participants may have changed
     for (const property of removed) await this.unconfigureProperty(property);
     for (const change of touched) {
       await this.configureProperty(change.current);
