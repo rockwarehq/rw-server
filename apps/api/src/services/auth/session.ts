@@ -1,7 +1,7 @@
-import bcrypt from "bcrypt";
 import prisma from "@rw/db";
 import { securityConfig } from "../../config.js";
 import { logEvent } from "@rw/services/audit/index";
+import { comparePassword } from "@rw/auth/password";
 import {
   createAccessToken,
   createRefreshToken,
@@ -11,8 +11,6 @@ import {
   type AccessTokenPayload,
 } from "@rw/auth/tokens";
 import { listAccessibleSites } from "@rw/auth/iam/index";
-
-const SALT_ROUNDS = 10;
 
 export interface LoginResult {
   [x: string]: unknown;
@@ -92,14 +90,6 @@ async function createUserAccessTokenForContext(
     accessToken: createAccessToken(tokenPayload),
     workspaceId: membership.workspaceId,
   };
-}
-
-export async function hashPassword(plainTextPassword: string): Promise<string> {
-  return bcrypt.hash(plainTextPassword, SALT_ROUNDS);
-}
-
-export async function comparePassword(plainTextPassword: string, hashedPassword: string): Promise<boolean> {
-  return bcrypt.compare(plainTextPassword, hashedPassword);
 }
 
 export async function login(

@@ -32,11 +32,10 @@ export {
   refreshSession,
   switchWorkspace,
   switchSite,
-  hashPassword,
-  comparePassword,
   type LoginResult,
   type TokenPair,
 } from "./session.js";
+export { hashPassword, comparePassword } from "@rw/auth/password";
 
 export {
   loginDisplay,

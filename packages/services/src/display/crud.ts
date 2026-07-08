@@ -1,6 +1,5 @@
-import { randomBytes } from "node:crypto";
 import prisma from "@rw/db";
-import { hashToken } from "@rw/auth/tokens";
+import { generateSecret, hashToken } from "@rw/auth/secrets";
 
 // ============================================================================
 // Types
@@ -55,7 +54,7 @@ async function generateUniqueClaimCode(): Promise<string> {
 }
 
 function generateBootstrapSecret(): string {
-  return randomBytes(32).toString("hex");
+  return generateSecret();
 }
 
 // ============================================================================

@@ -1,7 +1,7 @@
-import { createHash, randomBytes } from "node:crypto";
 import prisma from "@rw/db";
+import { generateToken, hashToken } from "@rw/auth/secrets";
+import { hashPassword, comparePassword } from "@rw/auth/password";
 import { securityConfig } from "../../../config.js";
-import { hashPassword, comparePassword } from "../../auth/session.js";
 import { sendPasswordResetEmail } from "@rw/services/email/index";
 import { logEvent } from "@rw/services/audit/index";
 import { validatePasswordStrength } from "../../validation.js";
@@ -15,22 +15,6 @@ export interface ResetRequestResult {
 export interface ResetContext {
   ipAddress?: string;
   userAgent?: string;
-}
-
-/**
- * Generate a secure random token and its SHA256 hash
- */
-function generateToken(): { plaintext: string; hash: string } {
-  const plaintext = randomBytes(32).toString("hex");
-  const hash = createHash("sha256").update(plaintext).digest("hex");
-  return { plaintext, hash };
-}
-
-/**
- * Hash a token for database lookup
- */
-function hashToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
 }
 
 export async function initiateReset(

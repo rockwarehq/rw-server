@@ -1,6 +1,6 @@
 import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
-import { hashPassword } from "../auth/session.js";
+import { hashPassword } from "@rw/auth/password";
 import { publishStationCurrentLogonsMetric } from "./logon.js";
 
 type DbClient = typeof prisma | Prisma.TransactionClient;

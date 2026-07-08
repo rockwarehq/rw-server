@@ -1,6 +1,10 @@
 import { createSigner, createVerifier } from "fast-jwt";
-import { createHash, randomBytes } from "node:crypto";
 import prisma from "@rw/db";
+import { generateSecret, hashToken } from "./secrets.js";
+
+// Re-exported for compatibility with existing `@rw/auth/tokens` importers;
+// the implementation lives in ./secrets.ts.
+export { hashToken };
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 const ACCESS_TOKEN_EXPIRY = 15 * 60 * 1000; // 15 minutes
@@ -52,15 +56,11 @@ export function verifyAccessToken(token: string): DecodedAccessToken {
   return accessTokenVerifier(token) as DecodedAccessToken;
 }
 
-export function hashToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
-}
-
 export async function createRefreshToken(
   userId: string,
   metadata?: { userAgent?: string; ipAddress?: string },
 ): Promise<{ token: string; expiresAt: Date }> {
-  const token = randomBytes(32).toString("hex");
+  const token = generateSecret();
   const tokenHash = hashToken(token);
   const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY);
 
@@ -81,7 +81,7 @@ export async function createDisplayRefreshToken(
   displayId: string,
   metadata?: { userAgent?: string; ipAddress?: string },
 ): Promise<{ token: string; expiresAt: Date }> {
-  const token = randomBytes(32).toString("hex");
+  const token = generateSecret();
   const tokenHash = hashToken(token);
   const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY);
 

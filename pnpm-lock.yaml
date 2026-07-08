@@ -279,10 +279,16 @@ importers:
       '@rw/db':
         specifier: workspace:*
         version: link:../db
+      bcrypt:
+        specifier: ^6.0.0
+        version: 6.0.0
       fast-jwt:
         specifier: ^6.1.0
         version: 6.2.4
     devDependencies:
+      '@types/bcrypt':
+        specifier: ^5.0.2
+        version: 5.0.2
       '@types/node':
         specifier: ^24.10.8
         version: 24.12.4
