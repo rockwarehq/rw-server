@@ -25,6 +25,22 @@ async function seed() {
     return;
   }
 
+  // Production bootstrap guard — must sit AFTER the already-bootstrapped
+  // early-return: the seed runs on every deploy (fly release_command), and
+  // already-seeded tenants without ADMIN_* secrets must keep deploying.
+  // A throw here aborts the release, which is the right outcome for a fresh
+  // tenant missing its admin credentials.
+  if (process.env.NODE_ENV === "production") {
+    const missing = ["ADMIN_EMAIL", "ADMIN_PASSWORD"].filter((key) => !process.env[key]);
+    if (missing.length > 0) {
+      throw new Error(`Refusing to bootstrap a production tenant: set ${missing.join(", ")} via fly secrets`);
+    }
+    const adminPassword = process.env.ADMIN_PASSWORD as string;
+    if (adminPassword === "changeme123" || adminPassword.length < 12) {
+      throw new Error("ADMIN_PASSWORD must be >= 12 characters and not the dev default");
+    }
+  }
+
   // Create default workspace
   const workspace = await prisma.workspace.upsert({
     where: { slug: "default" },
