@@ -23,7 +23,7 @@ export const tagResolverConfigSchema = z
       .meta({ description: "Datasource/device ID publishing the tag." }),
     tagPath: z
       .string({ error: "tag resolver requires deviceId and tagPath" })
-      .meta({ description: "Tag path on the device, e.g. \"line1/press/cycleCount\"." }),
+      .meta({ description: 'Tag path on the device, e.g. "line1/press/cycleCount".' }),
   })
   .meta({ description: "Live edge value: subscribes to the NATS subject derived from deviceId + tagPath." });
 
@@ -38,7 +38,7 @@ export const metricResolverConfigSchema = z
       .meta({ description: "Entity instance ID; must exist in the graph's site." }),
     granularity: z
       .string({ error: "metric resolver requires entityType, entityId, granularity, and metricKey" })
-      .meta({ description: "Metric bucket granularity, e.g. \"SHIFT\"." }),
+      .meta({ description: 'Metric bucket granularity, e.g. "SHIFT".' }),
     metricKey: z
       .string({ error: "metric resolver requires entityType, entityId, granularity, and metricKey" })
       .meta({ description: "MetricBucket column key (see metricCatalog.list for valid keys per kind)." }),
@@ -48,18 +48,16 @@ export const metricResolverConfigSchema = z
 export const entityResolverConfigSchema = z
   .looseObject({
     type: z.literal("entity"),
-    entityType: z
-      .string({ error: "entity resolver requires entityType, entityId, and path" })
-      .meta({ description: "Entity catalog key — a system entity (e.g. \"imm.station\") or a user object-schema key/ID." }),
+    entityType: z.string({ error: "entity resolver requires entityType, entityId, and path" }).meta({
+      description: 'Entity catalog key — a system entity (e.g. "imm.station") or a user object-schema key/ID.',
+    }),
     entityId: z
       .string({ error: "entity resolver requires entityType, entityId, and path" })
       .meta({ description: "Entity instance ID; must exist in the graph's site." }),
-    path: z
-      .string({ error: "entity resolver requires entityType, entityId, and path" })
-      .meta({
-        description:
-          "Catalog field key on the entity. Runtime specials: \"id\" (the entity ID) and \"*\" (the whole record).",
-      }),
+    path: z.string({ error: "entity resolver requires entityType, entityId, and path" }).meta({
+      description:
+        'Catalog field key on the entity. Runtime specials: "id" (the entity ID) and "*" (the whole record).',
+    }),
   })
   .meta({ description: "Field/relation read off a catalogued entity, refreshed from the domain-event feed." });
 
@@ -147,10 +145,7 @@ export const rollupResolverConfigSchema = z
       )
       .optional()
       .meta({ description: "Optional explicit parent entity; defaults to the node's bound entity." }),
-    weightBy: z
-      .string()
-      .optional()
-      .meta({ description: "Child property used as the weight for weighted averages." }),
+    weightBy: z.string().optional().meta({ description: "Child property used as the weight for weighted averages." }),
   })
   .meta({ description: "Structural aggregation over child assets found via entity relations." });
 

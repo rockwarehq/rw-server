@@ -159,7 +159,9 @@ export class WindowResolver {
     }
     await Promise.allSettled(runtimes.map((rt) => rt.emitChain));
     // Final state flush (§17.7 graceful shutdown).
-    const results = await Promise.allSettled(runtimes.map((rt) => this.store.put(rt.propertyId, this.stateForPersist(rt))));
+    const results = await Promise.allSettled(
+      runtimes.map((rt) => this.store.put(rt.propertyId, this.stateForPersist(rt))),
+    );
     const failed = results.filter((result) => result.status === "rejected").length;
     if (failed > 0) this.logger.error({ failed }, "livestore window state flush failed on shutdown");
     this.byId.clear();

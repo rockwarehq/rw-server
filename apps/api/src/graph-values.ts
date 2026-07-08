@@ -71,7 +71,9 @@ export async function readGraphValues(propertyIds: readonly string[]): Promise<G
         }
       }),
     );
-    chunk.forEach((id, index) => envelopes.set(id, results[index] ?? null));
+    chunk.forEach((id, index) => {
+      envelopes.set(id, results[index] ?? null);
+    });
   }
   return { available: true, envelopes };
 }

@@ -70,8 +70,16 @@ describe("buildRollupEdges batching", () => {
     expect(findMany.mock.calls[0]![0].where.id.in.sort()).toEqual(["wc1", "wc2"]);
 
     // wc1 -> st1's oee, wc2 -> st2's oee.
-    expect(edges).toContainEqual({ id: "rollup:oee-st1:rollup-wc1", fromPropertyId: "oee-st1", toPropertyId: "rollup-wc1" });
-    expect(edges).toContainEqual({ id: "rollup:oee-st2:rollup-wc2", fromPropertyId: "oee-st2", toPropertyId: "rollup-wc2" });
+    expect(edges).toContainEqual({
+      id: "rollup:oee-st1:rollup-wc1",
+      fromPropertyId: "oee-st1",
+      toPropertyId: "rollup-wc1",
+    });
+    expect(edges).toContainEqual({
+      id: "rollup:oee-st2:rollup-wc2",
+      fromPropertyId: "oee-st2",
+      toPropertyId: "rollup-wc2",
+    });
     expect(edges).toHaveLength(2);
   });
 

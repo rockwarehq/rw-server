@@ -155,9 +155,7 @@ export class GraphRuntime {
         .filter((dep) => dep.name === resolver.childProperty)
         .map((dep) => ({
           current: dep.current,
-          weight: resolver.weightBy
-            ? depByNodeAndName.get(`${dep.nodeId}|${resolver.weightBy}`)?.current
-            : undefined,
+          weight: resolver.weightBy ? depByNodeAndName.get(`${dep.nodeId}|${resolver.weightBy}`)?.current : undefined,
         }));
       const envelope = evaluateRollup(resolver, children);
       await this.commitValue(propertyId, envelope, "rollup");
@@ -530,10 +528,7 @@ export class GraphRuntime {
               // flush. The in-memory value is already applied; the next changed
               // commit repairs KV drift.
               this.kvPutFailures += 1;
-              this.options.logger.error(
-                { err, propertyId },
-                "livestore CVG put failed — in-memory value retained",
-              );
+              this.options.logger.error({ err, propertyId }, "livestore CVG put failed — in-memory value retained");
             } finally {
               // Remove only after the put settles, and only if no newer
               // envelope replaced it mid-flight: getCvgValue must keep seeing

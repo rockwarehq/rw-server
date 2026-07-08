@@ -52,7 +52,13 @@ const FIXTURES: Record<(typeof LIVESTORE_RESOLVER_TYPES)[number], Fixture[]> = {
   metric: [
     {
       name: "valid",
-      resolver: { type: "metric", entityType: "Station", entityId: "s1", granularity: "SHIFT", metricKey: "totalCycles" },
+      resolver: {
+        type: "metric",
+        entityType: "Station",
+        entityId: "s1",
+        granularity: "SHIFT",
+        metricKey: "totalCycles",
+      },
       ok: true,
     },
     {
@@ -133,7 +139,13 @@ const FIXTURES: Record<(typeof LIVESTORE_RESOLVER_TYPES)[number], Fixture[]> = {
   rollup: [
     {
       name: "valid",
-      resolver: { type: "rollup", childKind: "station", relation: "stations", childProperty: "oee", aggregation: "avg" },
+      resolver: {
+        type: "rollup",
+        childKind: "station",
+        relation: "stations",
+        childProperty: "oee",
+        aggregation: "avg",
+      },
       ok: true,
     },
     {
@@ -151,7 +163,13 @@ const FIXTURES: Record<(typeof LIVESTORE_RESOLVER_TYPES)[number], Fixture[]> = {
     },
     {
       name: "bad aggregation",
-      resolver: { type: "rollup", childKind: "station", relation: "stations", childProperty: "oee", aggregation: "p95" },
+      resolver: {
+        type: "rollup",
+        childKind: "station",
+        relation: "stations",
+        childProperty: "oee",
+        aggregation: "p95",
+      },
       ok: false,
       message: "rollup resolver requires childKind, relation, childProperty, and aggregation",
     },

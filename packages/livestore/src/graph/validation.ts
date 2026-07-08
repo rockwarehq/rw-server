@@ -181,10 +181,7 @@ export async function validateResolverConfig(args: {
   if (!schema) return errorResult("INVALID_RESOLVER_TYPE", `Unsupported resolverType "${resolverType}"`);
   const parsed = schema.safeParse(withType);
   if (!parsed.success) {
-    return errorResult(
-      "INVALID_RESOLVER",
-      parsed.error.issues[0]?.message ?? `${resolverType} resolver is invalid`,
-    );
+    return errorResult("INVALID_RESOLVER", parsed.error.issues[0]?.message ?? `${resolverType} resolver is invalid`);
   }
   const resolver = parsed.data as Record<string, unknown> & { type: string };
 

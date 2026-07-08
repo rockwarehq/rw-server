@@ -89,7 +89,11 @@ describe("plan", () => {
         hooks: [
           {
             name: "cycle spike",
-            condition: { source: { type: "property", propertyId: NEW_WINDOW }, operator: "crossesAbove", threshold: 90 },
+            condition: {
+              source: { type: "property", propertyId: NEW_WINDOW },
+              operator: "crossesAbove",
+              threshold: 90,
+            },
             eventNamespace: "imm",
             eventName: "cycle_completed",
             eventVersion: "1",
@@ -120,7 +124,12 @@ describe("plan", () => {
         nodes: [{ ref: "n1", name: "Existing Node" }],
         properties: [
           { nodeRef: "ghost", name: "p1", resolverType: "tag", resolver: { type: "tag" } },
-          { nodeId: EXISTING_NODE, name: "takenName", resolverType: "expr", resolver: { type: "expr", expression: "p_zzz" } },
+          {
+            nodeId: EXISTING_NODE,
+            name: "takenName",
+            resolverType: "expr",
+            resolver: { type: "expr", expression: "p_zzz" },
+          },
         ],
       },
       scope,
@@ -160,7 +169,10 @@ describe("plan", () => {
     );
     if (!("data" in result)) throw new Error("expected data");
     expect(result.data.issues).toEqual([
-      expect.objectContaining({ path: "properties[1].resolver", error: "window source cannot be another window property" }),
+      expect.objectContaining({
+        path: "properties[1].resolver",
+        error: "window source cannot be another window property",
+      }),
     ]);
   });
 

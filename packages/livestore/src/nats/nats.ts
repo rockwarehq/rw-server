@@ -85,11 +85,7 @@ export async function connectNatsResources(): Promise<NatsResources> {
 
 // A KV bucket is backed by a `KV_<bucket>` JetStream stream; apply the byte cap
 // there so it takes effect on already-existing buckets (kvm.create won't).
-async function reconcileKvMaxBytes(
-  jsm: JetStreamManager,
-  bucket: string,
-  maxBytes: number,
-): Promise<void> {
+async function reconcileKvMaxBytes(jsm: JetStreamManager, bucket: string, maxBytes: number): Promise<void> {
   const stream = `KV_${bucket}`;
   try {
     const info = await jsm.streams.info(stream);

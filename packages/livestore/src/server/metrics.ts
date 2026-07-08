@@ -30,13 +30,22 @@ const propertyCount = gauge("livestore_graph_property_count", "Graph properties 
 const edgeCount = gauge("livestore_graph_edge_count", "Graph edges loaded");
 
 // Write-behind durability — are CVG values reaching KV?
-const kvPutFailures = gauge("livestore_kv_put_failures_total", "Cumulative CVG KV put failures (value retained in memory)");
+const kvPutFailures = gauge(
+  "livestore_kv_put_failures_total",
+  "Cumulative CVG KV put failures (value retained in memory)",
+);
 
 // Ingestion resilience — a rising restart counter means a consume loop is
 // flapping; a broken consumer that never recovers pins its counter while
 // ingestion is silently dead, so alert on both rate and staleness.
-const definitionRestarts = gauge("livestore_definition_consumer_restarts_total", "Cumulative graph definition consumer restarts");
-const entityEventRestarts = gauge("livestore_entity_event_consumer_restarts_total", "Cumulative entity event consumer restarts");
+const definitionRestarts = gauge(
+  "livestore_definition_consumer_restarts_total",
+  "Cumulative graph definition consumer restarts",
+);
+const entityEventRestarts = gauge(
+  "livestore_entity_event_consumer_restarts_total",
+  "Cumulative entity event consumer restarts",
+);
 const tagRestarts = gauge("livestore_tag_consumer_restarts_total", "Cumulative tag consumer restarts");
 const metricRestarts = gauge("livestore_metric_consumer_restarts_total", "Cumulative metric resolver re-subscribes");
 const tagSubscriptions = gauge("livestore_tag_subscription_count", "Distinct tag subjects fanned out to properties");
