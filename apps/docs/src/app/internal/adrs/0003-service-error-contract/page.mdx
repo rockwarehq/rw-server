@@ -1,0 +1,39 @@
+export const metadata = {
+  title: '0003 – Service Error Contract and Transport Mapping',
+  description: 'ADR 0003: services return { error, code }; each transport maps codes to wire errors in exactly one place.',
+}
+
+# 0003 – Service Error Contract and Transport Mapping
+
+- **Status:** Accepted
+- **Date:** 2026-07-08
+- **Deciders:** Michael Lindenau
+
+## Context
+
+Services in `@rw/services` return discriminated results — `{ data }` on success, `{ error, code }` on failure — and never throw. Before this ADR, each oRPC router translated codes to `ORPCError`s with its own inline logic: some hardcoded a single error code, some switched on `result.code`, two files had private helper copies with substring rules. The same service code could surface as different transport errors depending on which router handled it, and there was no single place to see the mapping.
+
+`@rockwarehq/rpc-client` is published from the router types, so the error codes clients observe are part of the public API — any change is a breaking change, even when it makes the mapping more consistent.
+
+## Decision
+
+We will keep the service contract as-is: services return `{ error, code }` and never throw.
+
+Each transport maps codes to wire errors in exactly one place:
+
+- **oRPC**: `apps/api/src/rpc/errors.ts` — `mapServiceCode` resolves per-call overrides → exact table → suffix heuristics (`*_NOT_FOUND` → `NOT_FOUND`; `*_EXISTS`, `HAS_*`, `DUPLICATE_*`, `ALREADY_*` → `CONFLICT`) → `BAD_REQUEST`. Routers use `throwServiceError` / `unwrap`.
+- **REST**: the error body is `{ error }`, optionally `{ error, details }` for validation detail. Per-route status mapping stays local to the route file.
+
+Where a router's historical mapping differs from the shared default, the difference is **pinned as an override** rather than normalized — published clients may depend on it. Current pins: `entity.ts` and `graph.ts` map scope mismatches (`SITE_MISMATCH`, `ENTITY_SITE_MISMATCH`, `REF_SCHEMA_SITE_MISMATCH`, `RESOLVER_TYPE_MISMATCH`) to `FORBIDDEN` instead of the default `CONFLICT`; per-file pins in `display.ts`, `inventory.ts`, and `order.ts` are documented in those files.
+
+## Consequences
+
+- One table to read (and test — see `apps/api/test/rpc-errors.test.ts`) instead of ~30 inline variants.
+- New service codes get sensible transport errors from the heuristics without touching routers.
+- Divergent historical mappings remain — consistency was deliberately traded for wire compatibility. Normalizing them is a coordinated breaking change with a client major-version bump.
+
+## Alternatives Considered
+
+- **Services throw typed errors** — breaks the established `{ error, code }` convention across the whole codebase and couples services to transport concerns.
+- **Normalize all mappings to the default table** — cleanest end-state, but silently changes observable error codes under published clients.
+- **Mapping helper in `@rw/services`** — the mapping is a presentation concern of the API app; workers consume services without oRPC.
