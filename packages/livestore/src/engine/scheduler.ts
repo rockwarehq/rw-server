@@ -23,7 +23,7 @@ export class Scheduler {
 
   constructor(
     private readonly getDependents: (propertyId: string) => string[],
-    private readonly topoOrder: () => string[],
+    private readonly topoIndex: (propertyId: string) => number | undefined,
     private readonly evaluate: (propertyId: string) => Promise<void>,
     private readonly isBarrier: (propertyId: string) => boolean,
     private readonly logger: LivestoreLogger,
@@ -101,7 +101,28 @@ export class Scheduler {
     const startedAt = Date.now();
     let evaluated = 0;
     try {
-      for (const id of this.topoOrder()) {
+      // Snapshot the dirty set sorted by topo position — O(D log D) instead of
+      // scanning the whole topo order. Ids with no position (deleted properties,
+      // quarantined cycle members) can never evaluate; drop them now instead of
+      // letting them ride the dirty set into stall accounting.
+      const snapshot: Array<{ id: string; index: number }> = [];
+      let droppedUnorderable = 0;
+      for (const id of this.dirty) {
+        const index = this.topoIndex(id);
+        if (index === undefined) {
+          this.dirty.delete(id);
+          this.stallCounts.delete(id);
+          droppedUnorderable += 1;
+          continue;
+        }
+        snapshot.push({ id, index });
+      }
+      if (droppedUnorderable > 0) {
+        this.logger.info({ dropped: droppedUnorderable }, "livestore flush dropped unorderable dirty properties");
+      }
+      snapshot.sort((a, b) => a.index - b.index);
+
+      for (const { id } of snapshot) {
         if (!this.dirty.has(id)) continue;
         this.dirty.delete(id);
         try {

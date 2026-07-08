@@ -86,6 +86,34 @@ describe("coincident edges", () => {
   });
 });
 
+describe("topo index", () => {
+  it("matches the topo order and is undefined for quarantined or unknown ids", () => {
+    const graph = new DependencyGraph(logger);
+    graph.rebuild(
+      [prop("a"), prop("b"), prop("c"), prop("d")],
+      [edge("e1", "a", "b"), edge("e2", "c", "d"), edge("e3", "d", "c")],
+    );
+
+    const order = graph.topoOrder();
+    expect(order).toEqual(["a", "b"]);
+    expect(graph.topoIndex("a")).toBe(order.indexOf("a"));
+    expect(graph.topoIndex("b")).toBe(order.indexOf("b"));
+    expect(graph.topoIndex("c")).toBeUndefined(); // quarantined (c<->d cycle)
+    expect(graph.topoIndex("ghost")).toBeUndefined();
+  });
+
+  it("recomputes lazily after mutations", () => {
+    const graph = new DependencyGraph(logger);
+    graph.rebuild([prop("a"), prop("b")], []);
+    expect(graph.topoIndex("a")).toBeDefined();
+
+    graph.replaceEdges({ edges: [edge("e1", "b", "a")] });
+    const aIndex = graph.topoIndex("a");
+    const bIndex = graph.topoIndex("b");
+    expect(bIndex).toBeLessThan(aIndex as number);
+  });
+});
+
 describe("edge replacement", () => {
   it("targetPropertyIds removes all incoming edges of the target before re-adding", () => {
     const graph = new DependencyGraph(logger);

@@ -72,6 +72,8 @@ export class GraphKernel {
     this.nodes.clear();
     this.properties.clear();
 
+    const loadStartedAt = Date.now();
+    const propertyRows: Array<(typeof nodes)[number]["properties"][number]> = [];
     for (const node of nodes) {
       const runtimeNode: NodeRuntime = {
         id: node.id,
@@ -79,26 +81,18 @@ export class GraphKernel {
         siteId: node.siteId,
         typeRef: node.typeRef,
         typeContext: parseTypeContext(node.typeContext),
-        propertyIds: [],
+        propertyIds: node.properties.map((property) => property.id),
       };
       this.nodes.set(node.id, runtimeNode);
-
-      for (const property of node.properties) {
-        const current = (await this.cvg.get(property.id)) ?? staleEnvelope();
-        const runtimeProperty: PropertyRuntime = {
-          id: property.id,
-          nodeId: property.nodeId,
-          name: property.name,
-          resolverType: property.resolverType,
-          resolver: parseGraphResolver(property.resolver, property.resolverType),
-          sampleRateMs: property.sampleRateMs,
-          current,
-        };
-
-        runtimeNode.propertyIds.push(property.id);
-        this.properties.set(property.id, runtimeProperty);
-      }
+      propertyRows.push(...node.properties);
     }
+
+    // One KV round-trip per property: hydrate concurrently or boot time scales
+    // linearly with the graph. Order within each node is preserved by index.
+    const hydrated = await mapWithConcurrency(propertyRows, CVG_HYDRATE_CONCURRENCY, (row) =>
+      this.hydrateProperty(row),
+    );
+    for (const runtimeProperty of hydrated) this.properties.set(runtimeProperty.id, runtimeProperty);
 
     const runtimeEdges: GraphEdgeRuntime[] = edges.map((edge) => ({
       id: edge.id,
@@ -113,6 +107,7 @@ export class GraphKernel {
         nodeCount: this.nodes.size,
         propertyCount: this.properties.size,
         edgeCount: runtimeEdges.length,
+        loadMs: Date.now() - loadStartedAt,
       },
       "livestore kernel loaded",
     );
@@ -130,10 +125,9 @@ export class GraphKernel {
     });
     if (!node) return null;
 
-    const properties: PropertyRuntime[] = [];
-    for (const property of node.properties) {
-      properties.push(await this.hydrateProperty(property));
-    }
+    const properties = await mapWithConcurrency(node.properties, CVG_HYDRATE_CONCURRENCY, (property) =>
+      this.hydrateProperty(property),
+    );
     const edges = await this.loadIncomingStaticEdges(properties.map((property) => property.id));
 
     return {
@@ -320,17 +314,38 @@ export class GraphKernel {
     return this.dependencyGraph.getDependencies(propertyId);
   }
 
+  topoIndex(propertyId: string): number | undefined {
+    return this.dependencyGraph.topoIndex(propertyId);
+  }
+
   topoOrder(): string[] {
     return this.dependencyGraph.topoOrder();
   }
 
   // Inject runtime rollup into DAG
   // Rebuilt each boot from the domain model
-  applyRollupEdges(rollupEdges: GraphEdgeRuntime[]): void {
+  // Returns the rollup property ids whose incoming edge set actually changed,
+  // so callers can re-mark just those instead of every rollup in the graph.
+  applyRollupEdges(rollupEdges: GraphEdgeRuntime[]): string[] {
+    const edgeKey = (edge: GraphEdgeRuntime) => `${edge.fromPropertyId}>${edge.toPropertyId}`;
+    const oldKeys = new Set(this.rollupEdges.map(edgeKey));
+    const newKeys = new Set(rollupEdges.map(edgeKey));
+    const changedTargets = new Set<string>();
+    for (const edge of this.rollupEdges) {
+      if (!newKeys.has(edgeKey(edge))) changedTargets.add(edge.toPropertyId);
+    }
+    for (const edge of rollupEdges) {
+      if (!oldKeys.has(edgeKey(edge))) changedTargets.add(edge.toPropertyId);
+    }
+
     const oldIds = this.rollupEdges.map((edge) => edge.id);
     this.rollupEdges = rollupEdges;
     this.dependencyGraph.replaceEdges({ removeEdgeIds: oldIds, edges: rollupEdges });
-    this.logger.info({ rollupEdges: rollupEdges.length }, "livestore rollup edges applied");
+    this.logger.info(
+      { rollupEdges: rollupEdges.length, changedTargets: changedTargets.size },
+      "livestore rollup edges applied",
+    );
+    return [...changedTargets];
   }
 
   counts(): { nodeCount: number; propertyCount: number; edgeCount: number } {
@@ -413,4 +428,21 @@ export class GraphKernel {
 
 function parseTypeContext(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+const CVG_HYDRATE_CONCURRENCY = 32;
+
+// Bounded-concurrency map preserving input order.
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await fn(items[index] as T);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }

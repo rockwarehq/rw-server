@@ -11,8 +11,12 @@ interface EdgeLabel {
 
 export class DependencyGraph {
   private graph = new graphlib.Graph({ directed: true, multigraph: false, compound: false });
-  // Topological order (inputs before outputs), cached on rebuild for the flush pass.
+  // Topological order (inputs before outputs), recomputed lazily: a definition
+  // event mutates the graph several times back-to-back (remove + upsert +
+  // replaceEdges) and only the next read needs a fresh order.
   private topo: string[] = [];
+  private topoIndexById = new Map<string, number>();
+  private topoStale = true;
   // Members of dependency cycles, excluded from topo until the cycle is broken.
   private quarantined = new Set<string>();
 
@@ -27,21 +31,21 @@ export class DependencyGraph {
 
     this.graph = graph;
     for (const edge of edges) this.addEdge(edge);
-    this.recomputeTopo();
+    this.topoStale = true;
   }
 
   upsertProperties(properties: Iterable<PropertyRuntime>): void {
     for (const property of properties) {
       this.graph.setNode(property.id, { resolverType: property.resolverType });
     }
-    this.recomputeTopo();
+    this.topoStale = true;
   }
 
   removeProperties(propertyIds: Iterable<string>): void {
     for (const propertyId of propertyIds) {
       if (this.graph.hasNode(propertyId)) this.graph.removeNode(propertyId);
     }
-    this.recomputeTopo();
+    this.topoStale = true;
   }
 
   replaceEdges(args: {
@@ -69,11 +73,20 @@ export class DependencyGraph {
 
     for (const edge of args.edges) this.addEdge(edge);
 
-    this.recomputeTopo();
+    this.topoStale = true;
   }
 
   topoOrder(): string[] {
+    if (this.topoStale) this.recomputeTopo();
     return this.topo;
+  }
+
+  // Position of a property in the topo order; undefined for unknown or
+  // quarantined ids. The scheduler sorts its dirty set with this instead of
+  // scanning the full order every flush.
+  topoIndex(propertyId: string): number | undefined {
+    if (this.topoStale) this.recomputeTopo();
+    return this.topoIndexById.get(propertyId);
   }
 
   hasProperty(propertyId: string): boolean {
@@ -81,6 +94,7 @@ export class DependencyGraph {
   }
 
   isQuarantined(propertyId: string): boolean {
+    if (this.topoStale) this.recomputeTopo();
     return this.quarantined.has(propertyId);
   }
 
@@ -108,6 +122,7 @@ export class DependencyGraph {
   }
 
   private recomputeTopo(): void {
+    this.topoStale = false;
     try {
       this.topo = graphlib.alg.topsort(this.graph);
       if (this.quarantined.size > 0) {
@@ -135,5 +150,6 @@ export class DependencyGraph {
       }
       this.topo = graphlib.alg.topsort(acyclic);
     }
+    this.topoIndexById = new Map(this.topo.map((id, index) => [id, index]));
   }
 }

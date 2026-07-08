@@ -134,6 +134,9 @@ export interface LivestoreLogger {
   info: (obj: Record<string, unknown>, msg?: string) => void;
   warn: (obj: Record<string, unknown>, msg?: string) => void;
   error: (obj: Record<string, unknown>, msg?: string) => void;
+  // Optional: hot-path logs (per-commit) use this when present. Fastify's Pino
+  // instance provides it; bare test loggers may omit it.
+  debug?: (obj: Record<string, unknown>, msg?: string) => void;
 }
 
 const QUALITY_VALUES = new Set<Quality>(["good", "stale", "uncertain", "bad"]);

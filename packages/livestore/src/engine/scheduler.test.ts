@@ -14,9 +14,10 @@ function makeScheduler(options: {
 }) {
   const evaluated: string[] = [];
   const barriers = new Set(options.barriers ?? []);
+  const topoIndex = new Map(options.topo.map((id, index) => [id, index]));
   const scheduler: Scheduler = new Scheduler(
     (id) => options.dependents[id] ?? [],
-    () => options.topo,
+    (id) => topoIndex.get(id),
     async (id) => {
       evaluated.push(id);
       options.onEvaluate?.(id, scheduler);
@@ -61,6 +62,21 @@ describe("barrier", () => {
     scheduler.markDirtyMany(["src"]);
     await vi.advanceTimersByTimeAsync(100);
     expect(evaluated).toEqual(["src"]);
+  });
+});
+
+describe("unorderable dirty ids", () => {
+  it("ids missing from the topo order (deleted/quarantined) are dropped, the rest evaluate", async () => {
+    const { scheduler, evaluated } = makeScheduler({
+      dependents: { a: [] },
+      topo: ["a"], // "ghost" has no topo position
+    });
+    scheduler.markDirtyMany(["ghost", "a"]);
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(evaluated).toEqual(["a"]);
+    // No leftover work: the dirty set settled, so no further flush is scheduled.
+    expect(scheduler.flushStats().dirtySetSize).toBe(0);
   });
 });
 

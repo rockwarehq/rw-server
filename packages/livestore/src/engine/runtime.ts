@@ -64,6 +64,12 @@ export class GraphRuntime {
   private readonly pendingDefinitionEvents = new Map<string, GraphDefinitionEvent>();
   private definitionWaiters: Array<{ resolve: () => void; reject: (err: unknown) => void }> = [];
   private kvPutFailures = 0;
+  // Latest-wins CVG write-behind: commits apply in memory synchronously and the
+  // KV put is queued, so the flush loop (and resolver consume loops) never
+  // serialize on NATS round-trips. Only the newest envelope per property matters.
+  private readonly pendingPuts = new Map<string, ValueEnvelope>();
+  private putDrainRunning = false;
+  private putDrainDone: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: GraphRuntimeOptions) {
     this.cvg = new CvgStore(options.kv);
@@ -87,7 +93,7 @@ export class GraphRuntime {
     );
     this.scheduler = new Scheduler(
       (id) => this.kernel.getDependents(id),
-      () => this.kernel.topoOrder(),
+      (id) => this.kernel.topoIndex(id),
       (id) => this.evaluate(id),
       (id) => this.kernel.getProperty(id)?.resolverType === "window",
       options.logger,
@@ -130,12 +136,13 @@ export class GraphRuntime {
         .getDependencies(propertyId)
         .map((id) => this.kernel.getProperty(id))
         .filter((dep) => dep !== null);
+      const depByNodeAndName = new Map(deps.map((dep) => [`${dep.nodeId}|${dep.name}`, dep]));
       const children = deps
         .filter((dep) => dep.name === resolver.childProperty)
         .map((dep) => ({
           current: dep.current,
           weight: resolver.weightBy
-            ? deps.find((weight) => weight.nodeId === dep.nodeId && weight.name === resolver.weightBy)?.current
+            ? depByNodeAndName.get(`${dep.nodeId}|${resolver.weightBy}`)?.current
             : undefined,
         }));
       const envelope = evaluateRollup(resolver, children);
@@ -210,6 +217,7 @@ export class GraphRuntime {
     await this.windowResolver.stop(); // drains emit chains + flushes agg state to KV
     this.sampleGate.stop();
     this.scheduler.stop();
+    await this.putDrainDone; // flush queued CVG writes before disconnecting NATS
   }
 
   enqueueDefinitionChange(event: GraphDefinitionEvent): Promise<void> {
@@ -338,10 +346,9 @@ export class GraphRuntime {
     }
 
     const rollupEdges = await buildRollupEdges(this.options.prisma, this.kernel, this.options.logger);
-    this.kernel.applyRollupEdges(rollupEdges);
-    for (const property of this.kernel.listProperties()) {
-      if (isRollupResolverConfig(property.resolver)) dirty.add(property.id);
-    }
+    // Only rollups whose incoming edge set changed need a recompute — marking
+    // every rollup here thundering-herds the flush on each definition burst.
+    for (const targetId of this.kernel.applyRollupEdges(rollupEdges)) dirty.add(targetId);
     if (dirty.size > 0) this.scheduler.markDirtyMany(dirty);
 
     this.options.logger.info(
@@ -383,20 +390,14 @@ export class GraphRuntime {
       // Fold before the KV await: windows must see every sample synchronously —
       // the 50ms flush only ever reads the latest current value.
       this.windowResolver.onInput(propertyId, envelope);
-      try {
-        await this.cvg.put(propertyId, envelope);
-      } catch (err) {
-        // A KV blip must not throw through resolver consume loops or the flush.
-        // The in-memory value is already applied; the next changed commit (or
-        // WS clients falling back to getCurrentOrStale) repairs KV drift.
-        this.kvPutFailures += 1;
-        this.options.logger.error({ err, propertyId, source }, "livestore CVG put failed — in-memory value retained");
-      }
+      this.enqueuePut(propertyId, envelope);
       const hookQueued = this.hookManager.onPropertyCommitted({ propertyId, previous, current: envelope });
       if (hookQueued) this.scheduler.scheduleTerminal();
     }
 
-    this.options.logger.info(
+    // Per-commit logging runs at tag input rates — debug only. The flush-complete
+    // info log and healthStats counters remain the operational signal.
+    this.options.logger.debug?.(
       {
         propertyId,
         resolverType: property.resolverType,
@@ -409,7 +410,44 @@ export class GraphRuntime {
     );
   }
 
+  private enqueuePut(propertyId: string, envelope: ValueEnvelope): void {
+    this.pendingPuts.set(propertyId, envelope);
+    if (this.putDrainRunning) return;
+    this.putDrainRunning = true;
+    this.putDrainDone = this.drainPuts();
+  }
+
+  private async drainPuts(): Promise<void> {
+    try {
+      while (this.pendingPuts.size > 0) {
+        const batch = [...this.pendingPuts.entries()].slice(0, 16);
+        for (const [propertyId] of batch) this.pendingPuts.delete(propertyId);
+        await Promise.all(
+          batch.map(async ([propertyId, envelope]) => {
+            try {
+              await this.cvg.put(propertyId, envelope);
+            } catch (err) {
+              // A KV blip must not throw through resolver consume loops or the
+              // flush. The in-memory value is already applied; the next changed
+              // commit repairs KV drift.
+              this.kvPutFailures += 1;
+              this.options.logger.error(
+                { err, propertyId },
+                "livestore CVG put failed — in-memory value retained",
+              );
+            }
+          }),
+        );
+      }
+    } finally {
+      this.putDrainRunning = false;
+    }
+  }
+
   async getCvgValue(propertyId: string): Promise<ValueEnvelope | null> {
+    // A queued write-behind put is newer than whatever KV holds.
+    const pending = this.pendingPuts.get(propertyId);
+    if (pending) return pending;
     return this.cvg.get(propertyId);
   }
 
