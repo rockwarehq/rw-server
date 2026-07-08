@@ -1,0 +1,22 @@
+# NNNN – Title
+
+- **Status:** Proposed
+- **Date:** YYYY-MM-DD
+- **Deciders:** \<names\>
+
+## Context
+
+What problem are we solving? What forces are at play (technical, organizational, operational)?
+
+## Decision
+
+What did we decide? State it in full sentences, in active voice ("We will …").
+
+## Consequences
+
+What becomes easier or harder as a result? Trade-offs we're accepting.
+
+## Alternatives Considered
+
+- **Alternative A** — why it was rejected
+- **Alternative B** — why it was rejected

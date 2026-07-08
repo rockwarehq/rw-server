@@ -22,14 +22,19 @@
     "openapi:client": "pnpm --filter @rockwarehq/api-client generate && pnpm --filter @rockwarehq/api-client build",
     "openapi:all": "pnpm openapi:generate && pnpm openapi:client",
     "fly:deploy": "tsx scripts/fly-deploy.ts",
-    "fly:generate": "tsx scripts/fly-deploy.ts --generate-only"
+    "fly:generate": "tsx scripts/fly-deploy.ts --generate-only",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.11",
     "@types/node": "^24.10.8",
+    "mermaid": "^11.16.0",
     "smol-toml": "^1.6.0",
     "tsx": "^4.19.4",
-    "typescript": "~6.0.2"
+    "typescript": "~6.0.2",
+    "vitepress": "^1.6.4"
   },
   "engines": {
     "node": ">=24.0.0"

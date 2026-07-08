@@ -17,6 +17,10 @@ packages/api-client/src/generated/
 *.tsbuildinfo
 coverage/
 
+# VitePress (docs site)
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+
 # Fly generated configs
 fly.generated.toml
 apps/*/fly.generated.toml

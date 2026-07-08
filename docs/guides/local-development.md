@@ -1,0 +1,61 @@
+# Local Development
+
+How to get the rw-server monorepo running locally.
+
+## Prerequisites
+
+- **Node.js >= 24** (see `engines` in the root `package.json`)
+- **pnpm 11** — the exact version is pinned via the `packageManager` field; `corepack enable` picks it up automatically
+- **Docker** — for local infrastructure (`compose.yml` runs NATS)
+- Local **PostgreSQL** and **Redis** instances (or connection strings to shared dev instances) configured via `.env`
+
+## Setup
+
+```sh
+pnpm install
+
+# Start local infrastructure (NATS with JetStream)
+docker compose up -d
+
+# Generate the Prisma client and apply migrations
+pnpm db:generate
+pnpm db:migrate:dev
+
+# Seed data (optional)
+pnpm db:seed
+```
+
+Environment variables live in `.env` files (gitignored). Check `.env.example` files where present for the required keys.
+
+## Running the apps
+
+```sh
+pnpm dev            # runs @rw/api and @rw/livestore-app in parallel
+pnpm dev:api        # just the API
+pnpm dev:livestore  # just the livestore app
+```
+
+## Everyday commands
+
+| Command | What it does |
+| --- | --- |
+| `pnpm build` | `tsc -b` across all packages |
+| `pnpm test` | run tests in every workspace package |
+| `pnpm lint` / `pnpm lint:fix` | Biome check (and auto-fix) |
+| `pnpm format` | Biome format |
+| `pnpm openapi:all` | regenerate `openapi.json` and the API client |
+
+## Monorepo layout
+
+| Path | What lives there |
+| --- | --- |
+| `apps/api` | Fastify/oRPC HTTP server + in-process BullMQ workers |
+| `apps/workers` | Single worker binary with `--worker` startup modes (`rollups`, `processor`, `processor-consumer`) |
+| `apps/livestore` | Livestore app |
+| `packages/db` | Prisma schema, migrations, generated client |
+| `packages/runtime` | Events bus, BullMQ tuning, logger, http-host, lifecycle |
+| `packages/services` | Shared business logic |
+| `packages/auth` | Authentication |
+| `packages/livestore` | Reactive graph engine (see its `spec.md`) |
+| `packages/metrics` | OEE calculation functions |
+| `packages/automations`, `packages/rpc-client`, `packages/api-client` | Automations framework, RPC client, generated API client |
