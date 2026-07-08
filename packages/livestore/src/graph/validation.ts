@@ -1,6 +1,6 @@
 import prisma from "@rw/db";
 
-import { systemEntityCatalogEntryByKey } from "../entity/registry.js";
+import { systemEntityCatalogEntryByKey } from "@rw/services/entity/registry";
 import { graphNodeSiteWhere } from "./scope.js";
 import { errorResult, type GraphScope } from "./types.js";
 

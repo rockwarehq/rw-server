@@ -26,6 +26,7 @@
     "@prisma/adapter-pg": "^7.5.0",
     "@prisma/client": "^7.5.0",
     "@rw/db": "workspace:*",
+    "@rw/livestore": "workspace:*",
     "@rw/runtime": "workspace:*",
     "@rw/services": "workspace:*",
     "better-result": "^2.9.2",

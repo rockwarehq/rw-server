@@ -3,8 +3,8 @@ import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
 import { normalizeGraphTypeToken, parseGraphTypeRef } from "@rw/runtime/livestore-graph-types";
 
-import { SYSTEM_ENTITY_KEYS, systemEntityCatalogEntryByKey } from "../entity/registry.js";
-import type { EntityCatalogField } from "../entity/registry.types.js";
+import { SYSTEM_ENTITY_KEYS, systemEntityCatalogEntryByKey } from "@rw/services/entity/registry";
+import type { EntityCatalogField } from "@rw/services/entity/registry.types";
 import { publishGraphDefinitionEvent } from "./definition-events.js";
 import { activeHookIdsForProperties } from "./hooks.js";
 import * as nodeTypes from "./node-types.js";

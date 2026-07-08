@@ -65,6 +65,9 @@ importers:
       '@rw/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@rw/livestore':
+        specifier: workspace:*
+        version: link:../../packages/livestore
       '@rw/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
@@ -208,6 +211,9 @@ importers:
       '@rw/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@rw/livestore':
+        specifier: workspace:*
+        version: link:../../packages/livestore
       '@rw/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime

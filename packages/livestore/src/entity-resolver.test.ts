@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const readEntityFieldValue = vi.fn();
-vi.mock("@rw/services/graph/index", () => ({
+vi.mock("./graph/index.js", () => ({
   nodes: {
     readEntityFieldValue: (...args: unknown[]) => readEntityFieldValue(...args),
   },

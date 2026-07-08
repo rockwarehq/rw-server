@@ -10,6 +10,7 @@
   "references": [
     { "path": "../../packages/db" },
     { "path": "../../packages/services" },
-    { "path": "../../packages/runtime" }
+    { "path": "../../packages/runtime" },
+    { "path": "../../packages/livestore" }
   ]
 }

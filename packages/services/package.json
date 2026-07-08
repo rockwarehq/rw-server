@@ -16,7 +16,6 @@
     "./email/*": "./dist/email/*.js",
     "./employee/*": "./dist/employee/*.js",
     "./entity/*": "./dist/entity/*.js",
-    "./graph/*": "./dist/graph/*.js",
     "./iam/*": "./dist/iam/*.js",
     "./job/*": "./dist/job/*.js",
     "./facility/*": "./dist/facility/*.js",

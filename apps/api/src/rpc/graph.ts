@@ -1,9 +1,9 @@
 import { ORPCError } from "@orpc/server";
 import { GRAPH_TYPE_INPUT_VALUE_TYPES, GRAPH_TYPE_VALUE_TYPES } from "@rw/runtime/livestore-graph-types";
 import { z } from "zod";
-import * as graph from "@rw/services/graph/index";
+import * as graph from "@rw/livestore/graph/index";
 import { hasPermission, type Permission } from "@rw/services/iam/index";
-import type { GraphScope } from "@rw/services/graph/types";
+import type { GraphScope } from "@rw/livestore/graph/types";
 import { Principal } from "../services/auth/index.js";
 
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
