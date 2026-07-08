@@ -9,6 +9,8 @@ allowBuilds:
   lmdb: true
   msgpackr-extract: true
   prisma: true
+  sharp: true
+  unrs-resolver: true
 
 onlyBuiltDependencies:
   - '@prisma/engines'
@@ -17,3 +19,5 @@ onlyBuiltDependencies:
   - lmdb
   - msgpackr-extract
   - prisma
+  - sharp
+  - unrs-resolver

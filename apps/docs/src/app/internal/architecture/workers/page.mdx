@@ -1,0 +1,62 @@
+export const metadata = {
+  title: 'Background Work',
+  description: 'The workers binary, the in-process API workers, and the full job inventory.',
+}
+
+# Background Work
+
+Background processing is split between light in-process workers inside `apps/api` and the dedicated `apps/workers` binary. The split rule: anything that must scale with HTTP traffic or needs request-path coupling stays in api; anything heavy, stateful, or singleton moves to workers. {{ className: 'lead' }}
+
+## The workers binary
+
+`apps/workers/src/main.ts` — one binary, one mode per process, selected with `--worker <name>` (or `WORKER` env):
+
+| Mode | File | What it does |
+| --- | --- | --- |
+| `rollups` | `src/rollups.ts` | The entire metric-rollup pipeline (below) |
+| `imm-events` | `src/imm-events.ts` | JetStream consumer for livestore hook events → records cycles (`imm.cycle_completed` → `services/cycle.complete()`) |
+| `gateway-health` | `src/gateway-health.ts` | Mirrors gateway health snapshots from NATS into prom-client gauges at `/metrics` (Fly Prometheus → Grafana); sweeps `gateway_up` to 0 after 90s of silence |
+
+Every mode gets the shared http-host (`/healthz`, `/readyz`, `/metrics`) and lifecycle drain from `@rw/runtime`. Rollups can use `DATABASE_URL_ROLLUPS` for a **direct** (non-pgbouncer) connection — its long CTE queries break under transaction-mode pooling.
+
+## The rollups pipeline
+
+Five tightly-coupled pieces in one process (they share `MetricsContext` caches and callback-chain into each other — see the header comment in `src/rollups.ts`):
+
+- **metric-bucket-ensure** — self-chaining ~60s tick that materializes upcoming `MetricBucket` rows per entity/granularity so ingestion never misses a bucket
+- **shift-bucket-create** — BullMQ producer+consumer creating shift-scoped buckets
+- **shift-change** — BullMQ delayed jobs firing at shift boundaries; triggers an ensure tick
+- **combined metrics tick** — 5s `setInterval` advancing live calculations (elapsed windows, downtime accumulation) plus the dirty-bucket consumer that batch-recomputes
+- **archive** — called from inside the ensure tick; moves past-business-date buckets to `MetricBucketLog`
+
+<Note>
+  **Rollups is a singleton.** Run exactly one rollups machine per tenant — the
+  combined tick assumes it is alone; a second instance double-counts. The fly
+  config pins the process group's machine count.
+</Note>
+
+## In-process API workers
+
+Documented in the `apps/api/src/main.ts` header comment (keep it current):
+
+| Job | Cadence | Purpose |
+| --- | --- | --- |
+| `stale-gateway-check` | 30s repeating | Mark gateways OFFLINE when heartbeats stop |
+| `station-detect` (slow + down) | event-driven | Detect slow cycles / stopped stations after each completion; writes `StationStateLog` |
+| `replay-reconcile` | on-boot (`recoverReplayWindows`) + queued | Re-process event windows missed during downtime |
+
+The API also initializes **producer-side** queues (metric buckets, station detection) that its HTTP handlers enqueue against — consumers may live in workers.
+
+## Shared runtime (`packages/runtime`)
+
+- **events-bus** — Redis pub/sub bridge with modes: api boots `both` (its own publishes loop back through Redis so SSE on other machines stays consistent); workers boot `publisher`. Not durable — durability belongs to JetStream/BullMQ; the bus is for fan-out nudges.
+- **queues** — BullMQ factories with shared connection options and job defaults.
+- **http-host** — the tiny health/metrics server every worker process runs.
+- **lifecycle** — SIGTERM orchestration: stop intake → drain in-flight → close connections. Both apps register closers here; killing a worker mid-job is safe (BullMQ redelivers) but draining avoids latency spikes.
+
+## Rules of thumb
+
+- New heavy/periodic job → `rollups` (if metrics-adjacent) or a new worker mode.
+- New event-driven consumer of JetStream → its own worker mode (follow `imm-events`).
+- Never add a second consumer of a singleton tick without redesigning for it.
+- Producers and consumers share payload types — keep them in `@rw/services/queues/*` so api and workers can't drift.

@@ -1,0 +1,59 @@
+export const metadata = {
+  title: 'Livestore',
+  description: 'The reactive graph engine that powers live dashboards and interprets edge signals.',
+}
+
+# Livestore
+
+Livestore (`packages/livestore` + `apps/livestore`) is a user-configurable reactive computation graph: nodes bundle **properties** whose values come from PLC tags, entity fields, metrics, or expressions — and every change propagates live to websocket clients. The full design doc is `packages/livestore/spec.md`; this page is the orientation. {{ className: 'lead' }}
+
+## What problem it solves
+
+Shop-floor dashboards need live, derived values ("current cycle time vs standard", "workcenter OEE weighted by station"). Without livestore, that logic would be hardcoded per dashboard. Instead, the graph makes it configuration: properties declare *where a value comes from and how it's derived*, the engine keeps everything current, and clients just subscribe.
+
+It also acts as the platform's **signal interpreter**: graph hooks turn raw tag changes into typed domain events (see [Edge & Data Pipeline](/internal/architecture/edge)).
+
+## Concepts
+
+- **Node** — a named bundle of properties, optionally entity-backed (`entityType` + `entityId` → a real Station/Workcenter/Site).
+- **Property** — the addressable unit of computation. Output is always a `ValueEnvelope`: `{ value, quality: good|stale|uncertain|bad, timestamp, context? }`.
+- **Resolver** — the property's value source, a discriminated union:
+
+| Resolver | Source |
+| --- | --- |
+| `tag` | NATS subject derived from `deviceId` + `tagPath` (live edge data) |
+| `entity` | A Prisma field/relation on the bound entity |
+| `metric` | A `MetricBucket` column, via the metrics→NATS bridge |
+| `expr` | mathjs expression over other properties (sandboxed; deps become graph edges) |
+| `window` | Time aggregation — tumbling buckets or EWMA, state persisted in NATS KV |
+| `rollup` | Structural aggregation over child assets (sum / weighted avg), max depth 3 |
+
+Configuration lives in Postgres (`GraphNode`, `GraphProperty`, `GraphEdge`, `GraphHook` — `packages/db/schema/graph.prisma`); **values never touch Postgres** — current values live in the NATS KV bucket `imm_cvt` (key `prop.<id>`), aggregation state in `imm_agg_state`.
+
+## The engine loop
+
+1. Boot: load graph from Postgres, build dependency adjacency, compile expressions, seed values from KV, subscribe (NATS tag subjects, metric subjects, domain-event feed for entity properties).
+2. Input arrives → property value updates → dependents marked **dirty** (transitively).
+3. A ~50ms coalescing tick topo-sorts the dirty set (Kahn), evaluates expr/window/rollup properties in order, and writes changed envelopes to KV.
+4. **Quality propagates worst-of-inputs** — one stale input makes the output stale; failed evaluation yields `quality: bad` with the error in context.
+5. Property saves run **cycle detection** (DFS) before persisting; edges are rebuilt per save, and the engine hot-reloads off the graph-definition feed published by the API.
+
+## Hooks: graph → domain events
+
+A `GraphHook` watches one property with a condition (edge operators: `increases`, `decreases`, `crossesAbove`, `crossesBelow`), gated on good quality. When it fires, the engine resolves the configured context from current graph values and publishes a versioned event to JetStream:
+
+```
+livestore.events.<siteId>.<namespace>.<name>.v<version>
+```
+
+The event catalog (`packages/livestore/src/catalog/events.ts`) types these. Today's flagship consumer: `imm.cycle_completed` → the `imm-events` worker → cycle recording.
+
+## Client delivery: `/ws/graph`
+
+The websocket gateway (recently hardened) speaks a minimal protocol — `{ op: "subscribe", propertyIds: [...] }` in, `{ op: "value", propertyId, envelope }` out. Per-subscription it sends the current KV value then watches for updates. Backpressure: if a socket buffers > 1 MB, intermediate updates are dropped and only the latest value per property is sent when it drains. API tokens (`graph:read`) can authenticate here without a DB pool (prisma-free verifier in `@rw/auth`).
+
+## Operational notes
+
+- One livestore machine per tenant; no sharding; HA is explicitly deferred (spec §non-goals).
+- Restart behavior is spec'd: window state rehydrates from KV; skipped tumbling buckets emit as `stale`.
+- The engine reads Postgres only for configuration — all hot-path data flows through NATS.
