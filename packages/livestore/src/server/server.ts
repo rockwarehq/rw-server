@@ -4,7 +4,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 
 import { parseEnvelopeText } from "../store/cvg-store.js";
 import type { GraphRuntime } from "../engine/runtime.js";
-import type { LivestoreLogger } from "../types/index.js";
+import type { LivestoreLogger, ValueEnvelope } from "../types/index.js";
 import { bearerFromAuthorizationHeader, type LivestorePrincipal } from "./auth.js";
 
 // Structural so tests (and future transports) can stub it; LivestoreAuthenticator
@@ -270,6 +270,10 @@ export function registerGraphRoutes(
 
     // lates wins per property to avoid backpressure
     const pending = new Map<string, unknown>();
+    // Highest timestamp sent per property: the initial read can serve a queued
+    // write-behind value newer than the KV watcher's first delivery, and the
+    // client must never see the older one after it.
+    const lastSentTs = new Map<string, number>();
     let drainTimer: ReturnType<typeof setInterval> | null = null;
 
     const clearDrainTimer = () => {
@@ -298,8 +302,11 @@ export function registerGraphRoutes(
       }
     };
 
-    const sendValue = (propertyId: string, envelope: unknown) => {
+    const sendValue = (propertyId: string, envelope: ValueEnvelope) => {
       if (ws.readyState !== OPEN) return;
+      const last = lastSentTs.get(propertyId);
+      if (last !== undefined && envelope.timestamp < last) return;
+      lastSentTs.set(propertyId, envelope.timestamp);
       pending.set(propertyId, envelope);
       flushPending();
     };
@@ -307,11 +314,15 @@ export function registerGraphRoutes(
     const stopWatcher = (propertyId: string) => {
       watchers.get(propertyId)?.stop();
       watchers.delete(propertyId);
+      lastSentTs.delete(propertyId);
     };
 
+    let closed = false;
     const stopAll = () => {
+      closed = true;
       for (const propertyId of watchers.keys()) stopWatcher(propertyId);
       pending.clear();
+      lastSentTs.clear();
       clearDrainTimer();
       clearInterval(heartbeatTimer);
       clearAuthTimers();
@@ -319,6 +330,9 @@ export function registerGraphRoutes(
 
     const subscribe = async (propertyIds: string[]) => {
       for (const propertyId of propertyIds) {
+        // Re-check after every await: close can land mid-subscribe, and a
+        // watcher created after stopAll would leak untracked.
+        if (closed) return;
         if (watchers.has(propertyId)) continue;
         if (watchers.size >= opts.maxWatchersPerConnection) {
           sendJson({ op: "error", error: "subscription limit reached", code: "SUBSCRIPTION_LIMIT" });
@@ -326,10 +340,16 @@ export function registerGraphRoutes(
         }
 
         const initial = (await runtime.getCvgValue(propertyId)) ?? runtime.getCurrentOrStale(propertyId);
+        if (closed) return;
         sendValue(propertyId, initial);
 
         const watcher = await runtime.watchCvgValue(propertyId);
-        watchers.set(propertyId, { stop: () => watcher.stop() });
+        if (closed) {
+          watcher.stop();
+          return;
+        }
+        const handle = { stop: () => watcher.stop() };
+        watchers.set(propertyId, handle);
         void (async () => {
           try {
             for await (const entry of watcher) {
@@ -340,14 +360,21 @@ export function registerGraphRoutes(
           } catch (err) {
             server.log.warn({ err, propertyId }, "livestore websocket KV watcher stopped");
           } finally {
-            watchers.delete(propertyId);
+            // Only untrack our own registration: an unsubscribe + resubscribe
+            // replaces the map entry while this loop is still winding down,
+            // and deleting unconditionally would orphan the new watcher.
+            if (watchers.get(propertyId) === handle) watchers.delete(propertyId);
           }
         })();
       }
     };
 
+    // Messages are handled strictly in order on a per-connection chain:
+    // concurrent subscribe tasks would race the watchers map and its cap
+    // (duplicate/leaked KV watchers) across the awaits inside subscribe.
+    let messageChain: Promise<void> = Promise.resolve();
     ws.on("message", (raw) => {
-      void (async () => {
+      const run = async () => {
         // Settle in-flight header authentication before judging auth state.
         await initialAuth;
 
@@ -394,7 +421,8 @@ export function registerGraphRoutes(
         }
 
         sendJson({ op: "error", error: "unsupported op", code: "INVALID_MESSAGE" });
-      })().catch((err) => {
+      };
+      messageChain = messageChain.then(run).catch((err) => {
         server.log.warn({ err }, "livestore websocket message failed");
         sendJson({ op: "error", error: "message failed", code: "INTERNAL" });
       });

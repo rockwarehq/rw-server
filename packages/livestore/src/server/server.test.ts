@@ -84,9 +84,13 @@ afterEach(async () => {
   while (cleanups.length > 0) await cleanups.pop()?.();
 });
 
-async function startServer(options?: GraphSocketOptions, auth: GraphAuthenticator = makeAuthStub()) {
+async function startServer(
+  options?: GraphSocketOptions,
+  auth: GraphAuthenticator = makeAuthStub(),
+  runtime: GraphRuntime = makeRuntimeStub(),
+) {
   const server = await createLivestoreServer();
-  registerGraphRoutes(server, makeRuntimeStub(), auth, options);
+  registerGraphRoutes(server, runtime, auth, options);
   await server.listen({ port: 0, host: "127.0.0.1" });
   cleanups.push(() => server.close());
   const { port } = server.server.address() as AddressInfo;
@@ -342,5 +346,146 @@ describe("/graph/live", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(ws.readyState).toBe(WebSocket.OPEN);
+  });
+});
+
+// Watcher whose lifecycle the test controls: stop() only records the call (the
+// iterator keeps running until end()), and push() delivers KV entries.
+interface TestWatcher {
+  stopCalled: boolean;
+  push: (envelope: unknown) => void;
+  end: () => void;
+  stop: () => void;
+  [Symbol.asyncIterator]: () => AsyncIterator<{ string(): string }>;
+}
+
+function makeTestWatcher(): TestWatcher {
+  const queue: Array<{ string(): string } | null> = [];
+  let wake: (() => void) | null = null;
+  const notify = () => {
+    wake?.();
+    wake = null;
+  };
+  const watcher: TestWatcher = {
+    stopCalled: false,
+    push(envelope) {
+      queue.push({ string: () => JSON.stringify(envelope) });
+      notify();
+    },
+    end() {
+      queue.push(null);
+      notify();
+    },
+    stop() {
+      watcher.stopCalled = true;
+    },
+    async *[Symbol.asyncIterator]() {
+      for (;;) {
+        while (queue.length === 0) await new Promise<void>((resolve) => (wake = resolve));
+        const item = queue.shift();
+        if (item === null || item === undefined) return;
+        yield item;
+      }
+    },
+  };
+  return watcher;
+}
+
+function makeInstrumentedRuntime(overrides?: { getCvgValue?: () => Promise<unknown> }) {
+  const createdWatchers = new Map<string, TestWatcher[]>();
+  const stub = {
+    isReady: () => true,
+    counts: () => ({}),
+    listNodes: () => [NODE_A, NODE_B],
+    listNodesForSite: (siteId: string) => [NODE_A, NODE_B].filter((node) => node.siteId === siteId),
+    getNode: (id: string) => [NODE_A, NODE_B].find((node) => node.id === id),
+    getPropertySiteId: (id: string) => (id.startsWith("x-") ? SITE_B : SITE_A),
+    getCvgValue: overrides?.getCvgValue ?? (async () => ENVELOPE),
+    getCurrentOrStale: () => ENVELOPE,
+    watchCvgValue: async (propertyId: string) => {
+      const watcher = makeTestWatcher();
+      const list = createdWatchers.get(propertyId) ?? [];
+      list.push(watcher);
+      createdWatchers.set(propertyId, list);
+      return watcher;
+    },
+  };
+  return { runtime: stub as unknown as GraphRuntime, createdWatchers };
+}
+
+describe("/graph/live watcher lifecycle", () => {
+  it("concurrent subscribes for the same property create exactly one watcher", async () => {
+    // Hold the first subscribe open across its initial read so a second
+    // subscribe message arrives while it is still in flight.
+    let releaseRead: () => void = () => {};
+    const readGate = new Promise<void>((resolve) => (releaseRead = resolve));
+    let firstRead = true;
+    const { runtime, createdWatchers } = makeInstrumentedRuntime({
+      getCvgValue: async () => {
+        if (firstRead) {
+          firstRead = false;
+          await readGate;
+        }
+        return ENVELOPE;
+      },
+    });
+    const { wsUrl } = await startServer(undefined, makeAuthStub(), runtime);
+    const { ws, messages } = await openAuthedSocket(wsUrl);
+
+    ws.send(JSON.stringify({ op: "subscribe", propertyIds: ["p1"] }));
+    ws.send(JSON.stringify({ op: "subscribe", propertyIds: ["p1"] }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    releaseRead();
+    await waitFor(() => messages.some((m) => m.op === "value"));
+
+    expect(createdWatchers.get("p1") ?? []).toHaveLength(1);
+  });
+
+  it("a winding-down watcher does not untrack its replacement (unsubscribe + resubscribe)", async () => {
+    const { runtime, createdWatchers } = makeInstrumentedRuntime();
+    const { wsUrl } = await startServer(undefined, makeAuthStub(), runtime);
+    const { ws, messages } = await openAuthedSocket(wsUrl);
+
+    ws.send(JSON.stringify({ op: "subscribe", propertyIds: ["p1"] }));
+    await waitFor(() => (createdWatchers.get("p1") ?? []).length === 1);
+    const first = createdWatchers.get("p1")![0]!;
+
+    ws.send(JSON.stringify({ op: "unsubscribe", propertyIds: ["p1"] }));
+    await waitFor(() => first.stopCalled);
+
+    ws.send(JSON.stringify({ op: "subscribe", propertyIds: ["p1"] }));
+    await waitFor(() => (createdWatchers.get("p1") ?? []).length === 2);
+    const second = createdWatchers.get("p1")![1]!;
+
+    // The first watcher's loop only now winds down — after the replacement
+    // was registered. It must not delete the replacement's tracking entry.
+    first.end();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    ws.close();
+    await waitFor(() => second.stopCalled);
+    expect(messages.filter((m) => m.op === "value")).toHaveLength(2);
+  });
+
+  it("drops watcher deliveries older than the initial value", async () => {
+    const newer = { value: 10, quality: "good", timestamp: 100 };
+    const { runtime, createdWatchers } = makeInstrumentedRuntime({
+      // Initial read serves a queued write-behind value newer than KV.
+      getCvgValue: async () => newer,
+    });
+    const { wsUrl } = await startServer(undefined, makeAuthStub(), runtime);
+    const { ws, messages } = await openAuthedSocket(wsUrl);
+
+    ws.send(JSON.stringify({ op: "subscribe", propertyIds: ["p1"] }));
+    await waitFor(() => messages.some((m) => m.op === "value"));
+    const watcher = createdWatchers.get("p1")![0]!;
+
+    // KV watch replays the older stored value, then a genuinely new one lands.
+    watcher.push({ value: 9, quality: "good", timestamp: 50 });
+    watcher.push({ value: 11, quality: "good", timestamp: 150 });
+    await waitFor(() => messages.some((m) => (m.envelope as { timestamp?: number })?.timestamp === 150));
+
+    const timestamps = messages.filter((m) => m.op === "value").map((m) => (m.envelope as { timestamp: number }).timestamp);
+    expect(timestamps).toEqual([100, 150]);
   });
 });
