@@ -1,5 +1,6 @@
+import { runReadinessChecks } from "../readiness.js";
 import type { FastifyTypedInstance } from "../types/fastify.js";
-import { healthResponseSchema } from "./schemas.js";
+import { healthResponseSchema, readinessResponseSchema } from "./schemas.js";
 
 import auth from "./auth.js";
 import users from "./users.js";
@@ -32,6 +33,41 @@ export default async function api(fastify: FastifyTypedInstance) {
       return { status: "ok" };
     },
   });
+
+  // Alias matching apps/workers' http-host naming (/healthz).
+  fastify.route({
+    method: "GET",
+    url: "/healthz",
+    config: { rateLimit: false },
+    schema: { tags: ["Health"], response: { 200: healthResponseSchema } },
+    handler: async () => ({ status: "ok" }),
+  });
+
+  // Readiness: runs the registered dependency checks (db/redis/nats —
+  // registered in main.ts where those connections live). 503 when any
+  // critical check fails; non-critical checks are reported but never flip
+  // readiness. Serves /ready and /readyz (http-host naming).
+  for (const url of ["/ready", "/readyz"]) {
+    fastify.route({
+      method: "GET",
+      url,
+      config: { rateLimit: false },
+      schema: {
+        tags: ["Health"],
+        response: {
+          200: readinessResponseSchema,
+          503: readinessResponseSchema,
+        },
+      },
+      handler: async (_request, reply) => {
+        const { ready, checks } = await runReadinessChecks();
+        return reply.status(ready ? 200 : 503).send({
+          status: ready ? "ready" : "not_ready",
+          checks,
+        });
+      },
+    });
+  }
 
   await fastify.register(auth, { prefix: "/auth" });
   await fastify.register(users, { prefix: "/users" });

@@ -12,6 +12,7 @@ import {
 } from "@rw/runtime/command-subjects";
 import { commands as gatewayCommands } from "@rw/services/device/gateway/index";
 import { moduleLogger } from "./logger.js";
+import { registerReadinessCheck, unregisterReadinessCheck } from "./readiness.js";
 
 const log = moduleLogger("command-bus");
 
@@ -67,7 +68,12 @@ export async function startCommandBus(): Promise<() => Promise<void>> {
 
   log.info({ server: nc.getServer() }, "publishing commands + consuming ack/result");
 
+  // Non-critical: the app deliberately degrades without NATS, so this is
+  // reported in /ready but never flips readiness to 503.
+  registerReadinessCheck("nats", () => !nc.isClosed(), { critical: false });
+
   return async () => {
+    unregisterReadinessCheck("nats");
     gatewayCommands.setCommandSink(null);
     await nc.drain();
   };
