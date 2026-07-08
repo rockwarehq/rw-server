@@ -1,6 +1,6 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import type { Permission } from "@rw/services/iam/index";
-import { hasPermission } from "@rw/services/iam/index";
+import type { Permission } from "@rw/auth/iam/index";
+import { hasPermission } from "@rw/auth/iam/index";
 
 /**
  * Fastify preHandler that enforces a single RBAC permission.

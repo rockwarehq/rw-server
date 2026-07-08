@@ -13,9 +13,9 @@
 import "dotenv/config";
 
 import { createPrismaClient } from "@rw/db";
-import * as hooks from "@rw/services/graph/hooks";
-import * as nodes from "@rw/services/graph/nodes";
-import * as properties from "@rw/services/graph/properties";
+import * as hooks from "@rw/livestore/graph/hooks";
+import * as nodes from "@rw/livestore/graph/nodes";
+import * as properties from "@rw/livestore/graph/properties";
 
 createPrismaClient("api");
 

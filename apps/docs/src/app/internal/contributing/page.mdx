@@ -1,0 +1,56 @@
+export const metadata = {
+  title: 'How to Write Docs',
+  description: 'How to add pages, diagrams, and ADRs to this site.',
+}
+
+# How to Write Docs
+
+The docs site is a Next.js app at `apps/docs`, based on the Tailwind Plus Protocol template. Pages are MDX. {{ className: 'lead' }}
+
+## Running the site
+
+```sh
+pnpm docs:dev      # dev server at http://localhost:30200
+pnpm docs:build    # production build — run before pushing doc changes
+pnpm docs:preview  # serve the production build
+```
+
+## Adding a page
+
+1. Pick the right tree:
+   - `src/app/internal/guides/` — internal how-tos and workflows
+   - `src/app/internal/architecture/` — one page per implemented pattern
+   - `src/app/internal/adrs/` — decision records (see below)
+   - `src/app/` (root) — end-user-facing documentation
+2. Create `<route>/page.mdx` with a metadata export at the top:
+
+   ```mdx
+   export const metadata = {
+     title: 'Page Title',
+     description: 'One-line description.',
+   }
+
+   # Page Title
+
+   ...
+   ```
+
+3. Register it in the sidebar: add a link to `internalNavigation` (or `publicNavigation`) in `src/components/Navigation.tsx`.
+
+## MDX extras
+
+- **Mermaid diagrams**: use a fenced code block with the `mermaid` language tag — it renders as a diagram in the browser and adapts to dark mode.
+- **`h2` sections** are picked up automatically for the table of contents and search index.
+- The template ships useful components you can use directly in MDX: `<Note>` for callouts, `<Row>`/`<Col>` for two-column layouts, and `<CodeGroup>` for tabbed code examples.
+- MDX is stricter than plain markdown: literal `<` and `{` in prose must be escaped or wrapped in backticks.
+
+## Writing an ADR
+
+1. Copy `src/app/internal/adrs/template/page.mdx` to `src/app/internal/adrs/NNNN-kebab-case-title/page.mdx` using the next free number.
+2. Fill it in; open a PR with status `Proposed`.
+3. When agreed, flip the status to `Accepted`.
+4. Add a row to the log table in the [ADR log](/internal/adrs) and a sidebar entry in `src/components/Navigation.tsx`.
+
+## Internal vs end-user docs
+
+Everything under `/internal` is the internal tree with its own sidebar; the root tree is end-user-facing. Search currently indexes both — before any public deployment, the internal tree must be excluded from the build (see the TODO in `src/mdx/search.mjs`).

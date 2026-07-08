@@ -1,0 +1,58 @@
+export const metadata = {
+  title: 'Auth & IAM',
+  description: 'Token types, principals, RBAC, and the security hardening baked into packages/auth.',
+}
+
+# Auth & IAM
+
+Authentication and authorization split across two layers: `packages/auth` owns tokens, IAM context, and RBAC; `apps/api/src/auth/` owns the Fastify wiring (plugin, session routes). {{ className: 'lead' }}
+
+## Principals
+
+Every request resolves to an `IAMContext` (`packages/auth/src/context.ts`) with one of five principals:
+
+| Principal | Who | Token | Scope |
+| --- | --- | --- | --- |
+| `USER` | Human user | 15-min access JWT + 7-day refresh token | workspace, optional site |
+| `DISPLAY` | Shop-floor display device | Display JWT | bound to one site (+ optional dashboard/workcenter/station) |
+| `APP` | Customer integration | Opaque `rw_app_…` API token | workspace + site, read-only (`graph:read`) |
+| `WORKER` | Internal process | — | internal |
+| `UNKNOWN` | Failed/absent auth | — | none |
+
+The Fastify auth plugin (`apps/api/src/auth/plugin.ts`) runs as a preHandler on every request: it inspects the `Authorization` header, routes by token shape (`rw_` prefix → API-token lookup, otherwise JWT verify), hydrates the principal from the DB (user status, workspace membership, site access), and sets `request.iam`.
+
+## JWT design (`packages/auth/src/verify.ts`)
+
+Hardened in the `feat(auth)` commit series (`229ca44`…`de91f01`):
+
+- **Startup secret validation** (`env.ts`): production boot crashes unless `JWT_SECRET` is set, ≥ 32 chars, and not the dev default. No silent fallback.
+- **Algorithm pinning**: HS256 only — no alg-confusion attacks.
+- **Per-principal keys**: signing keys are HKDF-derived from the master secret per audience (`rw-auth:<audience>:v1`), so a user token can never verify as a display token.
+- **`iss`/`aud`/`exp`/`iat` enforced** on every verify.
+- **Expired vs invalid distinguished** — clients get `TOKEN_EXPIRED` (refresh and retry) vs `TOKEN_INVALID` (re-login).
+
+## Refresh tokens (`packages/auth/src/tokens.ts`)
+
+- Stored only as SHA-256 hashes; 7-day expiry; rotation on every `/auth/refresh`.
+- **Reuse detection with family revocation**: presenting an already-rotated token means the family is compromised — all refresh tokens for that user are revoked and every device re-authenticates.
+- Login and password-change endpoints are rate-limited (brute-force protection config in `apps/api/src/config.ts`; user lockout state on the `User` model).
+
+## API tokens (`packages/auth/src/api-tokens.ts`)
+
+Opaque `rw_app_`-prefixed tokens for customer integrations: SHA-256 hash lookup (O(1)), workspace+site-scoped, v1 scope is read-only `graph:read`, `lastUsed` updated at most every 5 minutes (fire-and-forget). Rejections don't reveal whether a token exists. The livestore app verifies these without opening a second DB pool (prisma-free verifier).
+
+## Secrets hygiene (`packages/auth/src/secrets.ts`)
+
+- `safeEqual()` — SHA-256 both sides, then `timingSafeEqual`; used anywhere a shared secret is compared (e.g. gateway tokens in `apps/api/src/edge.ts`).
+- Opaque tokens use deterministic SHA-256 (fast lookup); **user passwords use bcrypt** — different tools for different jobs.
+
+## RBAC
+
+- Permissions are `resource:action` strings (e.g. `facility:write`, `cycle:create`); the catalog lives in code (`packages/auth/src/iam/`), not the database.
+- `Role` rows (schema: `packages/db/schema/iam.prisma`) are WORKSPACE- or SITE-scoped with a `permissions: String[]`; `RoleAssignment` links a `WorkspaceMembership` to a role, optionally narrowed to one site.
+- `SystemRole` (SUPPORT, ENGINEER) marks internal staff without workspace membership.
+- Enforcement is two-tier: oRPC middleware asserts a valid principal type; handlers call `hasPermission(userId, permission, { workspaceId, siteId? })` before mutating.
+
+## Session flow (app-side, `apps/api/src/auth/session.ts`)
+
+`login()` → access + refresh pair; `refreshSession()` → rotate; `logout()` → revoke + audit log; `switchWorkspace()`/`switchSite()` re-issue the access token with new scope claims. Auth-relevant actions (login success, password change, token creation, …) are recorded in `AuditLog` with actor, IP, and user agent.

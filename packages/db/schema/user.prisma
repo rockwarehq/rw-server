@@ -42,6 +42,7 @@ model User {
   refreshTokens         RefreshToken[]
   shiftComments         ShiftComment[]
   materialLedgerEntries MaterialLedgerEntry[]
+  apiTokensCreated      ApiToken[]
 }
 
 model RefreshToken {

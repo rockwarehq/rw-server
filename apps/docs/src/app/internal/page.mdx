@@ -1,0 +1,22 @@
+export const metadata = {
+  title: 'Internal Dev Docs',
+  description: 'Guides, architecture patterns, and decision records for the rw-server monorepo.',
+}
+
+# Internal Dev Docs
+
+Internal documentation for the rw-server monorepo. {{ className: 'lead' }}
+
+## Sections
+
+- **[Guides](/internal/guides/local-development)** — how-tos for local development, workflows, and tooling.
+- **[Architecture Patterns](/internal/architecture)** — system structure and recurring patterns across apps and packages.
+- **[ADRs](/internal/adrs)** — Architecture Decision Records: why things are the way they are.
+
+## Contributing
+
+Docs are MDX pages in `apps/docs` — see [How to Write Docs](/internal/contributing).
+
+```sh
+pnpm docs:dev   # this site at http://localhost:30200
+```

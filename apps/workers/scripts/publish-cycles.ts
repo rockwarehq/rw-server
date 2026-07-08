@@ -27,7 +27,7 @@ import {
   LIVESTORE_EVENT_SUBJECT_FILTER,
   livestoreEventType,
   type LivestoreHookEvent,
-} from "@rw/runtime/livestore-events";
+} from "@rw/livestore/catalog/events";
 
 createPrismaClient("api");
 

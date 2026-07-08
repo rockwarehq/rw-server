@@ -2,7 +2,7 @@ import "dotenv/config";
 
 import { createPrismaClient } from "@rw/db";
 
-import { connectNatsResources, stopNatsResources } from "../nats.js";
+import { connectNatsResources, stopNatsResources } from "@rw/livestore";
 import { deriveMetricSubject } from "@rw/runtime/graph-subjects";
 
 // Mimics the metrics worker: ramps shift goodItems for a handful of stations and

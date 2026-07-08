@@ -3,8 +3,7 @@ import "dotenv/config";
 import { createPrismaClient } from "@rw/db";
 
 import { deriveTagSubject } from "@rw/runtime/graph-subjects";
-import { validateWindowResolver } from "../window-validate.js";
-import type { Aggregation, WindowResolverConfig } from "../types.js";
+import { type Aggregation, type WindowResolverConfig, validateWindowResolver } from "@rw/livestore";
 
 const nodeName = process.env.GRAPH_NODE_NAME ?? "Press 7";
 const propertyName = process.env.GRAPH_PROPERTY_NAME ?? "cycleTime";

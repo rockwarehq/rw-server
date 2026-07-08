@@ -1,0 +1,436 @@
+import type { PrismaClient } from "@rw/db";
+
+import type { CvgStore } from "../store/cvg-store.js";
+import { DependencyGraph } from "./dependency-graph.js";
+import {
+  parseGraphResolver,
+  staleEnvelope,
+  type GraphEdgeRuntime,
+  type GraphSnapshotNode,
+  type LivestoreLogger,
+  type NodeRuntime,
+  type PropertyRuntime,
+  type ValueEnvelope,
+} from "../types/index.js";
+
+interface LoadedNodeDefinition {
+  node: NodeRuntime;
+  properties: PropertyRuntime[];
+  edges: GraphEdgeRuntime[];
+}
+
+interface LoadedPropertyDefinition {
+  node: NodeRuntime;
+  property: PropertyRuntime;
+  edges: GraphEdgeRuntime[];
+}
+
+export interface KernelPropertyUpsert {
+  previous: PropertyRuntime | null;
+  current: PropertyRuntime;
+}
+
+export interface KernelPatchResult {
+  upsertedProperties: KernelPropertyUpsert[];
+  removedProperties: PropertyRuntime[];
+}
+
+export class GraphKernel {
+  private readonly nodes = new Map<string, NodeRuntime>();
+  private readonly properties = new Map<string, PropertyRuntime>();
+  private readonly dependencyGraph: DependencyGraph;
+  private rollupEdges: GraphEdgeRuntime[] = [];
+
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly cvg: CvgStore,
+    private readonly logger: LivestoreLogger,
+  ) {
+    this.dependencyGraph = new DependencyGraph(logger);
+  }
+
+  async load(): Promise<void> {
+    const nodes = await this.prisma.graphNode.findMany({
+      where: { isDeleted: false },
+      include: {
+        properties: {
+          where: { isDeleted: false },
+          orderBy: { name: "asc" },
+        },
+      },
+      orderBy: { name: "asc" },
+    });
+
+    const edges = await this.prisma.graphEdge.findMany({
+      where: {
+        fromProperty: { isDeleted: false, node: { isDeleted: false } },
+        toProperty: { isDeleted: false, node: { isDeleted: false } },
+      },
+    });
+
+    this.nodes.clear();
+    this.properties.clear();
+
+    const loadStartedAt = Date.now();
+    const propertyRows: Array<(typeof nodes)[number]["properties"][number]> = [];
+    for (const node of nodes) {
+      const runtimeNode: NodeRuntime = {
+        id: node.id,
+        name: node.name,
+        siteId: node.siteId,
+        typeRef: node.typeRef,
+        typeContext: parseTypeContext(node.typeContext),
+        propertyIds: node.properties.map((property) => property.id),
+      };
+      this.nodes.set(node.id, runtimeNode);
+      propertyRows.push(...node.properties);
+    }
+
+    // One KV round-trip per property: hydrate concurrently or boot time scales
+    // linearly with the graph. Order within each node is preserved by index.
+    const hydrated = await mapWithConcurrency(propertyRows, CVG_HYDRATE_CONCURRENCY, (row) =>
+      this.hydrateProperty(row),
+    );
+    for (const runtimeProperty of hydrated) this.properties.set(runtimeProperty.id, runtimeProperty);
+
+    const runtimeEdges: GraphEdgeRuntime[] = edges.map((edge) => ({
+      id: edge.id,
+      fromPropertyId: edge.fromPropertyId,
+      toPropertyId: edge.toPropertyId,
+    }));
+    this.dependencyGraph.rebuild(this.properties.values(), runtimeEdges);
+
+    this.logger.info(
+      {
+        nodeCount: this.nodes.size,
+        propertyCount: this.properties.size,
+        edgeCount: runtimeEdges.length,
+        loadMs: Date.now() - loadStartedAt,
+      },
+      "livestore kernel loaded",
+    );
+  }
+
+  async loadNodeDefinition(nodeId: string): Promise<LoadedNodeDefinition | null> {
+    const node = await this.prisma.graphNode.findFirst({
+      where: { id: nodeId, isDeleted: false },
+      include: {
+        properties: {
+          where: { isDeleted: false },
+          orderBy: { name: "asc" },
+        },
+      },
+    });
+    if (!node) return null;
+
+    const properties = await mapWithConcurrency(node.properties, CVG_HYDRATE_CONCURRENCY, (property) =>
+      this.hydrateProperty(property),
+    );
+    const edges = await this.loadIncomingStaticEdges(properties.map((property) => property.id));
+
+    return {
+      node: {
+        id: node.id,
+        name: node.name,
+        siteId: node.siteId,
+        typeRef: node.typeRef,
+        typeContext: parseTypeContext(node.typeContext),
+        propertyIds: properties.map((property) => property.id),
+      },
+      properties,
+      edges,
+    };
+  }
+
+  async loadPropertyDefinition(propertyId: string): Promise<LoadedPropertyDefinition | null> {
+    const property = await this.prisma.graphProperty.findFirst({
+      where: { id: propertyId, isDeleted: false, node: { isDeleted: false } },
+      include: { node: true },
+    });
+    if (!property) return null;
+    const runtimeProperty = await this.hydrateProperty(property);
+    const edges = await this.loadIncomingStaticEdges([property.id]);
+
+    return {
+      node: {
+        id: property.node.id,
+        name: property.node.name,
+        siteId: property.node.siteId,
+        typeRef: property.node.typeRef,
+        typeContext: parseTypeContext(property.node.typeContext),
+        propertyIds: [],
+      },
+      property: runtimeProperty,
+      edges,
+    };
+  }
+
+  applyNodeDefinition(definition: LoadedNodeDefinition): KernelPatchResult {
+    const previousProperties = this.getNodeProperties(definition.node.id);
+    const nextIds = new Set(definition.properties.map((property) => property.id));
+    const removedProperties = previousProperties
+      .filter((property) => !nextIds.has(property.id))
+      .map((property) => this.cloneProperty(property));
+
+    const runtimeNode: NodeRuntime = { ...definition.node, propertyIds: [] };
+    this.nodes.set(runtimeNode.id, runtimeNode);
+
+    const upsertedProperties: KernelPropertyUpsert[] = [];
+    for (const property of definition.properties) {
+      // Look up across ALL nodes, not just this one: a property that moved in
+      // from another node must keep its live value and leave the old node's
+      // membership, or the old node's snapshot lists it forever.
+      const existing = this.properties.get(property.id);
+      const previous = existing ? this.cloneProperty(existing) : null;
+      const current = { ...property, current: previous?.current ?? property.current };
+      if (existing && existing.nodeId !== runtimeNode.id) {
+        const oldNode = this.nodes.get(existing.nodeId);
+        if (oldNode) oldNode.propertyIds = oldNode.propertyIds.filter((id) => id !== property.id);
+      }
+      runtimeNode.propertyIds.push(current.id);
+      this.properties.set(current.id, current);
+      upsertedProperties.push({ previous, current });
+    }
+
+    for (const property of removedProperties) this.properties.delete(property.id);
+
+    const targetIds = definition.properties.map((property) => property.id);
+    const removedIds = removedProperties.map((property) => property.id);
+    this.dependencyGraph.removeProperties(removedIds);
+    this.dependencyGraph.upsertProperties(definition.properties);
+    this.dependencyGraph.replaceEdges({
+      targetPropertyIds: targetIds,
+      removeIncidentPropertyIds: removedIds,
+      edges: [...definition.edges, ...this.rollupEdges],
+    });
+
+    return { upsertedProperties, removedProperties };
+  }
+
+  applyPropertyDefinition(definition: LoadedPropertyDefinition): KernelPatchResult {
+    const node = this.nodes.get(definition.node.id) ?? { ...definition.node, propertyIds: [] };
+    node.name = definition.node.name;
+    node.siteId = definition.node.siteId; // feeds subscription auth via getPropertySiteId
+    node.typeRef = definition.node.typeRef;
+    node.typeContext = definition.node.typeContext;
+    this.nodes.set(node.id, node);
+
+    const previous = this.properties.get(definition.property.id);
+    const previousSnapshot = previous ? this.cloneProperty(previous) : null;
+    const current = { ...definition.property, current: previous?.current ?? definition.property.current };
+    this.properties.set(current.id, current);
+    // A property that moved between nodes must leave the old node's membership,
+    // or the old node's snapshot keeps listing it forever.
+    if (previous && previous.nodeId !== current.nodeId) {
+      const oldNode = this.nodes.get(previous.nodeId);
+      if (oldNode) oldNode.propertyIds = oldNode.propertyIds.filter((id) => id !== current.id);
+    }
+    if (!node.propertyIds.includes(current.id)) node.propertyIds.push(current.id);
+    node.propertyIds.sort((a, b) =>
+      (this.properties.get(a)?.name ?? a).localeCompare(this.properties.get(b)?.name ?? b),
+    );
+
+    this.dependencyGraph.upsertProperties([current]);
+    this.dependencyGraph.replaceEdges({
+      targetPropertyIds: [current.id],
+      edges: [...definition.edges, ...this.rollupEdges],
+    });
+
+    return { upsertedProperties: [{ previous: previousSnapshot, current }], removedProperties: [] };
+  }
+
+  removeNode(nodeId: string): KernelPatchResult {
+    const removedProperties = this.getNodeProperties(nodeId).map((property) => this.cloneProperty(property));
+    for (const property of removedProperties) this.properties.delete(property.id);
+    this.nodes.delete(nodeId);
+    const removedIds = removedProperties.map((property) => property.id);
+    this.dependencyGraph.removeProperties(removedIds);
+    this.dependencyGraph.replaceEdges({ removeIncidentPropertyIds: removedIds, edges: this.rollupEdges });
+    return { upsertedProperties: [], removedProperties };
+  }
+
+  removeProperty(propertyId: string): KernelPatchResult {
+    const previous = this.properties.get(propertyId);
+    if (!previous) return { upsertedProperties: [], removedProperties: [] };
+    const removed = this.cloneProperty(previous);
+    this.properties.delete(propertyId);
+    const node = this.nodes.get(previous.nodeId);
+    if (node) node.propertyIds = node.propertyIds.filter((id) => id !== propertyId);
+    this.dependencyGraph.removeProperties([propertyId]);
+    this.dependencyGraph.replaceEdges({ removeIncidentPropertyIds: [propertyId], edges: this.rollupEdges });
+    return { upsertedProperties: [], removedProperties: [removed] };
+  }
+
+  applyExternalValue(propertyId: string, envelope: ValueEnvelope): PropertyRuntime | null {
+    const property = this.properties.get(propertyId);
+    if (!property) return null;
+    property.current = envelope;
+    return property;
+  }
+
+  getProperty(propertyId: string): PropertyRuntime | null {
+    return this.properties.get(propertyId) ?? null;
+  }
+
+  getCurrent(propertyId: string): ValueEnvelope | null {
+    return this.properties.get(propertyId)?.current ?? null;
+  }
+
+  listProperties(): PropertyRuntime[] {
+    return Array.from(this.properties.values());
+  }
+
+  listNodes(): GraphSnapshotNode[] {
+    return Array.from(this.nodes.values()).map((node) => this.snapshotNode(node));
+  }
+
+  listNodesForSite(siteId: string): GraphSnapshotNode[] {
+    return Array.from(this.nodes.values())
+      .filter((node) => node.siteId === siteId)
+      .map((node) => this.snapshotNode(node));
+  }
+
+  getNode(nodeId: string): GraphSnapshotNode | null {
+    const node = this.nodes.get(nodeId);
+    return node ? this.snapshotNode(node) : null;
+  }
+
+  // Tenancy lookup for subscription authorization: property → node → site.
+  // Pure in-memory, O(1); null for unknown properties.
+  getPropertySiteId(propertyId: string): string | null {
+    const property = this.properties.get(propertyId);
+    if (!property) return null;
+    return this.nodes.get(property.nodeId)?.siteId ?? null;
+  }
+
+  getDependents(propertyId: string): string[] {
+    return this.dependencyGraph.getDependents(propertyId);
+  }
+
+  getDependencies(propertyId: string): string[] {
+    return this.dependencyGraph.getDependencies(propertyId);
+  }
+
+  topoIndex(propertyId: string): number | undefined {
+    return this.dependencyGraph.topoIndex(propertyId);
+  }
+
+  topoOrder(): string[] {
+    return this.dependencyGraph.topoOrder();
+  }
+
+  // Inject runtime rollup into DAG
+  // Rebuilt each boot from the domain model
+  // Returns the rollup property ids whose incoming edge set actually changed,
+  // so callers can re-mark just those instead of every rollup in the graph.
+  applyRollupEdges(rollupEdges: GraphEdgeRuntime[]): string[] {
+    const edgeKey = (edge: GraphEdgeRuntime) => `${edge.fromPropertyId}>${edge.toPropertyId}`;
+    const oldKeys = new Set(this.rollupEdges.map(edgeKey));
+    const newKeys = new Set(rollupEdges.map(edgeKey));
+    const changedTargets = new Set<string>();
+    for (const edge of this.rollupEdges) {
+      if (!newKeys.has(edgeKey(edge))) changedTargets.add(edge.toPropertyId);
+    }
+    for (const edge of rollupEdges) {
+      if (!oldKeys.has(edgeKey(edge))) changedTargets.add(edge.toPropertyId);
+    }
+
+    const oldIds = this.rollupEdges.map((edge) => edge.id);
+    this.rollupEdges = rollupEdges;
+    this.dependencyGraph.replaceEdges({ removeEdgeIds: oldIds, edges: rollupEdges });
+    this.logger.info(
+      { rollupEdges: rollupEdges.length, changedTargets: changedTargets.size },
+      "livestore rollup edges applied",
+    );
+    return [...changedTargets];
+  }
+
+  counts(): { nodeCount: number; propertyCount: number; edgeCount: number } {
+    return {
+      nodeCount: this.nodes.size,
+      propertyCount: this.properties.size,
+      edgeCount: this.dependencyGraph.edgeCount(),
+    };
+  }
+
+  private snapshotNode(node: NodeRuntime): GraphSnapshotNode {
+    const properties = node.propertyIds
+      .map((propertyId) => this.properties.get(propertyId))
+      .filter((property): property is PropertyRuntime => Boolean(property))
+      .map((property) => ({ ...property, current: property.current }));
+
+    return {
+      id: node.id,
+      name: node.name,
+      siteId: node.siteId,
+      typeRef: node.typeRef,
+      typeContext: node.typeContext,
+      properties,
+    };
+  }
+
+  private async hydrateProperty(property: {
+    id: string;
+    nodeId: string;
+    name: string;
+    resolverType: string;
+    resolver: unknown;
+    sampleRateMs: number | null;
+  }): Promise<PropertyRuntime> {
+    const current = (await this.cvg.get(property.id)) ?? staleEnvelope();
+    return {
+      id: property.id,
+      nodeId: property.nodeId,
+      name: property.name,
+      resolverType: property.resolverType,
+      resolver: parseGraphResolver(property.resolver, property.resolverType),
+      sampleRateMs: property.sampleRateMs,
+      current,
+    };
+  }
+
+  private async loadIncomingStaticEdges(propertyIds: string[]): Promise<GraphEdgeRuntime[]> {
+    if (propertyIds.length === 0) return [];
+    const edges = await this.prisma.graphEdge.findMany({
+      where: {
+        toPropertyId: { in: propertyIds },
+        fromProperty: { isDeleted: false, node: { isDeleted: false } },
+        toProperty: { isDeleted: false, node: { isDeleted: false } },
+      },
+    });
+    return edges.map((edge) => ({
+      id: edge.id,
+      fromPropertyId: edge.fromPropertyId,
+      toPropertyId: edge.toPropertyId,
+    }));
+  }
+
+  private getNodeProperties(nodeId: string): PropertyRuntime[] {
+    return Array.from(this.properties.values()).filter((property) => property.nodeId === nodeId);
+  }
+
+  private cloneProperty(property: PropertyRuntime): PropertyRuntime {
+    return { ...property, current: property.current };
+  }
+}
+
+function parseTypeContext(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+const CVG_HYDRATE_CONCURRENCY = 32;
+
+// Bounded-concurrency map preserving input order.
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await fn(items[index] as T);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}

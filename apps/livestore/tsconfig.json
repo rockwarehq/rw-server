@@ -9,6 +9,6 @@
   "references": [
     { "path": "../../packages/db" },
     { "path": "../../packages/runtime" },
-    { "path": "../../packages/services" }
+    { "path": "../../packages/livestore" }
   ]
 }

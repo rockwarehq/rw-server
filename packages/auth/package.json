@@ -1,0 +1,32 @@
+{
+  "name": "@rw/auth",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./tokens": "./dist/tokens.js",
+    "./verify": "./dist/verify.js",
+    "./api-tokens": "./dist/api-tokens.js",
+    "./secrets": "./dist/secrets.js",
+    "./password": "./dist/password.js",
+    "./env": "./dist/env.js",
+    "./context": "./dist/context.js",
+    "./display-session": "./dist/display-session.js",
+    "./iam/*": "./dist/iam/*.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@rw/db": "workspace:*",
+    "bcrypt": "^6.0.0",
+    "fast-jwt": "^6.1.0"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/node": "^24.10.8",
+    "typescript": "~6.0.2",
+    "vitest": "^4.0.14"
+  }
+}

@@ -1,4 +1,4 @@
-import type { DisplayIAMContext, IAMContext, UserIAMContext } from "@rw/services/auth/context";
+import type { AppIAMContext, DisplayIAMContext, IAMContext, UserIAMContext } from "@rw/auth/context";
 
 export interface RPCRequest {
   headers: {
@@ -25,4 +25,10 @@ export interface DisplayAuthenticatedRPCContext extends RPCContext {
 // Context after any principal auth middleware runs
 export interface PrincipalAuthenticatedRPCContext extends RPCContext {
   iam: UserIAMContext | DisplayIAMContext;
+}
+
+// Context after graph-read auth middleware runs: the only surface that also
+// admits APP (customer API token) principals, read-only and site-scoped.
+export interface GraphReadRPCContext extends RPCContext {
+  iam: UserIAMContext | DisplayIAMContext | AppIAMContext;
 }

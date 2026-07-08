@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { connect } from "@nats-io/transport-node";
 
 import { deriveTagSubject } from "@rw/runtime/graph-subjects";
-import { parseValueEnvelope, type ValueEnvelope } from "../types.js";
+import { parseValueEnvelope, type ValueEnvelope } from "@rw/livestore";
 
 const encoder = new TextEncoder();
 const statePath = join(tmpdir(), "rw-livestore-last-tag-envelope.json");

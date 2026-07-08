@@ -1,8 +1,8 @@
 import "dotenv/config";
 import { createInterface } from "node:readline/promises";
-import bcrypt from "bcrypt";
 import prisma from "@rw/db";
-import { findSystemRole } from "@rw/services/iam/roles";
+import { hashPassword } from "@rw/auth/password";
+import { findSystemRole } from "@rw/auth/iam/roles";
 import { seedSystemRoles } from "./systemRoles.js";
 import config from "./config.js";
 import { IdMap, setDataFile, setDevSeed } from "./utils.js";
@@ -24,9 +24,7 @@ import { driverRegistry } from "../../src/services/device/driver/registry.js";
 import * as datasourceSvc from "../../src/services/device/datasource/index.js";
 import * as gatewaySvc from "@rw/services/device/gateway/index";
 
-const SALT_ROUNDS = 10;
-
-const DEFAULT_ROLES = ["Operator", "Supervisor", "Lead", "Quality", "Maintenance", "Contractor", "Engineer", "Manager"];
+const DEFAULT_ROLES =["Operator", "Supervisor", "Lead", "Quality", "Maintenance", "Contractor", "Engineer", "Manager"];
 
 type SystemRoleName = "Company Administrator" | "Factory Administrator" | "Office User" | "Read-only User";
 type SiteKey = "primary" | "secondary";
@@ -289,7 +287,7 @@ async function bootstrap() {
 
   const adminEmail = process.env.ADMIN_EMAIL || "admin@example.com";
   const devUserPassword = process.env.DEV_USER_PASSWORD || process.env.ADMIN_PASSWORD || "changeme123";
-  const passwordHash = await bcrypt.hash(devUserPassword, SALT_ROUNDS);
+  const passwordHash = await hashPassword(devUserPassword);
 
   const site = await prisma.site.upsert({
     where: { workspaceId_name: { workspaceId: workspace.id, name: config.siteName } },

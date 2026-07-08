@@ -1,9 +1,10 @@
 import { os, ORPCError } from "@orpc/server";
 import { timingSafeEqual } from "node:crypto";
 import { processorConfig } from "../config.js";
-import { Principal } from "../services/auth/index.js";
+import { Principal } from "../auth/index.js";
 import type {
   DisplayAuthenticatedRPCContext,
+  GraphReadRPCContext,
   PrincipalAuthenticatedRPCContext,
   RPCContext,
   UserAuthenticatedRPCContext,
@@ -25,15 +26,40 @@ const userMiddleware = os.$context<RPCContext>().middleware(async ({ context, ne
   });
 });
 
-// Any authenticated principal
+// User or display principal. Explicit allowlist — APP (customer API token)
+// principals must NOT pass here; they are only admitted by the graph-read
+// middleware below.
 const principalMiddleware = os.$context<RPCContext>().middleware(async ({ context, next }) => {
-  if (!context.iam?.validToken) {
+  if (
+    !context.iam?.validToken ||
+    (context.iam.principal !== Principal.USER && context.iam.principal !== Principal.DISPLAY)
+  ) {
     throw new ORPCError("UNAUTHORIZED", { message: "Authentication required" });
   }
 
   return next({
     context: {
       iam: context.iam as PrincipalAuthenticatedRPCContext["iam"],
+    },
+  });
+});
+
+// Graph read access: the only middleware that also admits APP principals
+// (site-scoped, read-only customer API tokens). Use exclusively on graph.*
+// read procedures.
+const graphReadPrincipalMiddleware = os.$context<RPCContext>().middleware(async ({ context, next }) => {
+  if (
+    !context.iam?.validToken ||
+    (context.iam.principal !== Principal.USER &&
+      context.iam.principal !== Principal.DISPLAY &&
+      context.iam.principal !== Principal.APP)
+  ) {
+    throw new ORPCError("UNAUTHORIZED", { message: "Authentication required" });
+  }
+
+  return next({
+    context: {
+      iam: context.iam as GraphReadRPCContext["iam"],
     },
   });
 });
@@ -57,8 +83,11 @@ export const userRequired = publicProcedure.use(userMiddleware);
 // Backward-compatible alias for existing user-authenticated procedures
 export const authRequired = userRequired;
 
-// Requires any valid authenticated principal
+// Requires a user or display principal
 export const userOrDisplayRequired = publicProcedure.use(principalMiddleware);
+
+// Requires a user, display, or app principal (graph read surface only)
+export const graphReadRequired = publicProcedure.use(graphReadPrincipalMiddleware);
 
 // Requires valid display authentication
 export const displayRequired = publicProcedure.use(displayMiddleware);
@@ -101,9 +130,9 @@ export const processorRequired = publicProcedure.use(processorMiddleware);
 // against the caller's workspaceId from the auth token.
 //
 // Replaces the old `adminRequired` / `ownerRequired` enum-based gates.
-export const permissionRequired = (permission: import("@rw/services/iam/index").Permission) => {
+export const permissionRequired = (permission: import("@rw/auth/iam/index").Permission) => {
   const mw = os.$context<UserAuthenticatedRPCContext>().middleware(async ({ context, next }) => {
-    const { hasPermission } = await import("@rw/services/iam/index");
+    const { hasPermission } = await import("@rw/auth/iam/index");
     const userId = context.iam.id;
     const workspaceId = context.iam.workspaceId;
     if (!userId || !workspaceId) {

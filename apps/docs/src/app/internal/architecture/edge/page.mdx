@@ -1,0 +1,65 @@
+export const metadata = {
+  title: 'Edge & Data Pipeline',
+  description: 'Gateways, NATS leaf nodes, and how a machine cycle becomes a database row.',
+}
+
+# Edge & Data Pipeline
+
+The edge story: a **gateway** (an rw-gateway device on the factory floor) reads PLC/sensor data through **drivers**, streams it to the platform over a **NATS leaf-node** connection, and the platform turns those signals into **cycles** and **metrics**. {{ className: 'lead' }}
+
+<Note>
+  The old architecture routed edge data through MQTT into a dedicated
+  `processor` service. That path is gone — gateways now speak NATS directly.
+  If you find MQTT references in older docs or comments, treat them as
+  historical.
+</Note>
+
+## Gateway lifecycle
+
+1. **Claim** — a technician enters the device's serial number + claim code; `POST /edge/claim` (`apps/api/src/edge.ts`) binds the physical device to a site and issues a gateway token (validated with timing-safe compares on subsequent calls).
+2. **Connect** — the gateway calls `/edge/connect` to fetch its NATS leaf-node credentials and config, then holds a persistent NATS connection.
+3. **Operate** — drivers on the gateway (modbus, opc-ua, …; definitions registered by the API's driver registry) sample configured **datasource points** and publish to NATS subjects. Health snapshots go to `health.gateway.<id>` (~every 5s; subject helpers in `packages/runtime/src/gateway-subjects.ts`).
+4. **Monitored** — `stale-gateway-check` (api, 30s) flips gateways OFFLINE when heartbeats stop; the `gateway-health` worker mirrors health snapshots into Prometheus gauges for Grafana.
+
+Gateway state machine: `PROVISIONED → ONLINE ↔ OFFLINE → DISABLED` (schema: `packages/db/schema/gateway.prisma`).
+
+## Commands to gateways
+
+The API publishes gateway-bound commands through the **command bus** (`apps/api/src/command-bus.ts`) backed by JetStream, so commands survive gateway disconnects and deliver on reconnect.
+
+## From signal to cycle
+
+The path a "machine finished a part" signal takes:
+
+```mermaid
+sequenceDiagram
+  participant PLC
+  participant GW as Gateway
+  participant N as NATS
+  participant LS as Livestore engine
+  participant JS as JetStream
+  participant IE as imm-events worker
+  participant PG as Postgres
+
+  PLC->>GW: pin change / tag update
+  GW->>N: publish tag subject (deriveTagSubject)
+  N->>LS: tag property updates
+  LS->>LS: graph recompute; GraphHook condition fires (e.g. counter increases)
+  LS->>JS: livestore.events.<siteId>.imm.cycle_completed.v1
+  JS->>IE: durable consumer delivery
+  IE->>PG: services/cycle complete() — one transaction
+```
+
+Key points:
+
+- **Livestore is the signal interpreter.** Which tag means "cycle completed" for which station is *configuration*, not code: a graph property bound to the tag plus a `GraphHook` with an edge condition (`increases`, `crossesAbove`, …). See [Livestore](/internal/architecture/livestore).
+- **`imm-events`** (`apps/workers/src/imm-events.ts`) consumes the hook events from JetStream and calls `complete()` in `packages/services/src/cycle/cycle.ts`.
+- **`complete()` is one transaction**: validates station+job via a single CTE, inserts/closes the `Cycle` (two strategies — immediate-complete, or open/close with `keepOpen`), creates inventory items, increments the HOUR metric bucket, and loads everything post-commit publishes need. Redis publishes and BullMQ enqueues happen only after commit — a rollback leaks no side effects.
+- **Idempotent + replay-safe**: `replay-reconcile` (api in-process, with `recoverReplayWindows()` on boot) re-processes windows missed during downtime; replayed completions skip state-log transitions.
+
+## After the cycle row
+
+- **Station detection** (api in-process): each completion schedules slow/down detection jobs (was the station running slower than `slowDetect`? has it stopped?), writing `StationStateLog` transitions that feed downtime metrics.
+- **Metric buckets**: the [rollups worker](/internal/architecture/workers) keeps time-sliced `MetricBucket` rows fresh; OEE ratios are Postgres generated columns. See [Data Model & Metrics](/internal/architecture/data-model).
+- **Live updates**: metric changes bridge back onto NATS (`graph-nats-bridge`) so livestore metric properties — and therefore dashboards over `/ws/graph` — update within seconds.
+- **Events bus** (Redis): lightweight fan-out nudges to api processes for SSE clients (live KPIs, shift recap).

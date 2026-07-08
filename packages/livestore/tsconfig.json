@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "types": ["node"],
+    "noUncheckedIndexedAccess": false
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../auth" },
+    { "path": "../db" },
+    { "path": "../runtime" },
+    { "path": "../services" }
+  ]
+}

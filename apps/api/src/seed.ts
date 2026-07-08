@@ -1,10 +1,8 @@
 import "dotenv/config";
-import bcrypt from "bcrypt";
 import prisma from "@rw/db";
-import { findSystemRole } from "@rw/services/iam/roles";
+import { hashPassword } from "@rw/auth/password";
+import { findSystemRole } from "@rw/auth/iam/roles";
 import { seedSystemRoles } from "./seed-system-roles.js";
-
-const SALT_ROUNDS = 10;
 
 // Bootstrap a tenant database with the default workspace, RBAC system roles,
 // a Company Administrator user, and the default site + employee roles.
@@ -49,7 +47,7 @@ async function seed() {
   const adminEmail = process.env.ADMIN_EMAIL || "admin@example.com";
   const adminPassword = process.env.ADMIN_PASSWORD || "changeme123";
 
-  const passwordHash = await bcrypt.hash(adminPassword, SALT_ROUNDS);
+  const passwordHash = await hashPassword(adminPassword);
 
   const admin = await prisma.user.upsert({
     where: { email: adminEmail },

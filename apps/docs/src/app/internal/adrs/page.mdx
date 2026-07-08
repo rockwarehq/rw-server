@@ -1,0 +1,22 @@
+export const metadata = {
+  title: 'Architecture Decision Records',
+  description: 'ADR log and conventions for rw-server.',
+}
+
+# Architecture Decision Records
+
+ADRs capture significant architectural decisions: the context, the decision itself, and its consequences. {{ className: 'lead' }}
+
+They are immutable once accepted — a change of course gets a **new** ADR that supersedes the old one.
+
+## Conventions
+
+- Pages live at `apps/docs/src/app/internal/adrs/NNNN-kebab-case-title/page.mdx` — four digits, zero-padded, monotonically increasing, never reused.
+- Statuses: `Proposed` → `Accepted`, and later possibly `Deprecated` or `Superseded by NNNN`.
+- To write one: copy [the template](/internal/adrs/template), take the next number, then add it to the table below **and** to `internalNavigation` in `apps/docs/src/components/Navigation.tsx`.
+
+## Log
+
+| # | Title | Status | Date |
+| --- | --- | --- | --- |
+| [0001](/internal/adrs/0001-record-architecture-decisions) | Record Architecture Decisions | Accepted | 2026-07-08 |

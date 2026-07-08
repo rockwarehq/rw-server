@@ -9,7 +9,7 @@ import type { SerializerSchemaOptions } from "./types/fastify.js";
 import { stopStaleGatewayCheck } from "@rw/services/queues/background-workers";
 import { stopQueues } from "@rw/services/queues/station-detection";
 import { stopMetricBucketQueues } from "@rw/services/queues/metric-buckets";
-import { authPlugin } from "./services/auth/index.js";
+import { authPlugin } from "./auth/index.js";
 import swaggerPlugin from "./plugins/swagger.js";
 import rateLimitPlugin from "./plugins/ratelimit.js";
 import api from "./api/index.js";

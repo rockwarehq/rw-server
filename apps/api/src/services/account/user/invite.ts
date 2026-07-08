@@ -1,8 +1,8 @@
-import { createHash, randomBytes } from "node:crypto";
 import prisma from "@rw/db";
+import { generateToken, hashToken } from "@rw/auth/secrets";
 import { securityConfig } from "../../../config.js";
-import { hasOwnerPermission, hasPermission, OWNER_PERMISSION } from "@rw/services/iam/index";
-import { hashPassword } from "../../auth/session.js";
+import { hasOwnerPermission, hasPermission, OWNER_PERMISSION } from "@rw/auth/iam/index";
+import { hashPassword } from "@rw/auth/password";
 import * as employeeService from "../../employee/index.js";
 import { sendInviteEmail } from "@rw/services/email/index";
 import { logEvent } from "@rw/services/audit/index";
@@ -48,22 +48,6 @@ export interface CompleteInviteInput {
 export interface InviteContext {
   ipAddress?: string;
   userAgent?: string;
-}
-
-/**
- * Generate a secure random token and its SHA256 hash
- */
-function generateToken(): { plaintext: string; hash: string } {
-  const plaintext = randomBytes(32).toString("hex");
-  const hash = createHash("sha256").update(plaintext).digest("hex");
-  return { plaintext, hash };
-}
-
-/**
- * Hash a token for database lookup
- */
-function hashToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
 }
 
 interface InviteAssignment {

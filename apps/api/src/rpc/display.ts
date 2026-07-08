@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ORPCError } from "@orpc/server";
 import { publicProcedure, authRequired } from "./middleware.js";
 import { display } from "@rw/services/display/index";
-import { Principal } from "../services/auth/index.js";
+import { Principal } from "../auth/index.js";
 
 // ============================================================================
 // Input Schemas

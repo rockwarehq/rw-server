@@ -7,7 +7,7 @@ import type { NatsConnection } from "@nats-io/nats-core";
 import { connect } from "@nats-io/transport-node";
 import prisma from "@rw/db";
 import { complete as completeCycle } from "@rw/services/cycle/index";
-import { livestoreEventType, type LivestoreHookEvent } from "@rw/runtime/livestore-events";
+import { livestoreEventType, type LivestoreHookEvent } from "@rw/livestore/catalog/events";
 
 import { ImmEventConsumer, type ImmEventHandlers } from "./imm-event-consumer.js";
 

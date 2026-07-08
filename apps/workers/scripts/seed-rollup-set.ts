@@ -10,7 +10,7 @@
 import "dotenv/config";
 
 import prisma, { createPrismaClient } from "@rw/db";
-import * as nodes from "@rw/services/graph/nodes";
+import * as nodes from "@rw/livestore/graph/nodes";
 
 createPrismaClient("api");
 

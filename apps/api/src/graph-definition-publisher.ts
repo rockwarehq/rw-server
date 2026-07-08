@@ -5,8 +5,8 @@ import {
   GRAPH_DEFINITION_STREAM,
   GRAPH_DEFINITION_SUBJECT_FILTER,
   type GraphDefinitionEvent,
-} from "@rw/runtime/graph-definitions";
-import { setGraphDefinitionEventSink } from "@rw/services/graph/index";
+} from "@rw/livestore/catalog/definitions";
+import { setGraphDefinitionEventSink } from "@rw/livestore/graph/index";
 
 const encoder = new TextEncoder();
 const WEEK_NANOS = 7 * 24 * 60 * 60 * 1_000_000_000;

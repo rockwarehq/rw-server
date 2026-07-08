@@ -4,7 +4,7 @@ import { createPrismaClient } from "@rw/db";
 import { deriveTagSubject } from "@rw/runtime/graph-subjects";
 import { connect } from "@nats-io/transport-node";
 
-import type { Quality, ValueEnvelope } from "../types.js";
+import type { Quality, ValueEnvelope } from "@rw/livestore";
 
 interface Options {
   dryRun: boolean;

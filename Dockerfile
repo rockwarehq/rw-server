@@ -23,8 +23,10 @@ FROM base AS deps
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json tsconfig.json .npmrc ./
 COPY packages/db/package.json packages/db/
 COPY packages/services/package.json packages/services/
+COPY packages/auth/package.json packages/auth/
 COPY packages/runtime/package.json packages/runtime/
 COPY packages/automations/package.json packages/automations/
+COPY packages/livestore/package.json packages/livestore/
 COPY apps/api/package.json apps/api/
 COPY apps/workers/package.json apps/workers/
 COPY apps/livestore/package.json apps/livestore/
@@ -55,8 +57,10 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
 COPY apps/api/package.json apps/api/
 COPY packages/db/package.json packages/db/
 COPY packages/services/package.json packages/services/
+COPY packages/auth/package.json packages/auth/
 COPY packages/runtime/package.json packages/runtime/
 COPY packages/automations/package.json packages/automations/
+COPY packages/livestore/package.json packages/livestore/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --prod --filter '@rw/api...'
 
@@ -69,14 +73,16 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
 COPY apps/workers/package.json apps/workers/
 COPY packages/db/package.json packages/db/
 COPY packages/services/package.json packages/services/
+COPY packages/auth/package.json packages/auth/
 COPY packages/runtime/package.json packages/runtime/
 COPY packages/automations/package.json packages/automations/
+COPY packages/livestore/package.json packages/livestore/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --prod --filter '@rw/workers...'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3c. Production deps for livestore (pruned to @rw/livestore's transitive set)
+# 3c. Production deps for livestore (pruned to @rw/livestore-app's transitive set)
 # ─────────────────────────────────────────────────────────────────────────────
 FROM base AS prod-deps-livestore
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
@@ -84,9 +90,11 @@ COPY apps/livestore/package.json apps/livestore/
 COPY packages/db/package.json packages/db/
 COPY packages/runtime/package.json packages/runtime/
 COPY packages/services/package.json packages/services/
+COPY packages/auth/package.json packages/auth/
 COPY packages/automations/package.json packages/automations/
+COPY packages/livestore/package.json packages/livestore/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile --prod --filter '@rw/livestore...'
+    pnpm install --frozen-lockfile --prod --filter '@rw/livestore-app...'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -99,8 +107,10 @@ COPY --from=prod-deps-api /repo/node_modules ./node_modules
 COPY --from=prod-deps-api /repo/apps/api/node_modules apps/api/node_modules
 COPY --from=prod-deps-api /repo/packages/db/node_modules packages/db/node_modules
 COPY --from=prod-deps-api /repo/packages/services/node_modules packages/services/node_modules
+COPY --from=prod-deps-api /repo/packages/auth/node_modules packages/auth/node_modules
 COPY --from=prod-deps-api /repo/packages/runtime/node_modules packages/runtime/node_modules
 COPY --from=prod-deps-api /repo/packages/automations/node_modules packages/automations/node_modules
+COPY --from=prod-deps-api /repo/packages/livestore/node_modules packages/livestore/node_modules
 
 COPY --from=build /repo/packages/db/dist packages/db/dist
 COPY --from=build /repo/packages/db/src/generated packages/db/src/generated
@@ -109,11 +119,15 @@ COPY --from=build /repo/packages/db/migrations packages/db/migrations
 COPY --from=build /repo/packages/db/prisma.config.ts packages/db/
 COPY --from=build /repo/packages/db/package.json packages/db/
 COPY --from=build /repo/packages/services/dist packages/services/dist
+COPY --from=build /repo/packages/auth/dist packages/auth/dist
 COPY --from=build /repo/packages/services/package.json packages/services/
+COPY --from=build /repo/packages/auth/package.json packages/auth/
 COPY --from=build /repo/packages/runtime/dist packages/runtime/dist
 COPY --from=build /repo/packages/runtime/package.json packages/runtime/
 COPY --from=build /repo/packages/automations/dist packages/automations/dist
 COPY --from=build /repo/packages/automations/package.json packages/automations/
+COPY --from=build /repo/packages/livestore/dist packages/livestore/dist
+COPY --from=build /repo/packages/livestore/package.json packages/livestore/
 COPY --from=build /repo/apps/api/dist apps/api/dist
 COPY --from=build /repo/apps/api/package.json apps/api/
 # Driver manifests are read at runtime from `${cwd}/drivers` (cwd is /repo/apps/api).
@@ -138,8 +152,10 @@ COPY --from=prod-deps-workers /repo/node_modules ./node_modules
 COPY --from=prod-deps-workers /repo/apps/workers/node_modules apps/workers/node_modules
 COPY --from=prod-deps-workers /repo/packages/db/node_modules packages/db/node_modules
 COPY --from=prod-deps-workers /repo/packages/services/node_modules packages/services/node_modules
+COPY --from=prod-deps-workers /repo/packages/auth/node_modules packages/auth/node_modules
 COPY --from=prod-deps-workers /repo/packages/runtime/node_modules packages/runtime/node_modules
 COPY --from=prod-deps-workers /repo/packages/automations/node_modules packages/automations/node_modules
+COPY --from=prod-deps-workers /repo/packages/livestore/node_modules packages/livestore/node_modules
 
 COPY --from=build /repo/packages/db/dist packages/db/dist
 COPY --from=build /repo/packages/db/src/generated packages/db/src/generated
@@ -150,11 +166,15 @@ COPY --from=build /repo/packages/db/migrations packages/db/migrations
 COPY --from=build /repo/packages/db/prisma.config.ts packages/db/
 COPY --from=build /repo/packages/db/package.json packages/db/
 COPY --from=build /repo/packages/services/dist packages/services/dist
+COPY --from=build /repo/packages/auth/dist packages/auth/dist
 COPY --from=build /repo/packages/services/package.json packages/services/
+COPY --from=build /repo/packages/auth/package.json packages/auth/
 COPY --from=build /repo/packages/runtime/dist packages/runtime/dist
 COPY --from=build /repo/packages/runtime/package.json packages/runtime/
 COPY --from=build /repo/packages/automations/dist packages/automations/dist
 COPY --from=build /repo/packages/automations/package.json packages/automations/
+COPY --from=build /repo/packages/livestore/dist packages/livestore/dist
+COPY --from=build /repo/packages/livestore/package.json packages/livestore/
 COPY --from=build /repo/apps/workers/dist apps/workers/dist
 COPY --from=build /repo/apps/workers/package.json apps/workers/
 
@@ -177,7 +197,9 @@ COPY --from=prod-deps-livestore /repo/apps/livestore/node_modules apps/livestore
 COPY --from=prod-deps-livestore /repo/packages/db/node_modules packages/db/node_modules
 COPY --from=prod-deps-livestore /repo/packages/runtime/node_modules packages/runtime/node_modules
 COPY --from=prod-deps-livestore /repo/packages/services/node_modules packages/services/node_modules
+COPY --from=prod-deps-livestore /repo/packages/auth/node_modules packages/auth/node_modules
 COPY --from=prod-deps-livestore /repo/packages/automations/node_modules packages/automations/node_modules
+COPY --from=prod-deps-livestore /repo/packages/livestore/node_modules packages/livestore/node_modules
 
 COPY --from=build /repo/packages/db/dist packages/db/dist
 COPY --from=build /repo/packages/db/src/generated packages/db/src/generated
@@ -188,9 +210,13 @@ COPY --from=build /repo/packages/db/package.json packages/db/
 COPY --from=build /repo/packages/runtime/dist packages/runtime/dist
 COPY --from=build /repo/packages/runtime/package.json packages/runtime/
 COPY --from=build /repo/packages/services/dist packages/services/dist
+COPY --from=build /repo/packages/auth/dist packages/auth/dist
 COPY --from=build /repo/packages/services/package.json packages/services/
+COPY --from=build /repo/packages/auth/package.json packages/auth/
 COPY --from=build /repo/packages/automations/dist packages/automations/dist
 COPY --from=build /repo/packages/automations/package.json packages/automations/
+COPY --from=build /repo/packages/livestore/dist packages/livestore/dist
+COPY --from=build /repo/packages/livestore/package.json packages/livestore/
 COPY --from=build /repo/apps/livestore/dist apps/livestore/dist
 COPY --from=build /repo/apps/livestore/package.json apps/livestore/
 

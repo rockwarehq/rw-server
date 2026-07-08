@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
-import { Principal } from "../services/auth/index.js";
+import { Principal } from "../auth/index.js";
 import { site } from "@rw/services/facility/index";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
 

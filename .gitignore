@@ -17,6 +17,9 @@ packages/api-client/src/generated/
 *.tsbuildinfo
 coverage/
 
+# Next.js (docs site)
+apps/docs/.next/
+
 # Fly generated configs
 fly.generated.toml
 apps/*/fly.generated.toml

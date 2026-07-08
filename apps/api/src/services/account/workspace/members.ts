@@ -6,8 +6,8 @@ import {
   hasPermission,
   OWNER_PERMISSION,
   type Permission,
-} from "@rw/services/iam/index";
-import { findSystemRole } from "@rw/services/iam/roles";
+} from "@rw/auth/iam/index";
+import { findSystemRole } from "@rw/auth/iam/roles";
 
 const USER_ROLE_ASSIGNMENT_PERMISSIONS: readonly Permission[] = ["user:write", "user:admin"];
 

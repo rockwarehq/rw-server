@@ -1,6 +1,6 @@
 import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
-import * as auth from "../services/auth/index.js";
+import * as auth from "../auth/index.js";
 import { errorSchema, successResponseSchema } from "./schemas.js";
 import { sensitiveRateLimit } from "../plugins/ratelimit.js";
 

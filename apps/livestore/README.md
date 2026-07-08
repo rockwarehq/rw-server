@@ -1,4 +1,4 @@
-# @rw/livestore
+# @rw/livestore-app
 
 The Reactive Graph Engine (see `spec.md`): live values mirrored into a reactive
 graph and fanned out to dashboards over WebSocket. Two input paths feed the same
@@ -11,7 +11,7 @@ metrics worker (MetricBucket change)
   -> MetricResolver (UI-authored metric properties)
   -> optional UI-authored rollup / expr properties
   -> NATS KV `cvg` (current value table)
-  -> WebSocket /ws/graph -> dashboards
+  -> WebSocket /graph/live -> dashboards
 
 NATS tag message (tags.<deviceId>.<tagPath>)
   -> TagResolver -> commitValue() -> NATS KV `cvg` -> WebSocket clients
@@ -47,20 +47,20 @@ Requirements: Postgres via `DATABASE_URL`, NATS with JetStream, and a local env 
 ```bash
 docker compose up -d nats            # JetStream-enabled NATS
 pnpm --filter @rw/db db:migrate      # GraphNode / GraphProperty / GraphEdge tables
-pnpm --filter @rw/livestore dev      # boots authored graph, opens /ws/graph on :30100
+pnpm --filter @rw/livestore-app dev      # boots authored graph, opens /graph/live on :30100
 ```
 
 Simulate the worker (publishes ramping SHIFT goodItems for a few stations):
 
 ```bash
-pnpm --filter @rw/livestore playground:simulate
+pnpm --filter @rw/livestore-app playground:simulate
 ```
 
 Simulate datasource tag values for the devices/points added in the app:
 
 ```bash
-pnpm --filter @rw/livestore simulate:tags -- --list
-pnpm --filter @rw/livestore simulate:tags
+pnpm --filter @rw/livestore-app simulate:tags -- --list
+pnpm --filter @rw/livestore-app simulate:tags
 ```
 
 `simulate:tags` publishes `ValueEnvelope` messages to `tags.<datasourceId>.<pointId>`
@@ -75,8 +75,8 @@ graph definition hot-patch path.
 Or exercise the tag path (creates a tag-backed node, then publishes envelopes):
 
 ```bash
-pnpm --filter @rw/livestore fixture:create
-pnpm --filter @rw/livestore fixture:publish
+pnpm --filter @rw/livestore-app fixture:create
+pnpm --filter @rw/livestore-app fixture:publish
 ```
 
 Watch values: `GET /graph/nodes` for ids, then over WS
@@ -92,11 +92,12 @@ Watch values: `GET /graph/nodes` for ids, then over WS
 | `GET /health`, `/healthz`, `/readyz` | liveness / NATS readiness |
 | `GET /graph/nodes` | nodes + properties + current values |
 | `GET /graph/nodes/:id` | one node |
-| `GET /ws/graph` | WebSocket subscribe/unsubscribe per property |
+| `GET /graph/live` | WebSocket subscribe/unsubscribe per property |
+| `GET /ws/graph` | deprecated alias for `/graph/live` (removal pending client migration) |
 
 ## Tests
 
 ```bash
-pnpm --filter @rw/livestore test     # engine scheduler unit tests
+pnpm --filter @rw/livestore test     # engine unit tests (packages/livestore)
 pnpm --filter @rw/services test      # NATS bridge publish mapping
 ```

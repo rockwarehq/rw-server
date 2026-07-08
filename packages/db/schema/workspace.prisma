@@ -26,6 +26,9 @@ model Workspace {
 
   // Shared object schemas owned by this workspace
   objectSchemas ObjectSchema[]
+
+  // Customer/app API tokens issued for this workspace
+  apiTokens ApiToken[]
 }
 
 /// Membership: links a User to a Workspace and owns that user's role assignments.
@@ -109,6 +112,7 @@ model Site {
   graphHooks             GraphHook[]
   objectSchemas          ObjectSchema[]
   objectInstances        ObjectInstance[]
+  apiTokens              ApiToken[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId])

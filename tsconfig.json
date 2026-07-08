@@ -2,9 +2,11 @@
   "files": [],
   "references": [
     { "path": "./packages/db" },
+    { "path": "./packages/auth" },
     { "path": "./packages/services" },
     { "path": "./packages/runtime" },
     { "path": "./packages/automations" },
+    { "path": "./packages/livestore" },
     { "path": "./apps/workers" },
     { "path": "./apps/livestore" }
   ]
