@@ -34,6 +34,7 @@ import { recoverReplayWindows, cleanup as cleanupReplay } from "@rw/services/cyc
 import { startGraphDefinitionPublisher } from "./graph-definition-publisher.js";
 import { startEntityEventPublisher } from "./entity-event-publisher.js";
 import { startCommandBus } from "./command-bus.js";
+import { rootLogger } from "./logger.js";
 
 let cleanupBridge: (() => Promise<void>) | null = null;
 let cleanupMetricsBridge: (() => Promise<void>) | null = null;
@@ -76,7 +77,7 @@ async function main() {
   await registerReplayReconcileWorker();
   await recoverReplayWindows();
 
-  console.log("[api] HTTP + in-process workers started");
+  rootLogger.info("HTTP + in-process workers started");
 }
 
 async function shutdown() {
@@ -99,11 +100,11 @@ async function shutdown() {
 process.on("SIGINT", () => shutdown().then(() => process.exit(0)));
 process.on("SIGTERM", () => shutdown().then(() => process.exit(0)));
 process.on("uncaughtException", (err) => {
-  console.error("Uncaught exception:", err);
+  rootLogger.fatal({ err }, "uncaught exception");
   shutdown().then(() => process.exit(1));
 });
 
 main().catch((err) => {
-  console.error("Failed to start server:", err);
+  rootLogger.fatal({ err }, "failed to start server");
   shutdown().then(() => process.exit(1));
 });

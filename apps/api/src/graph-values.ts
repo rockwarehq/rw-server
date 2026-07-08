@@ -3,6 +3,9 @@ import { Kvm } from "@nats-io/kv";
 import { connect } from "@nats-io/transport-node";
 import { CVG_BUCKET, CvgStore } from "@rw/livestore/store/cvg-store";
 import type { ValueEnvelope } from "@rw/livestore/types/index";
+import { moduleLogger } from "./logger.js";
+
+const log = moduleLogger("graph-values");
 
 // Read-only access to livestore's current-value KV bucket for one-shot value
 // introspection (graph.introspect.values / explain). Livestore remains the
@@ -33,7 +36,7 @@ async function openStore(): Promise<CvgStore | null> {
     const kv = await new Kvm(jetstream(nc)).open(CVG_BUCKET);
     return new CvgStore(kv);
   } catch (err) {
-    console.error("[graph-values] could not open CVG bucket, value reads unavailable", err);
+    log.error({ err }, "could not open CVG bucket, value reads unavailable");
     return null;
   }
 }

@@ -1,6 +1,9 @@
 import type { ActionHandler } from "@rw/automations";
 import { sendAlertEmail } from "@rw/services/email/index";
 import { getUserById } from "@rw/services/user/automation-ref";
+import { moduleLogger } from "../../logger.js";
+
+const log = moduleLogger("automations");
 
 export const handler: ActionHandler = {
   type: "sendAlert",
@@ -39,11 +42,11 @@ export const handler: ActionHandler = {
         for (const id of ids) {
           const user = await getUserById(id);
           if (user) recipients.push(user.email);
-          else console.warn(`[automations] sendAlert: unknown user id "${id}" — skipped`);
+          else log.warn({ userId: id }, "sendAlert: unknown user id — skipped");
         }
 
         if (recipients.length === 0) {
-          console.warn(`[automations] sendAlert (${ctx.automation.label}): no recipients resolved — skipped`);
+          log.warn({ automation: ctx.automation.label }, "sendAlert: no recipients resolved — skipped");
           return;
         }
 

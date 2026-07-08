@@ -7,6 +7,9 @@ import {
   type GraphDefinitionEvent,
 } from "@rw/livestore/catalog/definitions";
 import { setGraphDefinitionEventSink } from "@rw/livestore/graph/index";
+import { moduleLogger } from "./logger.js";
+
+const log = moduleLogger("graph-definition-publisher");
 
 const encoder = new TextEncoder();
 const WEEK_NANOS = 7 * 24 * 60 * 60 * 1_000_000_000;
@@ -15,7 +18,7 @@ const TWO_MINUTES_NANOS = 2 * 60 * 1_000_000_000;
 export async function startGraphDefinitionPublisher(): Promise<() => Promise<void>> {
   const servers = process.env.NATS_URL;
   if (!servers) {
-    console.log("[graph-definition-publisher] NATS_URL not set, graph definition events disabled");
+    log.info("NATS_URL not set, graph definition events disabled");
     return async () => {};
   }
 
@@ -24,7 +27,7 @@ export async function startGraphDefinitionPublisher(): Promise<() => Promise<voi
     name: process.env.NATS_CLIENT_NAME || "rw-api-graph-definitions",
     maxReconnectAttempts: -1,
   }).catch((err: unknown) => {
-    console.error("[graph-definition-publisher] could not connect to NATS, graph definition events disabled", err);
+    log.error({ err }, "could not connect to NATS, graph definition events disabled");
     return null;
   });
   if (!nc) return async () => {};
@@ -33,10 +36,7 @@ export async function startGraphDefinitionPublisher(): Promise<() => Promise<voi
   try {
     await ensureGraphDefinitionStream(jsm);
   } catch (err) {
-    console.error(
-      "[graph-definition-publisher] could not ensure JetStream stream, graph definition events disabled",
-      err,
-    );
+    log.error({ err }, "could not ensure JetStream stream, graph definition events disabled");
     await nc.drain();
     return async () => {};
   }
@@ -45,11 +45,11 @@ export async function startGraphDefinitionPublisher(): Promise<() => Promise<voi
   setGraphDefinitionEventSink(async (event) => {
     const subject = deriveGraphDefinitionSubject(event.siteId);
     await js.publish(subject, encoder.encode(JSON.stringify(event)), { msgID: event.id }).catch((err: unknown) => {
-      console.error("[graph-definition-publisher] publish failed", { err, event });
+      log.error({ err, event }, "publish failed");
     });
   });
 
-  console.log(`[graph-definition-publisher] publishing graph definition events to ${nc.getServer()}`);
+  log.info({ server: nc.getServer() }, "publishing graph definition events");
 
   return async () => {
     setGraphDefinitionEventSink(null);

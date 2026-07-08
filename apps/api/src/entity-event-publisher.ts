@@ -7,6 +7,9 @@ import {
   type EntityEvent,
 } from "@rw/runtime/entity-events";
 import { setEntityEventSink } from "@rw/services/entity/index";
+import { moduleLogger } from "./logger.js";
+
+const log = moduleLogger("entity-event-publisher");
 
 const encoder = new TextEncoder();
 const WEEK_NANOS = 7 * 24 * 60 * 60 * 1_000_000_000;
@@ -15,7 +18,7 @@ const TWO_MINUTES_NANOS = 2 * 60 * 1_000_000_000;
 export async function startEntityEventPublisher(): Promise<() => Promise<void>> {
   const servers = process.env.NATS_URL;
   if (!servers) {
-    console.log("[entity-event-publisher] NATS_URL not set, entity events disabled");
+    log.info("NATS_URL not set, entity events disabled");
     return async () => {};
   }
 
@@ -24,7 +27,7 @@ export async function startEntityEventPublisher(): Promise<() => Promise<void>> 
     name: process.env.NATS_CLIENT_NAME || "rw-api-entity-events",
     maxReconnectAttempts: -1,
   }).catch((err: unknown) => {
-    console.error("[entity-event-publisher] could not connect to NATS, entity events disabled", err);
+    log.error({ err }, "could not connect to NATS, entity events disabled");
     return null;
   });
   if (!nc) return async () => {};
@@ -33,7 +36,7 @@ export async function startEntityEventPublisher(): Promise<() => Promise<void>> 
   try {
     await ensureEntityEventStream(jsm);
   } catch (err) {
-    console.error("[entity-event-publisher] could not ensure JetStream stream, entity events disabled", err);
+    log.error({ err }, "could not ensure JetStream stream, entity events disabled");
     await nc.drain();
     return async () => {};
   }
@@ -42,11 +45,11 @@ export async function startEntityEventPublisher(): Promise<() => Promise<void>> 
   setEntityEventSink(async (event) => {
     const subject = deriveEntityEventSubject(event);
     await js.publish(subject, encoder.encode(JSON.stringify(event)), { msgID: event.id }).catch((err: unknown) => {
-      console.error("[entity-event-publisher] publish failed", { err, event });
+      log.error({ err, event }, "publish failed");
     });
   });
 
-  console.log(`[entity-event-publisher] publishing entity events to ${nc.getServer()}`);
+  log.info({ server: nc.getServer() }, "publishing entity events");
 
   return async () => {
     setEntityEventSink(null);

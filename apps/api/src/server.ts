@@ -6,6 +6,7 @@ import sensible from "@fastify/sensible";
 
 import closeWithGrace from "close-with-grace";
 import { corsConfig, env } from "./config.js";
+import { rootLogger } from "./logger.js";
 import type { IServerOptions } from "./types.js";
 import type { SerializerSchemaOptions } from "./types/fastify.js";
 import { stopStaleGatewayCheck } from "@rw/services/queues/background-workers";
@@ -29,9 +30,9 @@ import { router } from "./rpc/index.js";
 let unhandledRejectionLoggerInstalled = false;
 
 export function createServer(options: IServerOptions) {
-  const server = Fastify({ logger: true }).withTypeProvider<
-    JsonSchemaToTsProvider<{ SerializerSchemaOptions: SerializerSchemaOptions }>
-  >();
+  const server = Fastify({
+    loggerInstance: options.loggerInstance ?? rootLogger.child({ module: "http" }),
+  }).withTypeProvider<JsonSchemaToTsProvider<{ SerializerSchemaOptions: SerializerSchemaOptions }>>();
 
   // Register plugins
   server.register(cors, {

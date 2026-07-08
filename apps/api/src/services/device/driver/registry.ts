@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import prisma from "@rw/db";
+import { moduleLogger } from "../../../logger.js";
 
 export interface DriverManifest {
   name: string;
@@ -23,6 +24,8 @@ export interface DriverInfo {
   manifest: DriverManifest;
 }
 
+const log = moduleLogger("driver-registry");
+
 class DriverRegistry {
   private drivers: Map<string, DriverInfo> = new Map();
   private driversPath: string;
@@ -41,7 +44,7 @@ class DriverRegistry {
     try {
       files = await readdir(this.driversPath);
     } catch (_error) {
-      console.warn(`Drivers directory not found: ${this.driversPath}`);
+      log.warn({ driversPath: this.driversPath }, "drivers directory not found");
       return;
     }
 
@@ -54,7 +57,7 @@ class DriverRegistry {
         const manifest = JSON.parse(content) as DriverManifest;
 
         if (!manifest.name || !manifest.version) {
-          console.warn(`Skipping ${file}: missing name or version`);
+          log.warn({ file }, "skipping driver manifest: missing name or version");
           continue;
         }
 
@@ -65,9 +68,9 @@ class DriverRegistry {
           manifest,
         });
 
-        console.log(`Loaded driver: ${manifest.name}@${manifest.version}`);
+        log.info({ name: manifest.name, version: manifest.version }, "loaded driver");
       } catch (error) {
-        console.error(`Failed to load driver ${file}:`, error);
+        log.error({ err: error, file }, "failed to load driver");
       }
     }
   }
@@ -102,7 +105,7 @@ class DriverRegistry {
   async initialize(): Promise<void> {
     await this.loadAll();
     await this.syncToDatabase();
-    console.log(`Driver registry initialized with ${this.drivers.size} driver(s)`);
+    log.info({ count: this.drivers.size }, "driver registry initialized");
   }
 
   /**

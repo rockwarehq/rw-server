@@ -1,10 +1,13 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
+import { moduleLogger } from "../logger.js";
 import { authRequired, processorRequired, userOrDisplayRequired } from "./middleware.js";
 import { Principal } from "../auth/index.js";
 import { station, workcenter } from "@rw/services/facility/index";
 import { getAccessibleSites, hasPermission } from "@rw/auth/iam/index";
 import { getAutomationFramework } from "../automations/index.js";
+
+const log = moduleLogger("rpc:station");
 
 // ============================================================================
 // Input Schemas
@@ -925,7 +928,7 @@ export const changeJob = userOrDisplayRequired.input(changeJobInputSchema).handl
       }),
     )
     .catch((err) => {
-      console.error(`[changeJob] failed to fire job.changed automation for station ${result.data.stationId}:`, err);
+      log.error({ err, stationId: result.data.stationId }, "changeJob: failed to fire job.changed automation");
     });
 
   return result.data;
