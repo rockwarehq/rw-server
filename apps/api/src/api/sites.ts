@@ -211,7 +211,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
         return reply.status(401).send({ error: "No workspace context" });
       }
       if (!userId || !(await hasPermission(userId, "facility:write", { workspaceId }))) {
-        return reply.status(403).send({ error: "forbidden", required: "facility:write" });
+        return reply.status(403).send({ error: "forbidden" });
       }
 
       const result = await site.create({ ...request.body, workspaceId });
@@ -310,7 +310,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
         return reply.status(401).send({ error: result.error });
       }
       if (!userId || !(await hasPermission(userId, "facility:read", { workspaceId, siteId: request.params.id }))) {
-        return reply.status(403).send({ error: "forbidden", required: "facility:read" });
+        return reply.status(403).send({ error: "forbidden" });
       }
       return result.data;
     },
@@ -342,7 +342,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
         return reply.status(401).send({ error: "No workspace context" });
       }
       if (!userId || !(await hasPermission(userId, "facility:write", { workspaceId, siteId: request.params.id }))) {
-        return reply.status(403).send({ error: "forbidden", required: "facility:write" });
+        return reply.status(403).send({ error: "forbidden" });
       }
 
       const result = await site.update(request.params.id, request.body, workspaceId);
@@ -379,7 +379,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
         return reply.status(401).send({ error: "No workspace context" });
       }
       if (!userId || !(await hasPermission(userId, "facility:admin", { workspaceId, siteId: request.params.id }))) {
-        return reply.status(403).send({ error: "forbidden", required: "facility:admin" });
+        return reply.status(403).send({ error: "forbidden" });
       }
 
       const result = await site.remove(request.params.id, workspaceId);
