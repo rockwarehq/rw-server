@@ -53,7 +53,6 @@
     "ioredis": "^5.10.1",
     "json-rules-engine": "^7.3.1",
     "json-schema-to-ts": "^3.1.1",
-    "mqtt": "^5.14.1",
     "nanoid": "^5.1.6",
     "pg": "^8.16.3",
     "pino": "^10.1.1",
