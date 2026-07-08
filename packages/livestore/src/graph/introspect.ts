@@ -18,7 +18,10 @@ import { errorResult, type GraphScope, type ServiceResult } from "./types.js";
 
 type JsonSchema = Record<string, unknown>;
 
-function valueTypeToJsonSchema(valueType: GraphTypeValueType | GraphTypeInputValueType, entityKey?: string | null): JsonSchema {
+function valueTypeToJsonSchema(
+  valueType: GraphTypeValueType | GraphTypeInputValueType,
+  entityKey?: string | null,
+): JsonSchema {
   switch (valueType) {
     case "string":
       return { type: "string" };
@@ -296,10 +299,7 @@ export interface GraphPropertyExplanation {
   watchingHooks: Array<{ id: string; name: string; enabled: boolean; role: "condition" | "context" }>;
 }
 
-function walkEdges(
-  start: string,
-  adjacency: Map<string, string[]>,
-): Map<string, number> {
+function walkEdges(start: string, adjacency: Map<string, string[]>): Map<string, number> {
   const depths = new Map<string, number>();
   let frontier = [start];
   let depth = 0;
@@ -461,12 +461,12 @@ export async function conformance(scope: GraphScope): Promise<ServiceResult<Grap
       continue;
     }
 
-    const boundKeys = new Set(
-      node.properties.map((p) => p.typeFieldKey).filter((key): key is string => key !== null),
-    );
+    const boundKeys = new Set(node.properties.map((p) => p.typeFieldKey).filter((key): key is string => key !== null));
     const missingFields = [...fieldKeys].filter((key) => !boundKeys.has(key));
     const orphanedProperties = node.properties
-      .filter((p): p is typeof p & { typeFieldKey: string } => p.typeFieldKey !== null && !fieldKeys.has(p.typeFieldKey))
+      .filter(
+        (p): p is typeof p & { typeFieldKey: string } => p.typeFieldKey !== null && !fieldKeys.has(p.typeFieldKey),
+      )
       .map((p) => ({ propertyId: p.id, name: p.name, typeFieldKey: p.typeFieldKey }));
 
     if (missingFields.length > 0 || orphanedProperties.length > 0) {

@@ -163,9 +163,7 @@ describe("conformance", () => {
     expect(drift?.nodeId).toBe(NODE.id);
     expect(drift?.missingFields.length).toBeGreaterThan(0);
     expect(drift?.missingFields).not.toContain("totalCycles");
-    expect(drift?.orphanedProperties).toEqual([
-      expect.objectContaining({ typeFieldKey: "legacyField" }),
-    ]);
+    expect(drift?.orphanedProperties).toEqual([expect.objectContaining({ typeFieldKey: "legacyField" })]);
   });
 });
 

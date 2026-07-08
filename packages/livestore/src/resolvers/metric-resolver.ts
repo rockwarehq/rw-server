@@ -129,7 +129,11 @@ export class MetricResolver {
     // Iterator ended without an unsubscribe: re-subscribe with backoff as long
     // as the subject still has bound properties (core subs are not durable, so
     // a dropped subscription otherwise freezes those metric properties).
-    if (!this.stopped && this.subscriptions.get(subject) === subscription && (this.bySubject.get(subject)?.size ?? 0) > 0) {
+    if (
+      !this.stopped &&
+      this.subscriptions.get(subject) === subscription &&
+      (this.bySubject.get(subject)?.size ?? 0) > 0
+    ) {
       this.subscriptions.delete(subject);
       this.scheduleRestart(subject);
     }

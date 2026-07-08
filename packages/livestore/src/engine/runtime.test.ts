@@ -333,9 +333,7 @@ describe("definition apply serialization", () => {
     }) as never;
     // Reconcile scan reports one changed property, so it has work to apply.
     prisma.graphProperty.findMany = (async (args?: { select?: unknown }) =>
-      args?.select
-        ? ([{ id: "p1", nodeId: "n1", node: { siteId: "site-1" } }] as never)
-        : ([] as never)) as never;
+      args?.select ? ([{ id: "p1", nodeId: "n1", node: { siteId: "site-1" } }] as never) : ([] as never)) as never;
 
     const { runtime } = makeRuntime({ prisma, calls });
     await runtime.start();

@@ -4,7 +4,6 @@ import type { Prisma } from "@rw/db";
 import { normalizeGraphTypeToken, parseGraphTypeRef } from "../catalog/graph-types.js";
 
 import { SYSTEM_ENTITY_KEYS, systemEntityCatalogEntryByKey } from "@rw/services/entity/registry";
-import type { EntityCatalogField } from "@rw/services/entity/registry.types";
 import { publishGraphDefinitionEvent } from "./definition-events.js";
 import { activeHookIdsForProperties } from "./hooks.js";
 import * as nodeTypes from "./node-types.js";

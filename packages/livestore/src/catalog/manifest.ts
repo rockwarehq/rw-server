@@ -84,7 +84,7 @@ const RESOLVER_DESCRIPTOR_META: Record<
     referentialChecks: [
       "entityType must be a known system entity or a user object-schema key/ID in the site",
       "entityId must exist in the graph's site",
-      "path must be a catalog field on the entity (or the runtime specials \"id\" / \"*\")",
+      'path must be a catalog field on the entity (or the runtime specials "id" / "*")',
     ],
   },
   metric: {
@@ -124,17 +124,83 @@ const RESOLVER_DESCRIPTOR_META: Record<
 };
 
 const HOOK_OPERATOR_DESCRIPTORS: LivestoreHookOperatorDescriptor[] = [
-  { operator: "changed", description: "Fires on any value change.", requiresThreshold: false, requiresValue: false, supportsMinDelta: true },
-  { operator: "increases", description: "Fires when the numeric value increases.", requiresThreshold: false, requiresValue: false, supportsMinDelta: true },
-  { operator: "decreases", description: "Fires when the numeric value decreases.", requiresThreshold: false, requiresValue: false, supportsMinDelta: true },
-  { operator: "equals", description: "Fires when the value equals `value`.", requiresThreshold: false, requiresValue: true, supportsMinDelta: false },
-  { operator: "notEquals", description: "Fires when the value stops equalling `value`.", requiresThreshold: false, requiresValue: true, supportsMinDelta: false },
-  { operator: "gt", description: "Fires while the value is > threshold.", requiresThreshold: true, requiresValue: false, supportsMinDelta: false },
-  { operator: "gte", description: "Fires while the value is >= threshold.", requiresThreshold: true, requiresValue: false, supportsMinDelta: false },
-  { operator: "lt", description: "Fires while the value is < threshold.", requiresThreshold: true, requiresValue: false, supportsMinDelta: false },
-  { operator: "lte", description: "Fires while the value is <= threshold.", requiresThreshold: true, requiresValue: false, supportsMinDelta: false },
-  { operator: "crossesAbove", description: "Fires on the transition from <= threshold to > threshold.", requiresThreshold: true, requiresValue: false, supportsMinDelta: false },
-  { operator: "crossesBelow", description: "Fires on the transition from >= threshold to < threshold.", requiresThreshold: true, requiresValue: false, supportsMinDelta: false },
+  {
+    operator: "changed",
+    description: "Fires on any value change.",
+    requiresThreshold: false,
+    requiresValue: false,
+    supportsMinDelta: true,
+  },
+  {
+    operator: "increases",
+    description: "Fires when the numeric value increases.",
+    requiresThreshold: false,
+    requiresValue: false,
+    supportsMinDelta: true,
+  },
+  {
+    operator: "decreases",
+    description: "Fires when the numeric value decreases.",
+    requiresThreshold: false,
+    requiresValue: false,
+    supportsMinDelta: true,
+  },
+  {
+    operator: "equals",
+    description: "Fires when the value equals `value`.",
+    requiresThreshold: false,
+    requiresValue: true,
+    supportsMinDelta: false,
+  },
+  {
+    operator: "notEquals",
+    description: "Fires when the value stops equalling `value`.",
+    requiresThreshold: false,
+    requiresValue: true,
+    supportsMinDelta: false,
+  },
+  {
+    operator: "gt",
+    description: "Fires while the value is > threshold.",
+    requiresThreshold: true,
+    requiresValue: false,
+    supportsMinDelta: false,
+  },
+  {
+    operator: "gte",
+    description: "Fires while the value is >= threshold.",
+    requiresThreshold: true,
+    requiresValue: false,
+    supportsMinDelta: false,
+  },
+  {
+    operator: "lt",
+    description: "Fires while the value is < threshold.",
+    requiresThreshold: true,
+    requiresValue: false,
+    supportsMinDelta: false,
+  },
+  {
+    operator: "lte",
+    description: "Fires while the value is <= threshold.",
+    requiresThreshold: true,
+    requiresValue: false,
+    supportsMinDelta: false,
+  },
+  {
+    operator: "crossesAbove",
+    description: "Fires on the transition from <= threshold to > threshold.",
+    requiresThreshold: true,
+    requiresValue: false,
+    supportsMinDelta: false,
+  },
+  {
+    operator: "crossesBelow",
+    description: "Fires on the transition from >= threshold to < threshold.",
+    requiresThreshold: true,
+    requiresValue: false,
+    supportsMinDelta: false,
+  },
 ];
 
 // Hand-written JSON Schema mirroring catalog/hook-conditions.ts's
@@ -169,10 +235,12 @@ const HOOK_CONDITION_JSON_SCHEMA: Record<string, unknown> = {
   allOf: [
     {
       if: { properties: { operator: { enum: ["equals", "notEquals"] } } },
+      // biome-ignore lint/suspicious/noThenProperty: JSON Schema if/then keyword, not a thenable
       then: { required: ["value"] },
     },
     {
       if: { properties: { operator: { enum: ["gt", "gte", "lt", "lte", "crossesAbove", "crossesBelow"] } } },
+      // biome-ignore lint/suspicious/noThenProperty: JSON Schema if/then keyword, not a thenable
       then: { required: ["threshold"] },
     },
   ],
@@ -209,7 +277,7 @@ export function buildLivestoreCapabilityManifest(): LivestoreCapabilityManifest 
       valueTypes: GRAPH_TYPE_VALUE_TYPES,
       inputValueTypes: GRAPH_TYPE_INPUT_VALUE_TYPES,
       typeRefFormat:
-        "Integration types: \"@<namespace>/<key>\" (e.g. \"@imm/station\"). Site types: bare \"<key>\". Both discoverable via graph.type.catalog.",
+        'Integration types: "@<namespace>/<key>" (e.g. "@imm/station"). Site types: bare "<key>". Both discoverable via graph.type.catalog.',
     },
     limits: {
       minWindowMs: 1000,
@@ -219,7 +287,7 @@ export function buildLivestoreCapabilityManifest(): LivestoreCapabilityManifest 
     valueEnvelope: {
       qualities: ["good", "stale", "uncertain", "bad"],
       description:
-        "Every property value is a ValueEnvelope { value, quality, timestamp, context? }. Quality propagates worst-of-inputs; evaluation errors surface as quality \"bad\" with the error in context.",
+        'Every property value is a ValueEnvelope { value, quality, timestamp, context? }. Quality propagates worst-of-inputs; evaluation errors surface as quality "bad" with the error in context.',
     },
   };
 

@@ -198,10 +198,7 @@ export class TagResolver {
       // applies tightened limits (and purges the backlog). A plain create()
       // no-ops when the stream exists, which would leave an old uncapped
       // RW_TAGS running unbounded.
-      if (
-        existing.config.max_age !== TAGS_MAX_AGE_NANOS ||
-        existing.config.max_bytes !== TAGS_MAX_BYTES
-      ) {
+      if (existing.config.max_age !== TAGS_MAX_AGE_NANOS || existing.config.max_bytes !== TAGS_MAX_BYTES) {
         await this.jsm.streams.update(TAGS_STREAM, {
           max_age: TAGS_MAX_AGE_NANOS,
           max_bytes: TAGS_MAX_BYTES,

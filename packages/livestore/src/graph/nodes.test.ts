@@ -40,10 +40,7 @@ describe("buildRequestedProperties", () => {
   const properties = [goodItems, oee, customNamed];
 
   it("matches camelCase typeFieldKeys against normalized (lowercased) request keys", () => {
-    const result = buildRequestedProperties(
-      [{ original: "goodItems", normalized: "gooditems" }],
-      properties,
-    );
+    const result = buildRequestedProperties([{ original: "goodItems", normalized: "gooditems" }], properties);
     expect(result.goodItems).toBe(goodItems);
   });
 
@@ -60,18 +57,12 @@ describe("buildRequestedProperties", () => {
   });
 
   it("matches user-named properties by folded name", () => {
-    const result = buildRequestedProperties(
-      [{ original: "scrap rate", normalized: "scrap_rate" }],
-      properties,
-    );
+    const result = buildRequestedProperties([{ original: "scrap rate", normalized: "scrap_rate" }], properties);
     expect(result["scrap rate"]).toBe(customNamed);
   });
 
   it("returns null for keys with no matching property", () => {
-    const result = buildRequestedProperties(
-      [{ original: "statusReason", normalized: "statusreason" }],
-      properties,
-    );
+    const result = buildRequestedProperties([{ original: "statusReason", normalized: "statusreason" }], properties);
     expect(result.statusReason).toBeNull();
   });
 });

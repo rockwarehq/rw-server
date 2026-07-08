@@ -172,8 +172,11 @@ export async function plan(input: GraphPlanInput, scope: GraphScope): Promise<Se
       }
       const resolved = resolvedTypeByRef.get(node.typeRef);
       if (!resolved || "error" in resolved) {
-        issue(`${path}.typeRef`, resolved && "error" in resolved ? resolved.code : "GRAPH_TYPE_NOT_FOUND",
-          resolved && "error" in resolved ? resolved.error : "Graph type not found");
+        issue(
+          `${path}.typeRef`,
+          resolved && "error" in resolved ? resolved.code : "GRAPH_TYPE_NOT_FOUND",
+          resolved && "error" in resolved ? resolved.error : "Graph type not found",
+        );
       } else {
         const inputResult = await validateTypeInputs({
           type: resolved.data,
@@ -361,8 +364,7 @@ export async function plan(input: GraphPlanInput, scope: GraphScope): Promise<Se
       where: { siteId: scope.siteId, name, isDeleted: false },
       select: { id: true },
     });
-    if (conflict)
-      issue(`hooks[${index}].name`, "GRAPH_HOOK_NAME_EXISTS", "Graph hook name already exists in the site");
+    if (conflict) issue(`hooks[${index}].name`, "GRAPH_HOOK_NAME_EXISTS", "Graph hook name already exists in the site");
   }
 
   // Hook property references: planned ids or existing site properties.

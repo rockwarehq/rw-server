@@ -71,7 +71,11 @@ export async function buildRollupEdges(
     const resolver = rollup.resolver;
     if (!isRollupResolverConfig(resolver) || !resolver.parent) continue; // narrowing; already filtered
     const key = `${resolver.parent.model}|${resolver.relation}`;
-    const group = parentIdsByGroup.get(key) ?? { model: resolver.parent.model, relation: resolver.relation, ids: new Set<string>() };
+    const group = parentIdsByGroup.get(key) ?? {
+      model: resolver.parent.model,
+      relation: resolver.relation,
+      ids: new Set<string>(),
+    };
     group.ids.add(resolver.parent.id);
     parentIdsByGroup.set(key, group);
   }
@@ -87,7 +91,10 @@ export async function buildRollupEdges(
     });
     for (const row of rows) {
       const parentId = row.id as string;
-      childrenByParent.set(`${group.model}|${group.relation}|${parentId}`, (row[group.relation] as ChildRow[] | undefined) ?? []);
+      childrenByParent.set(
+        `${group.model}|${group.relation}|${parentId}`,
+        (row[group.relation] as ChildRow[] | undefined) ?? [],
+      );
     }
   }
 
