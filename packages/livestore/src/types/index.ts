@@ -84,6 +84,9 @@ export interface TumblingState {
   max: number | null;
   goodCount: number; // samples with quality 'good'
   totalCount: number; // samples seen (incl. non-good)
+  // Which property the state was folded from; state persisted before this
+  // field existed omits it. Rehydrate discards state from a different source.
+  sourcePropertyId?: string;
 }
 
 export interface EwmaState {
@@ -91,6 +94,8 @@ export interface EwmaState {
   value: number;
   lastInputTs: number; // ms, for staleness reporting
   lastInputQuality: Quality;
+  // See TumblingState.sourcePropertyId.
+  sourcePropertyId?: string;
 }
 
 export type AggState = TumblingState | EwmaState;
@@ -217,6 +222,7 @@ export function isWindowResolverConfig(value: GraphResolver): value is WindowRes
 
 export function parseAggState(value: unknown): AggState | null {
   if (!isRecord(value)) return null;
+  if (value.sourcePropertyId !== undefined && typeof value.sourcePropertyId !== "string") return null;
   if (value.kind === "tumbling") {
     if (typeof value.bucketStart !== "number" || typeof value.bucketEnd !== "number") return null;
     if (typeof value.count !== "number" || typeof value.sum !== "number") return null;

@@ -16,7 +16,12 @@ import {
   getGraphSiteForWorkspace,
 } from "./scope.js";
 import { errorResult, type GraphScope, type ListResult, type ServiceResult } from "./types.js";
-import { prefixedPropertyId, validateAcyclicStaticEdges, validateResolverConfig } from "./validation.js";
+import {
+  entityCatalogField,
+  prefixedPropertyId,
+  validateAcyclicStaticEdges,
+  validateResolverConfig,
+} from "./validation.js";
 
 export interface CreateGraphNodeInput {
   name: string;
@@ -287,47 +292,6 @@ async function validateTypeInputs(args: {
   }
 
   return { data: args.typeContext };
-}
-
-async function entityCatalogField(
-  entityKey: string,
-  path: string,
-  scope: GraphScope,
-): Promise<ServiceResult<EntityCatalogField>> {
-  const systemEntry = systemEntityCatalogEntryByKey(entityKey, true);
-  if (systemEntry?.fields) {
-    const field = systemEntry.fields.find((candidate) => candidate.key === path || candidate.path === path);
-    return field ? { data: field } : errorResult("ENTITY_PATH_NOT_FOUND", `Entity path not found: ${path}`);
-  }
-
-  const schema = await prisma.objectSchema.findFirst({
-    where: {
-      workspaceId: scope.workspaceId,
-      siteId: scope.siteId,
-      source: "DOCUMENT",
-      isDeleted: false,
-      OR: [...(UUID_PATTERN.test(entityKey) ? [{ id: entityKey }] : []), { key: entityKey }],
-    },
-    include: { fields: { where: { isDeleted: false } } },
-  });
-  if (!schema) return errorResult("ENTITY_REF_SCHEMA_NOT_FOUND", "Entity reference schema was not found");
-
-  const field = schema.fields.find((candidate) => candidate.key === path || candidate.name === path);
-  if (!field) return errorResult("ENTITY_PATH_NOT_FOUND", `Entity path not found: ${path}`);
-  return {
-    data: {
-      key: field.key,
-      name: field.key,
-      label: field.label,
-      type: field.type,
-      description: field.description,
-      required: field.required,
-      isList: field.isList,
-      path: field.key,
-      relation: field.refSchemaId ? { key: field.key, targetKey: field.refSchemaId } : null,
-      sortOrder: field.sortOrder,
-    },
-  };
 }
 
 async function resolveSystemEntityRecord(

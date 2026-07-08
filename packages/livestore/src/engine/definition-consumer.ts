@@ -89,13 +89,15 @@ export class GraphDefinitionConsumer {
           continue;
         }
 
-        try {
-          await this.sink.enqueueDefinitionChange(event);
-          message.ack();
-        } catch (err) {
-          this.logger.error({ err, event }, "livestore graph definition event failed");
-          message.nak(1_000);
-        }
+        // Ack on enqueue, not after the apply: the DB is the source of truth
+        // and the reconcile is the backstop, so redelivery buys nothing —
+        // while ack-after-apply serialized messages at >=100ms each (the
+        // coalescing window never batched) and blew the 30s ack_wait on bulk
+        // imports, causing redelivery storms.
+        this.sink.enqueueDefinitionChange(event).catch((err) => {
+          this.logger.error({ err, event }, "livestore graph definition apply failed (reconcile will repair)");
+        });
+        message.ack();
       }
     } catch (err) {
       this.logger.error({ err }, "livestore graph definition consumer failed");

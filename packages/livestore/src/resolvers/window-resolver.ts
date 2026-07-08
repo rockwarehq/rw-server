@@ -5,6 +5,7 @@ import { validateWindowResolver } from "./window-validate.js";
 import {
   isWindowResolverConfig,
   worse,
+  type AggState,
   type Aggregation,
   type EwmaState,
   type LivestoreLogger,
@@ -26,6 +27,7 @@ const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
 interface BaseRuntime {
   propertyId: string;
+  sourcePropertyId: string;
   persistTimer: ReturnType<typeof setTimeout> | null;
   emitChain: Promise<void>;
 }
@@ -111,7 +113,7 @@ export class WindowResolver {
     if (rt.persistTimer) clearTimeout(rt.persistTimer);
     rt.persistTimer = null;
     await rt.emitChain;
-    await this.store.put(rt.propertyId, rt.state);
+    await this.store.put(rt.propertyId, this.stateForPersist(rt));
   }
 
   // Synchronous by design
@@ -157,7 +159,7 @@ export class WindowResolver {
     }
     await Promise.allSettled(runtimes.map((rt) => rt.emitChain));
     // Final state flush (§17.7 graceful shutdown).
-    const results = await Promise.allSettled(runtimes.map((rt) => this.store.put(rt.propertyId, rt.state)));
+    const results = await Promise.allSettled(runtimes.map((rt) => this.store.put(rt.propertyId, this.stateForPersist(rt))));
     const failed = results.filter((result) => result.status === "rejected").length;
     if (failed > 0) this.logger.error({ failed }, "livestore window state flush failed on shutdown");
     this.byId.clear();
@@ -174,13 +176,21 @@ export class WindowResolver {
 
   // Restart loads persisted state into agg state
   private async rehydrate(propertyId: string, config: WindowResolverConfig): Promise<WindowRuntime> {
-    const persisted = await this.store.get(propertyId);
+    const loaded = await this.store.get(propertyId);
+    // State folded from a different source property must not seed this window.
+    // (Pre-existing state without the field is trusted as-is.)
+    const sourceMatches = loaded?.sourcePropertyId === undefined || loaded.sourcePropertyId === config.sourcePropertyId;
+    if (loaded && !sourceMatches) {
+      this.logger.warn({ propertyId }, "livestore window state discarded (source property changed)");
+    }
+    const persisted = loaded && sourceMatches ? loaded : null;
 
     if (config.kind === "ewma") {
       const state = persisted?.kind === "ewma" ? persisted : initEwmaState();
       const rt: EwmaRuntime = {
         kind: "ewma",
         propertyId,
+        sourcePropertyId: config.sourcePropertyId,
         alpha: config.alpha as number,
         state,
         persistTimer: null,
@@ -206,6 +216,7 @@ export class WindowResolver {
     const rt: TumblingRuntime = {
       kind: "tumbling",
       propertyId,
+      sourcePropertyId: config.sourcePropertyId,
       windowMs,
       alignToMs,
       aggregation: config.aggregation,
@@ -287,7 +298,13 @@ export class WindowResolver {
       rt.persistTimer = null;
     }
     void this.store
-      .put(rt.propertyId, rt.state)
+      .put(rt.propertyId, this.stateForPersist(rt))
       .catch((err) => this.logger.error({ err, propertyId: rt.propertyId }, "livestore window state persist failed"));
+  }
+
+  // Stamp the source at persist time (folds create states without it), so a
+  // future rehydrate can tell whether the state belongs to this source.
+  private stateForPersist(rt: WindowRuntime): AggState {
+    return { ...rt.state, sourcePropertyId: rt.sourcePropertyId };
   }
 }

@@ -238,6 +238,44 @@ describe("rehydrate", () => {
     expect(h.commits[0]?.envelope).toMatchObject({ value: 5, context: { count: 1 } });
   });
 
+  it("discards persisted state folded from a different source property", async () => {
+    const h = makeHarness();
+    h.states.set("win", {
+      kind: "ewma",
+      value: 42,
+      lastInputTs: T0 - 1_000,
+      lastInputQuality: "good",
+      sourcePropertyId: "other-src",
+    });
+
+    await h.evaluator.start([property("win", ewma(1))], getProperty); // config source: "src"
+    await settle();
+
+    // Fresh state: the first sample fully defines the value (alpha=1) instead
+    // of being contaminated by the other source's 42.
+    h.evaluator.onInput("src", sample(5, T0 + 1_000));
+    await settle();
+    expect(h.commits.at(-1)?.envelope).toMatchObject({ value: 5 });
+  });
+
+  it("keeps persisted state stamped with the same source, and stamps persists", async () => {
+    const h = makeHarness();
+    h.states.set("win", {
+      kind: "ewma",
+      value: 40,
+      lastInputTs: T0 - 1_000,
+      lastInputQuality: "good",
+      sourcePropertyId: "src",
+    });
+
+    await h.evaluator.start([property("win", ewma(0.5))], getProperty);
+    h.evaluator.onInput("src", sample(20, T0 + 1_000));
+    await vi.advanceTimersByTimeAsync(600); // persist debounce
+
+    expect(h.commits.at(-1)?.envelope).toMatchObject({ value: 30 }); // folded onto 40, not fresh
+    expect(h.states.get("win")).toMatchObject({ sourcePropertyId: "src" });
+  });
+
   it("re-emits a long-idle EWMA as stale until fresh input arrives", async () => {
     const h = makeHarness();
     h.states.set("win", { kind: "ewma", value: 7, lastInputTs: T0 - 2 * 60 * 60 * 1000, lastInputQuality: "good" });

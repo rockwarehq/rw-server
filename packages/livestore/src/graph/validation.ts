@@ -1,11 +1,15 @@
 import prisma from "@rw/db";
 
 import { systemEntityCatalogEntryByKey } from "@rw/services/entity/registry";
+import type { EntityCatalogField } from "@rw/services/entity/registry.types";
 import { graphNodeSiteWhere } from "./scope.js";
-import { errorResult, type GraphScope } from "./types.js";
+import { errorResult, type GraphScope, type ServiceResult } from "./types.js";
 
 const AGGREGATIONS = new Set(["sum", "avg", "count", "min", "max"]);
 const PREFIXED_UUID_PATTERN = /\bp_([0-9a-f]{8}_[0-9a-f]{4}_[1-8][0-9a-f]{3}_[89ab][0-9a-f]{3}_[0-9a-f]{12})\b/gi;
+// Any property-shaped symbol the expression sandbox will accept at eval time.
+const PROPERTY_SYMBOL_PATTERN = /\bp_\w+\b/g;
+const PREFIXED_UUID_EXACT_PATTERN = /^p_[0-9a-f]{8}_[0-9a-f]{4}_[1-8][0-9a-f]{3}_[89ab][0-9a-f]{3}_[0-9a-f]{12}$/i;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -22,6 +26,60 @@ export function extractExpressionDependencyIds(expression: string): string[] {
     ids.add(match[1].replaceAll("_", "-"));
   }
   return [...ids];
+}
+
+// The sandbox accepts any p_* symbol, but only UUID-shaped ones become graph
+// edges — anything else would save as a zombie expression with no dependencies
+// that never recomputes and evaluates against an unbound symbol.
+function findMalformedPropertySymbols(expression: string): string[] {
+  const malformed = new Set<string>();
+  for (const match of expression.matchAll(PROPERTY_SYMBOL_PATTERN)) {
+    if (!PREFIXED_UUID_EXACT_PATTERN.test(match[0])) malformed.add(match[0]);
+  }
+  return [...malformed];
+}
+
+// Validate an entity path against the catalog (system entry fields or user
+// ObjectSchema fields). Shared with the facet materializer in nodes.ts.
+export async function entityCatalogField(
+  entityKey: string,
+  path: string,
+  scope: GraphScope,
+): Promise<ServiceResult<EntityCatalogField>> {
+  const systemEntry = systemEntityCatalogEntryByKey(entityKey, true);
+  if (systemEntry?.fields) {
+    const field = systemEntry.fields.find((candidate) => candidate.key === path || candidate.path === path);
+    return field ? { data: field } : errorResult("ENTITY_PATH_NOT_FOUND", `Entity path not found: ${path}`);
+  }
+
+  const schema = await prisma.objectSchema.findFirst({
+    where: {
+      workspaceId: scope.workspaceId,
+      siteId: scope.siteId,
+      source: "DOCUMENT",
+      isDeleted: false,
+      OR: [...(UUID_PATTERN.test(entityKey) ? [{ id: entityKey }] : []), { key: entityKey }],
+    },
+    include: { fields: { where: { isDeleted: false } } },
+  });
+  if (!schema) return errorResult("ENTITY_REF_SCHEMA_NOT_FOUND", "Entity reference schema was not found");
+
+  const field = schema.fields.find((candidate) => candidate.key === path || candidate.name === path);
+  if (!field) return errorResult("ENTITY_PATH_NOT_FOUND", `Entity path not found: ${path}`);
+  return {
+    data: {
+      key: field.key,
+      name: field.key,
+      label: field.label,
+      type: field.type,
+      description: field.description,
+      required: field.required,
+      isList: field.isList,
+      path: field.key,
+      relation: field.refSchemaId ? { key: field.key, targetKey: field.refSchemaId } : null,
+      sortOrder: field.sortOrder,
+    },
+  };
 }
 
 async function assertPropertiesInSite(propertyIds: readonly string[], scope: GraphScope) {
@@ -152,12 +210,22 @@ export async function validateResolverConfig(args: {
       ? await assertKnownEntityInSite(entry.model, resolver.entityId, args.scope)
       : await assertKnownUserEntityInSite(resolver.entityType, resolver.entityId, args.scope);
     if (entityError) return entityError;
+    // Unknown paths would resolve to null with quality "good" forever; reject
+    // them at save time. "id" and "*" are runtime specials outside the catalog.
+    if (resolver.path !== "id" && resolver.path !== "*") {
+      const fieldResult = await entityCatalogField(resolver.entityType, resolver.path, args.scope);
+      if ("error" in fieldResult) return fieldResult;
+    }
     return { data: { resolver, dependencyIds: [] } };
   }
 
   if (resolverType === "expr") {
     if (typeof resolver.expression !== "string" || !resolver.expression.trim()) {
       return errorResult("INVALID_RESOLVER", "expr resolver requires expression");
+    }
+    const malformed = findMalformedPropertySymbols(resolver.expression);
+    if (malformed.length > 0) {
+      return errorResult("INVALID_RESOLVER", `expr references unknown property symbol: ${malformed.join(", ")}`);
     }
     const dependencyIds = extractExpressionDependencyIds(resolver.expression);
     const known = args.knownPropertyIds;
