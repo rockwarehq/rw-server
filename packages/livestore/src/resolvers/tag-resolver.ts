@@ -49,6 +49,10 @@ export class TagResolver {
   private readonly bySubject = new Map<string, Set<string>>();
   private readonly propertySubjects = new Map<string, string>();
   private messages: ConsumerMessages | null = null;
+  private stopped = false;
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
+  private restartAttempts = 0;
+  private restartsTotal = 0;
 
   constructor(
     private readonly js: JetStreamClient,
@@ -58,6 +62,7 @@ export class TagResolver {
   ) {}
 
   async start(properties: Iterable<PropertyRuntime>): Promise<void> {
+    this.stopped = false;
     for (const property of properties) {
       this.upsertProperty(property);
     }
@@ -65,10 +70,18 @@ export class TagResolver {
     await this.ensureStream();
     await this.ensureConsumer();
 
+    await this.open();
+    this.logger.info({ stream: TAGS_STREAM, durable: TAGS_DURABLE }, "livestore tag consumer started");
+  }
+
+  stats(): { restartsTotal: number } {
+    return { restartsTotal: this.restartsTotal };
+  }
+
+  private async open(): Promise<void> {
     const consumer = await this.js.consumers.get(TAGS_STREAM, TAGS_DURABLE);
     this.messages = await consumer.consume({ max_messages: 100 });
     void this.consume(this.messages);
-    this.logger.info({ stream: TAGS_STREAM, durable: TAGS_DURABLE }, "livestore tag consumer started");
   }
 
   // Subject routing is now pure bookkeeping — the single consumer already
@@ -102,6 +115,9 @@ export class TagResolver {
   }
 
   stop(): void {
+    this.stopped = true;
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = null;
     this.messages?.stop();
     this.messages = null;
     this.bySubject.clear();
@@ -115,6 +131,7 @@ export class TagResolver {
   private async consume(messages: ConsumerMessages): Promise<void> {
     try {
       for await (const message of messages) {
+        this.restartAttempts = 0; // healthy delivery resets the backoff
         const envelope = this.parseMessage(message.data);
         if (!envelope) {
           this.logger.warn({ subject: message.subject }, "livestore tag message ignored: not a ValueEnvelope");
@@ -144,8 +161,26 @@ export class TagResolver {
         else message.ack();
       }
     } catch (err) {
-      this.logger.error({ err }, "livestore tag consumer stopped");
+      this.logger.error({ err }, "livestore tag consumer failed");
     }
+    // The iterator only ends via stop() or an error; either way, if we aren't
+    // stopping, tag ingestion has silently halted — reopen with backoff.
+    if (!this.stopped) this.scheduleRestart();
+  }
+
+  private scheduleRestart(): void {
+    if (this.stopped || this.restartTimer) return;
+    this.restartAttempts += 1;
+    this.restartsTotal += 1;
+    const delayMs = Math.min(30_000, 1_000 * 2 ** Math.min(this.restartAttempts - 1, 5));
+    this.logger.warn({ delayMs, attempt: this.restartAttempts }, "livestore tag consumer restarting");
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      void this.open().catch((err) => {
+        this.logger.error({ err }, "livestore tag consumer reopen failed");
+        this.scheduleRestart();
+      });
+    }, delayMs);
   }
 
   private parseMessage(data: Uint8Array): ValueEnvelope | null {

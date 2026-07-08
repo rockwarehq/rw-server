@@ -18,6 +18,8 @@ model GraphNode {
   @@index([siteId, typeRef])
   @@index([facets], type: Gin)
   @@index([isDeleted])
+  // Livestore's 30s definition reconcile filters on updatedAt.
+  @@index([updatedAt])
 }
 
 model GraphProperty {
@@ -41,6 +43,8 @@ model GraphProperty {
   @@index([nodeId, typeFieldKey])
   @@index([resolverType])
   @@index([isDeleted])
+  // Livestore's 30s definition reconcile filters on updatedAt.
+  @@index([updatedAt])
 }
 
 model GraphNodeType {
@@ -173,4 +177,6 @@ model GraphHook {
   @@index([siteId, enabled])
   @@index([isDeleted])
   @@index([eventNamespace, eventName])
+  // Livestore's 30s definition reconcile filters on updatedAt.
+  @@index([updatedAt])
 }

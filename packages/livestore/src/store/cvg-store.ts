@@ -1,5 +1,4 @@
-import type { KV, KvWatchEntry } from "@nats-io/kv";
-import type { QueuedIterator } from "@nats-io/nats-core";
+import type { KV } from "@nats-io/kv";
 
 import { parseValueEnvelope, type ValueEnvelope } from "../types/index.js";
 
@@ -22,10 +21,6 @@ export class CvgStore {
 
   async put(propertyId: string, envelope: ValueEnvelope): Promise<void> {
     await this.kv.put(propertyKey(propertyId), encoder.encode(JSON.stringify(envelope)));
-  }
-
-  async watch(propertyId: string): Promise<QueuedIterator<KvWatchEntry>> {
-    return this.kv.watch({ key: propertyKey(propertyId) });
   }
 }
 

@@ -3,6 +3,7 @@ import prisma from "@rw/db";
 import { systemEntityCatalogEntryByKey } from "@rw/services/entity/registry";
 import type { EntityCatalogField } from "@rw/services/entity/registry.types";
 import { graphNodeSiteWhere } from "./scope.js";
+import { validateExpression } from "../resolvers/expr-sandbox.js";
 import { errorResult, type GraphScope, type ServiceResult } from "./types.js";
 
 const AGGREGATIONS = new Set(["sum", "avg", "count", "min", "max"]);
@@ -226,6 +227,13 @@ export async function validateResolverConfig(args: {
     const malformed = findMalformedPropertySymbols(resolver.expression);
     if (malformed.length > 0) {
       return errorResult("INVALID_RESOLVER", `expr references unknown property symbol: ${malformed.join(", ")}`);
+    }
+    // Enforce the sandbox whitelist (length, node budget, allowed ops/functions)
+    // at save time — otherwise a bad expression persists and only surfaces as a
+    // runtime quality:"bad" zombie that never recomputes.
+    const syntaxErrors = validateExpression(resolver.expression);
+    if (syntaxErrors.length > 0) {
+      return errorResult("INVALID_RESOLVER", `expr validation failed: ${syntaxErrors.join("; ")}`);
     }
     const dependencyIds = extractExpressionDependencyIds(resolver.expression);
     const known = args.knownPropertyIds;
