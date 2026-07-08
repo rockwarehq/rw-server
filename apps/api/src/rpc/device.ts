@@ -281,8 +281,7 @@ export const datasourceGet = authRequired.input(datasourceIdInputSchema).handler
   }
 
   // Validate workspace access via site
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const siteWorkspaceId = (result.site as any)?.workspaceId as string | undefined;
+  const siteWorkspaceId = result.site?.workspaceId;
   if (workspaceId && siteWorkspaceId !== workspaceId) {
     throw new ORPCError("FORBIDDEN", { message: "Unauthorized" });
   }
