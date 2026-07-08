@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { ORPCError } from "@orpc/server";
 import { authRequired } from "./middleware.js";
 import * as customerService from "@rw/services/order/customer";
+import { throwServiceError, unwrap } from "./errors.js";
 
 // ============================================================================
 // Input Schemas
@@ -31,18 +31,7 @@ const idInputSchema = z.object({ id: z.uuid() });
 // ============================================================================
 
 export const create = authRequired.input(createInputSchema).handler(async ({ input }) => {
-  const result = await customerService.create(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SITE_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "DUPLICATE_NAME") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  return unwrap(await customerService.create(input));
 });
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input }) => {
@@ -50,40 +39,16 @@ export const list = authRequired.input(listInputSchema).handler(async ({ input }
 });
 
 export const get = authRequired.input(idInputSchema).handler(async ({ input }) => {
-  const result = await customerService.getById(input.id);
-  if ("error" in result) {
-    throw new ORPCError("NOT_FOUND", { message: result.error as string });
-  }
-  return result.data;
+  return unwrap(await customerService.getById(input.id));
 });
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input }) => {
   const { id, ...updateData } = input;
-  const result = await customerService.update(id, updateData);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "CUSTOMER_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "DUPLICATE_NAME") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  return unwrap(await customerService.update(id, updateData));
 });
 
 export const remove = authRequired.input(idInputSchema).handler(async ({ input }) => {
   const result = await customerService.remove(input.id);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "CUSTOMER_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "HAS_ORDERS") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error) throwServiceError(result);
   return { success: true };
 });
