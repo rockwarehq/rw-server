@@ -38,7 +38,7 @@ export interface KernelPatchResult {
 export class GraphKernel {
   private readonly nodes = new Map<string, NodeRuntime>();
   private readonly properties = new Map<string, PropertyRuntime>();
-  private readonly dependencyGraph = new DependencyGraph();
+  private readonly dependencyGraph: DependencyGraph;
   private persistedEdges: GraphEdgeRuntime[] = [];
   private rollupEdges: GraphEdgeRuntime[] = [];
 
@@ -46,7 +46,9 @@ export class GraphKernel {
     private readonly prisma: PrismaClient,
     private readonly cvg: CvgStore,
     private readonly logger: LivestoreLogger,
-  ) {}
+  ) {
+    this.dependencyGraph = new DependencyGraph(logger);
+  }
 
   async load(): Promise<void> {
     const nodes = await this.prisma.graphNode.findMany({
@@ -218,6 +220,12 @@ export class GraphKernel {
     const previousSnapshot = previous ? this.cloneProperty(previous) : null;
     const current = { ...definition.property, current: previous?.current ?? definition.property.current };
     this.properties.set(current.id, current);
+    // A property that moved between nodes must leave the old node's membership,
+    // or the old node's snapshot keeps listing it forever.
+    if (previous && previous.nodeId !== current.nodeId) {
+      const oldNode = this.nodes.get(previous.nodeId);
+      if (oldNode) oldNode.propertyIds = oldNode.propertyIds.filter((id) => id !== current.id);
+    }
     if (!node.propertyIds.includes(current.id)) node.propertyIds.push(current.id);
     node.propertyIds.sort((a, b) =>
       (this.properties.get(a)?.name ?? a).localeCompare(this.properties.get(b)?.name ?? b),
@@ -238,8 +246,9 @@ export class GraphKernel {
     for (const property of removedProperties) this.properties.delete(property.id);
     this.nodes.delete(nodeId);
     const removedIds = removedProperties.map((property) => property.id);
+    const removedIdSet = new Set(removedIds);
     this.persistedEdges = this.persistedEdges.filter(
-      (edge) => !removedIds.includes(edge.fromPropertyId) && !removedIds.includes(edge.toPropertyId),
+      (edge) => !removedIdSet.has(edge.fromPropertyId) && !removedIdSet.has(edge.toPropertyId),
     );
     this.dependencyGraph.removeProperties(removedIds);
     this.dependencyGraph.replaceEdges({ removeIncidentPropertyIds: removedIds, edges: this.rollupEdges });

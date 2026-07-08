@@ -10,7 +10,10 @@ export class Scheduler {
   private flushScheduled = false;
   private flushing = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
-  private dirtyPasses = 0;
+  // Consecutive flush-ends each id has survived in the dirty set. An id that
+  // never settles (cycle, quarantined, or deleted property) gets dropped alone
+  // instead of nuking the whole dirty set with it.
+  private readonly stallCounts = new Map<string, number>();
   private flushCount = 0;
   private lastFlushAt: number | null = null;
   private flushMaxMs = 0;
@@ -120,16 +123,35 @@ export class Scheduler {
     }
     this.logger.info({ evaluated }, "livestore flush complete");
     if (this.dirty.size === 0) {
-      this.dirtyPasses = 0;
+      this.stallCounts.clear();
       await this.runAfterSettled();
       return;
     }
 
-    this.dirtyPasses += 1;
-    if (this.dirtyPasses >= Scheduler.MAX_DIRTY_PASSES) {
-      this.logger.warn({ remaining: this.dirty.size }, "livestore flush stalled (cycle?) — dropping dirty set");
-      this.dirty.clear();
-      this.dirtyPasses = 0;
+    // Per-id stall accounting: ids that settle reset; ids that survive
+    // MAX_DIRTY_PASSES consecutive flush-ends are dropped individually, so a
+    // busy-but-progressing dirty set never discards unrelated pending work.
+    for (const [id] of this.stallCounts) {
+      if (!this.dirty.has(id)) this.stallCounts.delete(id);
+    }
+    const stalled: string[] = [];
+    for (const id of this.dirty) {
+      const count = (this.stallCounts.get(id) ?? 0) + 1;
+      this.stallCounts.set(id, count);
+      if (count >= Scheduler.MAX_DIRTY_PASSES) stalled.push(id);
+    }
+    if (stalled.length > 0) {
+      this.logger.warn(
+        { count: stalled.length, propertyIds: stalled.slice(0, 20) },
+        "livestore flush stalled (cycle?) — dropping stalled properties from dirty set",
+      );
+      for (const id of stalled) {
+        this.dirty.delete(id);
+        this.stallCounts.delete(id);
+      }
+    }
+
+    if (this.dirty.size === 0) {
       await this.runAfterSettled();
       return;
     }

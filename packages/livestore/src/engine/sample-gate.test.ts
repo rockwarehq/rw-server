@@ -60,6 +60,19 @@ describe("sample gate", () => {
     expect(gate.shouldDefer("b", 1000)).toBe(false);
   });
 
+  it("forget clears the pending re-mark and evaluation history for a removed property", () => {
+    const remarked: string[] = [];
+    const gate = new SampleGate((id) => remarked.push(id));
+    gate.recordEvaluated("a");
+    gate.shouldDefer("a", 1000);
+
+    gate.forget("a");
+    vi.advanceTimersByTime(2000);
+    expect(remarked).toEqual([]);
+    // History gone: the property behaves like it never evaluated.
+    expect(gate.shouldDefer("a", 1000)).toBe(false);
+  });
+
   it("stop cancels pending re-marks", () => {
     const remarked: string[] = [];
     const gate = new SampleGate((id) => remarked.push(id));

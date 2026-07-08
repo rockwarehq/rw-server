@@ -196,6 +196,17 @@ export class GraphRuntime {
     if (this.definitionReconcileTimer) clearInterval(this.definitionReconcileTimer);
     this.definitionFlushTimer = null;
     this.definitionReconcileTimer = null;
+    // Settle enqueueDefinitionChange promises the cleared flush timer would
+    // have flushed — a hung waiter leaves its JetStream message un-nak'd.
+    const waiters = this.definitionWaiters;
+    this.definitionWaiters = [];
+    this.pendingDefinitionEvents.clear();
+    if (waiters.length > 0) {
+      const err = new Error("livestore runtime stopping");
+      for (const waiter of waiters) waiter.reject(err);
+    }
+    // Let any in-flight definition apply finish before tearing down resolvers.
+    await this.definitionApplyChain.catch(() => {});
     await this.windowResolver.stop(); // drains emit chains + flushes agg state to KV
     this.sampleGate.stop();
     this.scheduler.stop();
@@ -352,6 +363,7 @@ export class GraphRuntime {
     this.tagResolver.removeProperty(property.id);
     this.metricResolver.removeProperty(property.id);
     this.entityResolver.removeProperty(property.id);
+    this.sampleGate.forget(property.id);
     await this.windowResolver.removeProperty(property.id);
   }
 

@@ -26,6 +26,17 @@ export class SampleGate {
     this.lastEvaluatedAt.set(propertyId, Date.now());
   }
 
+  // Drop all state for a removed property; a live re-mark timer would
+  // otherwise fire for it and the maps grow forever on definition-heavy sites.
+  forget(propertyId: string): void {
+    this.lastEvaluatedAt.delete(propertyId);
+    const timer = this.pending.get(propertyId);
+    if (timer) {
+      clearTimeout(timer);
+      this.pending.delete(propertyId);
+    }
+  }
+
   stop(): void {
     for (const timer of this.pending.values()) clearTimeout(timer);
     this.pending.clear();
