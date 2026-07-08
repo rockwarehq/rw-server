@@ -1,4 +1,4 @@
-import type { AggStateStore } from "./agg-store.js";
+import type { AggStateStore } from "../value/agg-store.js";
 import { buildEwmaEnvelope, buildTumblingEnvelope } from "./window-envelope.js";
 import { bucketStartFor, foldEwmaSample, foldTumblingSample, initEwmaState, initTumblingState } from "./window-fold.js";
 import { validateWindowResolver } from "./window-validate.js";
@@ -12,7 +12,7 @@ import {
   type TumblingState,
   type ValueEnvelope,
   type WindowResolverConfig,
-} from "./types.js";
+} from "../value/types.js";
 
 export interface WindowCommitSink {
   commitValue(propertyId: string, envelope: ValueEnvelope, source: "window"): Promise<void>;

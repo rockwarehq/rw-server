@@ -1,4 +1,4 @@
-import type { Aggregation, EwmaState, Quality, TumblingState, ValueEnvelope } from "./types.js";
+import type { Aggregation, EwmaState, Quality, TumblingState, ValueEnvelope } from "../value/types.js";
 
 // Value of a closed tumbling bucket per aggregation
 export function aggregateTumbling(state: TumblingState, aggregation: Aggregation): number | null {

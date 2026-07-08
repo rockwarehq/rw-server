@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { HookManager } from "./hook-manager.js";
-import type { LivestoreLogger, ValueEnvelope } from "./types.js";
+import type { LivestoreLogger, ValueEnvelope } from "../value/types.js";
 
 const decoder = new TextDecoder();
 

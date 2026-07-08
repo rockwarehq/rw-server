@@ -1,7 +1,7 @@
 import type { EvalFunction } from "mathjs";
 
 import { compileExpression, DEFAULT_EVAL_TIMEOUT_MS } from "./expr-sandbox.js";
-import { usableValue, worse, type LivestoreLogger, type Quality, type ValueEnvelope } from "./types.js";
+import { usableValue, worse, type LivestoreLogger, type Quality, type ValueEnvelope } from "../value/types.js";
 
 export interface ExprEvalOptions {
   logger?: LivestoreLogger;

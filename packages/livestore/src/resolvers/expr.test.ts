@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { evaluateExpr, prefixPropertyId } from "./expr.js";
-import type { LivestoreLogger, Quality, ValueEnvelope } from "./types.js";
+import type { LivestoreLogger, Quality, ValueEnvelope } from "../value/types.js";
 
 const env = (value: number | null, quality: Quality = "good", timestamp = 1000): ValueEnvelope => ({
   value,

@@ -16,17 +16,17 @@ import {
   type LivestoreHookContextFieldType,
   type LivestoreHookEventContextMetadata,
   type LivestoreHookEvent,
-} from "./catalog/events.js";
+} from "../catalog/events.js";
 import {
   graphHookConditionPropertyIds,
   parseGraphHookCondition,
   parseGraphHookEventContext,
   type GraphHookCondition,
   type GraphHookEventContext,
-} from "./catalog/hook-conditions.js";
+} from "../catalog/hook-conditions.js";
 
 import { evaluateHookCondition } from "./hook-condition.js";
-import { isRecord, type LivestoreLogger, type ValueEnvelope } from "./types.js";
+import { isRecord, type LivestoreLogger, type ValueEnvelope } from "../value/types.js";
 
 const encoder = new TextEncoder();
 const WEEK_NANOS = 7 * 24 * 60 * 60 * 1_000_000_000;

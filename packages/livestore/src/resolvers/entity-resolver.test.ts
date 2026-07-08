@@ -1,14 +1,14 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const readEntityFieldValue = vi.fn();
-vi.mock("./graph/index.js", () => ({
+vi.mock("../graph/index.js", () => ({
   nodes: {
     readEntityFieldValue: (...args: unknown[]) => readEntityFieldValue(...args),
   },
 }));
 
 const { EntityResolver } = await import("./entity-resolver.js");
-import type { LivestoreLogger, PropertyRuntime, ValueEnvelope } from "./types.js";
+import type { LivestoreLogger, PropertyRuntime, ValueEnvelope } from "../value/types.js";
 import type { EntityEvent } from "@rw/runtime/entity-events";
 
 const logger: LivestoreLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };

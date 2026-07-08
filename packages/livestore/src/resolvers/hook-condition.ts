@@ -1,6 +1,6 @@
-import type { GraphHookCondition } from "./catalog/hook-conditions.js";
+import type { GraphHookCondition } from "../catalog/hook-conditions.js";
 
-import type { ValueEnvelope } from "./types.js";
+import type { ValueEnvelope } from "../value/types.js";
 
 const EDGE_OPERATORS = new Set(["changed", "increases", "decreases", "crossesAbove", "crossesBelow"]);
 

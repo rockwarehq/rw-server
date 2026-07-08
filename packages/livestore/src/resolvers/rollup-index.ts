@@ -1,8 +1,13 @@
 import type { PrismaClient } from "@rw/db";
 import { systemRelationTargets } from "@rw/services/entity/registry";
 
-import type { GraphKernel } from "./kernel.js";
-import { isMetricResolver, isRollupResolverConfig, type GraphEdgeRuntime, type LivestoreLogger } from "./types.js";
+import type { GraphKernel } from "../engine/kernel.js";
+import {
+  isMetricResolver,
+  isRollupResolverConfig,
+  type GraphEdgeRuntime,
+  type LivestoreLogger,
+} from "../value/types.js";
 
 interface ChildRow {
   id: string;

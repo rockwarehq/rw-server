@@ -9,7 +9,7 @@
 import type { FastifyInstance } from "fastify";
 import client from "prom-client";
 
-import type { GraphRuntime } from "./runtime.js";
+import type { GraphRuntime } from "../engine/runtime.js";
 
 const register = client.register;
 client.collectDefaultMetrics({ register });

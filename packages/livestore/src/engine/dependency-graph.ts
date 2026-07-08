@@ -1,6 +1,6 @@
 import graphlib from "graphlib";
 
-import type { GraphEdgeRuntime, PropertyRuntime } from "./types.js";
+import type { GraphEdgeRuntime, PropertyRuntime } from "../value/types.js";
 
 export class DependencyGraph {
   private graph = new graphlib.Graph({ directed: true, multigraph: false, compound: false });

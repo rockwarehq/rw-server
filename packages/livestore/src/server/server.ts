@@ -2,9 +2,9 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance } from "fastify";
 
-import { parseEnvelopeText } from "./cvg-store.js";
-import type { GraphRuntime } from "./runtime.js";
-import type { LivestoreLogger } from "./types.js";
+import { parseEnvelopeText } from "../value/cvg-store.js";
+import type { GraphRuntime } from "../engine/runtime.js";
+import type { LivestoreLogger } from "../value/types.js";
 
 interface WsLike {
   readyState: number;

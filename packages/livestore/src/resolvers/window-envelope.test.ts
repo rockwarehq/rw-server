@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { foldEwmaSample, initEwmaState, initTumblingState } from "./window-fold.js";
 import { aggregateTumbling, buildEwmaEnvelope, buildTumblingEnvelope, tumblingQuality } from "./window-envelope.js";
-import type { TumblingState } from "./types.js";
+import type { TumblingState } from "../value/types.js";
 
 const stateWith = (overrides: Partial<TumblingState>): TumblingState => ({
   ...initTumblingState(0, 10_000),

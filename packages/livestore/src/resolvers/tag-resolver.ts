@@ -18,7 +18,7 @@ import {
   type LivestoreLogger,
   type PropertyRuntime,
   type ValueEnvelope,
-} from "./types.js";
+} from "../value/types.js";
 
 export interface CommitSink {
   commitValue(propertyId: string, envelope: ValueEnvelope, source: "tag"): Promise<void>;

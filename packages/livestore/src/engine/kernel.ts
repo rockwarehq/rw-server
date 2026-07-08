@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@rw/db";
 
-import type { CvgStore } from "./cvg-store.js";
+import type { CvgStore } from "../value/cvg-store.js";
 import { DependencyGraph } from "./dependency-graph.js";
 import {
   parseGraphResolver,
@@ -11,7 +11,7 @@ import {
   type NodeRuntime,
   type PropertyRuntime,
   type ValueEnvelope,
-} from "./types.js";
+} from "../value/types.js";
 
 interface LoadedNodeDefinition {
   node: NodeRuntime;

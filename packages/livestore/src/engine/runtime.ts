@@ -2,24 +2,24 @@ import type { PrismaClient } from "@rw/db";
 import type { JetStreamClient, JetStreamManager } from "@nats-io/jetstream";
 import type { KV } from "@nats-io/kv";
 import type { NatsConnection } from "@nats-io/nats-core";
-import type { GraphDefinitionEvent } from "./catalog/definitions.js";
+import type { GraphDefinitionEvent } from "../catalog/definitions.js";
 
-import { AggStateStore } from "./agg-store.js";
-import { CvgStore } from "./cvg-store.js";
+import { AggStateStore } from "../value/agg-store.js";
+import { CvgStore } from "../value/cvg-store.js";
 import { GraphDefinitionConsumer } from "./definition-consumer.js";
 import { EntityEventConsumer } from "./entity-event-consumer.js";
-import { EntityResolver } from "./entity-resolver.js";
-import { evaluateExpr } from "./expr.js";
-import { HookManager } from "./hook-manager.js";
+import { EntityResolver } from "../resolvers/entity-resolver.js";
+import { evaluateExpr } from "../resolvers/expr.js";
+import { HookManager } from "../resolvers/hook-manager.js";
 import { GraphKernel } from "./kernel.js";
-import { MetricResolver, type MetricSubscription } from "./metric-resolver.js";
-import { evaluateRollup } from "./rollup.js";
-import { buildRollupEdges } from "./rollup-index.js";
+import { MetricResolver, type MetricSubscription } from "../resolvers/metric-resolver.js";
+import { evaluateRollup } from "../resolvers/rollup.js";
+import { buildRollupEdges } from "../resolvers/rollup-index.js";
 import { SampleGate } from "./sample-gate.js";
 import { Scheduler } from "./scheduler.js";
 import { deriveMetricSubject } from "@rw/runtime/graph-subjects";
-import { TagResolver } from "./tag-resolver.js";
-import { WindowResolver } from "./window-resolver.js";
+import { TagResolver } from "../resolvers/tag-resolver.js";
+import { WindowResolver } from "../resolvers/window-resolver.js";
 import {
   envelopesEqual,
   isExprResolverConfig,
@@ -31,7 +31,7 @@ import {
   type LivestoreLogger,
   type PropertyRuntime,
   type ValueEnvelope,
-} from "./types.js";
+} from "../value/types.js";
 
 export interface GraphRuntimeOptions {
   prisma: PrismaClient;

@@ -9,8 +9,8 @@ import { Kvm, type KV } from "@nats-io/kv";
 import type { NatsConnection } from "@nats-io/nats-core";
 import { connect } from "@nats-io/transport-node";
 
-import { AGG_BUCKET } from "./agg-store.js";
-import { CVG_BUCKET } from "./cvg-store.js";
+import { AGG_BUCKET } from "../value/agg-store.js";
+import { CVG_BUCKET } from "../value/cvg-store.js";
 
 export interface NatsResources {
   nc: NatsConnection;
