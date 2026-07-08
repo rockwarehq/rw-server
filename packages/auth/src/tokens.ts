@@ -1,4 +1,4 @@
-import { createDecoder, createSigner, createVerifier } from "fast-jwt";
+import { createDecoder, createSigner, createVerifier, TokenError } from "fast-jwt";
 import prisma from "@rw/db";
 import { authEnv, deriveSigningKey } from "./env.js";
 import { generateSecret, hashToken } from "./secrets.js";
@@ -86,6 +86,13 @@ export function verifyAccessToken(token: string): DecodedAccessToken {
   const unverified = decodeAccessToken(token) as { principal?: string } | null;
   const verifier = unverified?.principal === "DISPLAY" ? displayAccessVerifier : userAccessVerifier;
   return verifier(token) as DecodedAccessToken;
+}
+
+// True when verification failed only because the token is past its expiry (a
+// normal "please refresh" case) rather than malformed or wrongly signed (which
+// is worth flagging as suspicious). Never pass the token itself to logs.
+export function isExpiredTokenError(err: unknown): boolean {
+  return err instanceof TokenError && err.code === TokenError.codes.expired;
 }
 
 export async function createRefreshToken(

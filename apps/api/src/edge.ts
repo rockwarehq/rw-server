@@ -2,6 +2,7 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "./types/fastify.js";
 import type { FastifyRequest, FastifyReply } from "fastify";
 import { gateway } from "./services/device/index.js";
+import { safeEqual } from "@rw/auth/secrets";
 import prisma from "@rw/db";
 import { errorSchema } from "./api/schemas.js";
 import { gatewayNatsConfig } from "./config.js";
@@ -140,7 +141,7 @@ export default async function edge(fastify: FastifyTypedInstance) {
         return reply.status(400).send({ error: "Gateway already claimed" });
       }
 
-      if (gw.claimCode !== claimCode) {
+      if (!safeEqual(gw.claimCode, claimCode)) {
         return reply.status(400).send({ error: "Invalid claim code" });
       }
 

@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 // Single source of truth for opaque-secret hashing/generation used across
 // refresh tokens, display bootstrap secrets, gateway tokens, and invite/reset
@@ -19,4 +19,13 @@ export function generateSecret(): string {
 export function generateToken(): { plaintext: string; hash: string } {
   const plaintext = generateSecret();
   return { plaintext, hash: hashToken(plaintext) };
+}
+
+// Constant-time comparison of two secret strings. Both sides are hashed first
+// so the comparison is length-independent and never leaks length or content
+// via timing (use this for claim codes, bootstrap secrets, and hash equality).
+export function safeEqual(a: string, b: string): boolean {
+  const ha = createHash("sha256").update(a).digest();
+  const hb = createHash("sha256").update(b).digest();
+  return timingSafeEqual(ha, hb);
 }

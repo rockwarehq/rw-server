@@ -1,4 +1,5 @@
 import prisma from "@rw/db";
+import { safeEqual } from "./secrets.js";
 import {
   createAccessToken,
   createDisplayRefreshToken,
@@ -76,7 +77,7 @@ export async function loginDisplay(
 ): Promise<{ success: true; data: DisplayAuthResult } | { success: false; error: string }> {
   const display = await getDisplayAuthRecord(displayId);
 
-  if (!display?.bootstrapSecretHash || hashToken(bootstrapSecret) !== display.bootstrapSecretHash) {
+  if (!display?.bootstrapSecretHash || !safeEqual(hashToken(bootstrapSecret), display.bootstrapSecretHash)) {
     return { success: false, error: "Invalid display credentials" };
   }
 

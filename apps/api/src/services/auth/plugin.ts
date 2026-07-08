@@ -1,7 +1,7 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import createError from "http-errors";
-import { verifyAccessToken, type DecodedAccessToken } from "@rw/auth/tokens";
+import { verifyAccessToken, isExpiredTokenError, type DecodedAccessToken } from "@rw/auth/tokens";
 import { listAccessibleSites } from "@rw/auth/iam/index";
 import { Principal, type IAMContext, type UnknownIAMContext } from "@rw/auth/context";
 import prisma from "@rw/db";
@@ -94,7 +94,12 @@ declare module "fastify" {
   }
 }
 
-async function resolveIAM(authHeader: string): Promise<IAMContext> {
+interface RequestLogger {
+  debug: (msg: string) => void;
+  warn: (msg: string) => void;
+}
+
+async function resolveIAM(authHeader: string, log?: RequestLogger): Promise<IAMContext> {
   const iam: IAMContext = {
     principal: Principal.UNKNOWN,
     validToken: false,
@@ -109,7 +114,14 @@ async function resolveIAM(authHeader: string): Promise<IAMContext> {
   let decodedToken: DecodedAccessToken;
   try {
     decodedToken = verifyAccessToken(token);
-  } catch {
+  } catch (err) {
+    // Distinguish an expired token (routine — client should refresh) from a
+    // malformed/wrongly-signed one (potential attack). Never log the token.
+    if (isExpiredTokenError(err)) {
+      log?.debug("auth: access token expired");
+    } else {
+      log?.warn("auth: rejected invalid access token");
+    }
     return iam;
   }
 
@@ -204,7 +216,7 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
 async function iamDecorator(request: FastifyRequest) {
   if (request.headers.authorization) {
     try {
-      request.iam = await resolveIAM(request.headers.authorization);
+      request.iam = await resolveIAM(request.headers.authorization, request.log);
     } catch {
       // Swallow error, IAM will remain undefined/invalid
     }
