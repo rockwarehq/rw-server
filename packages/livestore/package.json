@@ -8,7 +8,8 @@
   "exports": {
     ".": "./dist/index.js",
     "./graph/*": "./dist/graph/*.js",
-    "./catalog/*": "./dist/catalog/*.js"
+    "./catalog/*": "./dist/catalog/*.js",
+    "./client/*": "./dist/client/*.js"
   },
   "scripts": {
     "build": "tsc -b",
@@ -32,6 +33,8 @@
   "devDependencies": {
     "@types/graphlib": "^2.1.12",
     "@types/node": "^24.10.8",
+    "@types/ws": "^8.18.1",
+    "ws": "^8.18.0",
     "typescript": "~6.0.2",
     "vitest": "^4.0.14"
   }

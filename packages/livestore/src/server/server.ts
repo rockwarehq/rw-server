@@ -11,15 +11,43 @@ interface WsLike {
   bufferedAmount: number;
   send: (data: string) => void;
   close: () => void;
+  ping: () => void;
+  terminate: () => void;
   on(event: "message", handler: (data: unknown) => void): void;
   on(event: "close", handler: () => void): void;
   on(event: "error", handler: (err: unknown) => void): void;
+  on(event: "pong", handler: () => void): void;
 }
 
 const OPEN = 1;
 
 // Backpressure threshold for websocket sends
 const HIGH_WATER_MARK = 1_000_000;
+
+// Client messages are subscribe/unsubscribe lists; anything near this size is abuse.
+const MAX_PAYLOAD_BYTES = 64 * 1024;
+
+export interface GraphSocketOptions {
+  /** Interval between server pings; a connection missing `maxMissedPongs` pongs is terminated. */
+  heartbeatIntervalMs?: number;
+  maxMissedPongs?: number;
+  /** Maximum concurrent KV watchers (subscribed properties) per connection. */
+  maxWatchersPerConnection?: number;
+  /** Maximum propertyIds accepted in a single subscribe/unsubscribe message. */
+  maxPropertyIdsPerMessage?: number;
+  /** Token bucket for client ops: sustained rate and burst capacity. */
+  opsPerSecond?: number;
+  opsBurst?: number;
+}
+
+const DEFAULT_SOCKET_OPTIONS: Required<GraphSocketOptions> = {
+  heartbeatIntervalMs: 30_000,
+  maxMissedPongs: 2,
+  maxWatchersPerConnection: 1_000,
+  maxPropertyIdsPerMessage: 1_000,
+  opsPerSecond: 10,
+  opsBurst: 30,
+};
 
 // Create the Fastify app first so the engine can log through its Pino instance (see asLivestoreLogger).
 export async function createLivestoreServer(): Promise<FastifyInstance> {
@@ -30,7 +58,7 @@ export async function createLivestoreServer(): Promise<FastifyInstance> {
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
   });
-  await server.register(websocket);
+  await server.register(websocket, { options: { maxPayload: MAX_PAYLOAD_BYTES } });
   return server;
 }
 
@@ -39,7 +67,12 @@ export function asLivestoreLogger(server: FastifyInstance): LivestoreLogger {
   return server.log as unknown as LivestoreLogger;
 }
 
-export function registerGraphRoutes(server: FastifyInstance, runtime: GraphRuntime): void {
+export function registerGraphRoutes(
+  server: FastifyInstance,
+  runtime: GraphRuntime,
+  socketOptions?: GraphSocketOptions,
+): void {
+  const opts = { ...DEFAULT_SOCKET_OPTIONS, ...socketOptions };
   server.get("/health", async () => ({
     status: runtime.isReady() ? "ok" : "starting",
     ...runtime.counts(),
@@ -67,6 +100,39 @@ export function registerGraphRoutes(server: FastifyInstance, runtime: GraphRunti
   server.get("/ws/graph", { websocket: true }, (socket, _request) => {
     const ws = socket as WsLike;
     const watchers = new Map<string, { stop: () => void }>();
+
+    // Heartbeat: terminate connections whose peer stops answering pings, so
+    // half-open sockets don't leak KV watchers indefinitely.
+    let missedPongs = 0;
+    ws.on("pong", () => {
+      missedPongs = 0;
+    });
+    const heartbeatTimer = setInterval(() => {
+      if (ws.readyState !== OPEN) return;
+      if (missedPongs >= opts.maxMissedPongs) {
+        server.log.warn("livestore websocket missed pongs, terminating");
+        ws.terminate();
+        return;
+      }
+      missedPongs += 1;
+      try {
+        ws.ping();
+      } catch {
+        ws.terminate();
+      }
+    }, opts.heartbeatIntervalMs);
+
+    // Token bucket for client ops (subscribe/unsubscribe).
+    let opTokens = opts.opsBurst;
+    let lastRefill = Date.now();
+    const takeOpToken = (): boolean => {
+      const now = Date.now();
+      opTokens = Math.min(opts.opsBurst, opTokens + ((now - lastRefill) / 1000) * opts.opsPerSecond);
+      lastRefill = now;
+      if (opTokens < 1) return false;
+      opTokens -= 1;
+      return true;
+    };
 
     // lates wins per property to avoid backpressure
     const pending = new Map<string, unknown>();
@@ -118,11 +184,16 @@ export function registerGraphRoutes(server: FastifyInstance, runtime: GraphRunti
       for (const propertyId of watchers.keys()) stopWatcher(propertyId);
       pending.clear();
       clearDrainTimer();
+      clearInterval(heartbeatTimer);
     };
 
     const subscribe = async (propertyIds: string[]) => {
       for (const propertyId of propertyIds) {
         if (watchers.has(propertyId)) continue;
+        if (watchers.size >= opts.maxWatchersPerConnection) {
+          sendJson({ op: "error", error: "subscription limit reached" });
+          return;
+        }
 
         const initial = (await runtime.getCvgValue(propertyId)) ?? runtime.getCurrentOrStale(propertyId);
         sendValue(propertyId, initial);
@@ -147,7 +218,12 @@ export function registerGraphRoutes(server: FastifyInstance, runtime: GraphRunti
 
     ws.on("message", (raw) => {
       void (async () => {
-        const message = parseClientMessage(raw);
+        if (!takeOpToken()) {
+          sendJson({ op: "error", error: "rate limited" });
+          return;
+        }
+
+        const message = parseClientMessage(raw, opts.maxPropertyIdsPerMessage);
         if (!message) {
           sendJson({ op: "error", error: "invalid message" });
           return;
@@ -180,10 +256,11 @@ export function registerGraphRoutes(server: FastifyInstance, runtime: GraphRunti
 
 type ClientMessage = { op: "subscribe" | "unsubscribe"; propertyIds: string[] };
 
-function parseClientMessage(raw: unknown): ClientMessage | null {
+function parseClientMessage(raw: unknown, maxPropertyIds: number): ClientMessage | null {
   try {
     const parsed = JSON.parse(rawToString(raw)) as unknown;
     if (!isClientMessage(parsed)) return null;
+    if (parsed.propertyIds.length > maxPropertyIds) return null;
     return parsed;
   } catch {
     return null;
