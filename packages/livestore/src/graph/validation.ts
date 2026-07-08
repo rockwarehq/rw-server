@@ -2,11 +2,10 @@ import prisma from "@rw/db";
 
 import { systemEntityCatalogEntryByKey } from "@rw/services/entity/registry";
 import type { EntityCatalogField } from "@rw/services/entity/registry.types";
+import { livestoreResolverConfigSchema } from "../catalog/resolver-schemas.js";
 import { graphNodeSiteWhere } from "./scope.js";
 import { validateExpression } from "../resolvers/expr-sandbox.js";
 import { errorResult, type GraphScope, type ServiceResult } from "./types.js";
-
-const AGGREGATIONS = new Set(["sum", "avg", "count", "min", "max"]);
 const PREFIXED_UUID_PATTERN = /\bp_([0-9a-f]{8}_[0-9a-f]{4}_[1-8][0-9a-f]{3}_[89ab][0-9a-f]{3}_[0-9a-f]{12})\b/gi;
 // Any property-shaped symbol the expression sandbox will accept at eval time.
 const PROPERTY_SYMBOL_PATTERN = /\bp_\w+\b/g;
@@ -166,76 +165,75 @@ export async function validateResolverConfig(args: {
   { data: { resolver: Record<string, unknown>; dependencyIds: string[] } } | { error: string; code: string }
 > {
   const resolverType = args.resolverType.trim();
-  const resolver: Record<string, unknown> & { type: string } = {
+  const withType: Record<string, unknown> & { type: string } = {
     ...args.resolver,
     type: typeof args.resolver.type === "string" ? args.resolver.type : resolverType,
   };
-  if (resolver.type !== resolverType)
+  if (withType.type !== resolverType)
     return errorResult("RESOLVER_TYPE_MISMATCH", "resolver.type must match resolverType");
 
+  // Structural layer: the shared zod schemas (also served to builders as JSON
+  // Schema via the capability manifest) are the single source of truth for
+  // field shapes and ranges. Per-field error messages match the historical
+  // strings. Referential checks (entities/dependencies exist in the site)
+  // follow below per type.
+  const schema = livestoreResolverConfigSchema(resolverType);
+  if (!schema) return errorResult("INVALID_RESOLVER_TYPE", `Unsupported resolverType "${resolverType}"`);
+  const parsed = schema.safeParse(withType);
+  if (!parsed.success) {
+    return errorResult(
+      "INVALID_RESOLVER",
+      parsed.error.issues[0]?.message ?? `${resolverType} resolver is invalid`,
+    );
+  }
+  const resolver = parsed.data as Record<string, unknown> & { type: string };
+
   if (resolverType === "tag") {
-    if (typeof resolver.deviceId !== "string" || typeof resolver.tagPath !== "string") {
-      return errorResult("INVALID_RESOLVER", "tag resolver requires deviceId and tagPath");
-    }
     return { data: { resolver, dependencyIds: [] } };
   }
 
   if (resolverType === "metric") {
-    if (
-      typeof resolver.entityType !== "string" ||
-      typeof resolver.entityId !== "string" ||
-      typeof resolver.granularity !== "string" ||
-      typeof resolver.metricKey !== "string"
-    ) {
-      return errorResult(
-        "INVALID_RESOLVER",
-        "metric resolver requires entityType, entityId, granularity, and metricKey",
-      );
-    }
-    const entityError = await assertKnownEntityInSite(resolver.entityType, resolver.entityId, args.scope);
+    const entityError = await assertKnownEntityInSite(
+      resolver.entityType as string,
+      resolver.entityId as string,
+      args.scope,
+    );
     if (entityError) return entityError;
     return { data: { resolver, dependencyIds: [] } };
   }
 
   if (resolverType === "entity") {
-    if (
-      typeof resolver.entityType !== "string" ||
-      typeof resolver.entityId !== "string" ||
-      typeof resolver.path !== "string"
-    ) {
-      return errorResult("INVALID_RESOLVER", "entity resolver requires entityType, entityId, and path");
-    }
-
-    const entry = systemEntityCatalogEntryByKey(resolver.entityType, false);
+    const entityType = resolver.entityType as string;
+    const entityId = resolver.entityId as string;
+    const path = resolver.path as string;
+    const entry = systemEntityCatalogEntryByKey(entityType, false);
     const entityError = entry?.model
-      ? await assertKnownEntityInSite(entry.model, resolver.entityId, args.scope)
-      : await assertKnownUserEntityInSite(resolver.entityType, resolver.entityId, args.scope);
+      ? await assertKnownEntityInSite(entry.model, entityId, args.scope)
+      : await assertKnownUserEntityInSite(entityType, entityId, args.scope);
     if (entityError) return entityError;
     // Unknown paths would resolve to null with quality "good" forever; reject
     // them at save time. "id" and "*" are runtime specials outside the catalog.
-    if (resolver.path !== "id" && resolver.path !== "*") {
-      const fieldResult = await entityCatalogField(resolver.entityType, resolver.path, args.scope);
+    if (path !== "id" && path !== "*") {
+      const fieldResult = await entityCatalogField(entityType, path, args.scope);
       if ("error" in fieldResult) return fieldResult;
     }
     return { data: { resolver, dependencyIds: [] } };
   }
 
   if (resolverType === "expr") {
-    if (typeof resolver.expression !== "string" || !resolver.expression.trim()) {
-      return errorResult("INVALID_RESOLVER", "expr resolver requires expression");
-    }
-    const malformed = findMalformedPropertySymbols(resolver.expression);
+    const expression = resolver.expression as string;
+    const malformed = findMalformedPropertySymbols(expression);
     if (malformed.length > 0) {
       return errorResult("INVALID_RESOLVER", `expr references unknown property symbol: ${malformed.join(", ")}`);
     }
     // Enforce the sandbox whitelist (length, node budget, allowed ops/functions)
     // at save time — otherwise a bad expression persists and only surfaces as a
     // runtime quality:"bad" zombie that never recomputes.
-    const syntaxErrors = validateExpression(resolver.expression);
+    const syntaxErrors = validateExpression(expression);
     if (syntaxErrors.length > 0) {
       return errorResult("INVALID_RESOLVER", `expr validation failed: ${syntaxErrors.join("; ")}`);
     }
-    const dependencyIds = extractExpressionDependencyIds(resolver.expression);
+    const dependencyIds = extractExpressionDependencyIds(expression);
     const known = args.knownPropertyIds;
     const toCheck = known ? dependencyIds.filter((id) => !known.has(id)) : dependencyIds;
     const dependencyResult = await assertPropertiesInSite(toCheck, args.scope);
@@ -244,47 +242,27 @@ export async function validateResolverConfig(args: {
   }
 
   if (resolverType === "window") {
-    if (typeof resolver.sourcePropertyId !== "string")
-      return errorResult("INVALID_RESOLVER", "window resolver requires sourcePropertyId");
-    const dependencyResult = await assertPropertiesInSite([resolver.sourcePropertyId], args.scope);
-    if (dependencyResult && "error" in dependencyResult) return dependencyResult;
-    const source = dependencyResult?.data[0];
-    if (source?.resolverType === "window")
-      return errorResult("INVALID_RESOLVER", "window source cannot be another window property");
-    if (resolver.kind !== "tumbling" && resolver.kind !== "ewma")
-      return errorResult("INVALID_RESOLVER", "window kind must be tumbling or ewma");
-    if (resolver.kind === "tumbling") {
-      if (typeof resolver.windowMs !== "number" || !Number.isFinite(resolver.windowMs) || resolver.windowMs < 1000) {
-        return errorResult("INVALID_RESOLVER", "tumbling windowMs must be a finite number >= 1000");
-      }
-      if (typeof resolver.aggregation !== "string" || !AGGREGATIONS.has(resolver.aggregation)) {
-        return errorResult("INVALID_RESOLVER", "tumbling aggregation must be one of sum, avg, count, min, max");
-      }
-    } else if (typeof resolver.alpha !== "number" || !(resolver.alpha > 0 && resolver.alpha <= 1)) {
-      return errorResult("INVALID_RESOLVER", "ewma alpha must be a number in (0, 1]");
+    const sourcePropertyId = resolver.sourcePropertyId as string;
+    // In-batch sibling sources skip the "exists in site" check (like expr
+    // dependencies above); batch callers verify the planned source's resolver
+    // type themselves since it isn't in the DB yet.
+    if (!args.knownPropertyIds?.has(sourcePropertyId)) {
+      const dependencyResult = await assertPropertiesInSite([sourcePropertyId], args.scope);
+      if (dependencyResult && "error" in dependencyResult) return dependencyResult;
+      const source = dependencyResult?.data[0];
+      if (source?.resolverType === "window")
+        return errorResult("INVALID_RESOLVER", "window source cannot be another window property");
     }
-    return { data: { resolver, dependencyIds: [resolver.sourcePropertyId] } };
+    return { data: { resolver, dependencyIds: [sourcePropertyId] } };
   }
 
   if (resolverType === "rollup") {
-    if (
-      typeof resolver.childKind !== "string" ||
-      typeof resolver.relation !== "string" ||
-      typeof resolver.childProperty !== "string" ||
-      typeof resolver.aggregation !== "string" ||
-      !AGGREGATIONS.has(resolver.aggregation)
-    ) {
-      return errorResult(
-        "INVALID_RESOLVER",
-        "rollup resolver requires childKind, relation, childProperty, and aggregation",
-      );
-    }
     const parentError = await validateRollupParent(resolver.parent, args.scope);
     if (parentError) return parentError;
     return { data: { resolver, dependencyIds: [] } };
   }
 
-  return errorResult("INVALID_RESOLVER_TYPE", `Unsupported resolverType "${resolverType}"`);
+  return { data: { resolver, dependencyIds: [] } };
 }
 
 export async function validateAcyclicStaticEdges(args: {

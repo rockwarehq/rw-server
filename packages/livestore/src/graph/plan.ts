@@ -12,7 +12,6 @@ import {
   parseGraphHookCondition,
   parseGraphHookEventContext,
 } from "../catalog/hook-conditions.js";
-import { windowResolverConfigSchema } from "../catalog/resolver-schemas.js";
 
 import { graphVersion, type GraphVersion } from "./introspect.js";
 import * as nodeTypes from "./node-types.js";
@@ -281,37 +280,6 @@ export async function plan(input: GraphPlanInput, scope: GraphScope): Promise<Se
     if (sampleRateInvalid(property.sampleRateMs))
       issue(`${path}.sampleRateMs`, "INVALID_SAMPLE_RATE", "sampleRateMs must be a positive integer");
 
-    // Windows sourcing an in-batch sibling can't go through
-    // validateResolverConfig (its window branch checks the source against the
-    // DB, where the sibling doesn't exist yet). Validate those structurally
-    // via the parity-tested schema and enforce the window-over-window rule
-    // against the batch; everything else uses the real validator.
-    const windowSource =
-      property.resolverType === "window" && typeof property.resolver.sourcePropertyId === "string"
-        ? property.resolver.sourcePropertyId
-        : null;
-    if (windowSource && plannedPropertyIds.has(windowSource)) {
-      const resolver = {
-        ...property.resolver,
-        type: typeof property.resolver.type === "string" ? property.resolver.type : property.resolverType,
-      };
-      if (resolver.type !== property.resolverType) {
-        issue(`${path}.resolver`, "RESOLVER_TYPE_MISMATCH", "resolver.type must match resolverType");
-        continue;
-      }
-      const parsed = windowResolverConfigSchema.safeParse(resolver);
-      if (!parsed.success) {
-        issue(`${path}.resolver`, "INVALID_RESOLVER", parsed.error.issues[0]?.message ?? "window resolver is invalid");
-        continue;
-      }
-      if (resolverTypeById.get(windowSource) === "window") {
-        issue(`${path}.resolver`, "INVALID_RESOLVER", "window source cannot be another window property");
-        continue;
-      }
-      plannedEdges.push({ fromPropertyId: windowSource, toPropertyId: id });
-      continue;
-    }
-
     const resolverResult = await validateResolverConfig({
       resolverType: property.resolverType,
       resolver: property.resolver,
@@ -320,6 +288,19 @@ export async function plan(input: GraphPlanInput, scope: GraphScope): Promise<Se
     });
     if ("error" in resolverResult) {
       issue(`${path}.resolver`, resolverResult.code, resolverResult.error);
+      continue;
+    }
+
+    // validateResolverConfig skips in-batch window sources (they aren't in
+    // the DB), so enforce the window-over-window rule against the batch here.
+    const config = resolverResult.data.resolver;
+    if (
+      property.resolverType === "window" &&
+      typeof config.sourcePropertyId === "string" &&
+      plannedPropertyIds.has(config.sourcePropertyId) &&
+      resolverTypeById.get(config.sourcePropertyId) === "window"
+    ) {
+      issue(`${path}.resolver`, "INVALID_RESOLVER", "window source cannot be another window property");
       continue;
     }
 
