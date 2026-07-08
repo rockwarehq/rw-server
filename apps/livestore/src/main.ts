@@ -5,10 +5,15 @@ import "dotenv/config";
 import { createPrismaClient } from "@rw/db";
 import { onShutdown } from "@rw/runtime";
 
-import { registerMetricsRoute } from "./metrics.js";
-import { connectNatsResources, stopNatsResources } from "./nats.js";
-import { GraphRuntime } from "./runtime.js";
-import { asLivestoreLogger, createLivestoreServer, registerGraphRoutes } from "./server.js";
+import {
+  GraphRuntime,
+  asLivestoreLogger,
+  connectNatsResources,
+  createLivestoreServer,
+  registerGraphRoutes,
+  registerMetricsRoute,
+  stopNatsResources,
+} from "@rw/livestore";
 
 async function main(): Promise<void> {
   const prisma = createPrismaClient("livestore");

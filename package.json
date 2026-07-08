@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm --parallel --filter @rw/api --filter @rw/livestore dev",
+    "dev": "pnpm --parallel --filter @rw/api --filter @rw/livestore-app dev",
     "dev:api": "pnpm --filter @rw/api dev",
-    "dev:livestore": "pnpm --filter @rw/livestore dev",
+    "dev:livestore": "pnpm --filter @rw/livestore-app dev",
     "build": "tsc -b && tsc -p apps/api",
     "clean": "tsc -b --clean",
     "lint": "biome check",

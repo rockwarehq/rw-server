@@ -25,6 +25,7 @@ COPY packages/db/package.json packages/db/
 COPY packages/services/package.json packages/services/
 COPY packages/runtime/package.json packages/runtime/
 COPY packages/automations/package.json packages/automations/
+COPY packages/livestore/package.json packages/livestore/
 COPY apps/api/package.json apps/api/
 COPY apps/workers/package.json apps/workers/
 COPY apps/livestore/package.json apps/livestore/
@@ -76,7 +77,7 @@ RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3c. Production deps for livestore (pruned to @rw/livestore's transitive set)
+# 3c. Production deps for livestore (pruned to @rw/livestore-app's transitive set)
 # ─────────────────────────────────────────────────────────────────────────────
 FROM base AS prod-deps-livestore
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
@@ -85,8 +86,9 @@ COPY packages/db/package.json packages/db/
 COPY packages/runtime/package.json packages/runtime/
 COPY packages/services/package.json packages/services/
 COPY packages/automations/package.json packages/automations/
+COPY packages/livestore/package.json packages/livestore/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile --prod --filter '@rw/livestore...'
+    pnpm install --frozen-lockfile --prod --filter '@rw/livestore-app...'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -178,6 +180,7 @@ COPY --from=prod-deps-livestore /repo/packages/db/node_modules packages/db/node_
 COPY --from=prod-deps-livestore /repo/packages/runtime/node_modules packages/runtime/node_modules
 COPY --from=prod-deps-livestore /repo/packages/services/node_modules packages/services/node_modules
 COPY --from=prod-deps-livestore /repo/packages/automations/node_modules packages/automations/node_modules
+COPY --from=prod-deps-livestore /repo/packages/livestore/node_modules packages/livestore/node_modules
 
 COPY --from=build /repo/packages/db/dist packages/db/dist
 COPY --from=build /repo/packages/db/src/generated packages/db/src/generated
@@ -191,6 +194,8 @@ COPY --from=build /repo/packages/services/dist packages/services/dist
 COPY --from=build /repo/packages/services/package.json packages/services/
 COPY --from=build /repo/packages/automations/dist packages/automations/dist
 COPY --from=build /repo/packages/automations/package.json packages/automations/
+COPY --from=build /repo/packages/livestore/dist packages/livestore/dist
+COPY --from=build /repo/packages/livestore/package.json packages/livestore/
 COPY --from=build /repo/apps/livestore/dist apps/livestore/dist
 COPY --from=build /repo/apps/livestore/package.json apps/livestore/
 
