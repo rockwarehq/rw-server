@@ -1,3 +1,6 @@
+import { coreLivestoreCatalog } from "./core.js";
+import { immLivestoreCatalog } from "./imm.js";
+
 export const LIVESTORE_EVENT_STREAM = "RW_LIVESTORE_EVENTS";
 export const LIVESTORE_EVENT_SUBJECT_PREFIX = "livestore.events";
 export const LIVESTORE_EVENT_SUBJECT_FILTER = `${LIVESTORE_EVENT_SUBJECT_PREFIX}.>`;
@@ -26,47 +29,11 @@ export interface LivestoreHookEventSchema {
   contextFields: Record<string, LivestoreHookContextFieldSchema>;
 }
 
+// Composed from the catalog fragments; order (core, then imm) matches the
+// original inline literal so downstream consumers see an identical catalog.
 export const LIVESTORE_HOOK_EVENT_CATALOG = [
-  {
-    namespace: "livestore",
-    name: "hook_triggered",
-    version: "1",
-    displayName: "LiveStore Hook Triggered",
-    integration: "livestore",
-    description: "Generic event emitted whenever a LiveStore hook condition matches.",
-    contextFields: {},
-  },
-  {
-    namespace: "imm",
-    name: "cycle_completed",
-    version: "1",
-    displayName: "IMM Cycle Completed",
-    integration: "rockware-imm",
-    description: "Rockware IMM event emitted when a configured cycle-complete condition matches.",
-    contextFields: {
-      stationId: {
-        label: "Station",
-        type: "string",
-        required: true,
-        description: "Station entity id where the cycle completed.",
-        sourceTypes: ["property"],
-      },
-      jobId: {
-        label: "Job",
-        type: "string",
-        required: false,
-        description: "Current job id when the cycle completed.",
-        sourceTypes: ["property"],
-      },
-      cycleTime: {
-        label: "Cycle Time",
-        type: "number",
-        required: false,
-        description: "Cycle time captured from the graph when the event is emitted.",
-        sourceTypes: ["property"],
-      },
-    },
-  },
+  ...coreLivestoreCatalog.hookEvents,
+  ...immLivestoreCatalog.hookEvents,
 ] as const satisfies readonly LivestoreHookEventSchema[];
 
 export interface LivestoreHookEventContextMetadata {
