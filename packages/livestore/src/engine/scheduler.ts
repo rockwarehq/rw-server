@@ -14,6 +14,7 @@ export class Scheduler {
   private flushCount = 0;
   private lastFlushAt: number | null = null;
   private flushMaxMs = 0;
+  private evaluateFailures = 0;
   private static readonly DELAY_MS = 50;
   private static readonly MAX_DIRTY_PASSES = 25;
 
@@ -52,10 +53,22 @@ export class Scheduler {
 
   // flushMaxMs is a windowed max: reading it resets the window (worst flush since
   // the last read). dirtySetSize is the live recompute backlog.
-  flushStats(): { flushCount: number; lastFlushAt: number | null; flushMaxMs: number; dirtySetSize: number } {
+  flushStats(): {
+    flushCount: number;
+    lastFlushAt: number | null;
+    flushMaxMs: number;
+    dirtySetSize: number;
+    evaluateFailures: number;
+  } {
     const flushMaxMs = this.flushMaxMs;
     this.flushMaxMs = 0;
-    return { flushCount: this.flushCount, lastFlushAt: this.lastFlushAt, flushMaxMs, dirtySetSize: this.dirty.size };
+    return {
+      flushCount: this.flushCount,
+      lastFlushAt: this.lastFlushAt,
+      flushMaxMs,
+      dirtySetSize: this.dirty.size,
+      evaluateFailures: this.evaluateFailures,
+    };
   }
 
   private enqueueDependents(propertyId: string): void {
@@ -77,6 +90,8 @@ export class Scheduler {
     }, Scheduler.DELAY_MS);
   }
 
+  // Must never reject: it runs under `void this.flush()`, so a rejection here is
+  // an unhandled rejection that kills the process (lifecycle.ts escalates it).
   private async flush(): Promise<void> {
     if (this.flushing) return;
     this.flushing = true;
@@ -86,7 +101,14 @@ export class Scheduler {
       for (const id of this.topoOrder()) {
         if (!this.dirty.has(id)) continue;
         this.dirty.delete(id);
-        await this.evaluate(id);
+        try {
+          await this.evaluate(id);
+        } catch (err) {
+          // Skip the property this pass; the next input re-marks it. Retrying
+          // here would spin hot against whatever made it fail.
+          this.evaluateFailures += 1;
+          this.logger.error({ err, propertyId: id }, "livestore evaluate failed — property skipped this flush");
+        }
         evaluated += 1;
       }
     } finally {
@@ -99,7 +121,7 @@ export class Scheduler {
     this.logger.info({ evaluated }, "livestore flush complete");
     if (this.dirty.size === 0) {
       this.dirtyPasses = 0;
-      await this.afterSettled?.();
+      await this.runAfterSettled();
       return;
     }
 
@@ -108,9 +130,17 @@ export class Scheduler {
       this.logger.warn({ remaining: this.dirty.size }, "livestore flush stalled (cycle?) — dropping dirty set");
       this.dirty.clear();
       this.dirtyPasses = 0;
-      await this.afterSettled?.();
+      await this.runAfterSettled();
       return;
     }
     this.schedule();
+  }
+
+  private async runAfterSettled(): Promise<void> {
+    try {
+      await this.afterSettled?.();
+    } catch (err) {
+      this.logger.error({ err }, "livestore after-settle hook failed");
+    }
   }
 }

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Scheduler } from "./scheduler.js";
 
-const logger = { info: () => {}, warn: vi.fn(), error: () => {} };
+const logger = { info: () => {}, warn: vi.fn(), error: vi.fn() };
 
 // Graph: src -> win -> expr, with win as a barrier (window property).
 function makeScheduler(options: {
@@ -10,6 +10,7 @@ function makeScheduler(options: {
   topo: string[];
   barriers?: string[];
   onEvaluate?: (id: string, scheduler: Scheduler) => void;
+  afterSettled?: () => Promise<void>;
 }) {
   const evaluated: string[] = [];
   const barriers = new Set(options.barriers ?? []);
@@ -22,6 +23,7 @@ function makeScheduler(options: {
     },
     (id) => barriers.has(id),
     logger,
+    options.afterSettled,
   );
   return { scheduler, evaluated };
 }
@@ -29,6 +31,7 @@ function makeScheduler(options: {
 beforeEach(() => {
   vi.useFakeTimers();
   logger.warn.mockClear();
+  logger.error.mockClear();
 });
 
 afterEach(() => {
@@ -58,6 +61,60 @@ describe("barrier", () => {
     scheduler.markDirtyMany(["src"]);
     await vi.advanceTimersByTimeAsync(100);
     expect(evaluated).toEqual(["src"]);
+  });
+});
+
+describe("failure containment", () => {
+  it("an evaluate failure skips that property but the flush continues and completes", async () => {
+    const { scheduler, evaluated } = makeScheduler({
+      dependents: { a: [], b: [], c: [] },
+      topo: ["a", "b", "c"],
+      onEvaluate: (id) => {
+        if (id === "b") throw new Error("kv down");
+      },
+    });
+    scheduler.markDirtyMany(["a", "b", "c"]);
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(evaluated).toEqual(["a", "b", "c"]);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ propertyId: "b" }),
+      expect.stringContaining("evaluate failed"),
+    );
+    expect(scheduler.flushStats().evaluateFailures).toBe(1);
+  });
+
+  it("the scheduler keeps working after a failed flush", async () => {
+    let fail = true;
+    const { scheduler, evaluated } = makeScheduler({
+      dependents: { a: [] },
+      topo: ["a"],
+      onEvaluate: () => {
+        if (fail) throw new Error("kv down");
+      },
+    });
+    scheduler.markDirtyMany(["a"]);
+    await vi.advanceTimersByTimeAsync(200);
+
+    fail = false;
+    scheduler.markDirtyMany(["a"]);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(evaluated).toEqual(["a", "a"]);
+  });
+
+  it("an after-settled hook rejection is contained", async () => {
+    const { scheduler, evaluated } = makeScheduler({
+      dependents: { a: [] },
+      topo: ["a"],
+      afterSettled: async () => {
+        throw new Error("hook flush failed");
+      },
+    });
+    scheduler.markDirtyMany(["a"]);
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(evaluated).toEqual(["a"]);
+    expect(logger.error).toHaveBeenCalledWith(expect.anything(), expect.stringContaining("after-settle"));
   });
 });
 

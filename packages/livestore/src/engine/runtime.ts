@@ -63,6 +63,7 @@ export class GraphRuntime {
   private lastDefinitionReconcileAt = new Date();
   private readonly pendingDefinitionEvents = new Map<string, GraphDefinitionEvent>();
   private definitionWaiters: Array<{ resolve: () => void; reject: (err: unknown) => void }> = [];
+  private kvPutFailures = 0;
 
   constructor(private readonly options: GraphRuntimeOptions) {
     this.cvg = new CvgStore(options.kv);
@@ -370,7 +371,15 @@ export class GraphRuntime {
       // Fold before the KV await: windows must see every sample synchronously —
       // the 50ms flush only ever reads the latest current value.
       this.windowResolver.onInput(propertyId, envelope);
-      await this.cvg.put(propertyId, envelope);
+      try {
+        await this.cvg.put(propertyId, envelope);
+      } catch (err) {
+        // A KV blip must not throw through resolver consume loops or the flush.
+        // The in-memory value is already applied; the next changed commit (or
+        // WS clients falling back to getCurrentOrStale) repairs KV drift.
+        this.kvPutFailures += 1;
+        this.options.logger.error({ err, propertyId, source }, "livestore CVG put failed — in-memory value retained");
+      }
       const hookQueued = this.hookManager.onPropertyCommitted({ propertyId, previous, current: envelope });
       if (hookQueued) this.scheduler.scheduleTerminal();
     }
@@ -435,7 +444,7 @@ export class GraphRuntime {
   healthStats() {
     return {
       ready: this.isReady(),
-      engine: { ...this.scheduler.flushStats(), ...this.kernel.counts() },
+      engine: { ...this.scheduler.flushStats(), ...this.kernel.counts(), kvPutFailures: this.kvPutFailures },
       hooks: this.hookManager.hookStats(),
     };
   }
