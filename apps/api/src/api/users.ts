@@ -315,6 +315,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
     method: "PUT",
     url: "/me/password",
     preHandler: [fastify.verifyAccessToken],
+    config: sensitiveRateLimit,
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
