@@ -1,12 +1,12 @@
-import { createSigner, createVerifier } from "fast-jwt";
+import { createDecoder, createSigner, createVerifier } from "fast-jwt";
 import prisma from "@rw/db";
+import { authEnv, deriveSigningKey } from "./env.js";
 import { generateSecret, hashToken } from "./secrets.js";
 
 // Re-exported for compatibility with existing `@rw/auth/tokens` importers;
 // the implementation lives in ./secrets.ts.
 export { hashToken };
 
-const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 const ACCESS_TOKEN_EXPIRY = 15 * 60 * 1000; // 15 minutes
 const REFRESH_TOKEN_EXPIRY = 7 * 24 * 60 * 60 * 1000; // 7 days
 
@@ -32,28 +32,60 @@ export type DecodedAccessToken = AnyAccessTokenPayload & {
   exp: number;
 };
 
-const accessTokenSigner = createSigner({
-  key: JWT_SECRET,
+// Each principal audience signs/verifies with its own HKDF-derived key, pins
+// HS256 (no algorithm confusion), and enforces issuer + audience + expiry.
+const userAccessSigner = createSigner({
+  key: deriveSigningKey(authEnv.userAudience),
+  algorithm: "HS256",
   expiresIn: ACCESS_TOKEN_EXPIRY,
+  iss: authEnv.issuer,
+  aud: authEnv.userAudience,
 });
 
-const accessTokenVerifier = createVerifier({
-  key: JWT_SECRET,
+const displayAccessSigner = createSigner({
+  key: deriveSigningKey(authEnv.displayAudience),
+  algorithm: "HS256",
+  expiresIn: ACCESS_TOKEN_EXPIRY,
+  iss: authEnv.issuer,
+  aud: authEnv.displayAudience,
 });
+
+const userAccessVerifier = createVerifier({
+  key: deriveSigningKey(authEnv.userAudience),
+  algorithms: ["HS256"],
+  allowedIss: authEnv.issuer,
+  allowedAud: authEnv.userAudience,
+  clockTolerance: authEnv.clockToleranceMs,
+});
+
+const displayAccessVerifier = createVerifier({
+  key: deriveSigningKey(authEnv.displayAudience),
+  algorithms: ["HS256"],
+  allowedIss: authEnv.issuer,
+  allowedAud: authEnv.displayAudience,
+  clockTolerance: authEnv.clockToleranceMs,
+});
+
+// Reads the (unverified) principal only to pick which verifier to run; the
+// selected verifier then cryptographically enforces key/aud/iss/alg/exp, so a
+// forged principal simply routes to a verifier whose key will reject it.
+const decodeAccessToken = createDecoder();
 
 export function createAccessToken(payload: AnyAccessTokenPayload): string {
   if (payload.principal === "DISPLAY") {
-    return accessTokenSigner(payload);
+    return displayAccessSigner(payload);
   }
 
-  return accessTokenSigner({
+  return userAccessSigner({
     ...payload,
     principal: "USER",
   });
 }
 
 export function verifyAccessToken(token: string): DecodedAccessToken {
-  return accessTokenVerifier(token) as DecodedAccessToken;
+  const unverified = decodeAccessToken(token) as { principal?: string } | null;
+  const verifier = unverified?.principal === "DISPLAY" ? displayAccessVerifier : userAccessVerifier;
+  return verifier(token) as DecodedAccessToken;
 }
 
 export async function createRefreshToken(

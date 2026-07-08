@@ -7,6 +7,7 @@
     "./tokens": "./dist/tokens.js",
     "./secrets": "./dist/secrets.js",
     "./password": "./dist/password.js",
+    "./env": "./dist/env.js",
     "./context": "./dist/context.js",
     "./display-session": "./dist/display-session.js",
     "./iam/*": "./dist/iam/*.js"
