@@ -6,6 +6,7 @@ import {
   createAccessToken,
   createRefreshToken,
   verifyRefreshToken,
+  inspectRefreshToken,
   revokeRefreshToken,
   revokeAllUserRefreshTokens,
   type AccessTokenPayload,
@@ -271,17 +272,25 @@ export async function refreshSession(
   siteId?: string,
   metadata?: { userAgent?: string; ipAddress?: string },
 ): Promise<{ success: true; data: TokenPair } | { success: false; error: string }> {
-  const verification = await verifyRefreshToken(refreshToken);
+  const inspection = await inspectRefreshToken(refreshToken);
 
-  if (!verification.valid || !verification.userId) {
+  // Reuse detection: a token that was already rotated (revoked) but is being
+  // presented again signals theft. Revoke the entire family so neither the
+  // attacker nor the victim can continue, forcing a fresh login.
+  if (inspection.status === "revoked" && inspection.userId) {
+    await revokeAllUserRefreshTokens(inspection.userId);
     return { success: false, error: "Invalid or expired refresh token" };
   }
 
-  // Revoke the old refresh token
+  if (inspection.status !== "valid" || !inspection.userId) {
+    return { success: false, error: "Invalid or expired refresh token" };
+  }
+
+  // Revoke the old refresh token (rotation)
   await revokeRefreshToken(refreshToken);
 
   const user = await prisma.user.findUnique({
-    where: { id: verification.userId },
+    where: { id: inspection.userId },
   });
 
   if (!user || user.status !== "ACTIVE") {

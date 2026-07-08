@@ -137,6 +137,32 @@ export async function createDisplayRefreshToken(
   return { token, expiresAt };
 }
 
+// Distinguishes a token that was never issued ("unknown") from one that was
+// issued but is now "revoked" or "expired". A "revoked" result on presentation
+// is the classic refresh-token-reuse signal: the caller should treat it as
+// theft and revoke the whole token family.
+export type RefreshTokenStatus = "valid" | "revoked" | "expired" | "unknown";
+
+export async function inspectRefreshToken(
+  token: string,
+): Promise<{ status: RefreshTokenStatus; userId?: string; tokenId?: string }> {
+  const record = await prisma.refreshToken.findUnique({ where: { tokenHash: hashToken(token) } });
+  if (!record) return { status: "unknown" };
+  if (record.revokedAt) return { status: "revoked", userId: record.userId, tokenId: record.id };
+  if (record.expiresAt < new Date()) return { status: "expired", userId: record.userId, tokenId: record.id };
+  return { status: "valid", userId: record.userId, tokenId: record.id };
+}
+
+export async function inspectDisplayRefreshToken(
+  token: string,
+): Promise<{ status: RefreshTokenStatus; displayId?: string; tokenId?: string }> {
+  const record = await prisma.displayRefreshToken.findUnique({ where: { tokenHash: hashToken(token) } });
+  if (!record) return { status: "unknown" };
+  if (record.revokedAt) return { status: "revoked", displayId: record.displayId, tokenId: record.id };
+  if (record.expiresAt < new Date()) return { status: "expired", displayId: record.displayId, tokenId: record.id };
+  return { status: "valid", displayId: record.displayId, tokenId: record.id };
+}
+
 export async function verifyRefreshToken(token: string): Promise<{
   valid: boolean;
   userId?: string;

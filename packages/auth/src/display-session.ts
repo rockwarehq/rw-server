@@ -4,8 +4,9 @@ import {
   createAccessToken,
   createDisplayRefreshToken,
   hashToken,
+  inspectDisplayRefreshToken,
+  revokeAllDisplayRefreshTokens,
   revokeDisplayRefreshToken,
-  verifyDisplayRefreshToken,
   type DisplayAccessTokenPayload,
 } from "./tokens.js";
 
@@ -127,15 +128,22 @@ export async function refreshDisplaySession(
   refreshToken: string,
   metadata?: DisplayAuthContext,
 ): Promise<{ success: true; data: DisplayTokenPair } | { success: false; error: string }> {
-  const verification = await verifyDisplayRefreshToken(refreshToken);
+  const inspection = await inspectDisplayRefreshToken(refreshToken);
 
-  if (!verification.valid || !verification.displayId) {
+  // Reuse detection: replay of an already-rotated token signals theft; revoke
+  // the whole family so the display must re-authenticate with its bootstrap secret.
+  if (inspection.status === "revoked" && inspection.displayId) {
+    await revokeAllDisplayRefreshTokens(inspection.displayId);
+    return { success: false, error: "Invalid or expired refresh token" };
+  }
+
+  if (inspection.status !== "valid" || !inspection.displayId) {
     return { success: false, error: "Invalid or expired refresh token" };
   }
 
   await revokeDisplayRefreshToken(refreshToken);
 
-  const display = await getDisplayAuthRecord(verification.displayId);
+  const display = await getDisplayAuthRecord(inspection.displayId);
 
   if (!display || display.status !== "CLAIMED") {
     return { success: false, error: "Display is not active" };
