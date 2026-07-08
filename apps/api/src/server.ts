@@ -1,9 +1,11 @@
 import Fastify from "fastify";
 import type { JsonSchemaToTsProvider } from "@fastify/type-provider-json-schema-to-ts";
 import cors from "@fastify/cors";
+import helmet from "@fastify/helmet";
 import sensible from "@fastify/sensible";
 
 import closeWithGrace from "close-with-grace";
+import { corsConfig, env } from "./config.js";
 import type { IServerOptions } from "./types.js";
 import type { SerializerSchemaOptions } from "./types/fastify.js";
 import { stopStaleGatewayCheck } from "@rw/services/queues/background-workers";
@@ -33,14 +35,28 @@ export function createServer(options: IServerOptions) {
 
   // Register plugins
   server.register(cors, {
-    origin: true, // Allow all origins in development (configure for production)
+    // Dev without CORS_ALLOWED_ORIGINS reflects any origin; production is an
+    // exact-match allowlist derived from APP_BASE_URL (+ CORS_ALLOWED_ORIGINS).
+    // Gateways (/edge/*) and API-token RPC clients are server-to-server and
+    // don't send browser preflights, so the allowlist can't break them.
+    origin: corsConfig.origins,
     methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
   });
+  server.register(helmet, {
+    // JSON API: no HTML surface worth a CSP (swagger UI is dev-only), and
+    // COEP buys nothing here. The valuable headers remain: nosniff, frame
+    // protection, HSTS.
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    global: true,
+  });
   server.register(sensible);
   server.register(rateLimitPlugin);
-  server.register(swaggerPlugin);
+  if (options.swagger ?? env.isDevelopment) {
+    server.register(swaggerPlugin);
+  }
   server.register(authPlugin);
 
   // Admin API
@@ -88,30 +104,29 @@ export function createServer(options: IServerOptions) {
     }
   });
 
-  if (!unhandledRejectionLoggerInstalled) {
-    unhandledRejectionLoggerInstalled = true;
-    process.on("unhandledRejection", (reason) => {
-      server.log.error({ err: reason }, "unhandled promise rejection");
+  if (options.installShutdownHandlers ?? true) {
+    if (!unhandledRejectionLoggerInstalled) {
+      unhandledRejectionLoggerInstalled = true;
+      process.on("unhandledRejection", (reason) => {
+        server.log.error({ err: reason }, "unhandled promise rejection");
+      });
+    }
+
+    closeWithGrace({ delay: options.graceDelay, skip: ["unhandledRejection"] }, async ({ signal, err }) => {
+      if (err) {
+        server.log.error({ err }, "server closing with error");
+      } else {
+        server.log.info(`${signal} received, server closing`);
+      }
+      await Promise.all([server.close(), stopQueues(), stopMetricBucketQueues(), stopStaleGatewayCheck()]);
     });
   }
 
-  closeWithGrace({ delay: options.graceDelay, skip: ["unhandledRejection"] }, async ({ signal, err }) => {
-    if (err) {
-      server.log.error({ err }, "server closing with error");
-    } else {
-      server.log.info(`${signal} received, server closing`);
-    }
-    await Promise.all([server.close(), stopQueues(), stopMetricBucketQueues(), stopStaleGatewayCheck()]);
-  });
-
   const start = async () => {
-    try {
-      await server.listen({ port: options.port, host: options.host });
-      console.log("listening on port", options.port);
-    } catch (err) {
-      server.log.error(err);
-      process.exit(1);
-    }
+    // Listen failures propagate to the caller — main() runs shutdown() and
+    // exits, so cleanup actually happens (a process.exit here would skip it).
+    await server.listen({ port: options.port, host: options.host });
+    server.log.info({ port: options.port }, "listening");
   };
 
   return { server, start };
