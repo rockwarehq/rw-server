@@ -2,7 +2,7 @@ import type { PrismaClient } from "@rw/db";
 import type { JetStreamClient, JetStreamManager } from "@nats-io/jetstream";
 import type { KV } from "@nats-io/kv";
 import type { NatsConnection } from "@nats-io/nats-core";
-import type { GraphDefinitionEvent } from "@rw/runtime/graph-definitions";
+import type { GraphDefinitionEvent } from "./catalog/definitions.js";
 
 import { AggStateStore } from "./agg-store.js";
 import { CvgStore } from "./cvg-store.js";

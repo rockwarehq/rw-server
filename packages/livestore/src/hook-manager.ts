@@ -16,14 +16,14 @@ import {
   type LivestoreHookContextFieldType,
   type LivestoreHookEventContextMetadata,
   type LivestoreHookEvent,
-} from "@rw/runtime/livestore-events";
+} from "./catalog/events.js";
 import {
   graphHookConditionPropertyIds,
   parseGraphHookCondition,
   parseGraphHookEventContext,
   type GraphHookCondition,
   type GraphHookEventContext,
-} from "@rw/runtime/livestore-hooks";
+} from "./catalog/hook-conditions.js";
 
 import { evaluateHookCondition } from "./hook-condition.js";
 import { isRecord, type LivestoreLogger, type ValueEnvelope } from "./types.js";

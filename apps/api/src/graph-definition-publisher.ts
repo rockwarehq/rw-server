@@ -5,7 +5,7 @@ import {
   GRAPH_DEFINITION_STREAM,
   GRAPH_DEFINITION_SUBJECT_FILTER,
   type GraphDefinitionEvent,
-} from "@rw/runtime/graph-definitions";
+} from "@rw/livestore/catalog/definitions";
 import { setGraphDefinitionEventSink } from "@rw/livestore/graph/index";
 
 const encoder = new TextEncoder();

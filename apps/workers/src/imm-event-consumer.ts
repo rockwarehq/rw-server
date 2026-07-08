@@ -14,7 +14,7 @@ import {
   LIVESTORE_EVENT_SUBJECT_FILTER,
   livestoreEventType,
   type LivestoreHookEvent,
-} from "@rw/runtime/livestore-events";
+} from "@rw/livestore/catalog/events";
 
 const decoder = new TextDecoder();
 const WEEK_NANOS = 7 * 24 * 60 * 60 * 1_000_000_000;

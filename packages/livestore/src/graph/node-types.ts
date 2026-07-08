@@ -14,7 +14,7 @@ import {
   type LivestoreGraphTypeInputSchema,
   type LivestoreGraphTypeNamespaceSchema,
   type LivestoreGraphTypeSchema,
-} from "@rw/runtime/livestore-graph-types";
+} from "../catalog/graph-types.js";
 
 import { systemEntityCatalogEntryByKey } from "@rw/services/entity/registry";
 import { getGraphSiteForWorkspace } from "./scope.js";

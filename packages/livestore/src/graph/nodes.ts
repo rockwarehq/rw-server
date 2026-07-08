@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
-import { normalizeGraphTypeToken, parseGraphTypeRef } from "@rw/runtime/livestore-graph-types";
+import { normalizeGraphTypeToken, parseGraphTypeRef } from "../catalog/graph-types.js";
 
 import { SYSTEM_ENTITY_KEYS, systemEntityCatalogEntryByKey } from "@rw/services/entity/registry";
 import type { EntityCatalogField } from "@rw/services/entity/registry.types";

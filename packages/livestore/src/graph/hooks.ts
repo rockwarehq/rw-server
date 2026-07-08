@@ -6,7 +6,7 @@ import {
   normalizeLivestoreEventToken,
   normalizeLivestoreEventVersion,
   type LivestoreHookEventSchema,
-} from "@rw/runtime/livestore-events";
+} from "../catalog/events.js";
 import {
   graphHookConditionPropertyIds,
   graphHookEventContextPropertyIds,
@@ -14,7 +14,7 @@ import {
   parseGraphHookEventContext,
   type GraphHookCondition,
   type GraphHookEventContext,
-} from "@rw/runtime/livestore-hooks";
+} from "../catalog/hook-conditions.js";
 
 import { publishGraphDefinitionEvent } from "./definition-events.js";
 import { graphNodeSiteWhere, getGraphSiteForWorkspace, nodeBelongsToSite } from "./scope.js";

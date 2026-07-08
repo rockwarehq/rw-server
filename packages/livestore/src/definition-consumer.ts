@@ -15,7 +15,7 @@ import {
   GRAPH_DEFINITION_SUBJECT_FILTER,
   parseGraphDefinitionEvent,
   type GraphDefinitionEvent,
-} from "@rw/runtime/graph-definitions";
+} from "./catalog/definitions.js";
 
 import type { LivestoreLogger } from "./types.js";
 

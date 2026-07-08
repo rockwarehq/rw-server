@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { GRAPH_TYPE_INPUT_VALUE_TYPES, GRAPH_TYPE_VALUE_TYPES } from "@rw/runtime/livestore-graph-types";
+import { GRAPH_TYPE_INPUT_VALUE_TYPES, GRAPH_TYPE_VALUE_TYPES } from "@rw/livestore/catalog/graph-types";
 import { z } from "zod";
 import * as graph from "@rw/livestore/graph/index";
 import { hasPermission, type Permission } from "@rw/services/iam/index";

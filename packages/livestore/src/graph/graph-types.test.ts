@@ -1,4 +1,4 @@
-import { IMM_GRAPH_TYPE_NAMESPACE, type LivestoreGraphTypeSchema } from "@rw/runtime/livestore-graph-types";
+import { IMM_GRAPH_TYPE_NAMESPACE, type LivestoreGraphTypeSchema } from "../catalog/graph-types.js";
 import { describe, expect, it } from "vitest";
 
 const typeByKey = (key: string): LivestoreGraphTypeSchema => {

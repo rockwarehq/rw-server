@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { GraphDefinitionAction, GraphDefinitionEntity, GraphDefinitionEvent } from "@rw/runtime/graph-definitions";
+import type { GraphDefinitionAction, GraphDefinitionEntity, GraphDefinitionEvent } from "../catalog/definitions.js";
 
 export type GraphDefinitionEventSink = (event: GraphDefinitionEvent) => void | Promise<void>;
 

@@ -1,4 +1,4 @@
-import type { GraphHookCondition } from "@rw/runtime/livestore-hooks";
+import type { GraphHookCondition } from "./catalog/hook-conditions.js";
 
 import type { ValueEnvelope } from "./types.js";
 
