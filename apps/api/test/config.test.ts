@@ -33,7 +33,12 @@ describe("config validation", () => {
     for (const [key, value] of Object.entries(PROD_BASELINE)) vi.stubEnv(key, value);
     const config = await loadConfig();
     expect(config.env.isDevelopment).toBe(false);
-    expect(config.corsConfig.origins).toEqual(["https://demo.rockware.io"]);
+  });
+
+  it("reflects any origin by default, even in production", async () => {
+    for (const [key, value] of Object.entries(PROD_BASELINE)) vi.stubEnv(key, value);
+    const config = await loadConfig();
+    expect(config.corsConfig.origins).toBe(true);
   });
 
   it("production rejects a non-https APP_BASE_URL", async () => {
@@ -47,8 +52,9 @@ describe("config validation", () => {
     await expect(loadConfig()).rejects.toThrow(/PORT/);
   });
 
-  it("CORS_ALLOWED_ORIGINS is additive to APP_BASE_URL", async () => {
+  it("CORS_ALLOW_ANY=false uses an exact-match allowlist, additive to APP_BASE_URL", async () => {
     for (const [key, value] of Object.entries(PROD_BASELINE)) vi.stubEnv(key, value);
+    vi.stubEnv("CORS_ALLOW_ANY", "false");
     vi.stubEnv("CORS_ALLOWED_ORIGINS", "https://staging.rockware.io, https://ops.rockware.io");
     const config = await loadConfig();
     expect(config.corsConfig.origins).toEqual([
@@ -56,12 +62,5 @@ describe("config validation", () => {
       "https://staging.rockware.io",
       "https://ops.rockware.io",
     ]);
-  });
-
-  it("dev with no allowlist reflects any origin", async () => {
-    vi.stubEnv("NODE_ENV", "development");
-    vi.stubEnv("CORS_ALLOWED_ORIGINS", "");
-    const config = await loadConfig();
-    expect(config.corsConfig.origins).toBe(true);
   });
 });

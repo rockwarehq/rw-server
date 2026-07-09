@@ -7,9 +7,11 @@ import type { NatsConnection } from "@nats-io/nats-core";
 import { connect } from "@nats-io/transport-node";
 import prisma from "@rw/db";
 import { complete as completeCycle } from "@rw/services/cycle/index";
+import { initQueues, stopQueues } from "@rw/services/queues/station-detection";
 import { livestoreEventType, type LivestoreHookEvent } from "@rw/livestore/catalog/events";
 
 import { ImmEventConsumer, type ImmEventHandlers } from "./imm-event-consumer.js";
+import { installEntityEventSink, uninstallEntityEventSink } from "./entity-event-publisher.js";
 
 let nc: NatsConnection | null = null;
 let consumer: ImmEventConsumer | null = null;
@@ -19,6 +21,9 @@ const handlers: ImmEventHandlers = {
 };
 
 export async function startImmEvents(): Promise<void> {
+  // Producer side of slow/down detection: without this, completeCycle's
+  // enqueueDetection is a silent no-op in this process. Workers stay in apps/api.
+  await initQueues();
   nc = await connect({
     servers: natsServers(),
     name: process.env.NATS_CLIENT_NAME || "rw-workers-imm-events",
@@ -27,6 +32,7 @@ export async function startImmEvents(): Promise<void> {
   });
   const js = jetstream(nc);
   const jsm = await jetstreamManager(nc);
+  await installEntityEventSink(js, jsm);
   consumer = new ImmEventConsumer(js, jsm, handlers);
   await consumer.start();
   console.log(`[imm-events] connected to NATS at ${nc.getServer()}`);
@@ -37,10 +43,12 @@ export async function startImmEvents(): Promise<void> {
 }
 
 export async function stopImmEvents(): Promise<void> {
+  uninstallEntityEventSink();
   consumer?.stop();
   consumer = null;
   if (nc && !nc.isClosed()) await nc.drain();
   nc = null;
+  await stopQueues();
 }
 
 async function handleCycleCompleted(event: LivestoreHookEvent): Promise<void> {
