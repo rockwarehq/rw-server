@@ -151,6 +151,27 @@ describe("EntityResolver", () => {
     expect(commits).toHaveLength(1);
   });
 
+  it("handleEntityEvent re-resolves both statusReasonId and statusReason paths for a statusReasonId change", async () => {
+    const { resolver, commits, properties } = harness();
+    // "statusReason" (the reason name) matches changedFields ["statusReasonId"] via the `${path}Id` rule.
+    for (const [id, path] of [
+      ["prop-reason-id", "statusReasonId"],
+      ["prop-reason", "statusReason"],
+    ] as const) {
+      const property = entityProperty({
+        id,
+        resolver: { type: "entity", entityType: "imm.station", entityId: "station-7", path },
+      });
+      properties.set(id, property);
+      await resolver.upsertProperty(property);
+    }
+    commits.length = 0;
+
+    await resolver.handleEntityEvent(event({ changedFields: ["statusReasonId"] }));
+
+    expect(commits.map((c) => c.propertyId).sort()).toEqual(["prop-reason", "prop-reason-id"]);
+  });
+
   it("handleEntityEvent always re-resolves nested paths (changedFields can't be trusted)", async () => {
     const { resolver, commits, properties } = harness();
     const property = entityProperty({

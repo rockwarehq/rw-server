@@ -344,12 +344,21 @@ async function resolveSystemEntityRecord(
       include: { currentBlob: true },
     });
     if (!station) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
+    // Live status is derived from the open state-log row, not a Station column.
+    const openState = await prisma.stationStateLog.findFirst({
+      where: { stationId: station.id, endTime: null, deletedAt: null },
+      orderBy: { startTime: "desc" },
+      select: { state: true, status: true, statusReasonId: true, statusReason: { select: { name: true } } },
+    });
     return {
       data: {
         ...station,
         site: station.siteId,
         workcenter: station.workcenterId,
         currentJob: station.currentJobId,
+        status: openState ? (openState.status ?? openState.state) : null,
+        statusReasonId: openState?.statusReasonId ?? null,
+        statusReason: openState?.statusReason?.name ?? null,
         currentBlob: station.currentBlob
           ? {
               ...station.currentBlob,

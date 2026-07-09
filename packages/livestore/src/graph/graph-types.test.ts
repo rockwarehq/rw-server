@@ -50,6 +50,18 @@ describe("IMM graph type namespace", () => {
     });
   });
 
+  it("station exposes the derived status fields as entity-backed properties", () => {
+    const station = typeByKey("station");
+    for (const key of ["status", "statusReasonId", "statusReason"]) {
+      expect(resolverFor(station, key)).toMatchObject({
+        type: "entity",
+        entityType: "imm.station",
+        entityId: "$input.stationId",
+        path: key,
+      });
+    }
+  });
+
   it("every derived expression references only fields present on the same type", () => {
     for (const key of ["station", "workcenter", "site"]) {
       const type = typeByKey(key);
