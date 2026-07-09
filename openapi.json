@@ -43,6 +43,243 @@
         }
       }
     },
+    "/healthz": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ready",
+                        "not_ready"
+                      ]
+                    },
+                    "checks": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "ok": {
+                            "type": "boolean"
+                          },
+                          "critical": {
+                            "type": "boolean"
+                          },
+                          "latencyMs": {
+                            "type": "number"
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "ok",
+                          "critical",
+                          "latencyMs"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "checks"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ready",
+                        "not_ready"
+                      ]
+                    },
+                    "checks": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "ok": {
+                            "type": "boolean"
+                          },
+                          "critical": {
+                            "type": "boolean"
+                          },
+                          "latencyMs": {
+                            "type": "number"
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "ok",
+                          "critical",
+                          "latencyMs"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "checks"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ready",
+                        "not_ready"
+                      ]
+                    },
+                    "checks": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "ok": {
+                            "type": "boolean"
+                          },
+                          "critical": {
+                            "type": "boolean"
+                          },
+                          "latencyMs": {
+                            "type": "number"
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "ok",
+                          "critical",
+                          "latencyMs"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "checks"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ready",
+                        "not_ready"
+                      ]
+                    },
+                    "checks": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "ok": {
+                            "type": "boolean"
+                          },
+                          "critical": {
+                            "type": "boolean"
+                          },
+                          "latencyMs": {
+                            "type": "number"
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "ok",
+                          "critical",
+                          "latencyMs"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "checks"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/login": {
       "post": {
         "tags": [
@@ -11884,25 +12121,6 @@
                     },
                     "upToDate": {
                       "type": "boolean"
-                    },
-                    "commands": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string",
-                            "format": "uuid"
-                          },
-                          "command": {
-                            "type": "string"
-                          },
-                          "payload": {
-                            "type": "object",
-                            "additionalProperties": true
-                          }
-                        }
-                      }
                     }
                   }
                 }
@@ -11925,171 +12143,6 @@
             }
           },
           "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/edge/cmds/{id}/ack": {
-      "post": {
-        "tags": [
-          "edge"
-        ],
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "in": "path",
-            "name": "id",
-            "required": true
-          }
-        ],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/edge/cmds/{id}/result": {
-      "post": {
-        "tags": [
-          "edge"
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "success": {
-                    "type": "boolean"
-                  },
-                  "result": {
-                    "type": "object",
-                    "additionalProperties": true
-                  },
-                  "error": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "success"
-                ]
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "in": "path",
-            "name": "id",
-            "required": true
-          }
-        ],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
             "description": "Default Response",
             "content": {
               "application/json": {

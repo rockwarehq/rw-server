@@ -34,6 +34,10 @@ import { recoverReplayWindows, cleanup as cleanupReplay } from "@rw/services/cyc
 import { startGraphDefinitionPublisher } from "./graph-definition-publisher.js";
 import { startEntityEventPublisher } from "./entity-event-publisher.js";
 import { startCommandBus } from "./command-bus.js";
+import { rootLogger } from "./logger.js";
+import { Redis } from "ioredis";
+import { infraConfig } from "./config.js";
+import { registerReadinessCheck } from "./readiness.js";
 
 let cleanupBridge: (() => Promise<void>) | null = null;
 let cleanupMetricsBridge: (() => Promise<void>) | null = null;
@@ -41,7 +45,35 @@ let cleanupGraphDefinitionPublisher: (() => Promise<void>) | null = null;
 let cleanupEntityEventPublisher: (() => Promise<void>) | null = null;
 let cleanupCommandBus: (() => Promise<void>) | null = null;
 
+let readinessRedis: Redis | null = null;
+
+// Readiness checks served by GET /ready. DB and Redis are critical (the app
+// can't do useful work without them); NATS registers itself as non-critical
+// in command-bus.ts since the app deliberately degrades without it.
+function registerReadiness() {
+  registerReadinessCheck("db", async () => {
+    const prisma = createPrismaClient("api");
+    await prisma.$queryRaw`SELECT 1`;
+    return true;
+  });
+
+  if (infraConfig.redisUrl) {
+    // Dedicated client so readiness reflects Redis itself, not BullMQ's
+    // connection state; lazyConnect defers dialing until the first check.
+    readinessRedis = new Redis(infraConfig.redisUrl, { lazyConnect: true, maxRetriesPerRequest: 1 });
+    readinessRedis.on("error", () => {
+      // Swallow: the check reports failures; unhandled 'error' events would crash.
+    });
+    registerReadinessCheck("redis", async () => {
+      if (!readinessRedis) return false;
+      return (await readinessRedis.ping()) === "PONG";
+    });
+  }
+}
+
 async function main() {
+  registerReadiness();
+
   // Initialize driver registry (load from files and upsert to DB —
   // safe under multiple API instances, name+version is the unique key).
   await driver.driverRegistry.initialize();
@@ -76,7 +108,7 @@ async function main() {
   await registerReplayReconcileWorker();
   await recoverReplayWindows();
 
-  console.log("[api] HTTP + in-process workers started");
+  rootLogger.info("HTTP + in-process workers started");
 }
 
 async function shutdown() {
@@ -92,6 +124,7 @@ async function shutdown() {
   if (cleanupGraphDefinitionPublisher) await cleanupGraphDefinitionPublisher();
   if (cleanupEntityEventPublisher) await cleanupEntityEventPublisher();
   if (cleanupCommandBus) await cleanupCommandBus();
+  if (readinessRedis) readinessRedis.disconnect();
   const { createPrismaClient: getClient } = await import("@rw/db");
   await getClient("api").$disconnect();
 }
@@ -99,11 +132,11 @@ async function shutdown() {
 process.on("SIGINT", () => shutdown().then(() => process.exit(0)));
 process.on("SIGTERM", () => shutdown().then(() => process.exit(0)));
 process.on("uncaughtException", (err) => {
-  console.error("Uncaught exception:", err);
+  rootLogger.fatal({ err }, "uncaught exception");
   shutdown().then(() => process.exit(1));
 });
 
 main().catch((err) => {
-  console.error("Failed to start server:", err);
+  rootLogger.fatal({ err }, "failed to start server");
   shutdown().then(() => process.exit(1));
 });

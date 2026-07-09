@@ -11,6 +11,10 @@ import {
   type CommandResult,
 } from "@rw/runtime/command-subjects";
 import { commands as gatewayCommands } from "@rw/services/device/gateway/index";
+import { moduleLogger } from "./logger.js";
+import { registerReadinessCheck, unregisterReadinessCheck } from "./readiness.js";
+
+const log = moduleLogger("command-bus");
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -23,7 +27,7 @@ const TWO_MINUTES_NANOS = 2 * 60 * 1_000_000_000;
 export async function startCommandBus(): Promise<() => Promise<void>> {
   const servers = process.env.NATS_URL;
   if (!servers) {
-    console.log("[command-bus] NATS_URL not set, gateway commands over NATS disabled");
+    log.info("NATS_URL not set, gateway commands over NATS disabled");
     return async () => {};
   }
 
@@ -32,7 +36,7 @@ export async function startCommandBus(): Promise<() => Promise<void>> {
     name: process.env.NATS_CLIENT_NAME || "rw-api-commands",
     maxReconnectAttempts: -1,
   }).catch((err: unknown) => {
-    console.error("[command-bus] could not connect to NATS, gateway commands disabled", err);
+    log.error({ err }, "could not connect to NATS, gateway commands disabled");
     return null;
   });
   if (!nc) return async () => {};
@@ -41,7 +45,7 @@ export async function startCommandBus(): Promise<() => Promise<void>> {
   try {
     await ensureCommandStream(jsm);
   } catch (err) {
-    console.error("[command-bus] could not ensure JetStream stream, gateway commands disabled", err);
+    log.error({ err }, "could not ensure JetStream stream, gateway commands disabled");
     await nc.drain();
     return async () => {};
   }
@@ -52,7 +56,7 @@ export async function startCommandBus(): Promise<() => Promise<void>> {
     const subject = deriveGatewayCommandSubject(command.gatewayId);
     const envelope: CommandEnvelope = { id: command.id, command: command.command, payload: command.payload };
     js.publish(subject, encoder.encode(JSON.stringify(envelope)), { msgID: command.id }).catch((err: unknown) => {
-      console.error("[command-bus] command publish failed", { err, command });
+      log.error({ err, command }, "command publish failed");
     });
   });
 
@@ -62,9 +66,14 @@ export async function startCommandBus(): Promise<() => Promise<void>> {
   void consumeAcks(acks);
   void consumeResults(results);
 
-  console.log(`[command-bus] publishing commands + consuming ack/result on ${nc.getServer()}`);
+  log.info({ server: nc.getServer() }, "publishing commands + consuming ack/result");
+
+  // Non-critical: the app deliberately degrades without NATS, so this is
+  // reported in /ready but never flips readiness to 503.
+  registerReadinessCheck("nats", () => !nc.isClosed(), { critical: false });
 
   return async () => {
+    unregisterReadinessCheck("nats");
     gatewayCommands.setCommandSink(null);
     await nc.drain();
   };
@@ -75,7 +84,7 @@ async function consumeAcks(sub: ReturnType<NatsConnection["subscribe"]>): Promis
     const ack = parse<CommandAck>(message.data);
     if (!ack?.gatewayId || !ack?.commandId) continue;
     await gatewayCommands.ack(ack.gatewayId, ack.commandId).catch((err: unknown) => {
-      console.error("[command-bus] ack update failed", { err, ack });
+      log.error({ err, ack }, "ack update failed");
     });
   }
 }
@@ -91,7 +100,7 @@ async function consumeResults(sub: ReturnType<NatsConnection["subscribe"]>): Pro
         error: res.error,
       })
       .catch((err: unknown) => {
-        console.error("[command-bus] result update failed", { err, res });
+        log.error({ err, res }, "result update failed");
       });
   }
 }

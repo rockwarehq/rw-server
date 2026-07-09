@@ -97,7 +97,7 @@ declare module "fastify" {
 
 interface RequestLogger {
   debug: (msg: string) => void;
-  warn: (msg: string) => void;
+  warn: (objOrMsg: object | string, msg?: string) => void;
 }
 
 async function resolveIAM(authHeader: string, log?: RequestLogger): Promise<IAMContext> {
@@ -147,7 +147,11 @@ async function resolveAppIAM(token: string, log?: RequestLogger): Promise<IAMCon
     return { principal: Principal.UNKNOWN, validToken: false };
   }
 
-  void touchApiToken(validated.id).catch(() => {});
+  // Fire-and-forget by design, but never silently: a failing touch means
+  // last-used tracking is broken (or the DB is unhappy) and we want to know.
+  void touchApiToken(validated.id).catch((err) => {
+    log?.warn({ err }, "auth: failed to touch api token last-used timestamp");
+  });
 
   const iam: AppIAMContext = {
     principal: Principal.APP,

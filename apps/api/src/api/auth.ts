@@ -2,7 +2,7 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import * as auth from "../auth/index.js";
 import { errorSchema, successResponseSchema } from "./schemas.js";
-import { sensitiveRateLimit } from "../plugins/ratelimit.js";
+import { refreshRateLimit, sensitiveRateLimit } from "../plugins/ratelimit.js";
 
 const tokenResponseSchema = {
   type: "object",
@@ -171,6 +171,7 @@ export default async function authRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/refresh",
+    config: refreshRateLimit,
     schema: {
       tags: ["auth"],
       body: refreshBodySchema,
@@ -230,6 +231,7 @@ export default async function authRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/display/refresh",
+    config: refreshRateLimit,
     schema: {
       tags: ["auth"],
       body: refreshBodySchema,

@@ -62,3 +62,25 @@ export const healthResponseSchema = {
   },
   required: ["status"],
 } as const satisfies JSONSchema;
+
+// Readiness response schema (GET /ready)
+export const readinessResponseSchema = {
+  type: "object",
+  properties: {
+    status: { type: "string", enum: ["ready", "not_ready"] },
+    checks: {
+      type: "object",
+      additionalProperties: {
+        type: "object",
+        properties: {
+          ok: { type: "boolean" },
+          critical: { type: "boolean" },
+          latencyMs: { type: "number" },
+          error: { type: "string" },
+        },
+        required: ["ok", "critical", "latencyMs"],
+      },
+    },
+  },
+  required: ["status", "checks"],
+} as const satisfies JSONSchema;

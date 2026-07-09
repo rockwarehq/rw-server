@@ -17,7 +17,7 @@ const repoRoot = resolve(here, "../../..");
 const outPath = resolve(repoRoot, "openapi.json");
 
 async function generateOpenAPI() {
-  const { server } = createServer(serverConfig);
+  const { server } = createServer({ ...serverConfig, swagger: true, installShutdownHandlers: false });
   await server.ready();
 
   const spec = (server as unknown as { swagger: () => object }).swagger();
