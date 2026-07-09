@@ -3,7 +3,8 @@ import { Kvm } from "@nats-io/kv";
 import { connect } from "@nats-io/transport-node";
 import { CVG_BUCKET, CvgStore } from "@rw/livestore/store/cvg-store";
 import type { ValueEnvelope } from "@rw/livestore/types/index";
-import { moduleLogger } from "./logger.js";
+import { moduleLogger } from "../logger.js";
+import { natsServers } from "./util.js";
 
 const log = moduleLogger("graph-values");
 
@@ -15,14 +16,6 @@ const log = moduleLogger("graph-values");
 const READ_CHUNK = 50;
 
 let storePromise: Promise<CvgStore | null> | null = null;
-
-function natsServers(value: string): string | string[] {
-  const servers = value
-    .split(",")
-    .map((server) => server.trim())
-    .filter(Boolean);
-  return servers.length === 1 ? (servers[0] as string) : servers;
-}
 
 async function openStore(): Promise<CvgStore | null> {
   const servers = process.env.NATS_URL;

@@ -15,7 +15,7 @@ Entry point is `apps/api/src/main.ts` (heavily commented — read it first). Ord
 2. Driver registry initialization — loads driver definitions from files and upserts to the DB (safe under multiple instances; name+version is the unique key)
 3. **HTTP server starts first** (`src/server.ts`) so health checks and RPC respond while the rest registers
 4. Events bridge (`initEventsBridge("both")`) and metrics bridge — Redis pub/sub so SSE clients on *any* api machine see events published by workers or by other api machines
-5. Graph-definition publisher, entity-event publisher, command bus — the NATS/JetStream publishers (`src/graph-definition-publisher.ts`, `src/entity-event-publisher.ts`, `src/command-bus.ts`)
+5. Graph-definition publisher, entity-event publisher, command bus — the NATS/JetStream adapters under `src/nats/` (app-owned composition roots, see [ADR-0004](/internal/adrs/0004-app-owned-composition-roots))
 6. Producer-side queue inits (metric buckets, station detection) — `Queue` instances RPC handlers enqueue against; most consumers live in `apps/workers`
 7. In-process workers: `stale-gateway-check` (30s repeating), station-detect (slow/down, producer **and** consumer here), `replay-reconcile` + `recoverReplayWindows()` on boot
 
@@ -23,9 +23,11 @@ The header comment in `main.ts` is the authoritative list of what runs in-proces
 
 ## Server composition
 
-`src/server.ts` registers, in order: CORS → sensible → rate limit → swagger → **auth plugin** (populates `request.iam` via preHandler) → admin REST routes (`src/api/`) → edge routes (`src/edge.ts`, gateway protocol) → the oRPC handler mounted at `/rpc/*` with error interceptors.
+`src/server.ts` registers, in order: CORS (allowlist in production, derived from `APP_BASE_URL` + `CORS_ALLOWED_ORIGINS`) → helmet → sensible → rate limit → swagger (development only) → **auth plugin** (populates `request.iam` via preHandler) → admin REST routes (`src/api/`) → edge routes (`src/edge.ts`, gateway protocol) → the oRPC handler mounted at `/rpc/*` with error interceptors.
 
-Config lives in `src/config.ts` — env-driven; API listens on port 30000 by default (livestore 30100, docs 30200).
+Config lives in `src/config.ts` — one zod schema parsed at module load; a misconfigured process fails at boot with an aggregated error, and `DATABASE_URL`/`REDIS_URL`/`APP_BASE_URL`/`PROCESSOR_SHARED_SECRET` are required in production. API listens on port 30000 by default (livestore 30100, docs 30200).
+
+Probes: `GET /health` is static liveness (fly healthchecks); `GET /ready` runs registered dependency checks (DB and Redis critical, NATS reported only) and returns 200/503 with per-check detail.
 
 ## The two API styles
 
@@ -59,7 +61,8 @@ sequenceDiagram
 
 ## Conventions
 
-- **Service results, not exceptions**: services return `{ data }` or `{ error, code }`. RPC handlers unwrap and map codes (`NOT_FOUND`, `EXISTS`, `MISMATCH`, …) to `ORPCError` statuses. Unhandled throws hit the oRPC interceptor in `server.ts`, get logged, and return 500.
+- **Service results, not exceptions**: services return `{ data }` or `{ error, code }`. RPC handlers map codes to `ORPCError`s through the single shared mapper in `src/rpc/errors.ts` (`throwServiceError` / `unwrap`); divergent historical mappings are pinned as overrides — see [ADR-0003](/internal/adrs/0003-service-error-contract). Unhandled throws hit the oRPC interceptor in `server.ts`, get logged, and return 500.
+- **Database access**: writes always go through `@rw/services`; a short, named list of RPC routers may run complex read-only reporting queries against Prisma directly — see [ADR-0002](/internal/adrs/0002-database-access-boundary).
 - **Validation**: Zod for RPC inputs; JSON Schema for REST responses; AJV for driver-defined datasource/point config.
 - **Scoping**: handlers read `workspaceId`/`siteId` from `context.iam` and pass them into services explicitly — services never trust client-supplied scope.
 - **Permissions**: `hasPermission(userId, "resource:action", { workspaceId, siteId? })` from `@rw/auth` — check at the top of any mutating handler.

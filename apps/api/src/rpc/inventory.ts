@@ -3,6 +3,18 @@ import { ORPCError } from "@orpc/server";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import { material, inventory, product, materialLedger } from "@rw/services/inventory/index";
 import { storageConfig } from "../config.js";
+import { type CodeOverrides, throwServiceError, unwrap } from "./errors.js";
+
+// Historical mappings that predate the shared mapper — pinned because
+// observable error codes are API (@rockwarehq/rpc-client is published):
+// - MATERIAL_DELETED reads as absent like the other *_DELETED codes, but is
+//   not in the shared exact table (default would be BAD_REQUEST).
+// - NO_CURRENT_BLOB always fell through to the catch-all BAD_REQUEST in this
+//   router (shared default: CONFLICT).
+const inventoryOverrides: CodeOverrides = {
+  MATERIAL_DELETED: "NOT_FOUND",
+  NO_CURRENT_BLOB: "BAD_REQUEST",
+};
 
 // ============================================================================
 // Input Schemas - Inventory
@@ -94,24 +106,7 @@ export const inventoryGet = authRequired.input(idInputSchema).handler(async ({ i
     });
   }
 
-  const result = await inventory.getById(input.id);
-  if (!result) {
-    throw new ORPCError("NOT_FOUND", { message: "Inventory item not found" });
-  }
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "INVENTORY_ITEM_DELETED") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await inventory.getById(input.id), { notFoundMessage: "Inventory item not found" });
 });
 
 /**
@@ -125,21 +120,7 @@ export const inventoryGetByCycle = authRequired.input(cycleIdInputSchema).handle
     });
   }
 
-  const result = await inventory.getByCycle(input.cycleId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "CYCLE_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await inventory.getByCycle(input.cycleId));
 });
 
 // ============================================================================
@@ -157,21 +138,7 @@ export const materialCreate = authRequired.input(materialCreateInputSchema).hand
     });
   }
 
-  const result = await material.create(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SITE_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await material.create(input));
 });
 
 /**
@@ -199,24 +166,10 @@ export const materialGet = authRequired.input(idInputSchema).handler(async ({ in
     });
   }
 
-  const result = await material.getById(input.id);
-  if (!result) {
-    throw new ORPCError("NOT_FOUND", { message: "Material not found" });
-  }
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "MATERIAL_DELETED") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await material.getById(input.id), {
+    notFoundMessage: "Material not found",
+    overrides: inventoryOverrides,
+  });
 });
 
 /**
@@ -231,27 +184,7 @@ export const materialUpdate = authRequired.input(materialUpdateInputSchema).hand
   }
 
   const { id, ...updateData } = input;
-  const result = await material.update(id, updateData);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "MATERIAL_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "MATERIAL_DELETED") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await material.update(id, updateData), { overrides: inventoryOverrides });
 });
 
 /**
@@ -266,25 +199,7 @@ export const materialRemove = authRequired.input(idInputSchema).handler(async ({
   }
 
   const result = await material.remove(input.id);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "MATERIAL_NOT_FOUND" || code === "MATERIAL_DELETED") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "HAS_PRODUCTS") {
-      throw new ORPCError("CONFLICT", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error) throwServiceError(result, inventoryOverrides);
   return { success: true };
 });
 
@@ -402,15 +317,7 @@ export const productCreate = authRequired.input(productCreateInputSchema).handle
     throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
   }
 
-  const result = await product.create(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SITE_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  return unwrap(await product.create(input));
 });
 
 /**
@@ -434,18 +341,7 @@ export const productGet = authRequired.input(idInputSchema).handler(async ({ inp
     throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
   }
 
-  const result = await product.getById(input.id);
-  if (!result) {
-    throw new ORPCError("NOT_FOUND", { message: "Product not found" });
-  }
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "PRODUCT_DELETED") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  return unwrap(await product.getById(input.id), { notFoundMessage: "Product not found" });
 });
 
 /**
@@ -458,15 +354,7 @@ export const productUpdate = authRequired.input(productUpdateInputSchema).handle
   }
 
   const { id, ...updateData } = input;
-  const result = await product.update(id, updateData);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "PRODUCT_NOT_FOUND" || code === "PRODUCT_DELETED") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  return unwrap(await product.update(id, updateData), { overrides: inventoryOverrides });
 });
 
 /**
@@ -479,16 +367,7 @@ export const productRemove = authRequired.input(idInputSchema).handler(async ({ 
   }
 
   const result = await product.remove(input.id);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "PRODUCT_NOT_FOUND" || code === "PRODUCT_DELETED") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "HAS_JOB_PRODUCTS") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error) throwServiceError(result);
   return { success: true };
 });
 
@@ -505,18 +384,7 @@ export const productArchive = authRequired.input(idInputSchema).handler(async ({
     throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
   }
 
-  const result = await product.archive(input.id);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "PRODUCT_NOT_FOUND" || code === "PRODUCT_DELETED") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "ALREADY_ARCHIVED") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  return unwrap(await product.archive(input.id));
 });
 
 /**
@@ -528,18 +396,7 @@ export const productUnarchive = authRequired.input(idInputSchema).handler(async 
     throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
   }
 
-  const result = await product.unarchive(input.id);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "PRODUCT_NOT_FOUND" || code === "PRODUCT_DELETED") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "NOT_ARCHIVED") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  return unwrap(await product.unarchive(input.id));
 });
 
 /**
@@ -551,15 +408,7 @@ export const productDuplicate = authRequired.input(productDuplicateInputSchema).
     throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
   }
 
-  const result = await product.duplicate(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "PRODUCT_NOT_FOUND" || code === "PRODUCT_DELETED") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  return unwrap(await product.duplicate(input), { overrides: inventoryOverrides });
 });
 
 // ============================================================================
@@ -577,21 +426,7 @@ export const productAddMaterial = authRequired
       throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
     }
 
-    const result = await product.addMaterial(input);
-    if ("error" in result) {
-      const code = result.code as string;
-      if (code === "PRODUCT_NOT_FOUND" || code === "MATERIAL_NOT_FOUND") {
-        throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-      }
-      if (code === "PRODUCT_DELETED" || code === "MATERIAL_DELETED") {
-        throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-      }
-      if (code === "ALREADY_LINKED" || code === "SITE_MISMATCH") {
-        throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-      }
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
-    return result.data;
+    return unwrap(await product.addMaterial(input), { overrides: inventoryOverrides });
   });
 
 /**
@@ -605,15 +440,7 @@ export const productUpdateMaterial = authRequired
       throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
     }
 
-    const result = await product.updateMaterial(input);
-    if ("error" in result) {
-      const code = result.code as string;
-      if (code === "NOT_LINKED") {
-        throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-      }
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
-    return result.data;
+    return unwrap(await product.updateMaterial(input), { overrides: inventoryOverrides });
   });
 
 /**
@@ -632,16 +459,7 @@ export const productRemoveMaterial = authRequired
       input.materialId,
       input.replaceActiveWithProductMaterialId,
     );
-    if ("error" in result) {
-      const code = result.code as string;
-      if (code === "NOT_LINKED") {
-        throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-      }
-      if (code === "NEEDS_ACTIVE_SWAP" || code === "REPLACEMENT_NOT_IN_GROUP" || code === "REPLACEMENT_IS_SELF") {
-        throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-      }
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
+    if (result.error) throwServiceError(result);
     return { success: true };
   });
 
@@ -654,15 +472,7 @@ export const productListMaterials = authRequired.input(productIdInputSchema).han
     throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
   }
 
-  const result = await product.listMaterials(input.productId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "PRODUCT_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  return unwrap(await product.listMaterials(input.productId));
 });
 
 // ============================================================================
@@ -680,21 +490,7 @@ export const productAddPicture = authRequired
       throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
     }
 
-    const result = await product.addPicture(input);
-    if ("error" in result) {
-      const code = result.code as string;
-      if (code === "PRODUCT_NOT_FOUND" || code === "PRODUCT_DELETED") {
-        throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-      }
-      if (code === "MAX_PICTURES_REACHED") {
-        throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-      }
-      if (code === "STORAGE_NOT_CONFIGURED" || code === "INVALID_UPLOAD") {
-        throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-      }
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
-    return result.data;
+    return unwrap(await product.addPicture(input));
   });
 
 /**
@@ -709,13 +505,7 @@ export const productRemovePicture = authRequired
     }
 
     const result = await product.removePicture(input.productId, input.pictureId);
-    if ("error" in result) {
-      const code = result.code as string;
-      if (code === "PICTURE_NOT_FOUND" || code === "PICTURE_MISMATCH") {
-        throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-      }
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
+    if (result.error) throwServiceError(result);
     return { success: true };
   });
 
@@ -731,16 +521,7 @@ export const productSetPrimaryPicture = authRequired
     }
 
     const result = await product.setPrimaryPicture(input.productId, input.pictureId);
-    if ("error" in result) {
-      const code = result.code as string;
-      if (code === "PICTURE_NOT_FOUND" || code === "PICTURE_MISMATCH") {
-        throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-      }
-      if (code === "ALREADY_PRIMARY") {
-        throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-      }
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
+    if (result.error) throwServiceError(result);
     return { success: true };
   });
 
@@ -753,15 +534,7 @@ export const productListPictures = authRequired.input(productIdInputSchema).hand
     throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
   }
 
-  const result = await product.listPictures(input.productId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "PRODUCT_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  return unwrap(await product.listPictures(input.productId));
 });
 
 // ============================================================================
@@ -813,18 +586,7 @@ export const productCreateAltGroup = authRequired
       throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
     }
 
-    const result = await product.createAltGroup(input.productMaterialId);
-    if ("error" in result) {
-      const code = result.code as string;
-      if (code === "PRODUCT_MATERIAL_NOT_FOUND") {
-        throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-      }
-      if (code === "ALREADY_IN_GROUP") {
-        throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-      }
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
-    return result.data;
+    return unwrap(await product.createAltGroup(input.productMaterialId));
   });
 
 /**
@@ -840,18 +602,9 @@ export const productAddMaterialToAltGroup = authRequired
       throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
     }
 
-    const result = await product.addMaterialToAltGroup(input.altGroupId, input.materialId);
-    if ("error" in result) {
-      const code = result.code as string;
-      if (code === "ALT_GROUP_NOT_FOUND" || code === "MATERIAL_NOT_FOUND" || code === "MATERIAL_DELETED") {
-        throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-      }
-      if (code === "SITE_MISMATCH" || code === "IN_OTHER_GROUP") {
-        throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-      }
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
-    return result.data;
+    return unwrap(await product.addMaterialToAltGroup(input.altGroupId, input.materialId), {
+      overrides: inventoryOverrides,
+    });
   });
 
 /**
@@ -865,18 +618,7 @@ export const productUpdateAltGroupLabel = authRequired
       throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
     }
 
-    const result = await product.updateAltGroupLabel(input.altGroupId, input.label);
-    if ("error" in result) {
-      const code = result.code as string;
-      if (code === "ALT_GROUP_NOT_FOUND") {
-        throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-      }
-      if (code === "LABEL_CONFLICT") {
-        throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-      }
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
-    return result.data;
+    return unwrap(await product.updateAltGroupLabel(input.altGroupId, input.label));
   });
 
 /**
@@ -896,15 +638,7 @@ export const productSetAltGroupActive = userOrDisplayRequired
       throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
     }
 
-    const result = await product.setAltGroupActive(input.altGroupId, input.productMaterialId);
-    if ("error" in result) {
-      const code = result.code as string;
-      if (code === "ALT_GROUP_NOT_FOUND" || code === "NOT_IN_GROUP") {
-        throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-      }
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
-    return result.data;
+    return unwrap(await product.setAltGroupActive(input.altGroupId, input.productMaterialId));
   });
 
 /**
@@ -922,18 +656,7 @@ export const productRemoveFromAltGroup = authRequired
       throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
     }
 
-    const result = await product.removeFromAltGroup(input.productMaterialId, input.replaceActiveWithProductMaterialId);
-    if ("error" in result) {
-      const code = result.code as string;
-      if (code === "PRODUCT_MATERIAL_NOT_FOUND" || code === "NOT_IN_GROUP") {
-        throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-      }
-      if (code === "NEEDS_ACTIVE_SWAP" || code === "REPLACEMENT_NOT_IN_GROUP" || code === "REPLACEMENT_IS_SELF") {
-        throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-      }
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
-    return result.data;
+    return unwrap(await product.removeFromAltGroup(input.productMaterialId, input.replaceActiveWithProductMaterialId));
   });
 
 /**
@@ -946,15 +669,7 @@ export const productDeleteAltGroup = authRequired.input(altGroupIdInputSchema).h
     throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
   }
 
-  const result = await product.deleteAltGroup(input.altGroupId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "ALT_GROUP_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  return unwrap(await product.deleteAltGroup(input.altGroupId));
 });
 
 // ============================================================================
@@ -1033,17 +748,10 @@ export const materialLedgerCreate = authRequired
       note: input.note,
       performedByUserId: "id" in context.iam ? context.iam.id : null,
     });
-    if ("error" in result) {
-      const code = result.code as string;
-      if (code === "MATERIAL_NOT_FOUND") {
-        throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-      }
-      if (code === "SITE_MISMATCH" || code === "INVALID_QUANTITY" || code === "INVALID_SIGN") {
-        throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-      }
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
-    return result.data;
+    // Ledger adjustments validate the material/site pairing as part of the
+    // request payload, so SITE_MISMATCH has always been BAD_REQUEST here
+    // (unlike the rest of this router, where it is a CONFLICT).
+    return unwrap(result, { overrides: { SITE_MISMATCH: "BAD_REQUEST" } });
   });
 
 export const materialLedgerList = authRequired

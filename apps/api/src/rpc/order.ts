@@ -1,7 +1,11 @@
 import { z } from "zod";
-import { ORPCError } from "@orpc/server";
 import { authRequired } from "./middleware.js";
 import * as orderService from "@rw/services/order/order";
+import { type CodeOverrides, throwServiceError, unwrap } from "./errors.js";
+
+// This router historically mapped HAS_ALLOCATIONS to BAD_REQUEST (the shared
+// default for HAS_* codes is CONFLICT). Pinned — observable codes are API.
+const lineItemOverrides: CodeOverrides = { HAS_ALLOCATIONS: "BAD_REQUEST" };
 
 // ============================================================================
 // Input Schemas
@@ -85,18 +89,10 @@ const nextNumberInputSchema = z.object({
 // ============================================================================
 
 export const create = authRequired.input(createInputSchema).handler(async ({ input }) => {
-  const result = await orderService.create(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SITE_NOT_FOUND" || code === "CUSTOMER_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "DUPLICATE_ORDER_NUMBER") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  // DUPLICATE_PRODUCT here means duplicate products within the create payload
+  // and historically fell through to BAD_REQUEST (unlike addLineItem, where the
+  // same code is a CONFLICT with existing state).
+  return unwrap(await orderService.create(input), { overrides: { DUPLICATE_PRODUCT: "BAD_REQUEST" } });
 });
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input }) => {
@@ -104,60 +100,22 @@ export const list = authRequired.input(listInputSchema).handler(async ({ input }
 });
 
 export const get = authRequired.input(idInputSchema).handler(async ({ input }) => {
-  const result = await orderService.get(input.id);
-  if ("error" in result) {
-    throw new ORPCError("NOT_FOUND", { message: result.error as string });
-  }
-  return result.data;
+  return unwrap(await orderService.get(input.id));
 });
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input }) => {
   const { id, ...updateData } = input;
-  const result = await orderService.update(id, updateData);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "ORDER_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "DUPLICATE_ORDER_NUMBER") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    if (code === "NOT_EDITABLE") {
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  return unwrap(await orderService.update(id, updateData));
 });
 
 export const remove = authRequired.input(idInputSchema).handler(async ({ input }) => {
   const result = await orderService.remove(input.id);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "ORDER_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "NOT_DELETABLE") {
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error) throwServiceError(result);
   return { success: true };
 });
 
 export const transitionStatus = authRequired.input(transitionStatusInputSchema).handler(async ({ input }) => {
-  const result = await orderService.transitionStatus(input.id, input.status);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "ORDER_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "INVALID_TRANSITION") {
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  return unwrap(await orderService.transitionStatus(input.id, input.status));
 });
 
 export const addLineItem = authRequired.input(addLineItemInputSchema).handler(async ({ input }) => {
@@ -165,44 +123,17 @@ export const addLineItem = authRequired.input(addLineItemInputSchema).handler(as
     productId: input.productId,
     targetQuantity: input.targetQuantity,
   });
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "ORDER_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "DUPLICATE_PRODUCT") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    if (code === "HAS_ALLOCATIONS") {
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  return unwrap(result, { overrides: lineItemOverrides });
 });
 
 export const updateLineItem = authRequired.input(updateLineItemInputSchema).handler(async ({ input }) => {
   const { id, ...updateData } = input;
-  const result = await orderService.updateLineItem(id, updateData);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "HAS_ALLOCATIONS") {
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("NOT_FOUND", { message: result.error as string });
-  }
-  return result.data;
+  return unwrap(await orderService.updateLineItem(id, updateData), { overrides: lineItemOverrides });
 });
 
 export const removeLineItem = authRequired.input(removeLineItemInputSchema).handler(async ({ input }) => {
   const result = await orderService.removeLineItem(input.id);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "HAS_ALLOCATIONS") {
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("NOT_FOUND", { message: result.error as string });
-  }
+  if (result.error) throwServiceError(result, lineItemOverrides);
   return { success: true };
 });
 

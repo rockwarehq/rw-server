@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { ORPCError } from "@orpc/server";
 import { authRequired } from "./middleware.js";
 import { role } from "../services/employee/index.js";
+import { throwServiceError } from "./errors.js";
 
 // ============================================================================
 // Input Schemas
@@ -44,17 +44,12 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
 export const update = authRequired.input(updateInputSchema).handler(async ({ input }) => {
   const { id, ...data } = input;
   const result = await role.update(id, data);
-  if ("error" in result) {
-    throw new ORPCError("NOT_FOUND", { message: result.error });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
 export const remove = authRequired.input(idInputSchema).handler(async ({ input }) => {
   const result = await role.remove(input.id);
-  if ("error" in result) {
-    const code = result.code === "CONFLICT" ? "CONFLICT" : "NOT_FOUND";
-    throw new ORPCError(code, { message: result.error });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });

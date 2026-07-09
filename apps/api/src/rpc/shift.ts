@@ -3,6 +3,21 @@ import { ORPCError } from "@orpc/server";
 import { Principal } from "../auth/index.js";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import { shift } from "@rw/services/facility/index";
+import { type CodeOverrides, throwServiceError, unwrap } from "./errors.js";
+
+// Pinned historical mappings (observable error codes are API — see errors.ts).
+// The assignment procedures fell through to BAD_REQUEST for definition-related
+// codes and used CONFLICT for PATTERN_ALREADY_ASSIGNED before the shared mapper
+// existed; mapServiceCode would return NOT_FOUND / CONFLICT / BAD_REQUEST
+// respectively.
+const ASSIGNMENT_OVERRIDES: CodeOverrides = {
+  SHIFT_DEFINITION_NOT_FOUND: "BAD_REQUEST",
+  DEFINITION_PATTERN_MISMATCH: "BAD_REQUEST",
+};
+const ASSIGNMENT_CREATE_OVERRIDES: CodeOverrides = {
+  ...ASSIGNMENT_OVERRIDES,
+  PATTERN_ALREADY_ASSIGNED: "CONFLICT",
+};
 
 // ============================================================================
 // Current Shift / Business Date
@@ -19,14 +34,7 @@ export const current = userOrDisplayRequired.input(currentInputSchema).handler(a
   }
 
   const result = await shift.current.getCurrentShift(input.siteId, input.workCenterId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SITE_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  return unwrap(result);
 });
 
 // ============================================================================
@@ -130,13 +138,7 @@ const assignmentListInputSchema = z.object({
 
 export const patternCreate = authRequired.input(patternCreateInputSchema).handler(async ({ input }) => {
   const result = await shift.pattern.create(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SITE_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -146,52 +148,25 @@ export const patternList = authRequired.input(patternListInputSchema).handler(as
 
 export const patternGet = authRequired.input(idInputSchema).handler(async ({ input }) => {
   const result = await shift.pattern.getById(input.id);
-  if (!result) {
-    throw new ORPCError("NOT_FOUND", { message: "Shift pattern not found" });
-  }
-  return result.data;
+  return unwrap(result, { notFoundMessage: "Shift pattern not found" });
 });
 
 export const patternUpdate = authRequired.input(patternUpdateInputSchema).handler(async ({ input }) => {
   const { id, ...updateData } = input;
   const result = await shift.pattern.update(id, updateData);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SHIFT_PATTERN_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "PATTERN_ASSIGNED") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
 export const patternDelete = authRequired.input(idInputSchema).handler(async ({ input }) => {
   const result = await shift.pattern.remove(input.id);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SHIFT_PATTERN_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "PATTERN_ASSIGNED") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
 
 export const patternDuplicate = authRequired.input(duplicateInputSchema).handler(async ({ input }) => {
   const result = await shift.pattern.duplicate(input.id, input.name);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SHIFT_PATTERN_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -201,16 +176,7 @@ export const patternDuplicate = authRequired.input(duplicateInputSchema).handler
 
 export const definitionCreate = authRequired.input(definitionCreateInputSchema).handler(async ({ input }) => {
   const result = await shift.definition.create(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SHIFT_PATTERN_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "PATTERN_ASSIGNED" || code === "DUPLICATE_SORT_ORDER") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -220,40 +186,19 @@ export const definitionList = authRequired.input(definitionListInputSchema).hand
 
 export const definitionGet = authRequired.input(idInputSchema).handler(async ({ input }) => {
   const result = await shift.definition.getById(input.id);
-  if (!result) {
-    throw new ORPCError("NOT_FOUND", { message: "Shift definition not found" });
-  }
-  return result.data;
+  return unwrap(result, { notFoundMessage: "Shift definition not found" });
 });
 
 export const definitionUpdate = authRequired.input(definitionUpdateInputSchema).handler(async ({ input }) => {
   const { id, ...updateData } = input;
   const result = await shift.definition.update(id, updateData);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SHIFT_DEFINITION_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "PATTERN_ASSIGNED" || code === "DUPLICATE_SORT_ORDER") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
 export const definitionDelete = authRequired.input(idInputSchema).handler(async ({ input }) => {
   const result = await shift.definition.remove(input.id);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SHIFT_DEFINITION_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "PATTERN_ASSIGNED") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
 
@@ -263,16 +208,7 @@ export const definitionDelete = authRequired.input(idInputSchema).handler(async 
 
 export const assignmentCreate = authRequired.input(assignmentCreateInputSchema).handler(async ({ input }) => {
   const result = await shift.assignment.create(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SHIFT_PATTERN_NOT_FOUND" || code === "SITE_NOT_FOUND" || code === "WORKCENTER_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "PATTERN_ALREADY_ASSIGNED" || code === "SITE_MISMATCH") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result, ASSIGNMENT_CREATE_OVERRIDES);
   return result.data;
 });
 
@@ -282,33 +218,18 @@ export const assignmentList = authRequired.input(assignmentListInputSchema).hand
 
 export const assignmentGet = authRequired.input(idInputSchema).handler(async ({ input }) => {
   const result = await shift.assignment.getById(input.id);
-  if (!result) {
-    throw new ORPCError("NOT_FOUND", { message: "Shift assignment not found" });
-  }
-  return result.data;
+  return unwrap(result, { notFoundMessage: "Shift assignment not found" });
 });
 
 export const assignmentUpdate = authRequired.input(assignmentUpdateInputSchema).handler(async ({ input }) => {
   const { id, ...updateData } = input;
   const result = await shift.assignment.update(id, updateData);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SHIFT_ASSIGNMENT_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result, ASSIGNMENT_OVERRIDES);
   return result.data;
 });
 
 export const assignmentDelete = authRequired.input(idInputSchema).handler(async ({ input }) => {
   const result = await shift.assignment.remove(input.id);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SHIFT_ASSIGNMENT_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });

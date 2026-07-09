@@ -1,9 +1,16 @@
 import { z } from "zod";
-import { ORPCError } from "@orpc/server";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import * as dispositionService from "@rw/services/inventory/disposition";
 import * as dispositionReasonService from "@rw/services/inventory/disposition-reason";
 import * as dispositionLogService from "@rw/services/inventory/disposition-log";
+import { type CodeOverrides, throwServiceError, unwrap } from "./errors.js";
+
+// The log handlers historically mapped DISPOSITION_REASON_NOT_LINKED to
+// CONFLICT (only the bare NOT_LINKED code is in the shared exact table, so the
+// default would be BAD_REQUEST). Pinned — observable error codes are API.
+const dispositionLogOverrides: CodeOverrides = {
+  DISPOSITION_REASON_NOT_LINKED: "CONFLICT",
+};
 
 // ============================================================================
 // ItemDisposition Input Schemas
@@ -117,18 +124,7 @@ const logListInputSchema = z.object({
 // ============================================================================
 
 export const dispositionCreate = authRequired.input(dispositionCreateInputSchema).handler(async ({ input }) => {
-  const result = await dispositionService.create(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SITE_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "DUPLICATE_NAME") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  return unwrap(await dispositionService.create(input));
 });
 
 export const dispositionList = userOrDisplayRequired.input(dispositionListInputSchema).handler(async ({ input }) => {
@@ -136,41 +132,17 @@ export const dispositionList = userOrDisplayRequired.input(dispositionListInputS
 });
 
 export const dispositionGet = authRequired.input(idInputSchema).handler(async ({ input }) => {
-  const result = await dispositionService.getById(input.id);
-  if (!result) {
-    throw new ORPCError("NOT_FOUND", { message: "Disposition not found" });
-  }
-  return result.data;
+  return unwrap(await dispositionService.getById(input.id), { notFoundMessage: "Disposition not found" });
 });
 
 export const dispositionUpdate = authRequired.input(dispositionUpdateInputSchema).handler(async ({ input }) => {
   const { id, ...updateData } = input;
-  const result = await dispositionService.update(id, updateData);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "DISPOSITION_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "DUPLICATE_NAME") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  return unwrap(await dispositionService.update(id, updateData));
 });
 
 export const dispositionDelete = authRequired.input(idInputSchema).handler(async ({ input }) => {
   const result = await dispositionService.remove(input.id);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "DISPOSITION_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "HAS_REASONS" || code === "HAS_LOGS") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error) throwServiceError(result);
   return { success: true };
 });
 
@@ -180,16 +152,7 @@ export const dispositionDelete = authRequired.input(idInputSchema).handler(async
 
 export const reasonCreate = authRequired.input(reasonCreateInputSchema).handler(async ({ input }) => {
   const result = await dispositionReasonService.create(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SITE_NOT_FOUND" || code === "DISPOSITION_NOT_FOUND" || code === "PROCESS_TYPE_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "DUPLICATE_NAME" || code === "SITE_MISMATCH") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if ("error" in result && result.error) throwServiceError(result);
   return result.data;
 });
 
@@ -198,45 +161,21 @@ export const reasonList = userOrDisplayRequired.input(reasonListInputSchema).han
 });
 
 export const reasonGet = authRequired.input(idInputSchema).handler(async ({ input }) => {
-  const result = await dispositionReasonService.getById(input.id);
-  if (!result) {
-    throw new ORPCError("NOT_FOUND", { message: "Disposition reason not found" });
-  }
-  return result.data;
+  return unwrap(await dispositionReasonService.getById(input.id), {
+    notFoundMessage: "Disposition reason not found",
+  });
 });
 
 export const reasonUpdate = authRequired.input(reasonUpdateInputSchema).handler(async ({ input }) => {
   const { id, ...updateData } = input;
   const result = await dispositionReasonService.update(id, updateData);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (
-      code === "DISPOSITION_REASON_NOT_FOUND" ||
-      code === "DISPOSITION_NOT_FOUND" ||
-      code === "PROCESS_TYPE_NOT_FOUND"
-    ) {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "DUPLICATE_NAME" || code === "SITE_MISMATCH") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if ("error" in result && result.error) throwServiceError(result);
   return result.data;
 });
 
 export const reasonDelete = authRequired.input(idInputSchema).handler(async ({ input }) => {
   const result = await dispositionReasonService.remove(input.id);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "DISPOSITION_REASON_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "HAS_LOGS") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error) throwServiceError(result);
   return { success: true };
 });
 
@@ -246,43 +185,13 @@ export const reasonDelete = authRequired.input(idInputSchema).handler(async ({ i
 
 export const logRecord = userOrDisplayRequired.input(logRecordInputSchema).handler(async ({ input }) => {
   const result = await dispositionLogService.record(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (
-      code === "STATION_NOT_FOUND" ||
-      code === "PRODUCT_NOT_FOUND" ||
-      code === "JOB_PRODUCT_NOT_FOUND" ||
-      code === "TOOL_CAVITY_NOT_FOUND" ||
-      code === "DISPOSITION_NOT_FOUND" ||
-      code === "DISPOSITION_REASON_NOT_FOUND"
-    ) {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "SITE_MISMATCH" || code === "NO_CURRENT_BLOB" || code === "DISPOSITION_REASON_NOT_LINKED") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if ("error" in result && result.error) throwServiceError(result, dispositionLogOverrides);
   return result.data;
 });
 
 export const logCreate = authRequired.input(logCreateInputSchema).handler(async ({ input }) => {
   const result = await dispositionLogService.create(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (
-      code === "STATION_NOT_FOUND" ||
-      code === "DISPOSITION_NOT_FOUND" ||
-      code === "DISPOSITION_REASON_NOT_FOUND" ||
-      code === "PRODUCT_BLOB_NOT_FOUND"
-    ) {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "SITE_MISMATCH" || code === "DISPOSITION_REASON_NOT_LINKED") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if ("error" in result && result.error) throwServiceError(result, dispositionLogOverrides);
   return result.data;
 });
 
@@ -291,41 +200,18 @@ export const logList = userOrDisplayRequired.input(logListInputSchema).handler(a
 });
 
 export const logGet = authRequired.input(idInputSchema).handler(async ({ input }) => {
-  const result = await dispositionLogService.getById(input.id);
-  if (!result) {
-    throw new ORPCError("NOT_FOUND", { message: "Disposition log not found" });
-  }
-  return result.data;
+  return unwrap(await dispositionLogService.getById(input.id), { notFoundMessage: "Disposition log not found" });
 });
 
 export const logUpdate = authRequired.input(logUpdateInputSchema).handler(async ({ input }) => {
   const { id, ...updateData } = input;
   const result = await dispositionLogService.update(id, updateData);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (
-      code === "DISPOSITION_LOG_NOT_FOUND" ||
-      code === "DISPOSITION_NOT_FOUND" ||
-      code === "DISPOSITION_REASON_NOT_FOUND"
-    ) {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "SITE_MISMATCH" || code === "DISPOSITION_REASON_NOT_LINKED") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if ("error" in result && result.error) throwServiceError(result, dispositionLogOverrides);
   return result.data;
 });
 
 export const logDelete = authRequired.input(idInputSchema).handler(async ({ input }) => {
   const result = await dispositionLogService.remove(input.id);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "DISPOSITION_LOG_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error) throwServiceError(result);
   return { success: true };
 });

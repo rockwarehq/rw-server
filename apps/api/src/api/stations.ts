@@ -145,7 +145,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
         return reply.status(401).send({ error: "No workspace context" });
       }
       if (!userId || !(await hasPermission(userId, "facility:write", { workspaceId, siteId: request.body.siteId }))) {
-        return reply.status(403).send({ error: "forbidden", required: "facility:write" });
+        return reply.status(403).send({ error: "forbidden" });
       }
 
       const result = await station.create(request.body);
@@ -182,7 +182,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
       if (!userId) return reply.status(401).send({ error: "Unauthorized" });
       const access = await getAccessibleSites(userId, "facility:read", workspaceId);
       if (request.query.siteId && !access.all && !access.siteIds.includes(request.query.siteId)) {
-        return reply.status(403).send({ error: "forbidden", required: "facility:read" });
+        return reply.status(403).send({ error: "forbidden" });
       }
 
       return station.list({
@@ -224,7 +224,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
       }
       const userId = request.iam?.id;
       if (!userId || !(await hasPermission(userId, "facility:read", { workspaceId, siteId: result.data.siteId }))) {
-        return reply.status(403).send({ error: "forbidden", required: "facility:read" });
+        return reply.status(403).send({ error: "forbidden" });
       }
       return result.data;
     },
@@ -259,7 +259,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
       const existing = await station.getById(request.params.id, workspaceId);
       if (!existing || "error" in existing) return reply.status(404).send({ error: "Station not found" });
       if (!userId || !(await hasPermission(userId, "facility:write", { workspaceId, siteId: existing.data.siteId }))) {
-        return reply.status(403).send({ error: "forbidden", required: "facility:write" });
+        return reply.status(403).send({ error: "forbidden" });
       }
 
       const result = await station.update(request.params.id, request.body, workspaceId);
@@ -300,7 +300,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
       const existing = await station.getById(request.params.id, workspaceId);
       if (!existing || "error" in existing) return reply.status(404).send({ error: "Station not found" });
       if (!userId || !(await hasPermission(userId, "facility:write", { workspaceId, siteId: existing.data.siteId }))) {
-        return reply.status(403).send({ error: "forbidden", required: "facility:write" });
+        return reply.status(403).send({ error: "forbidden" });
       }
 
       const result = await station.move(request.params.id, request.body.workcenterId, workspaceId);
@@ -340,7 +340,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
       const existing = await station.getById(request.params.id, workspaceId);
       if (!existing || "error" in existing) return reply.status(404).send({ error: "Station not found" });
       if (!userId || !(await hasPermission(userId, "facility:admin", { workspaceId, siteId: existing.data.siteId }))) {
-        return reply.status(403).send({ error: "forbidden", required: "facility:admin" });
+        return reply.status(403).send({ error: "forbidden" });
       }
 
       const result = await station.remove(request.params.id, workspaceId);

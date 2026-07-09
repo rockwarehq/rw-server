@@ -2,6 +2,19 @@ import { z } from "zod";
 import { ORPCError } from "@orpc/server";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import { tool, job } from "@rw/services/job/index";
+import { type CodeOverrides, throwServiceError, unwrap } from "./errors.js";
+
+// Historical mappings that predate the shared mapper — pinned because
+// observable error codes are API (@rockwarehq/rpc-client is published):
+// - NO_CURRENT_BLOB fell through to the catch-all BAD_REQUEST in this router
+//   (shared default: CONFLICT).
+// - The old handlers checked for HAS_JOB_ITEMS, a code the services never
+//   emit; the actual HAS_JOB_PRODUCTS therefore always fell through to
+//   BAD_REQUEST (shared default: CONFLICT).
+const jobOverrides: CodeOverrides = {
+  NO_CURRENT_BLOB: "BAD_REQUEST",
+  HAS_JOB_PRODUCTS: "BAD_REQUEST",
+};
 
 // ============================================================================
 // Input Schemas - Tool CRUD
@@ -155,21 +168,7 @@ export const toolCreate = authRequired.input(toolCreateInputSchema).handler(asyn
     });
   }
 
-  const result = await tool.create(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SITE_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await tool.create(input));
 });
 
 /**
@@ -197,24 +196,7 @@ export const toolGet = authRequired.input(toolIdInputSchema).handler(async ({ in
     });
   }
 
-  const result = await tool.getById(input.id);
-  if (!result) {
-    throw new ORPCError("NOT_FOUND", { message: "Tool not found" });
-  }
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "TOOL_DELETED") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await tool.getById(input.id), { notFoundMessage: "Tool not found" });
 });
 
 /**
@@ -229,21 +211,7 @@ export const toolUpdate = authRequired.input(toolUpdateInputSchema).handler(asyn
   }
 
   const { id, ...updateData } = input;
-  const result = await tool.update(id, updateData);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "TOOL_NOT_FOUND" || code === "TOOL_DELETED") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await tool.update(id, updateData), { overrides: jobOverrides });
 });
 
 /**
@@ -258,25 +226,7 @@ export const toolRemove = authRequired.input(toolIdInputSchema).handler(async ({
   }
 
   const result = await tool.remove(input.id);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "TOOL_NOT_FOUND" || code === "TOOL_DELETED") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "HAS_JOBS" || code === "HAS_JOB_ITEMS") {
-      throw new ORPCError("CONFLICT", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error) throwServiceError(result, jobOverrides);
   return { success: true };
 });
 
@@ -295,21 +245,7 @@ export const toolAddCavity = authRequired.input(addCavityInputSchema).handler(as
     });
   }
 
-  const result = await tool.addCavity(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "TOOL_NOT_FOUND" || code === "TOOL_DELETED") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await tool.addCavity(input));
 });
 
 /**
@@ -324,21 +260,7 @@ export const toolUpdateCavity = authRequired.input(updateCavityInputSchema).hand
   }
 
   const { cavityId, ...updateData } = input;
-  const result = await tool.updateCavity(cavityId, updateData);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "CAVITY_NOT_FOUND" || code === "CAVITY_DELETED" || code === "TOOL_DELETED") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await tool.updateCavity(cavityId, updateData), { overrides: jobOverrides });
 });
 
 /**
@@ -353,25 +275,7 @@ export const toolRemoveCavity = authRequired.input(cavityIdInputSchema).handler(
   }
 
   const result = await tool.removeCavity(input.cavityId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "CAVITY_NOT_FOUND" || code === "CAVITY_DELETED") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "HAS_JOB_ITEMS") {
-      throw new ORPCError("CONFLICT", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error) throwServiceError(result, jobOverrides);
   return { success: true };
 });
 
@@ -386,21 +290,7 @@ export const toolListCavities = authRequired.input(listCavitiesInputSchema).hand
     });
   }
 
-  const result = await tool.listCavities(input.toolId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "TOOL_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await tool.listCavities(input.toolId));
 });
 
 // ============================================================================
@@ -418,21 +308,7 @@ export const create = authRequired.input(jobCreateInputSchema).handler(async ({ 
     });
   }
 
-  const result = await job.create(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SITE_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await job.create(input));
 });
 
 /**
@@ -460,24 +336,7 @@ export const get = userOrDisplayRequired.input(jobIdInputSchema).handler(async (
     });
   }
 
-  const result = await job.getById(input.id);
-  if (!result) {
-    throw new ORPCError("NOT_FOUND", { message: "Job not found" });
-  }
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "JOB_DELETED") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await job.getById(input.id), { notFoundMessage: "Job not found" });
 });
 
 /**
@@ -492,21 +351,7 @@ export const update = authRequired.input(jobUpdateInputSchema).handler(async ({ 
   }
 
   const { id, ...updateData } = input;
-  const result = await job.update(id, updateData);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "JOB_NOT_FOUND" || code === "JOB_DELETED") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await job.update(id, updateData), { overrides: jobOverrides });
 });
 
 /**
@@ -521,25 +366,7 @@ export const remove = authRequired.input(jobIdInputSchema).handler(async ({ inpu
   }
 
   const result = await job.remove(input.id);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "JOB_NOT_FOUND" || code === "JOB_DELETED") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "HAS_ORDERS") {
-      throw new ORPCError("CONFLICT", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error) throwServiceError(result);
   return { success: true };
 });
 
@@ -558,27 +385,7 @@ export const addTool = authRequired.input(addToolInputSchema).handler(async ({ i
     });
   }
 
-  const result = await job.addTool(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "JOB_NOT_FOUND" || code === "JOB_DELETED" || code === "TOOL_NOT_FOUND" || code === "TOOL_DELETED") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "SITE_MISMATCH" || code === "ALREADY_LINKED") {
-      throw new ORPCError("CONFLICT", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await job.addTool(input));
 });
 
 /**
@@ -593,19 +400,7 @@ export const removeTool = authRequired.input(removeToolInputSchema).handler(asyn
   }
 
   const result = await job.removeTool(input.jobId, input.toolId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "NOT_LINKED" || code === "ALREADY_DELETED") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error) throwServiceError(result);
   return { success: true };
 });
 
@@ -620,21 +415,7 @@ export const listTools = userOrDisplayRequired.input(listToolsInputSchema).handl
     });
   }
 
-  const result = await job.listTools(input.jobId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "JOB_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await job.listTools(input.jobId));
 });
 
 // ============================================================================
@@ -652,36 +433,7 @@ export const addItem = authRequired.input(addItemInputSchema).handler(async ({ i
     });
   }
 
-  const result = await job.addItem(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (
-      code === "JOB_NOT_FOUND" ||
-      code === "JOB_DELETED" ||
-      code === "PRODUCT_NOT_FOUND" ||
-      code === "PRODUCT_DELETED" ||
-      code === "TOOL_NOT_FOUND" ||
-      code === "TOOL_DELETED" ||
-      code === "CAVITY_NOT_FOUND" ||
-      code === "CAVITY_DELETED"
-    ) {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "SITE_MISMATCH" || code === "TOOL_SITE_MISMATCH") {
-      throw new ORPCError("CONFLICT", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await job.addItem(input));
 });
 
 /**
@@ -696,35 +448,7 @@ export const updateItem = authRequired.input(updateItemInputSchema).handler(asyn
   }
 
   const { itemId, ...updateData } = input;
-  const result = await job.updateItem(itemId, updateData);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (
-      code === "ITEM_NOT_FOUND" ||
-      code === "ITEM_DELETED" ||
-      code === "JOB_DELETED" ||
-      code === "TOOL_NOT_FOUND" ||
-      code === "TOOL_DELETED" ||
-      code === "CAVITY_NOT_FOUND" ||
-      code === "CAVITY_DELETED"
-    ) {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "TOOL_SITE_MISMATCH") {
-      throw new ORPCError("CONFLICT", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await job.updateItem(itemId, updateData), { overrides: jobOverrides });
 });
 
 /**
@@ -739,19 +463,7 @@ export const removeItem = authRequired.input(itemIdInputSchema).handler(async ({
   }
 
   const result = await job.removeItem(input.itemId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "ITEM_NOT_FOUND" || code === "ITEM_DELETED") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error) throwServiceError(result);
   return { success: true };
 });
 
@@ -766,21 +478,7 @@ export const listItems = userOrDisplayRequired.input(listItemsInputSchema).handl
     });
   }
 
-  const result = await job.listItems(input.jobId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "JOB_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(await job.listItems(input.jobId));
 });
 
 /**

@@ -274,6 +274,18 @@ export const internalNavigation: Array<NavGroup> = [
         title: '0001 – Record Architecture Decisions',
         href: '/internal/adrs/0001-record-architecture-decisions',
       },
+      {
+        title: '0002 – Database Access Boundary',
+        href: '/internal/adrs/0002-database-access-boundary',
+      },
+      {
+        title: '0003 – Service Error Contract',
+        href: '/internal/adrs/0003-service-error-contract',
+      },
+      {
+        title: '0004 – App-Owned Composition Roots',
+        href: '/internal/adrs/0004-app-owned-composition-roots',
+      },
     ],
   },
   {

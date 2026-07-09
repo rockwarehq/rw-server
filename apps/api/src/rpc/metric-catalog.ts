@@ -8,6 +8,7 @@ import {
   listMetrics,
 } from "@rw/services/metric-catalog/index";
 import { Principal } from "../auth/index.js";
+import { throwServiceError } from "./errors.js";
 import { userOrDisplayRequired } from "./middleware.js";
 
 const metricCatalogItemSchema = z.object({
@@ -50,15 +51,7 @@ export const list = userOrDisplayRequired
     });
 
     if (!result.success) {
-      if (result.code === "SITE_NOT_FOUND") {
-        throw new ORPCError("NOT_FOUND", { message: result.error, cause: result });
-      }
-
-      if (result.code === "WORKSPACE_MISMATCH") {
-        throw new ORPCError("FORBIDDEN", { message: result.error, cause: result });
-      }
-
-      throw new ORPCError("BAD_REQUEST", { message: result.error, cause: result });
+      throwServiceError(result);
     }
 
     return { data: result.data };

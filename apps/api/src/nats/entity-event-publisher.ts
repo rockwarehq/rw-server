@@ -7,7 +7,8 @@ import {
   type EntityEvent,
 } from "@rw/runtime/entity-events";
 import { setEntityEventSink } from "@rw/services/entity/index";
-import { moduleLogger } from "./logger.js";
+import { moduleLogger } from "../logger.js";
+import { ensureStream, natsServers } from "./util.js";
 
 const log = moduleLogger("entity-event-publisher");
 
@@ -57,35 +58,15 @@ export async function startEntityEventPublisher(): Promise<() => Promise<void>> 
   };
 }
 
-async function ensureEntityEventStream(jsm: Awaited<ReturnType<typeof jetstreamManager>>): Promise<void> {
-  try {
-    const info = await jsm.streams.info(ENTITY_EVENT_STREAM);
-    const subjects = new Set(info.config.subjects ?? []);
-    if (!subjects.has(ENTITY_EVENT_SUBJECT_FILTER)) {
-      await jsm.streams.update(ENTITY_EVENT_STREAM, { subjects: [...subjects, ENTITY_EVENT_SUBJECT_FILTER] });
-    }
-    return;
-  } catch {
-    await jsm.streams.add({
-      name: ENTITY_EVENT_STREAM,
-      subjects: [ENTITY_EVENT_SUBJECT_FILTER],
-      retention: RetentionPolicy.Limits,
-      storage: StorageType.File,
-      discard: DiscardPolicy.Old,
-      max_msgs: 100_000,
-      max_age: WEEK_NANOS,
-      duplicate_window: TWO_MINUTES_NANOS,
-    });
-  }
-}
-
-function natsServers(value: string): string | string[] {
-  const servers = value
-    .split(",")
-    .map((server) => server.trim())
-    .filter(Boolean);
-  if (servers.length === 1) return servers[0] as string;
-  return servers;
+function ensureEntityEventStream(jsm: Awaited<ReturnType<typeof jetstreamManager>>): Promise<void> {
+  return ensureStream(jsm, ENTITY_EVENT_STREAM, ENTITY_EVENT_SUBJECT_FILTER, {
+    retention: RetentionPolicy.Limits,
+    storage: StorageType.File,
+    discard: DiscardPolicy.Old,
+    max_msgs: 100_000,
+    max_age: WEEK_NANOS,
+    duplicate_window: TWO_MINUTES_NANOS,
+  });
 }
 
 export type { EntityEvent };

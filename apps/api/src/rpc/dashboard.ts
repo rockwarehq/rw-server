@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ORPCError } from "@orpc/server";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import { dashboard } from "@rw/services/dashboard/index";
+import { throwServiceError } from "./errors.js";
 import { Principal } from "../auth/index.js";
 
 // ============================================================================
@@ -51,16 +52,7 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
   }
 
   const result = await dashboard.create(input, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SITE_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -97,16 +89,7 @@ export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ i
   if (!result) {
     throw new ORPCError("NOT_FOUND", { message: "Dashboard not found" });
   }
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "DASHBOARD_DELETED") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result);
 
   if (context.iam.principal === Principal.DISPLAY && result.data.siteId !== context.iam.siteId) {
     throw new ORPCError("FORBIDDEN", { message: "Display can only access dashboards in its site" });
@@ -126,16 +109,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 
   const { id, ...updateData } = input;
   const result = await dashboard.update(id, updateData, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "DASHBOARD_NOT_FOUND" || code === "DASHBOARD_DELETED") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -149,15 +123,6 @@ export const remove = authRequired.input(idInputSchema).handler(async ({ input, 
   }
 
   const result = await dashboard.remove(input.id, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "DASHBOARD_NOT_FOUND" || code === "DASHBOARD_DELETED") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });

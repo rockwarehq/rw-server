@@ -6,8 +6,20 @@ import { Principal } from "../auth/index.js";
 import { station, workcenter } from "@rw/services/facility/index";
 import { getAccessibleSites, hasPermission } from "@rw/auth/iam/index";
 import { getAutomationFramework } from "../automations/index.js";
+import { type CodeOverrides, throwServiceError } from "./errors.js";
 
 const log = moduleLogger("rpc:station");
+
+// Pinned historical mappings (observable error codes are API — see errors.ts):
+// these codes fell through to BAD_REQUEST here before the shared mapper existed,
+// while mapServiceCode would return NOT_FOUND (PROCESS_TYPE_NOT_FOUND,
+// ACTION_NOT_FOUND) or CONFLICT (SITE_MISMATCH on update).
+const CREATE_OVERRIDES: CodeOverrides = { PROCESS_TYPE_NOT_FOUND: "BAD_REQUEST" };
+const UPDATE_OVERRIDES: CodeOverrides = {
+  PROCESS_TYPE_NOT_FOUND: "BAD_REQUEST",
+  SITE_MISMATCH: "BAD_REQUEST",
+};
+const EVENT_ACTION_OVERRIDES: CodeOverrides = { ACTION_NOT_FOUND: "BAD_REQUEST" };
 
 // ============================================================================
 // Input Schemas
@@ -177,25 +189,7 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
   }
 
   const result = await station.create(input);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SITE_NOT_FOUND" || code === "WORKCENTER_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "SITE_MISMATCH") {
-      throw new ORPCError("CONFLICT", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error !== undefined) throwServiceError(result, CREATE_OVERRIDES);
   return result.data;
 });
 
@@ -272,12 +266,7 @@ export const get = authRequired.input(idInputSchema).handler(async ({ input, con
   if (!result) {
     throw new ORPCError("NOT_FOUND", { message: "Station not found" });
   }
-  if ("error" in result) {
-    throw new ORPCError("FORBIDDEN", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   if (
     !workspaceId ||
     !(await hasPermission(context.iam.id, "facility:read", { workspaceId, siteId: result.data.siteId }))
@@ -304,25 +293,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
   }
 
   const result = await station.update(id, updateData, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "STATION_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error !== undefined) throwServiceError(result, UPDATE_OVERRIDES);
   return result.data;
 });
 
@@ -342,31 +313,7 @@ export const move = authRequired.input(moveInputSchema).handler(async ({ input, 
   }
 
   const result = await station.move(input.id, input.workcenterId, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "STATION_NOT_FOUND" || code === "WORKCENTER_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "SITE_MISMATCH") {
-      throw new ORPCError("CONFLICT", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -386,25 +333,7 @@ export const remove = authRequired.input(idInputSchema).handler(async ({ input, 
   }
 
   const result = await station.remove(input.id, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "STATION_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
 
@@ -420,26 +349,7 @@ export const createEvent = authRequired.input(createEventInputSchema).handler(as
   }
 
   const result = await station.createEvent(input as station.CreateStationEventInput, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "STATION_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-
+  if ("error" in result && result.error !== undefined) throwServiceError(result, EVENT_ACTION_OVERRIDES);
   return result.data;
 });
 
@@ -455,32 +365,7 @@ export const updateEvent = authRequired.input(updateEventInputSchema).handler(as
   }
 
   const result = await station.updateEvent(input as station.UpdateStationEventInput, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "STATION_NOT_FOUND" || code === "STATION_EVENT_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "VERSION_CONFLICT") {
-      throw new ORPCError("CONFLICT", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-
+  if ("error" in result && result.error !== undefined) throwServiceError(result, EVENT_ACTION_OVERRIDES);
   return result.data;
 });
 
@@ -496,26 +381,7 @@ export const listEvents = authRequired.input(listEventsInputSchema).handler(asyn
   }
 
   const result = await station.listEvents(input.stationId, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "STATION_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-
+  if ("error" in result && result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -535,26 +401,7 @@ export const listEventExecutions = authRequired
     const result = await station.listEventExecutions(input.stationId, workspaceId, {
       limit: input.limit,
     });
-    if ("error" in result) {
-      const code = result.code as string;
-      if (code === "STATION_NOT_FOUND") {
-        throw new ORPCError("NOT_FOUND", {
-          message: result.error as string,
-          cause: result,
-        });
-      }
-      if (code === "WORKSPACE_MISMATCH") {
-        throw new ORPCError("FORBIDDEN", {
-          message: result.error as string,
-          cause: result,
-        });
-      }
-      throw new ORPCError("BAD_REQUEST", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-
+    if ("error" in result && result.error !== undefined) throwServiceError(result);
     return result.data;
   });
 
@@ -565,6 +412,8 @@ export const listEventsForProcessor = processorRequired
   .input(listEventsForProcessorInputSchema)
   .handler(async ({ input }) => {
     const result = await station.listEventsForProcessor(input?.stationId);
+    // intentional catch-all mapping — see ADR-0003 (service currently emits no
+    // error codes; any future one must stay INTERNAL_SERVER_ERROR here)
     if ("error" in result) {
       throw new ORPCError("INTERNAL_SERVER_ERROR", {
         message: result.error as string,
@@ -582,6 +431,8 @@ export const getTagSnapshotsForProcessor = processorRequired
   .input(getTagSnapshotsForProcessorInputSchema)
   .handler(async ({ input }) => {
     const result = await station.getTagSnapshotsForProcessor(input.tagKeys);
+    // intentional catch-all mapping — see ADR-0003 (service currently emits no
+    // error codes; any future one must stay INTERNAL_SERVER_ERROR here)
     if ("error" in result) {
       throw new ORPCError("INTERNAL_SERVER_ERROR", {
         message: result.error as string,
@@ -604,27 +455,7 @@ export const toggleEvent = authRequired.input(toggleEventInputSchema).handler(as
   }
 
   const result = await station.toggleEvent(input.stationId, input.eventId, input.enabled, workspaceId);
-
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "STATION_NOT_FOUND" || code === "STATION_EVENT_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-
+  if ("error" in result && result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -638,32 +469,7 @@ export const triggerEvent = processorRequired.input(triggerEventInputSchema).han
     payload: input.payload ?? input.data,
   } as station.TriggerStationEventInput);
 
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "STATION_NOT_FOUND" || code === "STATION_EVENT_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "STATION_EVENT_DISABLED") {
-      throw new ORPCError("CONFLICT", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "EXECUTION_ENQUEUE_FAILED") {
-      throw new ORPCError("INTERNAL_SERVER_ERROR", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-
+  if ("error" in result && result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -679,26 +485,7 @@ export const deleteEvent = authRequired.input(stationEventIdInputSchema).handler
   }
 
   const result = await station.removeEvent(input.stationId, input.eventId, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "STATION_NOT_FOUND" || code === "STATION_EVENT_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-
+  if ("error" in result && result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
 
@@ -728,31 +515,7 @@ export const addDatasource = authRequired.input(addDatasourceInputSchema).handle
   const workspaceId = context.iam.workspaceId;
 
   const result = await station.addDatasource(input.stationId, input.datasourceIds, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "STATION_NOT_FOUND" || code === "DATASOURCE_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "SITE_MISMATCH" || code === "ALREADY_LINKED") {
-      throw new ORPCError("CONFLICT", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -763,25 +526,7 @@ export const removeDatasource = authRequired.input(removeDatasourceInputSchema).
   const workspaceId = context.iam.workspaceId;
 
   const result = await station.removeDatasource(input.stationId, input.datasourceId, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "STATION_NOT_FOUND" || code === "LINK_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
 
@@ -792,25 +537,7 @@ export const listDatasources = authRequired.input(stationIdInputSchema).handler(
   const workspaceId = context.iam.workspaceId;
 
   const result = await station.listDatasources(input.stationId, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "STATION_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -858,16 +585,7 @@ export const splitDowntime = userOrDisplayRequired
   .output(splitDowntimeOutputSchema)
   .handler(async ({ input }) => {
     const result = await station.splitDownEntry(input.entryId, input.splitAt);
-    if ("error" in result) {
-      const code = result.code as string;
-      if (code === "NOT_FOUND") {
-        throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-      }
-      if (code === "INVALID_STATE") {
-        throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-      }
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
+    if ("error" in result) throwServiceError(result);
     return result;
   });
 
@@ -880,16 +598,7 @@ export const assignDowntimeReason = userOrDisplayRequired
     const result = await station.assignDowntimeReason(input.entryId, input.statusReasonId, {
       applyToBlock: input.applyToBlock,
     });
-    if ("error" in result) {
-      const code = result.code as string;
-      if (code === "NOT_FOUND" || code === "REASON_NOT_FOUND") {
-        throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-      }
-      if (code === "INVALID_STATE") {
-        throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-      }
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
+    if ("error" in result) throwServiceError(result);
     return result;
   });
 
@@ -898,16 +607,7 @@ export const assignDowntimeReason = userOrDisplayRequired
  */
 export const changeJob = userOrDisplayRequired.input(changeJobInputSchema).handler(async ({ input }) => {
   const result = await station.changeJob(input.stationId, input.jobId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "STATION_NOT_FOUND" || code === "JOB_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "SITE_MISMATCH" || code === "NO_CURRENT_BLOB") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if ("error" in result) throwServiceError(result);
 
   // Fire the `job.changed` automation event. Fire-and-forget so a misconfigured automation can
   // never fail a committed job change — mirrors the side-effect pattern inside `changeJob`.

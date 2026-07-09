@@ -3,6 +3,7 @@ import { ORPCError } from "@orpc/server";
 import { Principal } from "../auth/index.js";
 import { site } from "@rw/services/facility/index";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
+import { throwServiceError } from "./errors.js";
 
 const andonRuleInputSchema = z.object({
   siteId: z.uuid(),
@@ -54,18 +55,6 @@ function hasAndonRuleError(result: unknown): result is { error: string; code: st
   );
 }
 
-function mapAndonRuleError(result: { error: string; code: string }): never {
-  if (result.code === "SITE_NOT_FOUND" || result.code === "RULE_NOT_FOUND") {
-    throw new ORPCError("NOT_FOUND", { message: result.error, cause: result });
-  }
-
-  if (result.code === "WORKSPACE_MISMATCH") {
-    throw new ORPCError("FORBIDDEN", { message: result.error, cause: result });
-  }
-
-  throw new ORPCError("BAD_REQUEST", { message: result.error, cause: result });
-}
-
 export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
   const workspaceId = requireWorkspaceId(context.iam.workspaceId);
 
@@ -75,7 +64,7 @@ export const list = userOrDisplayRequired.input(listInputSchema).handler(async (
 
   const result = await site.andonRules.list(input, workspaceId);
   if (hasAndonRuleError(result)) {
-    mapAndonRuleError(result);
+    throwServiceError(result);
   }
 
   return result.data;
@@ -86,7 +75,7 @@ export const create = authRequired.input(andonRuleInputSchema).handler(async ({ 
 
   const result = await site.andonRules.create(input, workspaceId);
   if (hasAndonRuleError(result)) {
-    mapAndonRuleError(result);
+    throwServiceError(result);
   }
 
   return result.data;
@@ -97,7 +86,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 
   const result = await site.andonRules.update(input, workspaceId);
   if (hasAndonRuleError(result)) {
-    mapAndonRuleError(result);
+    throwServiceError(result);
   }
 
   return result.data;
@@ -108,7 +97,7 @@ export const remove = authRequired.input(deleteInputSchema).handler(async ({ inp
 
   const result = await site.andonRules.remove(input.id, workspaceId);
   if (hasAndonRuleError(result)) {
-    mapAndonRuleError(result);
+    throwServiceError(result);
   }
 
   return { success: true };
@@ -119,7 +108,7 @@ export const reorder = authRequired.input(reorderInputSchema).handler(async ({ i
 
   const result = await site.andonRules.reorder(input, workspaceId);
   if (hasAndonRuleError(result)) {
-    mapAndonRuleError(result);
+    throwServiceError(result);
   }
 
   return { success: true };

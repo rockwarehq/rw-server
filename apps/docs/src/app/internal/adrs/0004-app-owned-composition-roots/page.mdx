@@ -1,0 +1,38 @@
+export const metadata = {
+  title: '0004 – App-Owned Composition Roots',
+  description: 'ADR 0004: NATS adapters and automations wiring live in apps/api, not in shared packages.',
+}
+
+# 0004 – App-Owned Composition Roots
+
+- **Status:** Accepted
+- **Date:** 2026-07-08
+- **Deciders:** Michael Lindenau
+
+## Context
+
+`apps/api` contains modules that look like shared infrastructure at first glance and periodically attract "move this to a package" suggestions:
+
+- `src/nats/command-bus.ts`, `src/nats/entity-event-publisher.ts` — JetStream publishers behind service seams (`gatewayCommands.setCommandSink`, `setEntityEventSink`)
+- `src/nats/graph-definition-publisher.ts`, `src/nats/graph-values.ts` — JetStream/KV adapters that import `@rw/livestore`
+- `src/automations/` — concrete event schemas, action handlers, and ref sources wired into the generic `@rw/automations` framework
+
+## Decision
+
+We will keep these in `apps/api`. They are composition roots — the place where the app assembles seams that packages deliberately leave open:
+
+- The services expose **sink setters** precisely so they don't hard-wire a transport. Moving the NATS adapters into `@rw/services` would collapse that seam and add `@nats-io/*` to every service consumer.
+- `graph-definition-publisher` and `graph-values` import `@rw/livestore`, which itself depends on `@rw/services` and `@rw/runtime` — moving them into either package creates a dependency cycle.
+- The automations wiring is documented seam design (`apps/api/src/automations/README.md`): `@rw/automations` stays domain-agnostic; the app injects events, actions, and ref sources. Only this app fires automation events today.
+- All of these hold app-lifecycle state (connections opened at boot, torn down at shutdown by `main.ts`).
+
+## Consequences
+
+- Packages stay transport-agnostic and cycle-free; the app owns its own boot/shutdown wiring.
+- Each deployable that needs a sink writes its own adapter. Acceptable while only `apps/api` publishes; if `apps/workers` ever needs to fire automation events or publish commands, the wiring moves to a **new** package (e.g. `@rw/automation-wiring`) — not into `@rw/services`.
+- The NATS adapters share stream-bootstrap boilerplate via `src/nats/util.ts` inside the app rather than a shared package.
+
+## Alternatives Considered
+
+- **Move adapters to `@rw/runtime`** — runtime is dependency-free by design (subject conventions only, no NATS client); and the graph adapters would cycle through `@rw/livestore`.
+- **Move automations wiring to `@rw/services`** — inverts the dependency: services would know about concrete action handlers that call back into services.

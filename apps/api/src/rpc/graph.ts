@@ -1,4 +1,5 @@
 import { ORPCError } from "@orpc/server";
+import { type CodeOverrides, unwrap as unwrapService } from "./errors.js";
 import { GRAPH_TYPE_INPUT_VALUE_TYPES, GRAPH_TYPE_VALUE_TYPES } from "@rw/livestore/catalog/graph-types";
 import { buildLivestoreCapabilityManifest } from "@rw/livestore/catalog/manifest";
 import { z } from "zod";
@@ -6,7 +7,7 @@ import * as graph from "@rw/livestore/graph/index";
 import { hasPermission, type Permission } from "@rw/auth/iam/index";
 import type { GraphScope } from "@rw/livestore/graph/types";
 import { Principal } from "../auth/index.js";
-import { readGraphValues } from "../graph-values.js";
+import { readGraphValues } from "../nats/graph-values.js";
 
 import { authRequired, graphReadRequired } from "./middleware.js";
 
@@ -219,19 +220,17 @@ async function assertSiteReadAccess(context: AuthContext, siteId: string): Promi
   return assertSitePermission(context, "graph:read", siteId);
 }
 
-function throwServiceError(result: { error: string; code: string }): never {
-  if (result.code.includes("NOT_FOUND")) throw new ORPCError("NOT_FOUND", { message: result.error, cause: result });
-  if (result.code.includes("MISMATCH")) throw new ORPCError("FORBIDDEN", { message: result.error, cause: result });
-  if (result.code.includes("EXISTS") || result.code.includes("HAS_") || result.code === "GRAPH_CYCLE") {
-    throw new ORPCError("CONFLICT", { message: result.error, cause: result });
-  }
-  throw new ORPCError("BAD_REQUEST", { message: result.error, cause: result });
-}
+// Historical mapping in this router: scope/resolver mismatches are FORBIDDEN
+// (the shared default is CONFLICT / BAD_REQUEST). Pinned for rpc-client
+// back-compat.
+const GRAPH_OVERRIDES: CodeOverrides = {
+  SITE_MISMATCH: "FORBIDDEN",
+  ENTITY_SITE_MISMATCH: "FORBIDDEN",
+  RESOLVER_TYPE_MISMATCH: "FORBIDDEN",
+};
 
 function unwrap<T>(result: { data: T } | { error: string; code: string } | null): T {
-  if (!result) throw new ORPCError("NOT_FOUND", { message: "Resource not found" });
-  if ("error" in result) throwServiceError(result);
-  return result.data;
+  return unwrapService(result, { overrides: GRAPH_OVERRIDES });
 }
 
 async function assertNodePermission(context: AuthContext, permission: Permission, nodeId: string): Promise<GraphScope> {
