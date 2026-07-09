@@ -27,7 +27,16 @@ const EnvSchema = z.object({
   // apps/api/fly/tenants/*.toml.
   APP_BASE_URL: isProduction ? z.url({ protocol: /^https$/ }) : z.url().default("http://localhost:3000"),
   // Extra allowed browser origins (comma-separated), additive to APP_BASE_URL.
+  // Only consulted when CORS_ALLOW_ANY=false.
   CORS_ALLOWED_ORIGINS: z.string().optional(),
+  // Default reflect-any: the packaged Electron console loads from file:// (and
+  // sends `Origin: null`) and could run on any machine, so pinning an allowlist
+  // buys little here — auth is Bearer-only, so a cross-origin page still has no
+  // token. Set CORS_ALLOW_ANY=false to fall back to the exact-match allowlist.
+  CORS_ALLOW_ANY: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
 
   PROCESSOR_SHARED_SECRET: isProduction ? z.string().min(16) : z.string().default(""),
   PROCESSOR_CACHE_REFRESH_URL: z.string().default(""),
@@ -87,19 +96,20 @@ export const serverConfig = {
 };
 
 export const corsConfig = {
-  // Dev with no explicit allowlist keeps reflecting any origin (local web
-  // dev on arbitrary ports). Production is always an exact-match list —
-  // APP_BASE_URL is required there, so the list is never empty.
-  origins:
-    !isProduction && !config.CORS_ALLOWED_ORIGINS
-      ? (true as const)
-      : [
-          config.APP_BASE_URL,
-          ...(config.CORS_ALLOWED_ORIGINS ?? "")
-            .split(",")
-            .map((origin) => origin.trim())
-            .filter(Boolean),
-        ],
+  // Default (CORS_ALLOW_ANY=true): reflect any origin. `true` reflects the
+  // request origin back rather than emitting literal "*", so it stays
+  // compatible with `credentials: true`. Set CORS_ALLOW_ANY=false for an
+  // exact-match allowlist (APP_BASE_URL + CORS_ALLOWED_ORIGINS); in production
+  // APP_BASE_URL is required, so that list is never empty.
+  origins: config.CORS_ALLOW_ANY
+    ? (true as const)
+    : [
+        config.APP_BASE_URL,
+        ...(config.CORS_ALLOWED_ORIGINS ?? "")
+          .split(",")
+          .map((origin) => origin.trim())
+          .filter(Boolean),
+      ],
 };
 
 export const emailConfig = {

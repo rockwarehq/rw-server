@@ -36,8 +36,8 @@ export function createServer(options: IServerOptions) {
 
   // Register plugins
   server.register(cors, {
-    // Dev without CORS_ALLOWED_ORIGINS reflects any origin; production is an
-    // exact-match allowlist derived from APP_BASE_URL (+ CORS_ALLOWED_ORIGINS).
+    // Reflects any origin by default (CORS_ALLOW_ANY=true); set it to false for
+    // an exact-match allowlist from APP_BASE_URL (+ CORS_ALLOWED_ORIGINS).
     // Gateways (/edge/*) and API-token RPC clients are server-to-server and
     // don't send browser preflights, so the allowlist can't break them.
     origin: corsConfig.origins,
