@@ -6,6 +6,7 @@ import { allocateInventory } from "../order/allocation.js";
 import {
   loadStationMetricContext,
   publishStationLastCycleMetricEvent,
+  publishStationStatusEntityEvent,
   publishStationStatusMetricEvent,
   publishStationStatusReasonMetricEvent,
   transitionToUp,
@@ -41,6 +42,8 @@ interface StrategyResult {
   /** Status written on the new state-log row ("UP" or "SLOW"), or null when
    * the strategy did not write a state transition (replayed paths). */
   newStatus: "UP" | "SLOW" | null;
+  /** Status/reason changed vs the prior open row — gates the entity.changes publish. */
+  statusChanged: boolean;
   /** Loaded inside the tx so post-commit publishes don't check out their own connections. */
   stationCtx: StationMetricContext | null;
   /** Detection plan computed inside the tx; BullMQ enqueue happens post-commit. */
@@ -177,7 +180,7 @@ export async function complete(input: StartCycleInput) {
           idealCycleIncrement,
           slowThresholdSeconds,
         );
-  const { cycle, items, closedEntry, newStatus, stationCtx, detectionPrepared } = result;
+  const { cycle, items, closedEntry, newStatus, statusChanged, stationCtx, detectionPrepared } = result;
   const t2 = Date.now();
 
   // Material-shift flush is NOT triggered per cycle. The 60s minute tick
@@ -222,6 +225,14 @@ export async function complete(input: StartCycleInput) {
         publishStationStatusReasonMetricEvent(stationCtx, null, timestamp);
       } catch (err) {
         console.error(`[cycle] publishStationStatusReasonMetric failed for station ${stationId}:`, err);
+      }
+      // Only on real change; includes statusReasonId since the new row cleared any reason.
+      if (statusChanged) {
+        try {
+          publishStationStatusEntityEvent(stationCtx, ["status", "statusReasonId"]);
+        } catch (err) {
+          console.error(`[cycle] publishStationStatusEntityEvent failed for station ${stationId}:`, err);
+        }
       }
     }
 
@@ -277,6 +288,8 @@ async function completeImmediate(
         state_id: string | null;
         state_start: Date | null;
         state_state: string | null;
+        state_status: string | null;
+        state_status_reason_id: string | null;
         state_block_id: string | null;
       }>
     >`
@@ -306,7 +319,9 @@ async function completeImmediate(
       )
       SELECT
         nc.id AS cycle_id, nc.start AS cycle_start, nc."end" AS cycle_end,
-        cs.id AS state_id, cs."startTime" AS state_start, cs.state AS state_state, cs."blockId" AS state_block_id
+        cs.id AS state_id, cs."startTime" AS state_start, cs.state AS state_state,
+        cs.status AS state_status, cs."statusReasonId"::text AS state_status_reason_id,
+        cs."blockId" AS state_block_id
       FROM new_cycle nc
       LEFT JOIN "StationStateLog" cs
         ON cs."stationId" = ${stationId} AND cs."endTime" IS NULL AND cs."deletedAt" IS NULL
@@ -376,6 +391,10 @@ async function completeImmediate(
 
     const newStatus = isSlow ? ("SLOW" as const) : ("UP" as const);
 
+    // The new row always clears statusReasonId, so a prior reason also counts as a change.
+    const prevStatus = row.state_id ? (row.state_status ?? row.state_state) : null;
+    const statusChanged = prevStatus !== newStatus || row.state_status_reason_id != null;
+
     // Live-publish & detection-schedule data — read inside the tx so the
     // post-commit fire-and-forget block holds no DB connection.
     const stationCtx = await loadStationMetricContext(tx, stationId);
@@ -395,7 +414,7 @@ async function completeImmediate(
       totalCycleIncrement,
     );
 
-    return { cycle, items, closedEntry, newStatus, stationCtx, detectionPrepared };
+    return { cycle, items, closedEntry, newStatus, statusChanged, stationCtx, detectionPrepared };
   });
 }
 
@@ -481,7 +500,10 @@ async function completeOpenClose(
     await incrementHourCounts(tx, stationId, siteId, timestamp, 1, items.length, idealCycleIncrement, 0);
 
     const newStatus = entry.status === "SLOW" ? ("SLOW" as const) : ("UP" as const);
-    return { cycle: newCycle, items, closedEntry, newStatus, stationCtx, detectionPrepared };
+    // The new row always clears statusReasonId, so a prior reason also counts as a change.
+    const statusChanged =
+      !closedEntry || (closedEntry.status ?? closedEntry.state) !== newStatus || closedEntry.statusReasonId != null;
+    return { cycle: newCycle, items, closedEntry, newStatus, statusChanged, stationCtx, detectionPrepared };
   });
 }
 
@@ -556,7 +578,15 @@ async function completeImmediateReplay(
       await allocateInventory(tx, siteId, productId, id);
     }
 
-    return { cycle, items, closedEntry: null, newStatus: null, stationCtx: null, detectionPrepared: null };
+    return {
+      cycle,
+      items,
+      closedEntry: null,
+      newStatus: null,
+      statusChanged: false,
+      stationCtx: null,
+      detectionPrepared: null,
+    };
   });
 }
 
@@ -621,7 +651,15 @@ async function completeOpenCloseReplay(
       await allocateInventory(tx, siteId, productId, id);
     }
 
-    return { cycle: newCycle, items, closedEntry: null, newStatus: null, stationCtx: null, detectionPrepared: null };
+    return {
+      cycle: newCycle,
+      items,
+      closedEntry: null,
+      newStatus: null,
+      statusChanged: false,
+      stationCtx: null,
+      detectionPrepared: null,
+    };
   });
 }
 

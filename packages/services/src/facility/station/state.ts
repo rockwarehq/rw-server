@@ -3,6 +3,8 @@ import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
 import { publishMetricValueChange } from "../../rpc/metrics-bus.js";
 import { updateTimeBased } from "../../metrics/recalc.js";
+import { publishEntityEvent } from "../../entity/events.js";
+import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 
 type TransactionClient = Prisma.TransactionClient;
 
@@ -29,6 +31,10 @@ export interface ClosedEntryInfo {
   endTime: Date;
   /** The state of the closed entry (UP or DOWN). */
   state: "UP" | "DOWN";
+  /** Closed entry's status, for change detection. */
+  status?: "FAST" | "SLOW" | "UP" | "DOWN" | null;
+  /** Closed entry's statusReasonId, for change detection. */
+  statusReasonId?: string | null;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -119,6 +125,7 @@ async function getStationSiteId(stationId: string): Promise<string | null> {
 export interface StationMetricContext {
   stationId: string;
   siteId: string;
+  workspaceId: string;
   name: string;
   path: string;
 }
@@ -132,9 +139,12 @@ export async function loadStationMetricContext(
   client: TransactionClient | typeof prisma,
   stationId: string,
 ): Promise<StationMetricContext | null> {
-  const stationRows = await client.$queryRaw<Array<{ siteId: string; name: string; workcenterId: string | null }>>`
-    SELECT "siteId"::text, name, "workcenterId"::text
-    FROM "Station" WHERE id = ${stationId}::uuid
+  const stationRows = await client.$queryRaw<
+    Array<{ siteId: string; workspaceId: string; name: string; workcenterId: string | null }>
+  >`
+    SELECT s."siteId"::text, si."workspaceId"::text AS "workspaceId", s.name, s."workcenterId"::text
+    FROM "Station" s JOIN "Site" si ON si.id = s."siteId"
+    WHERE s.id = ${stationId}::uuid
   `;
   const station = stationRows[0];
   if (!station) return null;
@@ -157,7 +167,19 @@ export async function loadStationMetricContext(
     path = `${sitePath}.${wcSegments}.station.${stationId}`;
   }
 
-  return { stationId, siteId: station.siteId, name: station.name, path };
+  return { stationId, siteId: station.siteId, workspaceId: station.workspaceId, name: station.name, path };
+}
+
+/** Publish entity.changes so livestore re-resolves status-bound properties. Only after a real change, post-commit. */
+export function publishStationStatusEntityEvent(ctx: StationMetricContext, changedFields: string[]): void {
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Station,
+    entityId: ctx.stationId,
+    siteId: ctx.siteId,
+    workspaceId: ctx.workspaceId,
+    changedFields,
+  });
 }
 
 function publishStationStatusMetricEvent(
@@ -383,6 +405,8 @@ export async function transitionToUp(
       startTime: current.startTime,
       endTime: timestamp,
       state: current.state,
+      status: current.status ?? null,
+      statusReasonId: current.statusReasonId ?? null,
     };
   }
 
@@ -429,7 +453,7 @@ export async function transitionToUp(
  * so duration KPIs (runSeconds) don't change.
  */
 export async function transitionToSlow(stationId: string, timestamp: Date) {
-  const entry = await prisma.$transaction(async (tx) => {
+  const { entry, statusChanged } = await prisma.$transaction(async (tx) => {
     // Serialize with other state transitions for this station
     await acquireStationLock(tx, stationId);
 
@@ -438,38 +462,44 @@ export async function transitionToSlow(stationId: string, timestamp: Date) {
     if (!current) {
       // No open entry — create a SLOW one (shouldn't normally happen)
       const blockId = randomUUID();
-      return createStateEntry(tx, {
+      const created = await createStateEntry(tx, {
         stationId,
         startTime: timestamp,
         state: "UP",
         status: "SLOW",
         blockId,
       });
+      return { entry: created, statusChanged: true };
     }
 
     // Already DOWN — downtime supersedes slow, do nothing
     if (current.state === "DOWN") {
-      return current;
+      return { entry: current, statusChanged: false };
     }
 
     // Already SLOW — no change needed
     if (current.status === "SLOW") {
-      return current;
+      return { entry: current, statusChanged: false };
     }
 
     // Currently UP — update status in place. State stays UP so no
     // close/create needed; avoids row churn.
-    return tx.stationStateLog.update({
+    const updated = await tx.stationStateLog.update({
       where: { id: current.id },
       data: { status: "SLOW" },
     });
+    return { entry: updated, statusChanged: true };
   });
 
-  await publishStationStatusMetric(
-    stationId,
-    (entry.status ?? entry.state) as "FAST" | "SLOW" | "UP" | "DOWN",
-    entry.updatedAt,
-  );
+  const ctx = await loadStationMetricContext(prisma, stationId);
+  if (ctx) {
+    publishStationStatusMetricEvent(
+      ctx,
+      (entry.status ?? entry.state) as "FAST" | "SLOW" | "UP" | "DOWN",
+      entry.updatedAt,
+    );
+    if (statusChanged) publishStationStatusEntityEvent(ctx, ["status"]);
+  }
   return entry;
 }
 
@@ -510,12 +540,16 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
         blockId,
         jobBlobId,
       });
-      return { entry, convertedRange: null as { startTime: Date; endTime: Date } | null };
+      return { entry, convertedRange: null as { startTime: Date; endTime: Date } | null, statusChanged: true };
     }
 
     // Already DOWN — no change needed
     if (current.state === "DOWN") {
-      return { entry: current, convertedRange: null as { startTime: Date; endTime: Date } | null };
+      return {
+        entry: current,
+        convertedRange: null as { startTime: Date; endTime: Date } | null,
+        statusChanged: false,
+      };
     }
 
     // State change UP → DOWN — convert entry in place so the DOWN
@@ -535,7 +569,7 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
 
     // Range that changed from UP→DOWN, needed for metrics recalc
     const convertedRange = { startTime: current.startTime, endTime: timestamp };
-    return { entry, convertedRange };
+    return { entry, convertedRange, statusChanged: true };
   });
 
   // Fire updateTimeBased for the converted range (after transaction commits)
@@ -550,12 +584,16 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
     }
   }
 
-  await publishStationStatusMetric(
-    stationId,
-    (result.entry.status ?? result.entry.state) as "FAST" | "SLOW" | "UP" | "DOWN",
-    result.entry.updatedAt,
-  );
-  await publishStationStatusReasonMetric(stationId, result.entry.statusReasonId, result.entry.updatedAt);
+  const ctx = await loadStationMetricContext(prisma, stationId);
+  if (ctx) {
+    publishStationStatusMetricEvent(
+      ctx,
+      (result.entry.status ?? result.entry.state) as "FAST" | "SLOW" | "UP" | "DOWN",
+      result.entry.updatedAt,
+    );
+    publishStationStatusReasonMetricEvent(ctx, result.entry.statusReasonId, result.entry.updatedAt);
+    if (result.statusChanged) publishStationStatusEntityEvent(ctx, ["status", "statusReasonId"]);
+  }
   return result.entry;
 }
 
@@ -694,7 +732,7 @@ export async function assignDowntimeReason(
   // Look up the target entry
   const entry = await prisma.stationStateLog.findFirst({
     where: { id: entryId, deletedAt: null },
-    include: { station: { select: { siteId: true } } },
+    include: { station: { select: { siteId: true, site: { select: { workspaceId: true } } } } },
   });
 
   if (!entry) {
@@ -771,6 +809,15 @@ export async function assignDowntimeReason(
         `[assignDowntimeReason] publishStationStatusReasonMetric failed for station ${entry.stationId}:`,
         err,
       );
+    });
+    // ["statusReasonId"] also matches the statusReason path via the resolver's `${path}Id` rule.
+    publishEntityEvent({
+      action: "updated",
+      entityKey: SYSTEM_ENTITY_KEYS.Station,
+      entityId: entry.stationId,
+      siteId: entry.station.siteId,
+      workspaceId: entry.station.site.workspaceId,
+      changedFields: ["statusReasonId"],
     });
   }
 
