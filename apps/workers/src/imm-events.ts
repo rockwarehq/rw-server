@@ -10,6 +10,7 @@ import { complete as completeCycle } from "@rw/services/cycle/index";
 import { livestoreEventType, type LivestoreHookEvent } from "@rw/livestore/catalog/events";
 
 import { ImmEventConsumer, type ImmEventHandlers } from "./imm-event-consumer.js";
+import { installEntityEventSink, uninstallEntityEventSink } from "./entity-event-publisher.js";
 
 let nc: NatsConnection | null = null;
 let consumer: ImmEventConsumer | null = null;
@@ -27,6 +28,7 @@ export async function startImmEvents(): Promise<void> {
   });
   const js = jetstream(nc);
   const jsm = await jetstreamManager(nc);
+  await installEntityEventSink(js, jsm);
   consumer = new ImmEventConsumer(js, jsm, handlers);
   await consumer.start();
   console.log(`[imm-events] connected to NATS at ${nc.getServer()}`);
@@ -37,6 +39,7 @@ export async function startImmEvents(): Promise<void> {
 }
 
 export async function stopImmEvents(): Promise<void> {
+  uninstallEntityEventSink();
   consumer?.stop();
   consumer = null;
   if (nc && !nc.isClosed()) await nc.drain();
