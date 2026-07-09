@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { ORPCError } from "@orpc/server";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import prisma from "@rw/db";
 import * as shiftCommentService from "@rw/services/facility/shift/shift-comment";
+import { throwServiceError } from "./errors.js";
 
 // ============================================================================
 // Shift Instance List (by site + business date + optional workcenter)
@@ -438,16 +438,7 @@ export const commentCreate = authRequired.input(commentCreateInputSchema).handle
     text: input.text,
     createdById: context.iam.id,
   });
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SHIFT_INSTANCE_NOT_FOUND" || code === "STATION_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "SITE_MISMATCH" || code === "WORKCENTER_MISMATCH") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -461,16 +452,7 @@ export const commentUpdate = authRequired.input(commentUpdateInputSchema).handle
     text: input.text,
     actorId: context.iam.id,
   });
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SHIFT_COMMENT_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "FORBIDDEN") {
-      throw new ORPCError("FORBIDDEN", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -480,15 +462,6 @@ const commentDeleteInputSchema = z.object({
 
 export const commentDelete = authRequired.input(commentDeleteInputSchema).handler(async ({ input, context }) => {
   const result = await shiftCommentService.remove(input.id, { actorId: context.iam.id });
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SHIFT_COMMENT_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "FORBIDDEN") {
-      throw new ORPCError("FORBIDDEN", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });

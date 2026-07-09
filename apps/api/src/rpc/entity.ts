@@ -15,6 +15,7 @@ import {
 } from "./entity.types.js";
 
 import { ORPCError } from "@orpc/server";
+import { type CodeOverrides, throwServiceError as throwServiceErrorShared, unwrap as unwrapService } from "./errors.js";
 import * as entity from "@rw/services/entity/index";
 import type { EntityScope } from "@rw/services/entity/index";
 import { hasPermission, type Permission } from "@rw/auth/iam/index";
@@ -43,17 +44,19 @@ async function assertPermission(context: AuthContext, permission: Permission): P
   return { workspaceId, siteId };
 }
 
-function throwServiceError(result: { error: string; code: string }): never {
-  if (result.code.includes("NOT_FOUND")) throw new ORPCError("NOT_FOUND", { message: result.error, cause: result });
-  if (result.code.includes("MISMATCH")) throw new ORPCError("FORBIDDEN", { message: result.error, cause: result });
-  if (result.code.includes("EXISTS")) throw new ORPCError("CONFLICT", { message: result.error, cause: result });
-  throw new ORPCError("BAD_REQUEST", { message: result.error, cause: result });
-}
+// Historical mapping in this router: scope mismatches are FORBIDDEN (the
+// shared default is CONFLICT). Pinned for rpc-client back-compat.
+const ENTITY_OVERRIDES: CodeOverrides = {
+  SITE_MISMATCH: "FORBIDDEN",
+  REF_SCHEMA_SITE_MISMATCH: "FORBIDDEN",
+};
 
 function unwrap<T>(result: { data: T } | { error: string; code: string } | null): T {
-  if (!result) throw new ORPCError("NOT_FOUND", { message: "Resource not found" });
-  if ("error" in result) throwServiceError(result);
-  return result.data;
+  return unwrapService(result, { overrides: ENTITY_OVERRIDES });
+}
+
+function throwServiceError(result: { error: string; code: string }): never {
+  throwServiceErrorShared(result, ENTITY_OVERRIDES);
 }
 
 export const modelCreate = authRequired.input(modelCreateInputSchema).handler(async ({ input, context }) => {

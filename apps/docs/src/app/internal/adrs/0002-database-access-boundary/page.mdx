@@ -1,0 +1,37 @@
+export const metadata = {
+  title: '0002 – Database Access Boundary for the API App',
+  description: 'ADR 0002: writes go through @rw/services; complex read-only reporting queries may use Prisma directly.',
+}
+
+# 0002 – Database Access Boundary for the API App
+
+- **Status:** Accepted
+- **Date:** 2026-07-08
+- **Deciders:** Michael Lindenau
+
+## Context
+
+`@rw/services` is the business-logic layer: services own domain rules, return `{ data }` or `{ error, code }` (they never throw), and every mutation flows through them. Most oRPC routers in `apps/api/src/rpc/` follow this. A handful of routers, however, query Prisma directly — `logs.ts`, `events.ts`, `metrics.ts`, `operator.ts`, `shift-recap.ts` — all for complex, read-only reporting and aggregation (dynamic filter allowlists, shift-clamped downtime computation, bucket queries).
+
+Forcing those reads through service functions would mean either duplicating a query-builder abstraction in the service layer or smearing one reporting concern across two packages, for no gain in safety: reads cannot corrupt state.
+
+An audit of every direct-Prisma call in `apps/api/src/rpc/` (2026-07-08) found **zero writes** — no `create`, `update`, `upsert`, `delete`, `$executeRaw`, or `$transaction`. All direct access is read-only.
+
+## Decision
+
+We will keep writes strictly behind `@rw/services`: any RPC or REST handler that mutates state calls a service function. Complex **read-only** reporting/aggregation queries may use Prisma directly from RPC handlers when a service pass-through would add indirection without value.
+
+The current sanctioned exceptions are `src/rpc/logs.ts`, `events.ts`, `metrics.ts`, `operator.ts`, and `shift-recap.ts`. Adding a new exception is a code-review decision, not a default.
+
+Outside the RPC layer, `seed.ts` (bootstrap script), `edge.ts` (gateway protocol), and `src/auth/` (IAM resolution) also access Prisma directly by design.
+
+## Consequences
+
+- Reporting queries stay colocated with their endpoint and are fast to iterate on.
+- The rule is greppable: `prisma.<model>.create|update|delete` in `apps/api/src/rpc/` is a review flag.
+- Read queries in the API app do not benefit from service-layer reuse; if the same report is ever needed from `apps/workers`, the query moves to a service then.
+
+## Alternatives Considered
+
+- **Move all reads behind services** — large mechanical refactor, higher regression risk, and the service layer gains nothing from owning single-consumer reporting queries.
+- **Move writes only** — already the state of the world (the audit found no direct writes); this ADR records it as a rule rather than an accident.

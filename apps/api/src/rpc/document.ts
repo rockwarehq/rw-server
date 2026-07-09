@@ -5,6 +5,7 @@ import * as documents from "@rw/services/document/index";
 import { storageConfig } from "../config.js";
 import { Principal } from "../auth/index.js";
 import { authRequired, displayRequired, userOrDisplayRequired } from "./middleware.js";
+import { throwServiceError } from "./errors.js";
 
 const documentTargetTypeSchema = z.enum(["SITE", "WORKCENTER", "STATION", "JOB", "TOOL", "PRODUCT", "MATERIAL"]);
 
@@ -92,27 +93,6 @@ function getLabelFilter(input?: { labelsAny?: string[]; labelsAll?: string[] }) 
   };
 }
 
-function throwDocumentError(result: { error?: unknown; code?: unknown }): never {
-  const code = result.code as string;
-  const message = result.error as string;
-
-  if (
-    ["DOCUMENT_NOT_FOUND", "PARENT_NOT_FOUND", "SITE_NOT_FOUND", "TARGET_NOT_FOUND", "UPLOAD_NOT_FOUND"].includes(code)
-  ) {
-    throw new ORPCError("NOT_FOUND", { message, cause: result });
-  }
-
-  if (["SITE_NOT_IN_WORKSPACE"].includes(code)) {
-    throw new ORPCError("FORBIDDEN", { message, cause: result });
-  }
-
-  if (["SITE_MISMATCH", "DOCUMENT_PENDING", "INVALID_PARENT"].includes(code)) {
-    throw new ORPCError("CONFLICT", { message, cause: result });
-  }
-
-  throw new ORPCError("BAD_REQUEST", { message, cause: result });
-}
-
 function getDisplayDocumentContext(context: {
   iam: { siteId?: string; display?: { workcenterId: string | null; stationId: string | null } };
 }) {
@@ -144,7 +124,7 @@ export const createFolder = authRequired.input(createFolderInputSchema).handler(
   }
 
   const result = await documents.createFolder({ ...input, workspaceId });
-  if ("error" in result) throwDocumentError(result);
+  if ("error" in result) throwServiceError(result);
   return result.data;
 });
 
@@ -155,7 +135,7 @@ export const createUpload = authRequired.input(createUploadInputSchema).handler(
   }
 
   const result = await documents.createUpload({ ...input, workspaceId });
-  if ("error" in result) throwDocumentError(result);
+  if ("error" in result) throwServiceError(result);
   return result.data;
 });
 
@@ -166,7 +146,7 @@ export const completeUpload = authRequired.input(documentIdInputSchema).handler(
   }
 
   const result = await documents.completeUpload(input.documentId);
-  if ("error" in result) throwDocumentError(result);
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -184,7 +164,7 @@ export const get = userOrDisplayRequired.input(documentIdInputSchema).handler(as
     await assertDisplayCanAccessDocument(context, input.documentId);
     const result = await documents.getById(input.documentId);
     if (!result) throw new ORPCError("NOT_FOUND", { message: "Document not found" });
-    if ("error" in result) throwDocumentError(result);
+    if (result.error !== undefined) throwServiceError(result);
     return result.data;
   }
 
@@ -195,7 +175,7 @@ export const get = userOrDisplayRequired.input(documentIdInputSchema).handler(as
 
   const result = await documents.getById(input.documentId, { includePending: true });
   if (!result) throw new ORPCError("NOT_FOUND", { message: "Document not found" });
-  if ("error" in result) throwDocumentError(result);
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -210,7 +190,7 @@ export const download = userOrDisplayRequired.input(documentIdInputSchema).handl
   }
 
   const result = await documents.getDownloadUrl(input.documentId);
-  if ("error" in result) throwDocumentError(result);
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -225,7 +205,7 @@ export const open = userOrDisplayRequired.input(documentIdInputSchema).handler(a
   }
 
   const result = await documents.getOpenUrl(input.documentId);
-  if ("error" in result) throwDocumentError(result);
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -237,7 +217,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 
   const { documentId, ...updateData } = input;
   const result = await documents.update(documentId, updateData);
-  if ("error" in result) throwDocumentError(result);
+  if ("error" in result) throwServiceError(result);
   return result.data;
 });
 
@@ -248,7 +228,7 @@ export const remove = authRequired.input(documentIdInputSchema).handler(async ({
   }
 
   const result = await documents.remove(input.documentId);
-  if ("error" in result) throwDocumentError(result);
+  if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
 
@@ -259,7 +239,7 @@ export const link = authRequired.input(documentLinkInputSchema).handler(async ({
   }
 
   const result = await documents.link(input.documentId, input.targetType as DocumentTargetType, input.targetId);
-  if ("error" in result) throwDocumentError(result);
+  if ("error" in result) throwServiceError(result);
   return result.data;
 });
 

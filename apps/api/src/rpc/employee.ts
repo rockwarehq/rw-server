@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { ORPCError } from "@orpc/server";
 import { authRequired } from "./middleware.js";
 import { crud } from "../services/employee/index.js";
+import { throwServiceError, unwrap } from "./errors.js";
 
 // ============================================================================
 // Input Schemas
@@ -55,26 +55,20 @@ export const list = authRequired.input(listInputSchema).handler(async ({ input }
 });
 
 export const get = authRequired.input(idInputSchema).handler(async ({ input }) => {
-  const result = await crud.getById(input.id);
-  if (!result) {
-    throw new ORPCError("NOT_FOUND", { message: "Employee not found" });
-  }
-  return result.data;
+  return unwrap(await crud.getById(input.id), { notFoundMessage: "Employee not found" });
 });
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input }) => {
   const { id, ...updateData } = input;
   const result = await crud.update(id, updateData);
-  if ("error" in result) {
-    throw new ORPCError("NOT_FOUND", { message: result.error });
-  }
+  // Historical mapping: a role from another workspace surfaced as NOT_FOUND
+  // here (the role is invisible to the caller), not the shared FORBIDDEN default.
+  if (result.error !== undefined) throwServiceError(result, { WORKSPACE_MISMATCH: "NOT_FOUND" });
   return result.data;
 });
 
 export const remove = authRequired.input(idInputSchema).handler(async ({ input }) => {
   const result = await crud.remove(input.id);
-  if ("error" in result) {
-    throw new ORPCError("NOT_FOUND", { message: result.error });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });

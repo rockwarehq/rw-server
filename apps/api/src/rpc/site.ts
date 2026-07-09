@@ -4,6 +4,7 @@ import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import { site } from "@rw/services/facility/index";
 import { Principal } from "../auth/index.js";
 import { getAccessibleSites, hasPermission } from "@rw/auth/iam/index";
+import { throwServiceError, unwrap } from "./errors.js";
 
 // ============================================================================
 // Input Schemas
@@ -53,13 +54,7 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
   }
 
   const result = await site.create({ ...input, workspaceId });
-  if ("error" in result) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
-  return result.data;
+  return unwrap(result);
 });
 
 /**
@@ -96,12 +91,7 @@ export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ i
   if (!result) {
     throw new ORPCError("NOT_FOUND", { message: "Site not found" });
   }
-  if ("error" in result) {
-    throw new ORPCError("FORBIDDEN", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   if (
     context.iam.principal === Principal.USER &&
     !(await hasPermission(context.iam.id, "facility:read", { workspaceId, siteId: input.id }))
@@ -143,25 +133,7 @@ export const tree = userOrDisplayRequired.input(treeInputSchema).handler(async (
     }
 
     const result = await site.getSiteTree(siteId, workspaceId);
-    if ("error" in result) {
-      const code = result.code as string;
-      if (code === "SITE_NOT_FOUND") {
-        throw new ORPCError("NOT_FOUND", {
-          message: result.error as string,
-          cause: result,
-        });
-      }
-      if (code === "WORKSPACE_MISMATCH") {
-        throw new ORPCError("FORBIDDEN", {
-          message: result.error as string,
-          cause: result,
-        });
-      }
-      throw new ORPCError("BAD_REQUEST", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
+    if (result.error !== undefined) throwServiceError(result);
 
     if (input.siteId) {
       return result.data;
@@ -181,25 +153,7 @@ export const tree = userOrDisplayRequired.input(treeInputSchema).handler(async (
   // If siteId provided, return single site tree
   if (input.siteId) {
     const result = await site.getSiteTree(input.siteId, workspaceId);
-    if ("error" in result) {
-      const code = result.code as string;
-      if (code === "SITE_NOT_FOUND") {
-        throw new ORPCError("NOT_FOUND", {
-          message: result.error as string,
-          cause: result,
-        });
-      }
-      if (code === "WORKSPACE_MISMATCH") {
-        throw new ORPCError("FORBIDDEN", {
-          message: result.error as string,
-          cause: result,
-        });
-      }
-      throw new ORPCError("BAD_REQUEST", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
+    if (result.error !== undefined) throwServiceError(result);
     if (!(await hasPermission(userId, "facility:read", { workspaceId, siteId: input.siteId }))) {
       throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:read" });
     }
@@ -223,25 +177,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
   }
 
   const result = await site.update(id, updateData, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SITE_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -256,26 +192,8 @@ export const remove = authRequired.input(idInputSchema).handler(async ({ input, 
   }
 
   const result = await site.remove(input.id, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SITE_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    // HAS_WORKCENTERS, HAS_GATEWAYS, HAS_DATASOURCES
-    throw new ORPCError("CONFLICT", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  // HAS_WORKCENTERS / HAS_GATEWAYS / HAS_DATASOURCES map to CONFLICT via the shared table
+  if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
 
@@ -295,24 +213,6 @@ export const deviceTree = authRequired.input(siteIdInputSchema).handler(async ({
   }
 
   const result = await site.getDeviceTree(input.siteId, workspaceId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "SITE_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    if (code === "WORKSPACE_MISMATCH") {
-      throw new ORPCError("FORBIDDEN", {
-        message: result.error as string,
-        cause: result,
-      });
-    }
-    throw new ORPCError("BAD_REQUEST", {
-      message: result.error as string,
-      cause: result,
-    });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });

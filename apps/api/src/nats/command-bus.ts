@@ -11,8 +11,9 @@ import {
   type CommandResult,
 } from "@rw/runtime/command-subjects";
 import { commands as gatewayCommands } from "@rw/services/device/gateway/index";
-import { moduleLogger } from "./logger.js";
-import { registerReadinessCheck, unregisterReadinessCheck } from "./readiness.js";
+import { moduleLogger } from "../logger.js";
+import { ensureStream, natsServers } from "./util.js";
+import { registerReadinessCheck, unregisterReadinessCheck } from "../readiness.js";
 
 const log = moduleLogger("command-bus");
 
@@ -113,33 +114,13 @@ function parse<T>(data: Uint8Array): T | null {
   }
 }
 
-async function ensureCommandStream(jsm: Awaited<ReturnType<typeof jetstreamManager>>): Promise<void> {
-  try {
-    const info = await jsm.streams.info(COMMAND_STREAM);
-    const subjects = new Set(info.config.subjects ?? []);
-    if (!subjects.has(COMMAND_SUBJECT_FILTER)) {
-      await jsm.streams.update(COMMAND_STREAM, { subjects: [...subjects, COMMAND_SUBJECT_FILTER] });
-    }
-    return;
-  } catch {
-    await jsm.streams.add({
-      name: COMMAND_STREAM,
-      subjects: [COMMAND_SUBJECT_FILTER],
-      retention: RetentionPolicy.Limits,
-      storage: StorageType.File,
-      discard: DiscardPolicy.Old,
-      max_msgs: 10_000,
-      max_age: DAY_NANOS,
-      duplicate_window: TWO_MINUTES_NANOS,
-    });
-  }
-}
-
-function natsServers(value: string): string | string[] {
-  const servers = value
-    .split(",")
-    .map((server) => server.trim())
-    .filter(Boolean);
-  if (servers.length === 1) return servers[0] as string;
-  return servers;
+function ensureCommandStream(jsm: Awaited<ReturnType<typeof jetstreamManager>>): Promise<void> {
+  return ensureStream(jsm, COMMAND_STREAM, COMMAND_SUBJECT_FILTER, {
+    retention: RetentionPolicy.Limits,
+    storage: StorageType.File,
+    discard: DiscardPolicy.Old,
+    max_msgs: 10_000,
+    max_age: DAY_NANOS,
+    duplicate_window: TWO_MINUTES_NANOS,
+  });
 }

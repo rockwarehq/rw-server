@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ORPCError } from "@orpc/server";
 import { publicProcedure, authRequired } from "./middleware.js";
 import { display } from "@rw/services/display/index";
+import { throwServiceError, unwrap } from "./errors.js";
 import { Principal } from "../auth/index.js";
 
 // ============================================================================
@@ -46,11 +47,7 @@ const listInputSchema = z.object({
  * Called by the TV/tablet when it first opens /display
  */
 export const register = publicProcedure.handler(async () => {
-  const result = await display.register();
-  if ("error" in result) {
-    throw new ORPCError("INTERNAL_SERVER_ERROR", { message: result.error as string, cause: result });
-  }
-  return result.data;
+  return unwrap(await display.register());
 });
 
 /**
@@ -58,11 +55,7 @@ export const register = publicProcedure.handler(async () => {
  * Called by the TV/tablet to poll for claim status and get dashboard data
  */
 export const get = publicProcedure.input(idInputSchema).handler(async ({ input }) => {
-  const result = await display.getById(input.id);
-  if (!result) {
-    throw new ORPCError("NOT_FOUND", { message: "Display not found" });
-  }
-  return result.data;
+  return unwrap(await display.getById(input.id), { notFoundMessage: "Display not found" });
 });
 
 /**
@@ -79,9 +72,7 @@ export const heartbeat = publicProcedure.input(idInputSchema).handler(async ({ i
   }
 
   const result = await display.heartbeat(input.id);
-  if ("error" in result) {
-    throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
 
@@ -103,22 +94,9 @@ export const claim = authRequired.input(claimInputSchema).handler(async ({ input
     siteId: input.siteId,
   });
 
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "INVALID_CLAIM_CODE") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "ALREADY_CLAIMED") {
-      throw new ORPCError("CONFLICT", { message: result.error as string, cause: result });
-    }
-    if (code === "SITE_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "SITE_NOT_IN_WORKSPACE") {
-      throw new ORPCError("FORBIDDEN", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  // Historical mapping: an unknown claim code reads as an absent resource,
+  // not the shared default BAD_REQUEST.
+  if (result.error !== undefined) throwServiceError(result, { INVALID_CLAIM_CODE: "NOT_FOUND" });
   return result.data;
 });
 
@@ -144,19 +122,9 @@ export const assignDashboard = authRequired.input(assignDashboardInputSchema).ha
   }
 
   const result = await display.assignDashboard(workspaceId, input.id, input.dashboardId);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "DISPLAY_NOT_FOUND" || code === "DASHBOARD_NOT_FOUND") {
-      throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-    }
-    if (code === "SITE_MISMATCH") {
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
-    if (code === "NOT_CLAIMED") {
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-  }
+  // Historical mapping: dashboard/display site mismatch is referential-input
+  // BAD_REQUEST here, not the shared CONFLICT default.
+  if (result.error !== undefined) throwServiceError(result, { SITE_MISMATCH: "BAD_REQUEST" });
   return result.data;
 });
 
@@ -170,9 +138,7 @@ export const unassignDashboard = authRequired.input(idInputSchema).handler(async
   }
 
   const result = await display.unassignDashboard(workspaceId, input.id);
-  if ("error" in result) {
-    throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -187,12 +153,10 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 
   const { id, ...updateData } = input;
   const result = await display.update(workspaceId, id, updateData);
-  if ("error" in result) {
-    const code = result.code as string;
-    if (code === "WORKCENTER_NOT_FOUND" || code === "STATION_NOT_FOUND") {
-      throw new ORPCError("BAD_REQUEST", { message: result.error as string, cause: result });
-    }
-    throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
+  // Historical mapping: workcenter/station are referential inputs on update,
+  // so their absence is BAD_REQUEST rather than the shared NOT_FOUND default.
+  if (result.error !== undefined) {
+    throwServiceError(result, { WORKCENTER_NOT_FOUND: "BAD_REQUEST", STATION_NOT_FOUND: "BAD_REQUEST" });
   }
   return result.data;
 });
@@ -207,8 +171,6 @@ export const remove = authRequired.input(idInputSchema).handler(async ({ input, 
   }
 
   const result = await display.remove(workspaceId, input.id);
-  if ("error" in result) {
-    throw new ORPCError("NOT_FOUND", { message: result.error as string, cause: result });
-  }
+  if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });

@@ -9,6 +9,7 @@ import {
 } from "../services/point-value.js";
 import { Principal } from "../auth/index.js";
 import { subscribeStreamEvents, type PointValueEvent, type StreamEvent } from "@rw/runtime/events-bus";
+import { throwServiceError, type CodeOverrides } from "./errors.js";
 import { userOrDisplayRequired } from "./middleware.js";
 
 const pointIdsInputSchema = z.object({
@@ -55,21 +56,9 @@ function dedupePointIds(pointIds: string[]): string[] {
   return Array.from(new Set(pointIds));
 }
 
-function throwPointAccessError(
-  result: Extract<ValidatePointWorkspaceAccessResult | ValidatePointSiteAccessResult, { success: false }>,
-): never {
-  if (result.code === "POINTS_NOT_FOUND") {
-    throw new ORPCError("NOT_FOUND", {
-      message: result.error,
-      cause: result,
-    });
-  }
-
-  throw new ORPCError("FORBIDDEN", {
-    message: result.error,
-    cause: result,
-  });
-}
+// Historical mapping: a display asking for points outside its site is an access
+// denial (FORBIDDEN) here, not the shared SITE_MISMATCH -> CONFLICT default.
+const POINT_ACCESS_OVERRIDES: CodeOverrides = { SITE_MISMATCH: "FORBIDDEN" };
 
 export async function* filterPointValueEvents(
   events: AsyncIterable<StreamEvent>,
@@ -117,7 +106,7 @@ export const getSnapshots = userOrDisplayRequired
     }
 
     if (!accessValidationResult.success) {
-      throwPointAccessError(accessValidationResult);
+      throwServiceError(accessValidationResult, POINT_ACCESS_OVERRIDES);
     }
 
     const snapshots = await getLatestPointSnapshots(pointIds);
@@ -149,7 +138,7 @@ export const stream = userOrDisplayRequired
     }
 
     if (!accessValidationResult.success) {
-      throwPointAccessError(accessValidationResult);
+      throwServiceError(accessValidationResult, POINT_ACCESS_OVERRIDES);
     }
 
     const workspaceId = context.iam.workspaceId;
