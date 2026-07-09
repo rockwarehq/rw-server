@@ -7,6 +7,7 @@ import type { NatsConnection } from "@nats-io/nats-core";
 import { connect } from "@nats-io/transport-node";
 import prisma from "@rw/db";
 import { complete as completeCycle } from "@rw/services/cycle/index";
+import { initQueues, stopQueues } from "@rw/services/queues/station-detection";
 import { livestoreEventType, type LivestoreHookEvent } from "@rw/livestore/catalog/events";
 
 import { ImmEventConsumer, type ImmEventHandlers } from "./imm-event-consumer.js";
@@ -20,6 +21,9 @@ const handlers: ImmEventHandlers = {
 };
 
 export async function startImmEvents(): Promise<void> {
+  // Producer side of slow/down detection: without this, completeCycle's
+  // enqueueDetection is a silent no-op in this process. Workers stay in apps/api.
+  await initQueues();
   nc = await connect({
     servers: natsServers(),
     name: process.env.NATS_CLIENT_NAME || "rw-workers-imm-events",
@@ -44,6 +48,7 @@ export async function stopImmEvents(): Promise<void> {
   consumer = null;
   if (nc && !nc.isClosed()) await nc.drain();
   nc = null;
+  await stopQueues();
 }
 
 async function handleCycleCompleted(event: LivestoreHookEvent): Promise<void> {
