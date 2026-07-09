@@ -1,6 +1,6 @@
 {
   "name": "@rockwarehq/api-client",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Generated API client for Rockware API",
   "type": "module",
   "main": "dist/index.js",
