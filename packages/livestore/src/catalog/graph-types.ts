@@ -276,6 +276,16 @@ export const IMM_GRAPH_TYPE_NAMESPACE = {
           "string",
           10,
         ),
+        entityField(
+          "statusStartAt",
+          "Status Start",
+          "When the current status period began",
+          "imm.station",
+          "$input.stationId",
+          "statusStartAt",
+          "date",
+          11,
+        ),
 
         // Mirrored counters (NATS metric subjects, SHIFT granularity)
         ...counterMetricFields(100),
