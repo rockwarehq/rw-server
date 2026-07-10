@@ -5,7 +5,11 @@ import { ensureBuckets } from "../../../metrics/bucket.js";
 import { jobEntityId } from "../../../metrics/cascade.js";
 import { publishEntityEvent } from "../../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../../entity/registry.js";
-import { publishStationCurrentJobMetric, publishStationStandardCycleMetric } from "../state.js";
+import {
+  publishStationCurrentJobMetric,
+  publishStationStandardCycleMetric,
+  splitOpenStateEntryForJobChange,
+} from "../state.js";
 import type { StationActionDefinition } from "./types.js";
 
 interface JobChangeInput {
@@ -136,6 +140,9 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
           },
         });
       }
+
+      // Keep state-log entries job-homogeneous under the period model.
+      await splitOpenStateEntryForJobChange(tx, stationId, timestamp, job?.currentBlobId ?? null);
 
       return { station, closedLogs };
     });

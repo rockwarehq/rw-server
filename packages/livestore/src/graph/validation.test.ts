@@ -65,7 +65,7 @@ describe("validateResolverConfig entity path", () => {
   });
 
   it("accepts a catalogued path and the runtime-special id path", async () => {
-    for (const path of ["standardCycle", "id", "status", "statusReasonId", "statusReason"]) {
+    for (const path of ["standardCycle", "id", "status", "statusReasonId", "statusReason", "statusStartAt"]) {
       const result = await validateResolverConfig({
         resolverType: "entity",
         resolver: { type: "entity", entityType: "imm.station", entityId: "station-1", path },

@@ -348,7 +348,13 @@ async function resolveSystemEntityRecord(
     const openState = await prisma.stationStateLog.findFirst({
       where: { stationId: station.id, endTime: null, deletedAt: null },
       orderBy: { startTime: "desc" },
-      select: { state: true, status: true, statusReasonId: true, statusReason: { select: { name: true } } },
+      select: {
+        state: true,
+        status: true,
+        statusReasonId: true,
+        startTime: true,
+        statusReason: { select: { name: true } },
+      },
     });
     return {
       data: {
@@ -359,6 +365,7 @@ async function resolveSystemEntityRecord(
         status: openState ? (openState.status ?? openState.state) : null,
         statusReasonId: openState?.statusReasonId ?? null,
         statusReason: openState?.statusReason?.name ?? null,
+        statusStartAt: openState?.startTime ?? null,
         currentBlob: station.currentBlob
           ? {
               ...station.currentBlob,

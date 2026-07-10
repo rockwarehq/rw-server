@@ -46,10 +46,11 @@ export {
 } from "./events.js";
 
 export {
-  transitionToUp,
+  applyCycleCompleteTransition,
   transitionToSlow,
   transitionToDown,
   splitDownEntry,
+  splitOpenStateEntryForJobChange,
   assignDowntimeReason,
   listStateLogs,
   type ListStateLogsFilter,

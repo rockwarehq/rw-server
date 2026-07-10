@@ -10,13 +10,23 @@ type TransactionClient = Prisma.TransactionClient;
 
 // ── Types ────────────────────────────────────────────────────────
 
-export interface TransitionToUpOptions {
-  /** Duration of the completed cycle in seconds. */
-  cycleDurationSeconds?: number;
-  /** Slow threshold in seconds: standardCycle * (1 + slowDetect). */
-  slowThresholdSeconds?: number;
-  /** Snapshot of the job blob version active at cycle time. */
-  jobBlobId?: string;
+/** Open state-log row snapshot handed to {@link applyCycleCompleteTransition}. */
+export interface CycleTransitionOpenRow {
+  id: string;
+  startTime: Date;
+  state: "UP" | "DOWN";
+  status: "FAST" | "SLOW" | "UP" | "DOWN" | null;
+  statusReasonId: string | null;
+  blockId: string;
+}
+
+export interface CycleCompleteTransitionResult {
+  /** Open status after the cycle: RUNNING ("UP") or "SLOW". */
+  newStatus: "UP" | "SLOW";
+  /** A row was opened/closed/converted with a different resulting status. */
+  statusChanged: boolean;
+  /** Populated only when a row actually closed. */
+  closedEntry: ClosedEntryInfo | null;
 }
 
 /**
@@ -49,7 +59,7 @@ export interface ClosedEntryInfo {
  * Uses pg_advisory_xact_lock which is automatically released when the
  * transaction commits or rolls back — no manual cleanup needed.
  */
-async function acquireStationLock(client: TransactionClient | typeof prisma, stationId: string) {
+export async function acquireStationLock(client: TransactionClient | typeof prisma, stationId: string) {
   await client.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${stationId}))::text`;
 }
 
@@ -57,7 +67,7 @@ async function acquireStationLock(client: TransactionClient | typeof prisma, sta
  * Find the current (open) state log entry for a station.
  * An open entry has endTime = null.
  */
-async function findOpenStateEntry(client: TransactionClient | typeof prisma, stationId: string) {
+export async function findOpenStateEntry(client: TransactionClient | typeof prisma, stationId: string) {
   return client.stationStateLog.findFirst({
     where: { stationId, endTime: null, deletedAt: null },
     orderBy: { startTime: "desc" },
@@ -365,87 +375,157 @@ const SPLIT_MIN_MARGIN_MINUTES = 5;
 
 // ── Public API ───────────────────────────────────────────────────
 
+/** Latest completed cycle end, clamped into [floor, ceil]; floor when no cycles exist. */
+async function lastCycleEndClamped(
+  client: TransactionClient | typeof prisma,
+  stationId: string,
+  floor: Date,
+  ceil: Date,
+): Promise<Date> {
+  const rows = await client.$queryRaw<Array<{ end: Date }>>`
+    SELECT "end" FROM "Cycle"
+    WHERE "stationId" = ${stationId} AND "end" IS NOT NULL
+    ORDER BY "end" DESC LIMIT 1
+  `;
+  const lastEnd = rows[0]?.end ?? floor;
+  return new Date(Math.min(Math.max(lastEnd.getTime(), floor.getTime()), ceil.getTime()));
+}
+
 /**
- * Transition a station to UP state on cycle complete.
+ * Apply a cycle completion to the state log under the period model:
+ * rows are status periods, so most cycles touch nothing.
  *
- * Every cycle completion closes the current open entry (regardless of
- * its state/status) and creates a new UP entry. A fresh blockId is
- * only generated on a state change (e.g. DOWN→UP) or when no prior
- * entry exists; consecutive UP transitions reuse the existing blockId.
+ * - RUNNING + on-pace cycle, or SLOW + slow cycle → no writes (SLOW is
+ *   sticky until a non-slow cycle completes, so dashboards don't flap).
+ * - SLOW + on-pace cycle → close SLOW, open RUNNING (same block).
+ * - DOWN → close DOWN, open RUNNING (new block) — always RUNNING: a
+ *   recovery cycle spans the down period, so its duration never means SLOW.
+ * - RUNNING + slow cycle → fallback when the slow timer didn't fire;
+ *   SLOW backdates to the start of the overlong cycle.
  *
- * After creating the entry, if the cycle duration exceeded the slow
- * threshold, the entry's status is upgraded to SLOW — this makes SLOW
- * persist across cycle completions so the dashboard shows SLOW as long
- * as the station keeps running slow, instead of flickering back to UP
- * for a split second between every slow cycle.
- *
- * Returns the new state log entry and info about the closed entry
- * (if any). The caller (cycle.ts) should use closedEntry to trigger
- * updateTimeBased for the closed entry's full time range.
- *
- * Accepts a transaction client so it can participate in the cycle
- * transaction, or falls back to the default prisma client.
+ * Caller must already hold the station advisory lock in `tx`.
  */
-export async function transitionToUp(
-  tx: TransactionClient | typeof prisma,
+export async function applyCycleCompleteTransition(
+  tx: TransactionClient,
   stationId: string,
   timestamp: Date,
-  options?: TransitionToUpOptions,
-): Promise<{ entry: Awaited<ReturnType<typeof createStateEntry>>; closedEntry: ClosedEntryInfo | null }> {
-  // Serialize with other state transitions for this station
-  await acquireStationLock(tx, stationId);
+  opts: {
+    cycleWasSlow: boolean;
+    /** Start of the completed cycle (== previous cycle's end); backdates the SLOW fallback. */
+    cycleStart: Date;
+    jobBlobId?: string | null;
+    openRow: CycleTransitionOpenRow | null;
+  },
+): Promise<CycleCompleteTransitionResult> {
+  const { openRow } = opts;
 
-  const current = await findOpenStateEntry(tx, stationId);
-  let closedEntry: ClosedEntryInfo | null = null;
+  const openRunning = async (blockId: string) => {
+    await createStateEntry(tx, {
+      stationId,
+      startTime: timestamp,
+      state: "UP",
+      status: "UP",
+      blockId,
+      jobBlobId: opts.jobBlobId,
+    });
+  };
 
-  // Close all open entries for this station (defensive against orphaned duplicates)
-  if (current) {
-    await closeOpenStateEntries(tx, stationId, timestamp);
-    closedEntry = {
-      startTime: current.startTime,
-      endTime: timestamp,
-      state: current.state,
-      status: current.status ?? null,
-      statusReasonId: current.statusReasonId ?? null,
-    };
+  if (!openRow) {
+    await openRunning(randomUUID());
+    return { newStatus: "UP", statusChanged: true, closedEntry: null };
   }
 
-  // New blockId only on state change (DOWN→UP) or first entry;
-  // reuse blockId when staying within the same state (UP→UP, UP→SLOW, SLOW→UP, SLOW→SLOW).
-  const blockId = current?.state === "UP" ? current.blockId : randomUUID();
-  const entry = await createStateEntry(tx, {
-    stationId,
-    startTime: timestamp,
-    state: "UP",
-    status: "UP",
-    blockId,
-    jobBlobId: options?.jobBlobId,
+  const closed = (endTime: Date): ClosedEntryInfo => ({
+    startTime: openRow.startTime,
+    endTime,
+    state: openRow.state,
+    status: openRow.status,
+    statusReasonId: openRow.statusReasonId,
   });
 
-  // Upgrade to SLOW if the just-completed cycle exceeded the slow threshold.
-  if (
-    options?.cycleDurationSeconds != null &&
-    options.cycleDurationSeconds > 0 &&
-    options?.slowThresholdSeconds != null &&
-    options.slowThresholdSeconds > 0 &&
-    options.cycleDurationSeconds > options.slowThresholdSeconds
-  ) {
-    const updated = await tx.stationStateLog.update({
-      where: { id: entry.id },
-      data: { status: "SLOW" },
-    });
-    return { entry: updated, closedEntry };
+  if (openRow.state === "DOWN") {
+    await closeOpenStateEntries(tx, stationId, timestamp);
+    await openRunning(randomUUID());
+    return { newStatus: "UP", statusChanged: true, closedEntry: closed(timestamp) };
   }
 
-  return { entry, closedEntry };
+  const running = openRow.status !== "SLOW"; // FAST/null on an UP row counts as RUNNING
+
+  if (running === !opts.cycleWasSlow) {
+    // Status already matches the cycle outcome — the hot path writes nothing.
+    return { newStatus: running ? "UP" : "SLOW", statusChanged: false, closedEntry: null };
+  }
+
+  if (!running) {
+    // SLOW + on-pace cycle → back to RUNNING, same block (state stayed UP).
+    await closeOpenStateEntries(tx, stationId, timestamp);
+    await openRunning(openRow.blockId);
+    return { newStatus: "UP", statusChanged: true, closedEntry: closed(timestamp) };
+  }
+
+  // RUNNING + slow cycle. Backdate SLOW to the overlong cycle's start;
+  // convert in place when the row opened there (no zero-duration rows).
+  const slowStart = new Date(
+    Math.min(Math.max(opts.cycleStart.getTime(), openRow.startTime.getTime()), timestamp.getTime()),
+  );
+  if (openRow.startTime >= slowStart) {
+    await tx.stationStateLog.update({ where: { id: openRow.id }, data: { status: "SLOW" } });
+    return { newStatus: "SLOW", statusChanged: true, closedEntry: null };
+  }
+  await closeOpenStateEntries(tx, stationId, slowStart);
+  await createStateEntry(tx, {
+    stationId,
+    startTime: slowStart,
+    state: "UP",
+    status: "SLOW",
+    blockId: openRow.blockId,
+    jobBlobId: opts.jobBlobId,
+  });
+  return { newStatus: "SLOW", statusChanged: true, closedEntry: closed(slowStart) };
+}
+
+/**
+ * Split the open state entry at a job change so entries stay
+ * job-homogeneous: close the open row and continue it with the same
+ * state/status/blockId/statusReasonId under the new job blob. Caller
+ * must hold the station advisory lock in `tx`.
+ */
+export async function splitOpenStateEntryForJobChange(
+  tx: TransactionClient,
+  stationId: string,
+  timestamp: Date,
+  newJobBlobId: string | null,
+): Promise<void> {
+  const current = await findOpenStateEntry(tx, stationId);
+  if (!current || current.jobBlobId === newJobBlobId) return;
+
+  if (current.startTime >= timestamp) {
+    await tx.stationStateLog.update({ where: { id: current.id }, data: { jobBlobId: newJobBlobId } });
+    return;
+  }
+
+  await closeOpenStateEntries(tx, stationId, timestamp);
+  await tx.stationStateLog.create({
+    data: {
+      stationId,
+      startTime: timestamp,
+      state: current.state,
+      status: current.status,
+      blockId: current.blockId,
+      statusReasonId: current.statusReasonId,
+      jobBlobId: newJobBlobId,
+    },
+  });
 }
 
 /**
  * Transition a station to the SLOW sub-status.
  *
- * Called by the slow detection timer. The machine is still UP but
- * exceeding the expected cycle time. Updates the status column on
- * the existing open entry (no close/create — avoids row churn).
+ * Called by the slow detection timer. The machine is still UP but the
+ * in-progress cycle exceeded the expected cycle time, so SLOW backdates
+ * to the last cycle completion (the overlong cycle's start). A young
+ * open entry (opened at that cycle) flips in place; a long-lived
+ * RUNNING entry is closed there and continued as SLOW (same block).
  *
  * No-op if the station is already DOWN or SLOW.
  *
@@ -482,13 +562,27 @@ export async function transitionToSlow(stationId: string, timestamp: Date) {
       return { entry: current, statusChanged: false };
     }
 
-    // Currently UP — update status in place. State stays UP so no
-    // close/create needed; avoids row churn.
-    const updated = await tx.stationStateLog.update({
-      where: { id: current.id },
-      data: { status: "SLOW" },
+    // Currently RUNNING — backdate SLOW to the last cycle completion.
+    const slowStart = await lastCycleEndClamped(tx, stationId, current.startTime, timestamp);
+    if (current.startTime >= slowStart) {
+      const updated = await tx.stationStateLog.update({
+        where: { id: current.id },
+        data: { status: "SLOW" },
+      });
+      return { entry: updated, statusChanged: true };
+    }
+    await closeOpenStateEntries(tx, stationId, slowStart);
+    const created = await tx.stationStateLog.create({
+      data: {
+        stationId,
+        startTime: slowStart,
+        state: "UP",
+        status: "SLOW",
+        blockId: current.blockId,
+        jobBlobId: current.jobBlobId,
+      },
     });
-    return { entry: updated, statusChanged: true };
+    return { entry: created, statusChanged: true };
   });
 
   const ctx = await loadStationMetricContext(prisma, stationId);
@@ -498,7 +592,7 @@ export async function transitionToSlow(stationId: string, timestamp: Date) {
       (entry.status ?? entry.state) as "FAST" | "SLOW" | "UP" | "DOWN",
       entry.updatedAt,
     );
-    if (statusChanged) publishStationStatusEntityEvent(ctx, ["status"]);
+    if (statusChanged) publishStationStatusEntityEvent(ctx, ["status", "statusStartAt"]);
   }
   return entry;
 }
@@ -506,13 +600,14 @@ export async function transitionToSlow(stationId: string, timestamp: Date) {
 /**
  * Transition a station to DOWN state.
  *
- * Called by the downtime detection timer. The machine has exceeded
- * the configured downtime threshold. Closes the current entry and
- * opens a new DOWN/DOWN entry with a new blockId (state change
- * UP→DOWN always starts a new block).
+ * Called by the downtime detection timer. Downtime backdates to the
+ * last cycle completion: a SLOW entry already starts there (SLOW
+ * backdates too) and converts in place — absorbing the slow period —
+ * while a long-lived RUNNING entry is closed there and continued as
+ * DOWN so run time isn't reclassified. DOWN always starts a new block.
  *
  * After the transaction, fires updateTimeBased to recompute
- * duration KPIs for the closed UP entry's time range.
+ * duration KPIs for the range that flipped to DOWN.
  */
 export async function transitionToDown(stationId: string, timestamp: Date) {
   const result = await prisma.$transaction(async (tx) => {
@@ -552,23 +647,33 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
       };
     }
 
-    // State change UP → DOWN — convert entry in place so the DOWN
-    // period starts at the last cycle time, not the timer fire time.
-
-    // Defensive: close any orphaned open entries (not the one we're converting)
-    await tx.stationStateLog.updateMany({
-      where: { stationId, endTime: null, deletedAt: null, id: { not: current.id } },
-      data: { endTime: timestamp },
-    });
-
+    // State change UP → DOWN — DOWN starts at the last cycle time,
+    // not the timer fire time.
+    const downStart = await lastCycleEndClamped(tx, stationId, current.startTime, timestamp);
     const blockId = randomUUID();
-    const entry = await tx.stationStateLog.update({
-      where: { id: current.id },
-      data: { state: "DOWN", status: "DOWN", blockId, jobBlobId },
-    });
+
+    let entry: Awaited<ReturnType<typeof createStateEntry>>;
+    if (current.startTime >= downStart) {
+      // Young entry (opened at that cycle, or a backdated SLOW) — convert in place.
+      // Defensive: close any orphaned open entries (not the one we're converting)
+      await tx.stationStateLog.updateMany({
+        where: { stationId, endTime: null, deletedAt: null, id: { not: current.id } },
+        data: { endTime: timestamp },
+      });
+      entry = await tx.stationStateLog.update({
+        where: { id: current.id },
+        data: { state: "DOWN", status: "DOWN", blockId, jobBlobId },
+      });
+    } else {
+      // Long-lived RUNNING entry — close it at the last cycle and continue as DOWN.
+      await closeOpenStateEntries(tx, stationId, downStart);
+      entry = await tx.stationStateLog.create({
+        data: { stationId, startTime: downStart, state: "DOWN", status: "DOWN", blockId, jobBlobId },
+      });
+    }
 
     // Range that changed from UP→DOWN, needed for metrics recalc
-    const convertedRange = { startTime: current.startTime, endTime: timestamp };
+    const convertedRange = { startTime: downStart, endTime: timestamp };
     return { entry, convertedRange, statusChanged: true };
   });
 
@@ -592,7 +697,7 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
       result.entry.updatedAt,
     );
     publishStationStatusReasonMetricEvent(ctx, result.entry.statusReasonId, result.entry.updatedAt);
-    if (result.statusChanged) publishStationStatusEntityEvent(ctx, ["status", "statusReasonId"]);
+    if (result.statusChanged) publishStationStatusEntityEvent(ctx, ["status", "statusReasonId", "statusStartAt"]);
   }
   return result.entry;
 }

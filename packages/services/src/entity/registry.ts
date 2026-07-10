@@ -145,6 +145,13 @@ export const SYSTEM_ENTITY_REGISTRY: readonly SystemEntitySpec[] = [
         description: "Name of the StatusReason on the open state-log entry.",
         sortOrder: 76,
       },
+      {
+        name: "statusStartAt",
+        label: "Status Start",
+        type: "TIMESTAMP",
+        description: "When the current status period began (open state-log entry start).",
+        sortOrder: 78,
+      },
       { name: "createdAt", type: "TIMESTAMP", sortOrder: 80 },
       { name: "updatedAt", type: "TIMESTAMP", sortOrder: 90 },
       { name: "deletedAt", type: "TIMESTAMP", sortOrder: 100 },
