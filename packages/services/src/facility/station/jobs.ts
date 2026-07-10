@@ -32,7 +32,7 @@ type ChangeJobResult =
  * invocation from the oRPC layer (without going through the event system).
  *
  * Closes the current StationJobLog entry, updates Station.currentJobId,
- * and creates a new StationJobLog entry with snapshotted blob data.
+ * and creates a new StationJobLog entry with snapshotted version data.
  */
 export async function changeJob(stationId: string, newJobId: string | null): Promise<ChangeJobResult> {
   const timestamp = new Date();
@@ -45,8 +45,8 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
         id: true,
         siteId: true,
         deletedAt: true,
-        currentBlobId: true,
-        currentBlob: {
+        currentVersionId: true,
+        currentVersion: {
           select: { standardCycle: true, name: true },
         },
       },
@@ -61,8 +61,8 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
       return { error: "Job not found", code: "JOB_NOT_FOUND" };
     }
 
-    if (!job.currentBlobId) {
-      return { error: "Job has no current blob version", code: "NO_CURRENT_BLOB" };
+    if (!job.currentVersionId) {
+      return { error: "Job has no current version version", code: "NO_CURRENT_VERSION" };
     }
   }
 
@@ -119,14 +119,14 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
 
     // Create a new StationJobLog entry
     if (newJobId && job) {
-      const standardCycle = job.currentBlob?.standardCycle ?? null;
+      const standardCycle = job.currentVersion?.standardCycle ?? null;
 
       await tx.stationJobLog.create({
         data: {
           stationId,
           jobId: newJobId,
-          // biome-ignore lint/style/noNonNullAssertion: returns NO_CURRENT_BLOB above (line 47-49) if job.currentBlobId is null; narrowing lost across closure
-          jobBlobId: job.currentBlobId!,
+          // biome-ignore lint/style/noNonNullAssertion: returns NO_CURRENT_VERSION above (line 47-49) if job.currentVersionId is null; narrowing lost across closure
+          jobVersionId: job.currentVersionId!,
           startTime: timestamp,
           standardCycle,
         },
@@ -134,7 +134,7 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
     }
 
     // Keep state-log entries job-homogeneous under the period model.
-    await splitOpenStateEntryForJobChange(tx, stationId, timestamp, job?.currentBlobId ?? null);
+    await splitOpenStateEntryForJobChange(tx, stationId, timestamp, job?.currentVersionId ?? null);
 
     return { station, previousJobId, openLogs };
   });
@@ -167,16 +167,16 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
       siteId: station.siteId,
       entityType: "JOB",
       entityId: jobEntityId(stationId, newJobId),
-      entityName: job.currentBlob?.name ?? "",
+      entityName: job.currentVersion?.name ?? "",
       timestamp,
     }).catch((err) => {
       console.error(`[changeJob] Failed to ensure JOB buckets for job ${newJobId}:`, err);
     });
 
-    publishStationCurrentJobMetric(stationId, job.currentBlob?.name ?? null, timestamp).catch((err) => {
+    publishStationCurrentJobMetric(stationId, job.currentVersion?.name ?? null, timestamp).catch((err) => {
       console.error(`[changeJob] publishStationCurrentJobMetric failed for station ${stationId}:`, err);
     });
-    const standardCycleSeconds = job.currentBlob?.standardCycle != null ? Number(job.currentBlob.standardCycle) : null;
+    const standardCycleSeconds = job.currentVersion?.standardCycle != null ? Number(job.currentVersion.standardCycle) : null;
     publishStationStandardCycleMetric(stationId, standardCycleSeconds, timestamp).catch((err) => {
       console.error(`[changeJob] publishStationStandardCycleMetric failed for station ${stationId}:`, err);
     });
@@ -192,7 +192,7 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
   // Resolve the previous job's display name (the new job's name is already loaded above). Used to
   // populate the job.changed automation event payload so messages can show names, not uuids.
   const previousJob = previousJobId
-    ? await prisma.job.findUnique({ where: { id: previousJobId }, select: { currentBlob: { select: { name: true } } } })
+    ? await prisma.job.findUnique({ where: { id: previousJobId }, select: { currentVersion: { select: { name: true } } } })
     : null;
 
   return {
@@ -200,9 +200,9 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
       stationId,
       stationName: station.name,
       previousJobId,
-      previousJobName: previousJob?.currentBlob?.name ?? null,
+      previousJobName: previousJob?.currentVersion?.name ?? null,
       newJobId,
-      currentJobName: job?.currentBlob?.name ?? null,
+      currentJobName: job?.currentVersion?.name ?? null,
       workCenterId: station.workcenterId,
       workCenterName: station.workcenter?.name ?? null,
     },

@@ -53,7 +53,7 @@ export interface MetricsUpdateRequest {
   timestamp: Date;
   /** Number of inventory items produced by this cycle. */
   itemsCount: number;
-  /** Standard cycle time in seconds from the job blob (for idealCycleSeconds). Null if unknown. */
+  /** Standard cycle time in seconds from the job version (for idealCycleSeconds). Null if unknown. */
   standardCycleSeconds: number | null;
   /** Number of items produced per cycle for this job (for expectedItems). */
   itemsPerCycle: number;

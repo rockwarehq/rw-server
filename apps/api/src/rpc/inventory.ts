@@ -9,11 +9,11 @@ import { type CodeOverrides, throwServiceError, unwrap } from "./errors.js";
 // observable error codes are API (@rockwarehq/rpc-client is published):
 // - MATERIAL_DELETED reads as absent like the other *_DELETED codes, but is
 //   not in the shared exact table (default would be BAD_REQUEST).
-// - NO_CURRENT_BLOB always fell through to the catch-all BAD_REQUEST in this
+// - NO_CURRENT_VERSION always fell through to the catch-all BAD_REQUEST in this
 //   router (shared default: CONFLICT).
 const inventoryOverrides: CodeOverrides = {
   MATERIAL_DELETED: "NOT_FOUND",
-  NO_CURRENT_BLOB: "BAD_REQUEST",
+  NO_CURRENT_VERSION: "BAD_REQUEST",
 };
 
 // ============================================================================
@@ -23,8 +23,8 @@ const inventoryOverrides: CodeOverrides = {
 const inventoryListInputSchema = z.object({
   siteId: z.uuid().optional(),
   cycleId: z.uuid().optional(),
-  productBlobId: z.uuid().optional(),
-  jobProductBlobId: z.uuid().optional(),
+  productVersionId: z.uuid().optional(),
+  jobProductVersionId: z.uuid().optional(),
   dateFrom: z.coerce.date().optional(),
   dateTo: z.coerce.date().optional(),
   limit: z.number().min(0).default(50),
@@ -173,7 +173,7 @@ export const materialGet = authRequired.input(idInputSchema).handler(async ({ in
 });
 
 /**
- * Update material (creates new blob version)
+ * Update material (creates new version version)
  */
 export const materialUpdate = authRequired.input(materialUpdateInputSchema).handler(async ({ input, context }) => {
   const workspaceId = context.iam.workspaceId;
@@ -345,7 +345,7 @@ export const productGet = authRequired.input(idInputSchema).handler(async ({ inp
 });
 
 /**
- * Update product (creates new blob version)
+ * Update product (creates new version version)
  */
 export const productUpdate = authRequired.input(productUpdateInputSchema).handler(async ({ input, context }) => {
   const workspaceId = context.iam.workspaceId;

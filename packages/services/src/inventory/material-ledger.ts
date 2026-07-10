@@ -26,7 +26,7 @@ const ledgerInclude = {
     select: {
       id: true,
       siteId: true,
-      currentBlob: {
+      currentVersion: {
         select: { materialNumber: true, name: true, shortCode: true },
       },
     },
@@ -43,7 +43,7 @@ export async function create(input: CreateLedgerEntryInput) {
       id: true,
       siteId: true,
       deletedAt: true,
-      currentBlob: { select: { weightUnits: true } },
+      currentVersion: { select: { weightUnits: true } },
     },
   });
 
@@ -59,7 +59,7 @@ export async function create(input: CreateLedgerEntryInput) {
   // The auto path (cycle close → shift flush) handles unit conversion before
   // it ever reaches the ledger; this guard catches client bugs that would
   // otherwise corrupt SUM(quantity) balances.
-  const canonicalUnit = material.currentBlob?.weightUnits ?? null;
+  const canonicalUnit = material.currentVersion?.weightUnits ?? null;
   if (canonicalUnit !== null && input.unit !== canonicalUnit) {
     return {
       error: `Ledger unit ${input.unit} does not match material canonical unit ${canonicalUnit}`,
@@ -304,11 +304,11 @@ export async function usage(input: UsageQueryInput): Promise<{ data: UsageRow[];
         g."itemCount"::int                           AS "itemCount"
       FROM grouped g
       LEFT JOIN "Job"          j  ON j.id  = g."jobId"
-      LEFT JOIN "JobBlob"      jb ON jb.id = j."currentBlobId"
+      LEFT JOIN "JobVersion"      jb ON jb.id = j."currentVersionId"
       LEFT JOIN "Product"      p  ON p.id  = g."productId"
-      LEFT JOIN "ProductBlob"  pb ON pb.id = p."currentBlobId"
+      LEFT JOIN "ProductVersion"  pb ON pb.id = p."currentVersionId"
       LEFT JOIN "Material"     m  ON m.id  = g."materialId"
-      LEFT JOIN "MaterialBlob" mb ON mb.id = m."currentBlobId"
+      LEFT JOIN "MaterialVersion" mb ON mb.id = m."currentVersionId"
     )
     SELECT
       d.*,

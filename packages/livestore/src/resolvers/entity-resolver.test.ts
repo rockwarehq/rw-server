@@ -175,7 +175,7 @@ describe("EntityResolver", () => {
   it("handleEntityEvent always re-resolves nested paths (changedFields can't be trusted)", async () => {
     const { resolver, commits, properties } = harness();
     const property = entityProperty({
-      resolver: { type: "entity", entityType: "imm.station", entityId: "station-7", path: "currentBlob.standardCycle" },
+      resolver: { type: "entity", entityType: "imm.station", entityId: "station-7", path: "currentVersion.standardCycle" },
     });
     properties.set(property.id, property);
     await resolver.upsertProperty(property);

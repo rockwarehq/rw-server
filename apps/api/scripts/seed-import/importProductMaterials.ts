@@ -67,37 +67,37 @@ export async function importProductMaterials(
           productId,
           materialId,
         },
-        include: { currentBlob: true },
+        include: { currentVersion: true },
       });
 
       const product = await prisma.product.findUnique({
         where: { id: productId },
-        select: { currentBlobId: true },
+        select: { currentVersionId: true },
       });
       const material = await prisma.material.findUnique({
         where: { id: materialId },
-        select: { currentBlobId: true },
+        select: { currentVersionId: true },
       });
 
-      if (!product?.currentBlobId || !material?.currentBlobId) return;
+      if (!product?.currentVersionId || !material?.currentVersionId) return;
 
-      const current = pm.currentBlob;
+      const current = pm.currentVersion;
 
       if (!current) {
-        // First time we've seen this ProductMaterial — create v1 blob and link it.
-        const newBlob = await prisma.productMaterialBlob.create({
+        // First time we've seen this ProductMaterial — create v1 version and link it.
+        const newVersion = await prisma.productMaterialVersion.create({
           data: {
             productMaterialId: pm.id,
             version: 1,
             weight,
             weightUnits,
-            materialBlobId: material.currentBlobId,
-            productBlobId: product.currentBlobId,
+            materialVersionId: material.currentVersionId,
+            productVersionId: product.currentVersionId,
           },
         });
         await prisma.productMaterial.update({
           where: { id: pm.id },
-          data: { currentBlobId: newBlob.id },
+          data: { currentVersionId: newVersion.id },
         });
         return;
       }
@@ -105,18 +105,18 @@ export async function importProductMaterials(
       const changed =
         (current.weight !== null ? Number(current.weight) : null) !== weight ||
         current.weightUnits !== weightUnits ||
-        current.materialBlobId !== material.currentBlobId ||
-        current.productBlobId !== product.currentBlobId;
+        current.materialVersionId !== material.currentVersionId ||
+        current.productVersionId !== product.currentVersionId;
 
       if (!changed) return;
 
-      await prisma.productMaterialBlob.update({
+      await prisma.productMaterialVersion.update({
         where: { id: current.id },
         data: {
           weight,
           weightUnits,
-          materialBlobId: material.currentBlobId,
-          productBlobId: product.currentBlobId,
+          materialVersionId: material.currentVersionId,
+          productVersionId: product.currentVersionId,
         },
       });
     },

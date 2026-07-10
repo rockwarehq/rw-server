@@ -221,7 +221,7 @@ async function ensureBucketsInternal(input: EnsureBucketsInput, timezone: string
       SELECT s."currentJobId", jb.name AS "jobName"
       FROM "Station" s
       LEFT JOIN "Job" j ON j.id = s."currentJobId"
-      LEFT JOIN "JobBlob" jb ON jb.id = j."currentBlobId"
+      LEFT JOIN "JobVersion" jb ON jb.id = j."currentVersionId"
       WHERE s.id = ${input.entityId}::uuid
       LIMIT 1
     `;

@@ -52,35 +52,35 @@ export async function importMaterials(
       const weightUnits = mapWeightUnit(row.Unit);
       const unitCost = parseDecimalCommaNumber(row.UnitCost);
 
-      // Look up existing material by matching current blob shortCode + siteId.
+      // Look up existing material by matching current version shortCode + siteId.
       // shortCode is nullable; only apply case-insensitive matching when it's
       // a real string (a NULL shortCode just matches NULL — there's no case).
       const existing = await prisma.material.findFirst({
         where: {
           siteId,
-          currentBlob:
+          currentVersion:
             shortCode === null
               ? { shortCode: null }
               : { shortCode: { equals: shortCode, mode: "insensitive" } },
         },
-        include: { currentBlob: true },
+        include: { currentVersion: true },
       });
 
       if (existing) {
         // Check if data changed
-        const blob = existing.currentBlob;
+        const version = existing.currentVersion;
         const changed =
-          blob?.name !== name ||
-          blob?.materialNumber !== materialNumber ||
-          blob?.description !== description ||
-          blob?.weightUnits !== weightUnits ||
-          (blob?.unitCost !== null && blob?.unitCost !== undefined
-            ? Number(blob.unitCost)
+          version?.name !== name ||
+          version?.materialNumber !== materialNumber ||
+          version?.description !== description ||
+          version?.weightUnits !== weightUnits ||
+          (version?.unitCost !== null && version?.unitCost !== undefined
+            ? Number(version.unitCost)
             : null) !== unitCost;
 
-        if (changed && blob) {
-          await prisma.materialBlob.update({
-            where: { id: blob.id },
+        if (changed && version) {
+          await prisma.materialVersion.update({
+            where: { id: version.id },
             data: { name, shortCode, materialNumber, description, weightUnits, unitCost },
           });
         }
@@ -89,12 +89,12 @@ export async function importMaterials(
         return;
       }
 
-      // Create new material + blob v1
+      // Create new material + version v1
       const material = await prisma.material.create({
         data: { siteId },
       });
 
-      const blob = await prisma.materialBlob.create({
+      const version = await prisma.materialVersion.create({
         data: {
           version: 1,
           name,
@@ -109,7 +109,7 @@ export async function importMaterials(
 
       await prisma.material.update({
         where: { id: material.id },
-        data: { currentBlobId: blob.id },
+        data: { currentVersionId: version.id },
       });
 
       idMap.set("material", row.shortCode, material.id);

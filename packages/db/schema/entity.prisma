@@ -15,17 +15,17 @@ enum ObjectSchemaSource {
 }
 
 model ObjectSchema {
-  id          String  @id @default(uuid()) @db.Uuid
-  key         String
-  label       String
-  name        String
-  description String?
-  source      ObjectSchemaSource @default(DOCUMENT)
-  meta        Json               @default("{}")
+  id              String             @id @default(uuid()) @db.Uuid
+  key             String
+  label           String
+  name            String
+  description     String?
+  source          ObjectSchemaSource @default(DOCUMENT)
+  meta            Json               @default("{}")
   displayFieldKey String?
-  isSystem    Boolean            @default(false)
-  version     Int     @default(1)
-  isDeleted   Boolean @default(false)
+  isSystem        Boolean            @default(false)
+  version         Int                @default(1)
+  isDeleted       Boolean            @default(false)
 
   workspaceId String?    @db.Uuid
   workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)

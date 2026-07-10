@@ -6,13 +6,13 @@ import { type CodeOverrides, throwServiceError, unwrap } from "./errors.js";
 
 // Historical mappings that predate the shared mapper — pinned because
 // observable error codes are API (@rockwarehq/rpc-client is published):
-// - NO_CURRENT_BLOB fell through to the catch-all BAD_REQUEST in this router
+// - NO_CURRENT_VERSION fell through to the catch-all BAD_REQUEST in this router
 //   (shared default: CONFLICT).
 // - The old handlers checked for HAS_JOB_ITEMS, a code the services never
 //   emit; the actual HAS_JOB_PRODUCTS therefore always fell through to
 //   BAD_REQUEST (shared default: CONFLICT).
 const jobOverrides: CodeOverrides = {
-  NO_CURRENT_BLOB: "BAD_REQUEST",
+  NO_CURRENT_VERSION: "BAD_REQUEST",
   HAS_JOB_PRODUCTS: "BAD_REQUEST",
 };
 
@@ -200,7 +200,7 @@ export const toolGet = authRequired.input(toolIdInputSchema).handler(async ({ in
 });
 
 /**
- * Update tool (creates new blob version)
+ * Update tool (creates new version version)
  */
 export const toolUpdate = authRequired.input(toolUpdateInputSchema).handler(async ({ input, context }) => {
   const workspaceId = context.iam.workspaceId;
@@ -249,7 +249,7 @@ export const toolAddCavity = authRequired.input(addCavityInputSchema).handler(as
 });
 
 /**
- * Update a cavity (creates new blob version)
+ * Update a cavity (creates new version version)
  */
 export const toolUpdateCavity = authRequired.input(updateCavityInputSchema).handler(async ({ input, context }) => {
   const workspaceId = context.iam.workspaceId;
@@ -340,7 +340,7 @@ export const get = userOrDisplayRequired.input(jobIdInputSchema).handler(async (
 });
 
 /**
- * Update job (creates new blob version)
+ * Update job (creates new version version)
  */
 export const update = authRequired.input(jobUpdateInputSchema).handler(async ({ input, context }) => {
   const workspaceId = context.iam.workspaceId;

@@ -341,7 +341,7 @@ async function resolveSystemEntityRecord(
   if (entityKey === SYSTEM_ENTITY_KEYS.Station) {
     const station = await prisma.station.findFirst({
       where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null },
-      include: { currentBlob: true },
+      include: { currentVersion: true },
     });
     if (!station) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
     // Live status is derived from the open state-log row, not a Station column.
@@ -366,12 +366,12 @@ async function resolveSystemEntityRecord(
         statusReasonId: openState?.statusReasonId ?? null,
         statusReason: openState?.statusReason?.name ?? null,
         statusStartAt: openState?.startTime ?? null,
-        currentBlob: station.currentBlob
+        currentVersion: station.currentVersion
           ? {
-              ...station.currentBlob,
-              standardCycle: station.currentBlob.standardCycle?.toNumber() ?? null,
-              downtimeDetect: station.currentBlob.downtimeDetect?.toNumber() ?? null,
-              slowDetect: station.currentBlob.slowDetect?.toNumber() ?? null,
+              ...station.currentVersion,
+              standardCycle: station.currentVersion.standardCycle?.toNumber() ?? null,
+              downtimeDetect: station.currentVersion.downtimeDetect?.toNumber() ?? null,
+              slowDetect: station.currentVersion.slowDetect?.toNumber() ?? null,
             }
           : null,
       },
@@ -382,7 +382,7 @@ async function resolveSystemEntityRecord(
     const job = await prisma.job.findFirst({
       where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null },
       include: {
-        currentBlob: true,
+        currentVersion: true,
         currentOfStations: { where: { deletedAt: null }, select: { id: true } },
         jobProducts: { where: { deletedAt: null, product: { deletedAt: null } }, select: { productId: true } },
         tools: { where: { deletedAt: null, tool: { deletedAt: null } }, select: { toolId: true } },
@@ -396,8 +396,8 @@ async function resolveSystemEntityRecord(
         stations: job.currentOfStations.map((row) => row.id),
         products: job.jobProducts.map((row) => row.productId),
         tools: job.tools.map((row) => row.toolId),
-        currentBlob: job.currentBlob
-          ? { ...job.currentBlob, standardCycle: job.currentBlob.standardCycle?.toNumber() ?? null }
+        currentVersion: job.currentVersion
+          ? { ...job.currentVersion, standardCycle: job.currentVersion.standardCycle?.toNumber() ?? null }
           : null,
       },
     };
@@ -407,7 +407,7 @@ async function resolveSystemEntityRecord(
     const product = await prisma.product.findFirst({
       where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null },
       include: {
-        currentBlob: true,
+        currentVersion: true,
         materials: { where: { archivedAt: null, material: { deletedAt: null } }, select: { materialId: true } },
         jobProducts: { where: { deletedAt: null, job: { deletedAt: null } }, select: { jobId: true } },
         workOrders: { where: { deletedAt: null }, select: { id: true } },
@@ -421,8 +421,8 @@ async function resolveSystemEntityRecord(
         materials: product.materials.map((row) => row.materialId),
         jobs: product.jobProducts.map((row) => row.jobId),
         workOrders: product.workOrders.map((row) => row.id),
-        currentBlob: product.currentBlob
-          ? { ...product.currentBlob, weight: product.currentBlob.weight?.toNumber() ?? null }
+        currentVersion: product.currentVersion
+          ? { ...product.currentVersion, weight: product.currentVersion.weight?.toNumber() ?? null }
           : null,
       },
     };
@@ -432,7 +432,7 @@ async function resolveSystemEntityRecord(
     const material = await prisma.material.findFirst({
       where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null },
       include: {
-        currentBlob: true,
+        currentVersion: true,
         products: { where: { archivedAt: null, product: { deletedAt: null } }, select: { productId: true } },
       },
     });
@@ -450,7 +450,7 @@ async function resolveSystemEntityRecord(
     const tool = await prisma.tool.findFirst({
       where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null },
       include: {
-        currentBlob: true,
+        currentVersion: true,
         jobs: { where: { deletedAt: null, job: { deletedAt: null } }, select: { jobId: true } },
       },
     });

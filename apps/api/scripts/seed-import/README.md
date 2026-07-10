@@ -48,15 +48,15 @@
 --
 --   1. ProcessType        (no dependencies — reference table)
 --   2. Workcenter         (depends on: ProcessType)
---   3. Product            (no dependencies — has BLOB versioning)
---   4. Material           (no dependencies — has BLOB versioning)
+--   3. Product            (no dependencies — has VERSION versioning)
+--   4. Material           (no dependencies — has VERSION versioning)
 --   5. ProductMaterial    (depends on: Product, Material)
---   6. Tool               (no dependencies — has BLOB versioning)
---   7. ToolCavities       (depends on: Tool — has BLOB versioning)
---   8. Job                (depends on: ProcessType, Tool — has BLOB versioning)
+--   6. Tool               (no dependencies — has VERSION versioning)
+--   7. ToolCavities       (depends on: Tool — has VERSION versioning)
+--   8. Job                (depends on: ProcessType, Tool — has VERSION versioning)
 --      Also creates JobTool links for production jobs that share a name with a Tool
---   9. Station            (depends on: Workcenter, Job — has BLOB versioning)
---  10. JobCavity          (depends on: Job, Product, Tool, ToolCavity — has BLOB versioning)
+--   9. Station            (depends on: Workcenter, Job — has VERSION versioning)
+--  10. JobCavity          (depends on: Job, Product, Tool, ToolCavity — has VERSION versioning)
 --      (imported as "JobProduct" in the new schema)
 --  11. StatusCategory     (no dependencies — reference table)
 --  12. StatusReason       (depends on: StatusCategory, ProcessType)
@@ -65,25 +65,25 @@
 --  15. EmployeeRole       (no dependencies — reference table per site)
 --  16. Employee           (depends on: EmployeeRole — uses EmployeeVersion snapshots)
 --
--- BLOB VERSIONING PATTERN
+-- VERSION VERSIONING PATTERN
 -- -----------------------
--- Several Prisma models use a "blob" versioning pattern:
---   - The main table (e.g., Product) holds a currentBlobId pointer.
---   - Each change creates a new blob row with an incremented version number.
---   - The main table's currentBlobId is then updated to point at the new blob.
+-- Several Prisma models use a "version" versioning pattern:
+--   - The main table (e.g., Product) holds a currentVersionId pointer.
+--   - Each change creates a new version row with an incremented version number.
+--   - The main table's currentVersionId is then updated to point at the new version.
 --
--- On first import:  blob version = 1
--- On re-import if data changed:  blob version = max(existing versions) + 1
--- On re-import if data unchanged: no new blob is created (idempotent)
+-- On first import:  version version = 1
+-- On re-import if data changed:  version version = max(existing versions) + 1
+-- On re-import if data unchanged: no new version is created (idempotent)
 --
--- Tables with blob versioning:
---   Product      -> ProductBlob      (sku, name, weight, itemCost)
---   Material     -> MaterialBlob     (name, shortCode, materialNumber, description)
---   Tool         -> ToolBlob         (name, pmLimit, pmWarn)
---   ToolCavity   -> ToolCavityBlob   (name, position)
---   Job          -> JobBlob          (name, description, standardCycle)
---   Station      -> StationBlob      (standardCycle, downtimeDetect, slowDetect, inLineCalculations, processTypeId)
---   JobProduct   -> JobProductBlob   (isActive, quantity)
+-- Tables with version versioning:
+--   Product      -> ProductVersion      (sku, name, weight, itemCost)
+--   Material     -> MaterialVersion     (name, shortCode, materialNumber, description)
+--   Tool         -> ToolVersion         (name, pmLimit, pmWarn)
+--   ToolCavity   -> ToolCavityVersion   (name, position)
+--   Job          -> JobVersion          (name, description, standardCycle)
+--   Station      -> StationVersion      (standardCycle, downtimeDetect, slowDetect, inLineCalculations, processTypeId)
+--   JobProduct   -> JobProductVersion   (isActive, quantity)
 --
 -- ID MAPPING (IdMap)
 -- ------------------
@@ -106,7 +106,7 @@
 -- --------------------------------------------------------------------------
 -- GENERAL NOTES (printed into output for the importer to preserve)
 -- --------------------------------------------------------------------------
-print '//Some tables have a BLOB table tied to them. In this case if the row exists increment the version and insert a new entry. If the row doesnt exist use version 1. If the row was unchanged do nothing and leave as is'
+print '//Some tables have a VERSION table tied to them. In this case if the row exists increment the version and insert a new entry. If the row doesnt exist use version 1. If the row was unchanged do nothing and leave as is'
 print '//Site comes from /prisma/seed/import/config.ts'
 
 -- ==========================================================================
@@ -118,7 +118,7 @@ print '//Site comes from /prisma/seed/import/config.ts'
 -- IdMap key:       "processType" keyed by name
 -- Prisma upsert:  unique constraint = (siteId, name)
 --
--- Used by:  Workcenter.processTypeId, StationBlob.processTypeId, Job.processTypeId
+-- Used by:  Workcenter.processTypeId, StationVersion.processTypeId, Job.processTypeId
 --
 -- Interface fields expected:
 --   name:        string  -> ProcessName
@@ -131,18 +131,18 @@ Select ProcessName as [name], [Description] from tblConfigProcess
 -- ==========================================================================
 -- 2. Product
 -- ==========================================================================
--- Prisma model:   Product + ProductBlob (inventory.prisma)
+-- Prisma model:   Product + ProductVersion (inventory.prisma)
 -- Importer:       prisma/seed/import/importProducts.ts
 -- SQL Server tbl: tblConfigPN
 -- IdMap key:       "product" keyed by Name (the PN column, NOT sku)
--- Lookup:         finds existing by (siteId, currentBlob.sku)
--- Blob fields:    sku, name, weight, itemCost
+-- Lookup:         finds existing by (siteId, currentVersion.sku)
+-- Version fields:    sku, name, weight, itemCost
 --
 -- Used by:  ProductMaterial.productId, JobProduct.productId
 --
 -- Interface fields expected:
---   sku:      string -> PartNumber  (used as ProductBlob.sku)
---   Name:     string -> PN          (used as ProductBlob.name AND the IdMap key)
+--   sku:      string -> PartNumber  (used as ProductVersion.sku)
+--   Name:     string -> PN          (used as ProductVersion.name AND the IdMap key)
 --   weight:   string -> PartWeight  (parsed to number, stored as Decimal(14, 4))
 --   itemCost: string -> PartCost    (parsed via parseDecimalCommaNumber — accepts
 --                                    "12,34" European format — stored as Decimal(14, 4))
@@ -157,12 +157,12 @@ Select PartNumber as sku,PN as [Name],PartWeight as [weight],PartCost as [itemCo
 -- ==========================================================================
 -- 3. Material
 -- ==========================================================================
--- Prisma model:   Material + MaterialBlob (inventory.prisma)
+-- Prisma model:   Material + MaterialVersion (inventory.prisma)
 -- Importer:       prisma/seed/import/importMaterials.ts
 -- SQL Server tbl: tblConfigMaterial
 -- IdMap key:       "material" keyed by shortCode (MaterialID column)
--- Lookup:         finds existing by (siteId, currentBlob.shortCode)
--- Blob fields:    name, shortCode, materialNumber, description, weightUnits, unitCost
+-- Lookup:         finds existing by (siteId, currentVersion.shortCode)
+-- Version fields:    name, shortCode, materialNumber, description, weightUnits, unitCost
 --
 -- Used by:  ProductMaterial.materialId
 --
@@ -189,7 +189,7 @@ SELECT MaterialDescription as [name],MaterialID as shortCode,MaterialId as mater
 -- ==========================================================================
 -- 4. ProductMaterial
 -- ==========================================================================
--- Prisma model:   ProductMaterial (inventory.prisma) — join table, no blob
+-- Prisma model:   ProductMaterial (inventory.prisma) — join table, no version
 -- Importer:       prisma/seed/import/importProductMaterials.ts
 -- SQL Server tbl: tblConfigPN_Material
 -- IdMap key:       (none created — this is a link table)
@@ -216,7 +216,7 @@ SELECt PN as [product],materialID as material, [weight],[unit] as weightUnits FR
 -- ==========================================================================
 -- 5. Workcenter
 -- ==========================================================================
--- Prisma model:   Workcenter (workcenter.prisma) — no blob versioning
+-- Prisma model:   Workcenter (workcenter.prisma) — no version versioning
 -- Importer:       prisma/seed/import/importWorkcenters.ts
 -- SQL Server tbl: tblConfigLine
 -- IdMap key:       "workcenter" keyed by PXID (the line identifier in
@@ -243,22 +243,22 @@ Select PXID,Title1 as [name],Process,Description from tblConfigLine
 -- ==========================================================================
 -- 6. Station
 -- ==========================================================================
--- Prisma model:   Station + StationBlob (workcenter.prisma)
+-- Prisma model:   Station + StationVersion (workcenter.prisma)
 -- Importer:       prisma/seed/import/importStations.ts
 -- SQL Server tbl: tblConfigSN1
 -- IdMap key:       "station" keyed by name (SN1)
 -- Prisma upsert:  unique constraint = (siteId, name)
--- Blob fields:    standardCycle, downtimeDetect, slowDetect, inLineCalculations, processTypeId
+-- Version fields:    standardCycle, downtimeDetect, slowDetect, inLineCalculations, processTypeId
 --
 -- Resolves FKs via IdMap:
 --   PXID        -> idMap.get("workcenter", row.PXID)    — workcenter linkage
 --   currentJob  -> idMap.get("job", row.currentJob)     — if not found, set to null
---   ProcessType -> idMap.get("processType", row.ProcessType) — stored in StationBlob
+--   ProcessType -> idMap.get("processType", row.ProcessType) — stored in StationVersion
 --
--- Station-level fields (on Station table, NOT in blob):
+-- Station-level fields (on Station table, NOT in version):
 --   name, workcenterId, currentJobId
 --
--- StationBlob fields (versioned):
+-- StationVersion fields (versioned):
 --   standardCycle, downtimeDetect, slowDetect, inLineCalculations, processTypeId
 --
 -- Interface fields expected:
@@ -279,20 +279,20 @@ Select PXID,SN1 as [name],StdCt as standardCycle,JobID_Current as currentJob,Slo
 -- ==========================================================================
 -- 7. Tool
 -- ==========================================================================
--- Prisma model:   Tool + ToolBlob (job.prisma)
+-- Prisma model:   Tool + ToolVersion (job.prisma)
 -- Importer:       prisma/seed/import/importTools.ts
 -- SQL Server tbl: tblConfigTool
 -- IdMap key:       "tool" keyed by Name (ToolId)
--- Lookup:         finds existing by (siteId, currentBlob.name)
--- Blob fields:    name, pmLimit, pmWarn
--- Non-blob fields on Tool table: pmCount (updated even if blob unchanged)
+-- Lookup:         finds existing by (siteId, currentVersion.name)
+-- Version fields:    name, pmLimit, pmWarn
+-- Non-version fields on Tool table: pmCount (updated even if version unchanged)
 --
 -- Used by:  ToolCavity.toolId, JobTool.toolId, JobProduct.toolId
 --
 -- Interface fields expected:
---   Name:    string -> ToolId     (used as ToolBlob.name AND the IdMap key)
---   pmLimit: string -> PM_Limit   (parsed to int, stored in ToolBlob)
---   pmWarn:  string -> PM_Warning (parsed to int, stored in ToolBlob)
+--   Name:    string -> ToolId     (used as ToolVersion.name AND the IdMap key)
+--   pmLimit: string -> PM_Limit   (parsed to int, stored in ToolVersion)
+--   pmWarn:  string -> PM_Warning (parsed to int, stored in ToolVersion)
 --   pmCount: string -> PM_Count   (parsed to int, stored on Tool table directly)
 -- --------------------------------------------------------------------------
 print '=== Tool ==='
@@ -302,12 +302,12 @@ Select ToolId as  [Name],PM_Limit as pmLimit, PM_Warning as pmWarn, PM_Count as 
 -- ==========================================================================
 -- 8. ToolCavities
 -- ==========================================================================
--- Prisma model:   ToolCavity + ToolCavityBlob (job.prisma)
+-- Prisma model:   ToolCavity + ToolCavityVersion (job.prisma)
 -- Importer:       prisma/seed/import/importToolCavities.ts
 -- SQL Server tbl: tblConfigJob_Cavity (DISTINCT ToolId, CavityID only)
 -- IdMap key:       "toolCavity" keyed by composite "TOOLNAME:CAVITYID"
--- Lookup:         finds existing by (toolId, currentBlob.name = cavityName)
--- Blob fields:    name (=CavityID), position (=parseInt(CavityID))
+-- Lookup:         finds existing by (toolId, currentVersion.name = cavityName)
+-- Version fields:    name (=CavityID), position (=parseInt(CavityID))
 --
 -- Resolves FKs via IdMap:
 --   toolId -> idMap.get("tool", row.ToolId)
@@ -316,7 +316,7 @@ Select ToolId as  [Name],PM_Limit as pmLimit, PM_Warning as pmWarn, PM_Count as 
 --
 -- Interface fields expected:
 --   ToolId:   string -> ToolId     (tool name for IdMap lookup)
---   CavityID: string -> CavityID   (used as ToolCavityBlob.name; parsed to int for position)
+--   CavityID: string -> CavityID   (used as ToolCavityVersion.name; parsed to int for position)
 --
 -- NOTE: We use SELECT DISTINCT because tblConfigJob_Cavity has one row per
 --       (Job, Tool, Cavity, Product) combination, but we only need the unique
@@ -328,13 +328,13 @@ Select distinct ToolId,CavityID from tblConfigJob_Cavity
 -- ==========================================================================
 -- 9. Job
 -- ==========================================================================
--- Prisma model:   Job + JobBlob (job.prisma)
+-- Prisma model:   Job + JobVersion (job.prisma)
 -- Importer:       prisma/seed/import/importJobs.ts
 -- SQL Server tbl: tblConfigJob
 -- IdMap key:       "job" keyed by name (JobId)
--- Lookup:         finds existing by (siteId, currentBlob.name, deletedAt=null)
--- Blob fields:    name, description, standardCycle
--- Non-blob:       processTypeId (hard-coded to "MOLD" in importer)
+-- Lookup:         finds existing by (siteId, currentVersion.name, deletedAt=null)
+-- Version fields:    name, description, standardCycle
+-- Non-version:       processTypeId (hard-coded to "MOLD" in importer)
 --
 -- The importer also creates JobTool records:
 --   For each production job (not in ["MAINT","OPEN","SCHED DOWN","TOOLING"]),
@@ -344,7 +344,7 @@ Select distinct ToolId,CavityID from tblConfigJob_Cavity
 -- Used by:  Station.currentJobId, JobProduct.jobId, JobTool.jobId
 --
 -- Interface fields expected:
---   name:              string -> JobId            (used as JobBlob.name AND the IdMap key)
+--   name:              string -> JobId            (used as JobVersion.name AND the IdMap key)
 --   description:       string -> JobDescription
 --   standardCycle:     string -> StdCT            (parsed to number, stored as Decimal)
 --   standardCycleUnit: string -> literal 'SECONDS' (hardcoded in query — matches Prisma enum)
@@ -360,12 +360,12 @@ Select JobId as name, JobDescription as [description], StdCT as [standardCycle],
 -- ==========================================================================
 -- 10. JobCavity (imported as "JobProduct" in the new schema)
 -- ==========================================================================
--- Prisma model:   JobProduct + JobProductBlob (job.prisma)
+-- Prisma model:   JobProduct + JobProductVersion (job.prisma)
 -- Importer:       prisma/seed/import/importJobProducts.ts
 -- SQL Server tbl: tblConfigJob_Cavity
 -- IdMap key:       (none created — this is a link/assignment table)
 -- Lookup:         findFirst by (jobId, productId, toolId, toolCavityId) for idempotency
--- Blob fields:    isActive, quantity (quantity is always 1)
+-- Version fields:    isActive, quantity (quantity is always 1)
 --
 -- Resolves FKs via IdMap:
 --   jobId        -> idMap.get("job", row.JobName)
@@ -390,7 +390,7 @@ Select JobID as JobName, ToolID as ToolName, CavityID as CavityName,PN as Produc
 -- ==========================================================================
 -- 11. StatusCategory
 -- ==========================================================================
--- Prisma model:   StatusCategory (workspace.prisma) — no blob versioning
+-- Prisma model:   StatusCategory (workspace.prisma) — no version versioning
 -- Importer:       prisma/seed/import/importStatusCategories.ts
 -- SQL Server tbl: tblConfigFTType
 -- IdMap key:       "statusCategory" keyed by name (FTTypeID)
@@ -412,7 +412,7 @@ select FTTypeID as [name], ABS(active) as isActive from tblConfigFTType
 -- ==========================================================================
 -- 12. StatusReason
 -- ==========================================================================
--- Prisma model:   StatusReason (workspace.prisma) — no blob versioning
+-- Prisma model:   StatusReason (workspace.prisma) — no version versioning
 -- Importer:       prisma/seed/import/importStatusReasons.ts
 -- SQL Server tbl: tblConfigDT
 -- IdMap key:       "statusReason" keyed by name (FN)
@@ -436,7 +436,7 @@ select DTGroupID,FN as [name],FTTypeID as statusCategoryName, 1 - ABS([DT]) AS i
 -- ==========================================================================
 -- 13. ItemDisposition
 -- ==========================================================================
--- Prisma model:   ItemDisposition (inventory.prisma) — no blob versioning
+-- Prisma model:   ItemDisposition (inventory.prisma) — no version versioning
 -- Importer:       prisma/seed/import/importItemDispositions.ts
 -- SQL Server tbl: (hardcoded — only "SCRAP" disposition exists currently)
 -- IdMap key:       "itemDisposition" keyed by name
@@ -456,7 +456,7 @@ select 'SCRAP' as [name]
 -- ==========================================================================
 -- 14. ItemDispositionReason
 -- ==========================================================================
--- Prisma model:   ItemDispositionReason (inventory.prisma) — no blob versioning
+-- Prisma model:   ItemDispositionReason (inventory.prisma) — no version versioning
 -- Importer:       prisma/seed/import/importItemDispositionReasons.ts
 -- SQL Server tbl: tblConfigRC
 -- IdMap key:       "itemDispositionReason" keyed by name (RC)
@@ -510,8 +510,8 @@ select NameTypeID as [name] from sysNameType
 -- IdMap key:       "employee" keyed by NameID (case-insensitive)
 -- Lookup:          finds existing Employee via IdMap; if the profile changed,
 --                  a new EmployeeVersion is created (version = max + 1) and
---                  Employee.versionId is updated. Same pattern as the BLOB
---                  versioning above, named "Version" instead of "Blob".
+--                  Employee.versionId is updated. Same version pattern as the
+--                  models above.
 --
 -- Resolves FKs via IdMap:
 --   roleId      -> idMap.get("employeeRole", row.Role)
@@ -566,15 +566,15 @@ select NameID, NameTypeId as Role, [Password] as PIN, [Number] as EmployeeID fro
 -- Legacy table            -> New Prisma model(s)          -> Data file section
 -- ----------------------     ---------------------------     -----------------
 -- tblConfigProcess        -> ProcessType                  -> ProcessType
--- tblConfigPN             -> Product, ProductBlob         -> Product
--- tblConfigMaterial       -> Material, MaterialBlob       -> Material
+-- tblConfigPN             -> Product, ProductVersion         -> Product
+-- tblConfigMaterial       -> Material, MaterialVersion       -> Material
 -- tblConfigPN_Material    -> ProductMaterial               -> ProductMaterial
 -- tblConfigLine           -> Workcenter                   -> Workcenter
--- tblConfigSN1            -> Station, StationBlob         -> Station
--- tblConfigTool           -> Tool, ToolBlob               -> Tool
--- tblConfigJob_Cavity     -> ToolCavity, ToolCavityBlob   -> ToolCavities (DISTINCT)
--- tblConfigJob            -> Job, JobBlob, JobTool        -> Job
--- tblConfigJob_Cavity     -> JobProduct, JobProductBlob   -> JobCavity (full rows)
+-- tblConfigSN1            -> Station, StationVersion         -> Station
+-- tblConfigTool           -> Tool, ToolVersion               -> Tool
+-- tblConfigJob_Cavity     -> ToolCavity, ToolCavityVersion   -> ToolCavities (DISTINCT)
+-- tblConfigJob            -> Job, JobVersion, JobTool        -> Job
+-- tblConfigJob_Cavity     -> JobProduct, JobProductVersion   -> JobCavity (full rows)
 -- tblConfigFTType         -> StatusCategory               -> StatusCategory
 -- tblConfigDT             -> StatusReason                  -> StatusReason
 -- (hardcoded)             -> ItemDisposition               -> ItemDisposition

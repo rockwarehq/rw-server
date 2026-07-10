@@ -94,11 +94,11 @@ const logCreateInputSchema = z.object({
   dispositionReasonId: z.uuid(),
   cycleId: z.uuid().optional(),
   shiftInstanceId: z.uuid().optional(),
-  productBlobId: z.uuid(),
-  stationBlobId: z.uuid().optional(),
-  jobProductBlobId: z.uuid().optional(),
-  toolBlobId: z.uuid().optional(),
-  toolCavityBlobId: z.uuid().optional(),
+  productVersionId: z.uuid(),
+  stationVersionId: z.uuid().optional(),
+  jobProductVersionId: z.uuid().optional(),
+  toolVersionId: z.uuid().optional(),
+  toolCavityVersionId: z.uuid().optional(),
 });
 
 const logUpdateInputSchema = z.object({

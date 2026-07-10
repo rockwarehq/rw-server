@@ -81,15 +81,15 @@ export async function importJobProducts(
       // Look up existing by (jobId, productId, toolId, toolCavityId) for idempotency
       const existing = await prisma.jobProduct.findFirst({
         where: { jobId, productId, toolId, toolCavityId },
-        include: { currentBlob: true },
+        include: { currentVersion: true },
       });
 
       if (existing) {
-        const blob = existing.currentBlob;
+        const version = existing.currentVersion;
 
-        if (!blob) {
-          // Existing JobProduct with no current blob — create v1.
-          const newBlob = await prisma.jobProductBlob.create({
+        if (!version) {
+          // Existing JobProduct with no current version — create v1.
+          const newVersion = await prisma.jobProductVersion.create({
             data: {
               version: 1,
               isActive,
@@ -99,18 +99,18 @@ export async function importJobProducts(
           });
           await prisma.jobProduct.update({
             where: { id: existing.id },
-            data: { currentBlobId: newBlob.id },
+            data: { currentVersionId: newVersion.id },
           });
-        } else if (blob.isActive !== isActive) {
-          await prisma.jobProductBlob.update({
-            where: { id: blob.id },
+        } else if (version.isActive !== isActive) {
+          await prisma.jobProductVersion.update({
+            where: { id: version.id },
             data: { isActive },
           });
         }
         return;
       }
 
-      // Create new job product + blob v1
+      // Create new job product + version v1
       const jobProduct = await prisma.jobProduct.create({
         data: {
           jobId,
@@ -120,7 +120,7 @@ export async function importJobProducts(
         },
       });
 
-      const blob = await prisma.jobProductBlob.create({
+      const version = await prisma.jobProductVersion.create({
         data: {
           version: 1,
           isActive,
@@ -131,7 +131,7 @@ export async function importJobProducts(
 
       await prisma.jobProduct.update({
         where: { id: jobProduct.id },
-        data: { currentBlobId: blob.id },
+        data: { currentVersionId: version.id },
       });
     },
     { label: "job-products" },

@@ -62,7 +62,7 @@ export interface RollupInput {
    */
   jobEntity?: {
     jobId: string;
-    /** Human-readable job name (from JobBlob). */
+    /** Human-readable job name (from JobVersion). */
     jobName: string;
     /** Hierarchical path: station path + `.job.{jobId}`. */
     jobPath: string;

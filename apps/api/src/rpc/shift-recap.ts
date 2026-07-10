@@ -173,7 +173,7 @@ export const stationJobLogList = authRequired.input(stationJobLogListInputSchema
       startTime: true,
       endTime: true,
       standardCycle: true,
-      job: { select: { currentBlob: { select: { name: true } } } },
+      job: { select: { currentVersion: { select: { name: true } } } },
     },
   });
 
@@ -183,7 +183,7 @@ export const stationJobLogList = authRequired.input(stationJobLogListInputSchema
     startTime: r.startTime < shiftInstance.startTime ? shiftInstance.startTime : r.startTime,
     endTime: r.endTime == null || r.endTime > shiftInstance.endTime ? shiftInstance.endTime : r.endTime,
     standardCycle: r.standardCycle ? Number(r.standardCycle) : null,
-    jobName: r.job.currentBlob?.name ?? null,
+    jobName: r.job.currentVersion?.name ?? null,
   }));
 });
 

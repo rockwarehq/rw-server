@@ -81,11 +81,11 @@ export async function complete(input: StartCycleInput) {
     Array<{
       siteId: string;
       jobSiteId: string;
-      currentBlobId: string | null;
+      currentVersionId: string | null;
       standardCycle: number | null;
       slowDetect: number | null;
       jobToolIds: string[];
-      toolBlobIds: string[];
+      toolVersionIds: string[];
       itemsPerCycle: number;
     }>
   >`
@@ -94,17 +94,17 @@ export async function complete(input: StartCycleInput) {
       SELECT
         s."siteId",
         j."siteId" AS "jobSiteId",
-        j."currentBlobId",
+        j."currentVersionId",
         jb."standardCycle"::float8 AS "standardCycle",
         sb."slowDetect"::float8 AS "slowDetect"
       FROM "Station" s
       JOIN "Job" j ON j.id = ${jobId}
-      LEFT JOIN "JobBlob" jb ON jb.id = j."currentBlobId"
-      LEFT JOIN "StationBlob" sb ON sb."id" = s."currentBlobId"
+      LEFT JOIN "JobVersion" jb ON jb.id = j."currentVersionId"
+      LEFT JOIN "StationVersion" sb ON sb."id" = s."currentVersionId"
       WHERE s.id = ${stationId}
     ),
     tools AS (
-      SELECT jt.id, t."currentBlobId" AS "toolBlobId"
+      SELECT jt.id, t."currentVersionId" AS "toolVersionId"
       FROM "JobTool" jt
       JOIN "Tool" t ON t.id = jt."toolId"
       WHERE jt."jobId" = ${jobId}::uuid AND jt."deletedAt" IS NULL AND jt."isActive" = true
@@ -112,18 +112,18 @@ export async function complete(input: StartCycleInput) {
     products AS (
       SELECT COALESCE(SUM(jpb.quantity), 1)::int AS total
       FROM "JobProduct" jp
-      JOIN "JobProductBlob" jpb ON jpb.id = jp."currentBlobId"
+      JOIN "JobProductVersion" jpb ON jpb.id = jp."currentVersionId"
       WHERE jp."jobId" = ${jobId}
         AND jp."deletedAt" IS NULL
         AND jpb."isActive" = true
     )
     SELECT s.*,
            COALESCE(array_agg(DISTINCT t.id) FILTER (WHERE t.id IS NOT NULL), '{}') AS "jobToolIds",
-           COALESCE(array_agg(DISTINCT t."toolBlobId") FILTER (WHERE t."toolBlobId" IS NOT NULL), '{}') AS "toolBlobIds",
+           COALESCE(array_agg(DISTINCT t."toolVersionId") FILTER (WHERE t."toolVersionId" IS NOT NULL), '{}') AS "toolVersionIds",
            (SELECT total FROM products) AS "itemsPerCycle"
     FROM setup s
     LEFT JOIN tools t ON true
-    GROUP BY s."siteId", s."jobSiteId", s."currentBlobId", s."standardCycle", s."slowDetect"
+    GROUP BY s."siteId", s."jobSiteId", s."currentVersionId", s."standardCycle", s."slowDetect"
   `;
   const t1 = Date.now();
 
@@ -132,8 +132,8 @@ export async function complete(input: StartCycleInput) {
   }
 
   const setup = setupRows[0];
-  if (!setup.currentBlobId) {
-    return { error: "Job has no current blob version", code: "JOB_NO_BLOB" };
+  if (!setup.currentVersionId) {
+    return { error: "Job has no current version version", code: "JOB_NO_VERSION" };
   }
   if (setup.siteId !== setup.jobSiteId) {
     return { error: "Job and station must belong to the same site", code: "SITE_MISMATCH" };
@@ -149,10 +149,10 @@ export async function complete(input: StartCycleInput) {
     slowThresholdSeconds = standardCycleSeconds * (1 + slowFraction);
   }
 
-  const blobConnects: BlobConnects = {
-    jobBlobId: setup.currentBlobId,
+  const versionConnects: VersionConnects = {
+    jobVersionId: setup.currentVersionId,
     jobTools: setup.jobToolIds.length > 0 ? { connect: setup.jobToolIds.map((id) => ({ id })) } : undefined,
-    toolBlobs: setup.toolBlobIds.length > 0 ? { connect: setup.toolBlobIds.map((id) => ({ id })) } : undefined,
+    toolVersions: setup.toolVersionIds.length > 0 ? { connect: setup.toolVersionIds.map((id) => ({ id })) } : undefined,
   };
 
   // ── Execute strategy (single transaction handles ALL DB writes) ──
@@ -160,15 +160,15 @@ export async function complete(input: StartCycleInput) {
 
   const result = replayed
     ? keepOpen
-      ? await completeOpenCloseReplay(stationId, siteId, timestamp, jobId, blobConnects)
-      : await completeImmediateReplay(stationId, siteId, timestamp, jobId, blobConnects)
+      ? await completeOpenCloseReplay(stationId, siteId, timestamp, jobId, versionConnects)
+      : await completeImmediateReplay(stationId, siteId, timestamp, jobId, versionConnects)
     : keepOpen
       ? await completeOpenClose(
           stationId,
           siteId,
           timestamp,
           jobId,
-          blobConnects,
+          versionConnects,
           idealCycleIncrement,
           slowThresholdSeconds,
         )
@@ -177,7 +177,7 @@ export async function complete(input: StartCycleInput) {
           siteId,
           timestamp,
           jobId,
-          blobConnects,
+          versionConnects,
           idealCycleIncrement,
           slowThresholdSeconds,
         );
@@ -271,7 +271,7 @@ async function completeImmediate(
   siteId: string,
   timestamp: Date,
   jobId: string,
-  blobConnects: BlobConnects,
+  versionConnects: VersionConnects,
   idealCycleIncrement: number,
   slowThresholdSeconds?: number,
 ): Promise<StrategyResult> {
@@ -299,7 +299,7 @@ async function completeImmediate(
         ORDER BY "end" DESC LIMIT 1
       ),
       new_cycle AS (
-        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", "siteId", "stationId", "jobBlobId", attrs, "createdAt", "updatedAt")
+        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", "siteId", "stationId", "jobVersionId", attrs, "createdAt", "updatedAt")
         VALUES (
           gen_random_uuid(),
           COALESCE((SELECT "end" FROM prev), ${timestamp}),
@@ -307,7 +307,7 @@ async function completeImmediate(
           'GOOD',
           ${siteId},
           ${stationId},
-          ${blobConnects.jobBlobId},
+          ${versionConnects.jobVersionId},
           '{}',
           NOW(),
           NOW()
@@ -341,15 +341,15 @@ async function completeImmediate(
         : null;
 
     // ── Batch M2M inserts ──
-    if (blobConnects.toolBlobs && blobConnects.toolBlobs.connect.length > 0) {
+    if (versionConnects.toolVersions && versionConnects.toolVersions.connect.length > 0) {
       const values = Prisma.join(
-        blobConnects.toolBlobs.connect.map((tb) => Prisma.sql`(${cycle.id}::uuid, ${tb.id}::uuid)`),
+        versionConnects.toolVersions.connect.map((tb) => Prisma.sql`(${cycle.id}::uuid, ${tb.id}::uuid)`),
       );
-      await tx.$executeRaw`INSERT INTO "_CycleToToolBlob" ("A", "B") VALUES ${values} ON CONFLICT DO NOTHING`;
+      await tx.$executeRaw`INSERT INTO "_CycleToToolVersion" ("A", "B") VALUES ${values} ON CONFLICT DO NOTHING`;
     }
-    if (blobConnects.jobTools && blobConnects.jobTools.connect.length > 0) {
+    if (versionConnects.jobTools && versionConnects.jobTools.connect.length > 0) {
       const values = Prisma.join(
-        blobConnects.jobTools.connect.map((jt) => Prisma.sql`(${cycle.id}::uuid, ${jt.id}::uuid)`),
+        versionConnects.jobTools.connect.map((jt) => Prisma.sql`(${cycle.id}::uuid, ${jt.id}::uuid)`),
       );
       await tx.$executeRaw`INSERT INTO "_CycleToJobTool" ("A", "B") VALUES ${values} ON CONFLICT DO NOTHING`;
     }
@@ -365,7 +365,7 @@ async function completeImmediate(
     const transition = await applyCycleCompleteTransition(tx, stationId, timestamp, {
       cycleWasSlow: isSlow,
       cycleStart: cycle.start,
-      jobBlobId: blobConnects.jobBlobId,
+      jobVersionId: versionConnects.jobVersionId,
       openRow,
     });
 
@@ -417,7 +417,7 @@ async function completeOpenClose(
   siteId: string,
   timestamp: Date,
   jobId: string,
-  blobConnects: BlobConnects,
+  versionConnects: VersionConnects,
   idealCycleIncrement: number,
   slowThresholdSeconds?: number,
 ): Promise<StrategyResult> {
@@ -451,7 +451,7 @@ async function completeOpenClose(
             cycleStatus: "GOOD",
             siteId,
             stationId,
-            ...blobConnects,
+            ...versionConnects,
           },
         });
 
@@ -473,7 +473,7 @@ async function completeOpenClose(
     const transition = await applyCycleCompleteTransition(tx, stationId, timestamp, {
       cycleWasSlow: isSlow,
       cycleStart: openCycles[0]?.start ?? timestamp,
-      jobBlobId: blobConnects.jobBlobId,
+      jobVersionId: versionConnects.jobVersionId,
       openRow: openEntry
         ? {
             id: openEntry.id,
@@ -492,7 +492,7 @@ async function completeOpenClose(
         cycleStatus: "GOOD",
         siteId,
         stationId,
-        ...blobConnects,
+        ...versionConnects,
       },
     });
 
@@ -529,7 +529,7 @@ async function completeImmediateReplay(
   siteId: string,
   timestamp: Date,
   jobId: string,
-  blobConnects: BlobConnects,
+  versionConnects: VersionConnects,
 ): Promise<StrategyResult> {
   return prisma.$transaction(async (tx) => {
     const cycleRows = await tx.$queryRaw<
@@ -548,7 +548,7 @@ async function completeImmediateReplay(
         ORDER BY "end" DESC LIMIT 1
       ),
       new_cycle AS (
-        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", "siteId", "stationId", "jobBlobId", attrs, "createdAt", "updatedAt")
+        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", "siteId", "stationId", "jobVersionId", attrs, "createdAt", "updatedAt")
         VALUES (
           gen_random_uuid(),
           COALESCE((SELECT "end" FROM prev), ${timestamp}),
@@ -556,7 +556,7 @@ async function completeImmediateReplay(
           'GOOD',
           ${siteId},
           ${stationId},
-          ${blobConnects.jobBlobId},
+          ${versionConnects.jobVersionId},
           '{}',
           NOW(),
           NOW()
@@ -572,15 +572,15 @@ async function completeImmediateReplay(
     const cycle = { id: row.cycle_id, start: row.cycle_start, end: row.cycle_end };
 
     // Batch M2M inserts
-    if (blobConnects.toolBlobs && blobConnects.toolBlobs.connect.length > 0) {
+    if (versionConnects.toolVersions && versionConnects.toolVersions.connect.length > 0) {
       const values = Prisma.join(
-        blobConnects.toolBlobs.connect.map((tb) => Prisma.sql`(${cycle.id}::uuid, ${tb.id}::uuid)`),
+        versionConnects.toolVersions.connect.map((tb) => Prisma.sql`(${cycle.id}::uuid, ${tb.id}::uuid)`),
       );
-      await tx.$executeRaw`INSERT INTO "_CycleToToolBlob" ("A", "B") VALUES ${values} ON CONFLICT DO NOTHING`;
+      await tx.$executeRaw`INSERT INTO "_CycleToToolVersion" ("A", "B") VALUES ${values} ON CONFLICT DO NOTHING`;
     }
-    if (blobConnects.jobTools && blobConnects.jobTools.connect.length > 0) {
+    if (versionConnects.jobTools && versionConnects.jobTools.connect.length > 0) {
       const values = Prisma.join(
-        blobConnects.jobTools.connect.map((jt) => Prisma.sql`(${cycle.id}::uuid, ${jt.id}::uuid)`),
+        versionConnects.jobTools.connect.map((jt) => Prisma.sql`(${cycle.id}::uuid, ${jt.id}::uuid)`),
       );
       await tx.$executeRaw`INSERT INTO "_CycleToJobTool" ("A", "B") VALUES ${values} ON CONFLICT DO NOTHING`;
     }
@@ -612,7 +612,7 @@ async function completeOpenCloseReplay(
   siteId: string,
   timestamp: Date,
   jobId: string,
-  blobConnects: BlobConnects,
+  versionConnects: VersionConnects,
 ): Promise<StrategyResult> {
   return prisma.$transaction(async (tx) => {
     const openCycles = await tx.cycle.findMany({
@@ -644,7 +644,7 @@ async function completeOpenCloseReplay(
             cycleStatus: "GOOD",
             siteId,
             stationId,
-            ...blobConnects,
+            ...versionConnects,
           },
         });
 
@@ -658,7 +658,7 @@ async function completeOpenCloseReplay(
         cycleStatus: "GOOD",
         siteId,
         stationId,
-        ...blobConnects,
+        ...versionConnects,
       },
     });
 
@@ -680,8 +680,8 @@ async function completeOpenCloseReplay(
 
 // ── Types ────────────────────────────────────────────────────────
 
-type BlobConnects = {
-  jobBlobId: string;
+type VersionConnects = {
+  jobVersionId: string;
   jobTools?: { connect: { id: string }[] };
-  toolBlobs?: { connect: { id: string }[] };
+  toolVersions?: { connect: { id: string }[] };
 };

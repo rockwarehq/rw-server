@@ -30,7 +30,7 @@ const SITE_ID = "a51c0000-0000-4000-8000-000000000001";
 const WC_ID = "a51c0000-0000-4000-8000-000000000002";
 const STATION_ID = "a51c0000-0000-4000-8000-000000000003";
 const JOB_ID = "a51c0000-0000-4000-8000-000000000004";
-const JOBBLOB_ID = "a51c0000-0000-4000-8000-000000000005";
+const JOBVERSION_ID = "a51c0000-0000-4000-8000-000000000005";
 const USR = [
   { id: "5e700000-0000-4000-8000-000000000001", email: "sam.supervisor@e2e.test" },
   { id: "5e700000-0000-4000-8000-000000000002", email: "riley.shiftlead@e2e.test" },
@@ -110,12 +110,12 @@ async function setup(): Promise<{ workspaceId: string }> {
     update: {},
   });
   await prisma.job.upsert({ where: { id: JOB_ID }, create: { id: JOB_ID, siteId: SITE_ID }, update: {} });
-  await prisma.jobBlob.upsert({
-    where: { id: JOBBLOB_ID },
-    create: { id: JOBBLOB_ID, jobId: JOB_ID, version: 1, name: "E2E Job" },
+  await prisma.jobVersion.upsert({
+    where: { id: JOBVERSION_ID },
+    create: { id: JOBVERSION_ID, jobId: JOB_ID, version: 1, name: "E2E Job" },
     update: {},
   });
-  await prisma.job.update({ where: { id: JOB_ID }, data: { currentBlobId: JOBBLOB_ID } });
+  await prisma.job.update({ where: { id: JOB_ID }, data: { currentVersionId: JOBVERSION_ID } });
 
   // Users (recipients are picked as users — only User carries an email).
   for (const u of USR) {
@@ -150,9 +150,9 @@ async function cleanupTestData(): Promise<void> {
 /** Remove every row this test created so re-runs start clean (and CI leaves no residue). */
 async function teardown(workspaceId: string): Promise<void> {
   await cleanupTestData();
-  // Clear Job→currentBlob then drop the blob + job (Job→Site may restrict the workspace cascade).
-  await prisma.job.updateMany({ where: { id: JOB_ID }, data: { currentBlobId: null } });
-  await prisma.jobBlob.deleteMany({ where: { id: JOBBLOB_ID } });
+  // Clear Job→currentVersion then drop the version + job (Job→Site may restrict the workspace cascade).
+  await prisma.job.updateMany({ where: { id: JOB_ID }, data: { currentVersionId: null } });
+  await prisma.jobVersion.deleteMany({ where: { id: JOBVERSION_ID } });
   await prisma.job.deleteMany({ where: { id: JOB_ID } });
   // Workspace delete cascades site (→ station, workcenter). Users are global (no workspace FK), so
   // drop the seeded ones explicitly.

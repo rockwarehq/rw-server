@@ -49,7 +49,7 @@ export interface UpdateCavityInput {
 // ============================================================================
 
 /**
- * Create a new tool with initial blob (version 1)
+ * Create a new tool with initial version (version 1)
  */
 export async function create(input: CreateToolInput) {
   const { siteId, name, description, cavityCount, attrs } = input;
@@ -64,15 +64,15 @@ export async function create(input: CreateToolInput) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
 
-  // Create tool and initial blob in transaction
+  // Create tool and initial version in transaction
   const tool = await prisma.$transaction(async (tx) => {
     // 1. Create Tool entity
     const t = await tx.tool.create({
       data: { siteId },
     });
 
-    // 2. Create initial ToolBlob (version 1)
-    const blob = await tx.toolBlob.create({
+    // 2. Create initial ToolVersion (version 1)
+    const version = await tx.toolVersion.create({
       data: {
         toolId: t.id,
         version: 1,
@@ -83,14 +83,14 @@ export async function create(input: CreateToolInput) {
       },
     });
 
-    // 3. Link blob as current and return
+    // 3. Link version as current and return
     return tx.tool.update({
       where: { id: t.id },
-      data: { currentBlobId: blob.id },
+      data: { currentVersionId: version.id },
       include: {
-        currentBlob: true,
+        currentVersion: true,
         site: { select: { id: true, name: true } },
-        _count: { select: { toolCavities: true, jobs: true, blobs: true } },
+        _count: { select: { toolCavities: true, jobs: true, versions: true } },
       },
     });
   });
@@ -120,9 +120,9 @@ export async function list(filter: ListToolsFilter = {}) {
     where.siteId = siteId;
   }
 
-  // Filter by current blob fields
+  // Filter by current version fields
   if (name) {
-    where.currentBlob = {
+    where.currentVersion = {
       name: { contains: name, mode: "insensitive" },
     };
   }
@@ -131,9 +131,9 @@ export async function list(filter: ListToolsFilter = {}) {
     prisma.tool.findMany({
       where,
       include: {
-        currentBlob: true,
+        currentVersion: true,
         site: { select: { id: true, name: true } },
-        _count: { select: { toolCavities: true, jobs: true, blobs: true } },
+        _count: { select: { toolCavities: true, jobs: true, versions: true } },
       },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
       skip: Number(offset),
@@ -151,22 +151,22 @@ export async function list(filter: ListToolsFilter = {}) {
 }
 
 /**
- * Get tool by ID with current blob and cavities
+ * Get tool by ID with current version and cavities
  */
 export async function getById(id: string) {
   const tool = await prisma.tool.findUnique({
     where: { id },
     include: {
-      currentBlob: true,
+      currentVersion: true,
       site: { select: { id: true, name: true } },
       toolCavities: {
         where: { deletedAt: null },
         include: {
-          currentBlob: true,
+          currentVersion: true,
         },
         orderBy: { createdAt: "asc" },
       },
-      _count: { select: { toolCavities: true, jobs: true, blobs: true } },
+      _count: { select: { toolCavities: true, jobs: true, versions: true } },
     },
   });
 
@@ -182,15 +182,15 @@ export async function getById(id: string) {
 }
 
 /**
- * Update tool (creates new blob version)
+ * Update tool (creates new version version)
  */
 export async function update(id: string, input: UpdateToolInput) {
   const { name, description, cavityCount, attrs } = input;
 
-  // Get current tool with blob
+  // Get current tool with version
   const current = await prisma.tool.findUnique({
     where: { id },
-    include: { currentBlob: true, site: { select: { workspaceId: true } } },
+    include: { currentVersion: true, site: { select: { workspaceId: true } } },
   });
 
   if (!current) {
@@ -201,41 +201,41 @@ export async function update(id: string, input: UpdateToolInput) {
     return { error: "Tool has been deleted", code: "TOOL_DELETED" };
   }
 
-  if (!current.currentBlob) {
-    return { error: "Tool has no current blob", code: "NO_CURRENT_BLOB" };
+  if (!current.currentVersion) {
+    return { error: "Tool has no current version", code: "NO_CURRENT_VERSION" };
   }
 
-  const currentBlob = current.currentBlob;
+  const currentVersion = current.currentVersion;
 
   // Get next version number
-  const latestBlob = await prisma.toolBlob.findFirst({
+  const latestVersion = await prisma.toolVersion.findFirst({
     where: { toolId: id },
     orderBy: { version: "desc" },
     select: { version: true },
   });
 
-  const nextVersion = (latestBlob?.version ?? 0) + 1;
+  const nextVersion = (latestVersion?.version ?? 0) + 1;
 
-  // Create new blob with merged data
+  // Create new version with merged data
   const tool = await prisma.$transaction(async (tx) => {
-    const blob = await tx.toolBlob.create({
+    const version = await tx.toolVersion.create({
       data: {
         toolId: id,
         version: nextVersion,
-        name: name ?? currentBlob.name,
-        description: description !== undefined ? description : currentBlob.description,
-        cavityCount: cavityCount !== undefined ? cavityCount : currentBlob.cavityCount,
-        attrs: attrs !== undefined ? attrs : (currentBlob.attrs as Record<string, unknown>),
+        name: name ?? currentVersion.name,
+        description: description !== undefined ? description : currentVersion.description,
+        cavityCount: cavityCount !== undefined ? cavityCount : currentVersion.cavityCount,
+        attrs: attrs !== undefined ? attrs : (currentVersion.attrs as Record<string, unknown>),
       },
     });
 
     return tx.tool.update({
       where: { id },
-      data: { currentBlobId: blob.id },
+      data: { currentVersionId: version.id },
       include: {
-        currentBlob: true,
+        currentVersion: true,
         site: { select: { id: true, name: true } },
-        _count: { select: { toolCavities: true, jobs: true, blobs: true } },
+        _count: { select: { toolCavities: true, jobs: true, versions: true } },
       },
     });
   });
@@ -339,15 +339,15 @@ export async function addCavity(input: AddCavityInput) {
     return { error: "Tool has been deleted", code: "TOOL_DELETED" };
   }
 
-  // Create cavity and initial blob in transaction
+  // Create cavity and initial version in transaction
   const cavity = await prisma.$transaction(async (tx) => {
     // 1. Create ToolCavity entity
     const c = await tx.toolCavity.create({
       data: { toolId },
     });
 
-    // 2. Create initial ToolCavityBlob (version 1)
-    const blob = await tx.toolCavityBlob.create({
+    // 2. Create initial ToolCavityVersion (version 1)
+    const version = await tx.toolCavityVersion.create({
       data: {
         toolCavityId: c.id,
         version: 1,
@@ -356,12 +356,12 @@ export async function addCavity(input: AddCavityInput) {
       },
     });
 
-    // 3. Link blob as current and return
+    // 3. Link version as current and return
     return tx.toolCavity.update({
       where: { id: c.id },
-      data: { currentBlobId: blob.id },
+      data: { currentVersionId: version.id },
       include: {
-        currentBlob: true,
+        currentVersion: true,
       },
     });
   });
@@ -379,16 +379,16 @@ export async function addCavity(input: AddCavityInput) {
 }
 
 /**
- * Update a cavity (creates new blob version)
+ * Update a cavity (creates new version version)
  */
 export async function updateCavity(cavityId: string, input: UpdateCavityInput) {
   const { name, position } = input;
 
-  // Get current cavity with blob
+  // Get current cavity with version
   const current = await prisma.toolCavity.findUnique({
     where: { id: cavityId },
     include: {
-      currentBlob: true,
+      currentVersion: true,
       tool: { select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } } },
     },
   });
@@ -405,37 +405,37 @@ export async function updateCavity(cavityId: string, input: UpdateCavityInput) {
     return { error: "Tool has been deleted", code: "TOOL_DELETED" };
   }
 
-  if (!current.currentBlob) {
-    return { error: "Cavity has no current blob", code: "NO_CURRENT_BLOB" };
+  if (!current.currentVersion) {
+    return { error: "Cavity has no current version", code: "NO_CURRENT_VERSION" };
   }
 
-  const currentBlob = current.currentBlob;
+  const currentVersion = current.currentVersion;
 
   // Get next version number
-  const latestBlob = await prisma.toolCavityBlob.findFirst({
+  const latestVersion = await prisma.toolCavityVersion.findFirst({
     where: { toolCavityId: cavityId },
     orderBy: { version: "desc" },
     select: { version: true },
   });
 
-  const nextVersion = (latestBlob?.version ?? 0) + 1;
+  const nextVersion = (latestVersion?.version ?? 0) + 1;
 
-  // Create new blob with merged data
+  // Create new version with merged data
   const cavity = await prisma.$transaction(async (tx) => {
-    const blob = await tx.toolCavityBlob.create({
+    const version = await tx.toolCavityVersion.create({
       data: {
         toolCavityId: cavityId,
         version: nextVersion,
-        name: name ?? currentBlob.name,
-        position: position !== undefined ? position : currentBlob.position,
+        name: name ?? currentVersion.name,
+        position: position !== undefined ? position : currentVersion.position,
       },
     });
 
     return tx.toolCavity.update({
       where: { id: cavityId },
-      data: { currentBlobId: blob.id },
+      data: { currentVersionId: version.id },
       include: {
-        currentBlob: true,
+        currentVersion: true,
       },
     });
   });
@@ -516,9 +516,9 @@ export async function listCavities(toolId: string) {
       deletedAt: null,
     },
     include: {
-      currentBlob: true,
+      currentVersion: true,
     },
-    orderBy: [{ currentBlob: { position: "asc" } }, { createdAt: "asc" }],
+    orderBy: [{ currentVersion: { position: "asc" } }, { createdAt: "asc" }],
   });
 
   return { data: cavities };

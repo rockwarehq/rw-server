@@ -117,14 +117,14 @@ enum WeightUnit {
 }
 
 model Product {
-  id            String  @id @default(uuid()) @db.Uuid
-  currentBlobId String? @unique @db.Uuid
+  id               String  @id @default(uuid()) @db.Uuid
+  currentVersionId String? @unique @db.Uuid
 
   siteId String @db.Uuid
   site   Site   @relation(fields: [siteId], references: [id])
 
-  currentBlob ProductBlob?  @relation("ProductCurrent", fields: [currentBlobId], references: [id])
-  blobs       ProductBlob[] @relation("ProductBlobs")
+  currentVersion ProductVersion?  @relation("ProductCurrent", fields: [currentVersionId], references: [id])
+  versions       ProductVersion[] @relation("ProductVersions")
 
   materials          ProductMaterial[]
   materialAltGroups  ProductMaterialAltGroup[]
@@ -140,7 +140,7 @@ model Product {
   archivedAt DateTime? @db.Timestamptz(3)
 }
 
-model ProductBlob {
+model ProductVersion {
   id          String      @id @default(uuid()) @db.Uuid
   version     Int
   sku         String
@@ -153,12 +153,12 @@ model ProductBlob {
   attrs       Json        @default("{}")
 
   productId String  @db.Uuid
-  product   Product @relation("ProductBlobs", fields: [productId], references: [id])
+  product   Product @relation("ProductVersions", fields: [productId], references: [id])
 
-  currentOfProduct     Product?              @relation("ProductCurrent")
-  inventoryItems       InventoryItem[]
-  itemDispositionLogs  ItemDispositionLog[]
-  productMaterialBlobs ProductMaterialBlob[]
+  currentOfProduct        Product?                 @relation("ProductCurrent")
+  inventoryItems          InventoryItem[]
+  itemDispositionLogs     ItemDispositionLog[]
+  productMaterialVersions ProductMaterialVersion[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
@@ -167,14 +167,14 @@ model ProductBlob {
 }
 
 model Material {
-  id            String  @id @default(uuid()) @db.Uuid
-  currentBlobId String? @unique @db.Uuid
+  id               String  @id @default(uuid()) @db.Uuid
+  currentVersionId String? @unique @db.Uuid
 
   siteId String @db.Uuid
   site   Site   @relation(fields: [siteId], references: [id])
 
-  currentBlob MaterialBlob?  @relation("MaterialCurrent", fields: [currentBlobId], references: [id])
-  blobs       MaterialBlob[] @relation("MaterialBlobs")
+  currentVersion MaterialVersion?  @relation("MaterialCurrent", fields: [currentVersionId], references: [id])
+  versions       MaterialVersion[] @relation("MaterialVersions")
 
   products      ProductMaterial[]
   ledgerEntries MaterialLedgerEntry[]
@@ -186,7 +186,7 @@ model Material {
   archivedAt DateTime? @db.Timestamptz(3)
 }
 
-model MaterialBlob {
+model MaterialVersion {
   id             String      @id @default(uuid()) @db.Uuid
   version        Int
   name           String?
@@ -200,10 +200,10 @@ model MaterialBlob {
   attrs          Json        @default("{}")
 
   materialId String   @db.Uuid
-  material   Material @relation("MaterialBlobs", fields: [materialId], references: [id])
+  material   Material @relation("MaterialVersions", fields: [materialId], references: [id])
 
-  currentOfMaterial    Material?             @relation("MaterialCurrent")
-  productMaterialBlobs ProductMaterialBlob[]
+  currentOfMaterial       Material?                @relation("MaterialCurrent")
+  productMaterialVersions ProductMaterialVersion[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
@@ -233,7 +233,7 @@ model ProductMaterialAltGroup {
   @@index([productId])
 }
 
-/// Assignment: links a Material to a Product (versioned data lives in ProductMaterialBlob).
+/// Assignment: links a Material to a Product (versioned data lives in ProductMaterialVersion).
 /// Two independent gates control whether this assignment contributes to a cycle's
 /// InventoryItems and appears in selection UIs:
 ///   - `archivedAt`: if non-null, this assignment is globally disabled — never
@@ -241,8 +241,8 @@ model ProductMaterialAltGroup {
 ///   - Group membership: if `altGroupId` is null, the material is standalone.
 ///     If set, it's the group's pick only when `group.activeProductMaterialId == id`.
 model ProductMaterial {
-  id            String  @id @default(uuid()) @db.Uuid
-  currentBlobId String? @unique @db.Uuid
+  id               String  @id @default(uuid()) @db.Uuid
+  currentVersionId String? @unique @db.Uuid
 
   productId  String  @db.Uuid
   materialId String  @db.Uuid
@@ -254,8 +254,8 @@ model ProductMaterial {
 
   activeOfAltGroup ProductMaterialAltGroup? @relation("ProductMaterialAltGroupActive")
 
-  currentBlob ProductMaterialBlob?  @relation("ProductMaterialCurrent", fields: [currentBlobId], references: [id])
-  blobs       ProductMaterialBlob[] @relation("ProductMaterialBlobs")
+  currentVersion ProductMaterialVersion?  @relation("ProductMaterialCurrent", fields: [currentVersionId], references: [id])
+  versions       ProductMaterialVersion[] @relation("ProductMaterialVersions")
 
   attrs Json @default("{}")
 
@@ -268,7 +268,7 @@ model ProductMaterial {
   @@index([altGroupId])
 }
 
-model ProductMaterialBlob {
+model ProductMaterialVersion {
   id      String @id @default(uuid()) @db.Uuid
   version Int
 
@@ -278,13 +278,13 @@ model ProductMaterialBlob {
   attrs       Json        @default("{}")
 
   productMaterialId String          @db.Uuid
-  productMaterial   ProductMaterial @relation("ProductMaterialBlobs", fields: [productMaterialId], references: [id], onDelete: Cascade)
+  productMaterial   ProductMaterial @relation("ProductMaterialVersions", fields: [productMaterialId], references: [id], onDelete: Cascade)
 
-  materialBlobId String       @db.Uuid
-  materialBlob   MaterialBlob @relation(fields: [materialBlobId], references: [id])
+  materialVersionId String          @db.Uuid
+  materialVersion   MaterialVersion @relation(fields: [materialVersionId], references: [id])
 
-  productBlobId String      @db.Uuid
-  productBlob   ProductBlob @relation(fields: [productBlobId], references: [id])
+  productVersionId String         @db.Uuid
+  productVersion   ProductVersion @relation(fields: [productVersionId], references: [id])
 
   currentOfProductMaterial ProductMaterial?     @relation("ProductMaterialCurrent")
   inventoryItems           InventoryItem[]
@@ -294,7 +294,7 @@ model ProductMaterialBlob {
 
   @@unique([productMaterialId, version])
   @@index([productMaterialId])
-  @@index([materialBlobId])
+  @@index([materialVersionId])
 }
 
 model InventoryItem {
@@ -304,21 +304,21 @@ model InventoryItem {
   cycleId String @db.Uuid
   cycle   Cycle  @relation(fields: [cycleId], references: [id], onDelete: Cascade)
 
-  // Snapshot: blob IDs at point in time
-  jobProductBlobId String?         @db.Uuid
-  jobProductBlob   JobProductBlob? @relation(fields: [jobProductBlobId], references: [id])
+  // Snapshot: version IDs at point in time
+  jobProductVersionId String?            @db.Uuid
+  jobProductVersion   JobProductVersion? @relation(fields: [jobProductVersionId], references: [id])
 
-  productBlobId String      @db.Uuid
-  productBlob   ProductBlob @relation(fields: [productBlobId], references: [id])
+  productVersionId String         @db.Uuid
+  productVersion   ProductVersion @relation(fields: [productVersionId], references: [id])
 
-  toolBlobId String?   @db.Uuid
-  toolBlob   ToolBlob? @relation(fields: [toolBlobId], references: [id])
+  toolVersionId String?      @db.Uuid
+  toolVersion   ToolVersion? @relation(fields: [toolVersionId], references: [id])
 
-  toolCavityBlobId String?         @db.Uuid
-  toolCavityBlob   ToolCavityBlob? @relation(fields: [toolCavityBlobId], references: [id])
+  toolCavityVersionId String?            @db.Uuid
+  toolCavityVersion   ToolCavityVersion? @relation(fields: [toolCavityVersionId], references: [id])
 
-  productMaterialBlobs ProductMaterialBlob[]
-  orderAllocations     OrderInventoryAllocation[]
+  productMaterialVersions ProductMaterialVersion[]
+  orderAllocations        OrderInventoryAllocation[]
 
   createdAt DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt DateTime  @updatedAt @db.Timestamptz(3)
@@ -326,10 +326,10 @@ model InventoryItem {
 
   @@index([cycleId])
   @@index([cycleId, deletedAt])
-  @@index([jobProductBlobId])
-  @@index([productBlobId])
-  @@index([toolBlobId])
-  @@index([toolCavityBlobId])
+  @@index([jobProductVersionId])
+  @@index([productVersionId])
+  @@index([toolVersionId])
+  @@index([toolCavityVersionId])
 }
 
 /// Product picture stored in S3-compatible storage (Tigris)
@@ -420,23 +420,23 @@ model ItemDispositionLog {
   dispositionReasonId String?                @db.Uuid
   dispositionReason   ItemDispositionReason? @relation(fields: [dispositionReasonId], references: [id])
 
-  // Snapshot: blob IDs at point in time
-  stationBlobId String?      @db.Uuid
-  stationBlob   StationBlob? @relation(fields: [stationBlobId], references: [id])
+  // Snapshot: version IDs at point in time
+  stationVersionId String?         @db.Uuid
+  stationVersion   StationVersion? @relation(fields: [stationVersionId], references: [id])
 
-  jobProductBlobId String?         @db.Uuid
-  jobProductBlob   JobProductBlob? @relation(fields: [jobProductBlobId], references: [id])
+  jobProductVersionId String?            @db.Uuid
+  jobProductVersion   JobProductVersion? @relation(fields: [jobProductVersionId], references: [id])
 
-  productBlobId String      @db.Uuid
-  productBlob   ProductBlob @relation(fields: [productBlobId], references: [id])
+  productVersionId String         @db.Uuid
+  productVersion   ProductVersion @relation(fields: [productVersionId], references: [id])
 
-  toolBlobId String?   @db.Uuid
-  toolBlob   ToolBlob? @relation(fields: [toolBlobId], references: [id])
+  toolVersionId String?      @db.Uuid
+  toolVersion   ToolVersion? @relation(fields: [toolVersionId], references: [id])
 
-  toolCavityBlobId String?         @db.Uuid
-  toolCavityBlob   ToolCavityBlob? @relation(fields: [toolCavityBlobId], references: [id])
+  toolCavityVersionId String?            @db.Uuid
+  toolCavityVersion   ToolCavityVersion? @relation(fields: [toolCavityVersionId], references: [id])
 
-  productMaterialBlobs ProductMaterialBlob[]
+  productMaterialVersions ProductMaterialVersion[]
 
   @@index([stationId, createdAt])
 }

@@ -40,8 +40,8 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
         select: {
           id: true,
           siteId: true,
-          currentBlobId: true,
-          currentBlob: {
+          currentVersionId: true,
+          currentVersion: {
             select: { standardCycle: true, name: true },
           },
         },
@@ -58,8 +58,8 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
         throw new Error(`Job not found: ${newJobId}`);
       }
 
-      if (!job.currentBlobId) {
-        throw new Error("Job has no current blob version");
+      if (!job.currentVersionId) {
+        throw new Error("Job has no current version version");
       }
     }
 
@@ -127,14 +127,14 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
 
       // ── Create new StationJobLog if assigning a job ─────────────
       if (newJobId && job) {
-        const standardCycle = job.currentBlob?.standardCycle ?? null;
+        const standardCycle = job.currentVersion?.standardCycle ?? null;
 
         await tx.stationJobLog.create({
           data: {
             stationId,
             jobId: newJobId,
-            // biome-ignore lint/style/noNonNullAssertion: throws above (line 55-57) if job.currentBlobId is null; narrowing lost across closure
-            jobBlobId: job.currentBlobId!,
+            // biome-ignore lint/style/noNonNullAssertion: throws above (line 55-57) if job.currentVersionId is null; narrowing lost across closure
+            jobVersionId: job.currentVersionId!,
             startTime: timestamp,
             standardCycle,
           },
@@ -142,7 +142,7 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
       }
 
       // Keep state-log entries job-homogeneous under the period model.
-      await splitOpenStateEntryForJobChange(tx, stationId, timestamp, job?.currentBlobId ?? null);
+      await splitOpenStateEntryForJobChange(tx, stationId, timestamp, job?.currentVersionId ?? null);
 
       return { station, closedLogs };
     });
@@ -174,17 +174,17 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
         siteId: station.siteId,
         entityType: "JOB",
         entityId: jobEntityId(stationId, newJobId),
-        entityName: job.currentBlob?.name ?? "",
+        entityName: job.currentVersion?.name ?? "",
         timestamp,
       }).catch((err) => {
         console.error(`[job.change] Failed to ensure JOB buckets for job ${newJobId}:`, err);
       });
 
-      publishStationCurrentJobMetric(stationId, job.currentBlob?.name ?? null, timestamp).catch((err) => {
+      publishStationCurrentJobMetric(stationId, job.currentVersion?.name ?? null, timestamp).catch((err) => {
         console.error(`[job.change] publishStationCurrentJobMetric failed for station ${stationId}:`, err);
       });
       const standardCycleSeconds =
-        job.currentBlob?.standardCycle != null ? Number(job.currentBlob.standardCycle) : null;
+        job.currentVersion?.standardCycle != null ? Number(job.currentVersion.standardCycle) : null;
       publishStationStandardCycleMetric(stationId, standardCycleSeconds, timestamp).catch((err) => {
         console.error(`[job.change] publishStationStandardCycleMetric failed for station ${stationId}:`, err);
       });

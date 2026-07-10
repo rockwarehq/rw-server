@@ -69,7 +69,7 @@ export interface UpdateItemInput {
 // ============================================================================
 
 /**
- * Create a new job with initial blob (version 1)
+ * Create a new job with initial version (version 1)
  */
 export async function create(input: CreateJobInput) {
   const { siteId, name, description, standardCycle, productsPerCycle, attrs } = input;
@@ -84,15 +84,15 @@ export async function create(input: CreateJobInput) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
 
-  // Create job and initial blob in transaction
+  // Create job and initial version in transaction
   const job = await prisma.$transaction(async (tx) => {
     // 1. Create Job entity
     const j = await tx.job.create({
       data: { siteId },
     });
 
-    // 2. Create initial JobBlob (version 1)
-    const blob = await tx.jobBlob.create({
+    // 2. Create initial JobVersion (version 1)
+    const version = await tx.jobVersion.create({
       data: {
         jobId: j.id,
         version: 1,
@@ -104,14 +104,14 @@ export async function create(input: CreateJobInput) {
       },
     });
 
-    // 3. Link blob as current and return
+    // 3. Link version as current and return
     return tx.job.update({
       where: { id: j.id },
-      data: { currentBlobId: blob.id },
+      data: { currentVersionId: version.id },
       include: {
-        currentBlob: true,
+        currentVersion: true,
         site: { select: { id: true, name: true } },
-        _count: { select: { tools: true, jobProducts: true, orders: true, blobs: true } },
+        _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
       },
     });
   });
@@ -143,11 +143,11 @@ export async function list(filter: ListJobsFilter = {}) {
 
   // Free-text search OR'd across the columns shown in the UI.
   if (q) {
-    where.currentBlob = {
+    where.currentVersion = {
       OR: [{ name: { contains: q, mode: "insensitive" } }, { description: { contains: q, mode: "insensitive" } }],
     };
   } else if (name) {
-    where.currentBlob = {
+    where.currentVersion = {
       name: { contains: name, mode: "insensitive" },
     };
   }
@@ -174,7 +174,7 @@ export async function list(filter: ListJobsFilter = {}) {
         where,
         select: {
           id: true,
-          currentBlob: { select: { name: true, description: true } },
+          currentVersion: { select: { name: true, description: true } },
         },
         ...pagination,
       }),
@@ -184,8 +184,8 @@ export async function list(filter: ListJobsFilter = {}) {
     return {
       data: jobs.map((j) => ({
         id: j.id,
-        name: j.currentBlob?.name ?? "",
-        description: j.currentBlob?.description ?? null,
+        name: j.currentVersion?.name ?? "",
+        description: j.currentVersion?.description ?? null,
       })),
       total,
       limit: Number(limit),
@@ -197,9 +197,9 @@ export async function list(filter: ListJobsFilter = {}) {
     prisma.job.findMany({
       where,
       include: {
-        currentBlob: true,
+        currentVersion: true,
         site: { select: { id: true, name: true } },
-        _count: { select: { tools: true, jobProducts: true, orders: true, blobs: true } },
+        _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
       },
       ...pagination,
     }),
@@ -215,23 +215,23 @@ export async function list(filter: ListJobsFilter = {}) {
 }
 
 /**
- * Get job by ID with current blob, tools, and items
+ * Get job by ID with current version, tools, and items
  */
 export async function getById(id: string) {
   const job = await prisma.job.findUnique({
     where: { id },
     include: {
-      currentBlob: true,
+      currentVersion: true,
       site: { select: { id: true, name: true } },
       tools: {
         where: { deletedAt: null },
         include: {
           tool: {
             include: {
-              currentBlob: true,
+              currentVersion: true,
               toolCavities: {
                 where: { deletedAt: null },
-                include: { currentBlob: true },
+                include: { currentVersion: true },
               },
             },
           },
@@ -240,17 +240,17 @@ export async function getById(id: string) {
       jobProducts: {
         where: { deletedAt: null },
         include: {
-          currentBlob: true,
+          currentVersion: true,
           product: {
             include: {
-              currentBlob: true,
+              currentVersion: true,
               // BOM materials so the operator screen can list short code +
               // description per material and offer alt-group swaps.
               materials: {
                 where: { archivedAt: null },
                 include: {
-                  currentBlob: true,
-                  material: { include: { currentBlob: true } },
+                  currentVersion: true,
+                  material: { include: { currentVersion: true } },
                   altGroup: true,
                 },
               },
@@ -258,17 +258,17 @@ export async function getById(id: string) {
           },
           tool: {
             include: {
-              currentBlob: true,
+              currentVersion: true,
             },
           },
           toolCavity: {
             include: {
-              currentBlob: true,
+              currentVersion: true,
             },
           },
         },
       },
-      _count: { select: { tools: true, jobProducts: true, orders: true, blobs: true } },
+      _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
     },
   });
 
@@ -284,15 +284,15 @@ export async function getById(id: string) {
 }
 
 /**
- * Update job (creates new blob version)
+ * Update job (creates new version version)
  */
 export async function update(id: string, input: UpdateJobInput) {
   const { name, description, standardCycle, productsPerCycle, attrs } = input;
 
-  // Get current job with blob
+  // Get current job with version
   const current = await prisma.job.findUnique({
     where: { id },
-    include: { currentBlob: true, site: { select: { workspaceId: true } } },
+    include: { currentVersion: true, site: { select: { workspaceId: true } } },
   });
 
   if (!current) {
@@ -303,42 +303,42 @@ export async function update(id: string, input: UpdateJobInput) {
     return { error: "Job has been deleted", code: "JOB_DELETED" };
   }
 
-  if (!current.currentBlob) {
-    return { error: "Job has no current blob", code: "NO_CURRENT_BLOB" };
+  if (!current.currentVersion) {
+    return { error: "Job has no current version", code: "NO_CURRENT_VERSION" };
   }
 
-  const currentBlob = current.currentBlob;
+  const currentVersion = current.currentVersion;
 
   // Get next version number
-  const latestBlob = await prisma.jobBlob.findFirst({
+  const latestVersion = await prisma.jobVersion.findFirst({
     where: { jobId: id },
     orderBy: { version: "desc" },
     select: { version: true },
   });
 
-  const nextVersion = (latestBlob?.version ?? 0) + 1;
+  const nextVersion = (latestVersion?.version ?? 0) + 1;
 
-  // Create new blob with merged data
+  // Create new version with merged data
   const job = await prisma.$transaction(async (tx) => {
-    const blob = await tx.jobBlob.create({
+    const version = await tx.jobVersion.create({
       data: {
         jobId: id,
         version: nextVersion,
-        name: name ?? currentBlob.name,
-        description: description !== undefined ? description : currentBlob.description,
-        standardCycle: standardCycle !== undefined ? standardCycle : currentBlob.standardCycle,
-        productsPerCycle: productsPerCycle !== undefined ? productsPerCycle : currentBlob.productsPerCycle,
-        attrs: attrs !== undefined ? attrs : (currentBlob.attrs as Record<string, unknown>),
+        name: name ?? currentVersion.name,
+        description: description !== undefined ? description : currentVersion.description,
+        standardCycle: standardCycle !== undefined ? standardCycle : currentVersion.standardCycle,
+        productsPerCycle: productsPerCycle !== undefined ? productsPerCycle : currentVersion.productsPerCycle,
+        attrs: attrs !== undefined ? attrs : (currentVersion.attrs as Record<string, unknown>),
       },
     });
 
     return tx.job.update({
       where: { id },
-      data: { currentBlobId: blob.id },
+      data: { currentVersionId: version.id },
       include: {
-        currentBlob: true,
+        currentVersion: true,
         site: { select: { id: true, name: true } },
-        _count: { select: { tools: true, jobProducts: true, orders: true, blobs: true } },
+        _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
       },
     });
   });
@@ -474,10 +474,10 @@ export async function addTool(input: AddToolInput) {
       include: {
         tool: {
           include: {
-            currentBlob: true,
+            currentVersion: true,
             toolCavities: {
               where: { deletedAt: null },
-              include: { currentBlob: true },
+              include: { currentVersion: true },
             },
           },
         },
@@ -490,10 +490,10 @@ export async function addTool(input: AddToolInput) {
       include: {
         tool: {
           include: {
-            currentBlob: true,
+            currentVersion: true,
             toolCavities: {
               where: { deletedAt: null },
-              include: { currentBlob: true },
+              include: { currentVersion: true },
             },
           },
         },
@@ -585,11 +585,11 @@ export async function listTools(jobId: string) {
     include: {
       tool: {
         include: {
-          currentBlob: true,
+          currentVersion: true,
           toolCavities: {
             where: { deletedAt: null },
             include: {
-              currentBlob: true,
+              currentVersion: true,
             },
           },
         },
@@ -680,7 +680,7 @@ export async function addItem(input: AddItemInput) {
     }
   }
 
-  // Create JobProduct with blob
+  // Create JobProduct with version
   const jobProduct = await prisma.$transaction(async (tx) => {
     // 1. Create JobProduct entity
     const jp = await tx.jobProduct.create({
@@ -692,8 +692,8 @@ export async function addItem(input: AddItemInput) {
       },
     });
 
-    // 2. Create initial JobProductBlob (version 1)
-    const blob = await tx.jobProductBlob.create({
+    // 2. Create initial JobProductVersion (version 1)
+    const version = await tx.jobProductVersion.create({
       data: {
         jobProductId: jp.id,
         version: 1,
@@ -702,25 +702,25 @@ export async function addItem(input: AddItemInput) {
       },
     });
 
-    // 3. Link blob as current and return
+    // 3. Link version as current and return
     return tx.jobProduct.update({
       where: { id: jp.id },
-      data: { currentBlobId: blob.id },
+      data: { currentVersionId: version.id },
       include: {
-        currentBlob: true,
+        currentVersion: true,
         product: {
           include: {
-            currentBlob: true,
+            currentVersion: true,
           },
         },
         tool: {
           include: {
-            currentBlob: true,
+            currentVersion: true,
           },
         },
         toolCavity: {
           include: {
-            currentBlob: true,
+            currentVersion: true,
           },
         },
       },
@@ -748,16 +748,16 @@ export async function addItem(input: AddItemInput) {
 }
 
 /**
- * Update a job product (creates new blob version)
+ * Update a job product (creates new version version)
  */
 export async function updateItem(itemId: string, input: UpdateItemInput) {
   const { isActive, toolId, toolCavityId, quantity } = input;
 
-  // Get current item with blob
+  // Get current item with version
   const current = await prisma.jobProduct.findUnique({
     where: { id: itemId },
     include: {
-      currentBlob: true,
+      currentVersion: true,
       job: { select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } } },
     },
   });
@@ -774,11 +774,11 @@ export async function updateItem(itemId: string, input: UpdateItemInput) {
     return { error: "Job has been deleted", code: "JOB_DELETED" };
   }
 
-  if (!current.currentBlob) {
-    return { error: "Job product has no current blob", code: "NO_CURRENT_BLOB" };
+  if (!current.currentVersion) {
+    return { error: "Job product has no current version", code: "NO_CURRENT_VERSION" };
   }
 
-  const currentBlob = current.currentBlob;
+  const currentVersion = current.currentVersion;
 
   // Validate toolId if changing
   if (toolId !== undefined && toolId !== null) {
@@ -817,47 +817,47 @@ export async function updateItem(itemId: string, input: UpdateItemInput) {
   }
 
   // Get next version number
-  const latestBlob = await prisma.jobProductBlob.findFirst({
+  const latestVersion = await prisma.jobProductVersion.findFirst({
     where: { jobProductId: itemId },
     orderBy: { version: "desc" },
     select: { version: true },
   });
 
-  const nextVersion = (latestBlob?.version ?? 0) + 1;
+  const nextVersion = (latestVersion?.version ?? 0) + 1;
 
-  // Create new blob and update item
+  // Create new version and update item
   const jobProduct = await prisma.$transaction(async (tx) => {
-    const blob = await tx.jobProductBlob.create({
+    const version = await tx.jobProductVersion.create({
       data: {
         jobProductId: itemId,
         version: nextVersion,
-        isActive: isActive !== undefined ? isActive : currentBlob.isActive,
-        quantity: quantity !== undefined ? quantity : currentBlob.quantity,
+        isActive: isActive !== undefined ? isActive : currentVersion.isActive,
+        quantity: quantity !== undefined ? quantity : currentVersion.quantity,
       },
     });
 
     return tx.jobProduct.update({
       where: { id: itemId },
       data: {
-        currentBlobId: blob.id,
+        currentVersionId: version.id,
         toolId: toolId !== undefined ? toolId : undefined,
         toolCavityId: toolCavityId !== undefined ? toolCavityId : undefined,
       },
       include: {
-        currentBlob: true,
+        currentVersion: true,
         product: {
           include: {
-            currentBlob: true,
+            currentVersion: true,
           },
         },
         tool: {
           include: {
-            currentBlob: true,
+            currentVersion: true,
           },
         },
         toolCavity: {
           include: {
-            currentBlob: true,
+            currentVersion: true,
           },
         },
       },
@@ -946,20 +946,20 @@ export async function listItems(jobId: string) {
       deletedAt: null,
     },
     include: {
-      currentBlob: true,
+      currentVersion: true,
       product: {
         include: {
-          currentBlob: true,
+          currentVersion: true,
         },
       },
       tool: {
         include: {
-          currentBlob: true,
+          currentVersion: true,
         },
       },
       toolCavity: {
         include: {
-          currentBlob: true,
+          currentVersion: true,
         },
       },
     },
@@ -987,7 +987,7 @@ export async function jobsByProductIds(siteId: string, productIds: string[]) {
       job: {
         select: {
           id: true,
-          currentBlob: { select: { name: true } },
+          currentVersion: { select: { name: true } },
         },
       },
     },
@@ -998,7 +998,7 @@ export async function jobsByProductIds(siteId: string, productIds: string[]) {
     if (!map[jp.productId]) map[jp.productId] = [];
     // Deduplicate — same job can appear multiple times via different cavities
     if (map[jp.productId].some((e) => e.jobId === jp.job.id)) continue;
-    map[jp.productId].push({ jobId: jp.job.id, jobName: jp.job.currentBlob?.name ?? "" });
+    map[jp.productId].push({ jobId: jp.job.id, jobName: jp.job.currentVersion?.name ?? "" });
   }
 
   return { data: map };

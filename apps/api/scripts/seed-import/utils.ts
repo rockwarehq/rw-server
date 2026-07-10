@@ -3,14 +3,14 @@ import config from "./config.js";
 import { WeightUnit } from "@rw/db";
 
 // ---------------------------------------------------------------------------
-// Blob versioning convention for importers
+// Version versioning convention for importers
 // ---------------------------------------------------------------------------
-// Importers update the current blob *in place* when source data changes — they
+// Importers update the current version *in place* when source data changes — they
 // do NOT bump `version`. Only the application's own write paths (e.g.
-// src/services/inventory/product.ts) create new blob versions on edit. This
+// src/services/inventory/product.ts) create new version versions on edit. This
 // keeps audit history meaningful (every version row corresponds to a real user
 // action) and avoids the "fields the importer doesn't carry get nulled on
-// re-import" bug. Importers still create v1 blobs for newly-created records.
+// re-import" bug. Importers still create v1 versions for newly-created records.
 
 // ---------------------------------------------------------------------------
 // Fixed-width text parser (SSMS "Results to Text" / sqlcmd output)

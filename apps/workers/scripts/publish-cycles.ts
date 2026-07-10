@@ -56,7 +56,7 @@ async function pickTarget(): Promise<Target | null> {
   let jobId = station.currentJobId;
   if (!jobId) {
     const job = await prisma.job.findFirst({
-      where: { siteId: station.siteId, deletedAt: null, currentBlobId: { not: null } },
+      where: { siteId: station.siteId, deletedAt: null, currentVersionId: { not: null } },
       select: { id: true },
     });
     jobId = job?.id ?? null;

@@ -143,8 +143,8 @@ export const COUNT_KPI_KEYS: ReadonlyArray<keyof CountKPIs> = [
  * When provided, restricts computation to a specific job on the station.
  *
  * - Cycles are filtered to those belonging to this job (by Job.id, matched
- *   through JobBlob.jobId). Cycles under any blob version of the same job
- *   are counted — re-blobbing a job mid-session does not drop its cycles.
+ *   through JobVersion.jobId). Cycles under any version version of the same job
+ *   are counted — re-versioning a job mid-session does not drop its cycles.
  * - State log durations are clipped to the job's active period within
  *   the bucket window
  * - The job's snapshotted standardCycle is used directly for
@@ -153,13 +153,13 @@ export const COUNT_KPI_KEYS: ReadonlyArray<keyof CountKPIs> = [
 export interface JobFilter {
   /** The job ID to filter cycles for. */
   jobId: string;
-  /** The job blob ID snapshotted at assignment time. */
-  jobBlobId: string;
+  /** The job version ID snapshotted at assignment time. */
+  jobVersionId: string;
   /** When the job was assigned to this station. */
   jobLogStartTime: Date;
   /** When the job was removed from this station. null = still active. */
   jobLogEndTime: Date | null;
-  /** Standard cycle time in seconds from the job blob snapshot. null if unknown. */
+  /** Standard cycle time in seconds from the job version snapshot. null if unknown. */
   standardCycle: number | null;
   /** Number of inventory items produced per cycle for this job. */
   itemsPerCycle: number;
@@ -181,7 +181,7 @@ export interface JobFilter {
  * summed by state (UP/DOWN) and reason (planned/unplanned).
  *
  * When `jobFilter` is provided, the computation is scoped to that job:
- * cycles are filtered by Job.id (across any blob version), and state log
+ * cycles are filtered by Job.id (across any version version), and state log
  * durations are clipped to the job's active period within the bucket window.
  *
  * @param stationId - The station to compute for
@@ -399,9 +399,9 @@ function resolveItemsPerCycle(cycleTally: CycleTally): number {
  *
  * When a jobFilter is provided, dispositions are attributed to the job via
  * two paths, in order of preference:
- *   1. ItemDispositionLog.cycleId → Cycle → JobBlob → jobId
+ *   1. ItemDispositionLog.cycleId → Cycle → JobVersion → jobId
  *      (used when the disposition was tied to a specific cycle)
- *   2. ItemDispositionLog.jobProductBlobId → JobProductBlob → JobProduct.jobId
+ *   2. ItemDispositionLog.jobProductVersionId → JobProductVersion → JobProduct.jobId
  *      (fallback for cycle-less dispositions — manual scrap entries snapshot
  *      the active JobProduct, which carries the jobId)
  * Dispositions where neither path resolves to a job are excluded from JOB
@@ -423,11 +423,11 @@ async function queryDispositionBadItems(
         AND idl."deletedAt" IS NULL
         AND COALESCE(
           (SELECT jb."jobId" FROM "Cycle" c
-             JOIN "JobBlob" jb ON jb.id = c."jobBlobId"
+             JOIN "JobVersion" jb ON jb.id = c."jobVersionId"
              WHERE c.id = idl."cycleId"),
-          (SELECT jp."jobId" FROM "JobProductBlob" jpb
+          (SELECT jp."jobId" FROM "JobProductVersion" jpb
              JOIN "JobProduct" jp ON jp.id = jpb."jobProductId"
-             WHERE jpb.id = idl."jobProductBlobId")
+             WHERE jpb.id = idl."jobProductVersionId")
         ) = ${jobFilter.jobId}::uuid
     `;
     return Number(rows[0]?.sum ?? 0);
@@ -456,11 +456,11 @@ interface CycleTally {
 /**
  * Query cycles ending in the bucket window and tally count-based KPIs.
  *
- * When a jobFilter is provided, only cycles whose JobBlob belongs to
- * `jobFilter.jobId` are included (matching by Job.id, not blob version,
- * so cycles under any blob of the same job are counted). The job's
+ * When a jobFilter is provided, only cycles whose JobVersion belongs to
+ * `jobFilter.jobId` are included (matching by Job.id, not version version,
+ * so cycles under any version of the same job are counted). The job's
  * snapshotted standardCycle is used for idealCycleSeconds instead of
- * reading from each cycle's blob.
+ * reading from each cycle's version.
  */
 async function queryAndTallyCycles(
   stationId: string,
@@ -486,7 +486,7 @@ async function queryAndTallyCycles(
         SELECT c."id", c."start", c."end", c."cycleStatus",
                jb."standardCycle"::float8 AS "standardCycle"
         FROM "Cycle" c
-        JOIN "JobBlob" jb ON jb."id" = c."jobBlobId"
+        JOIN "JobVersion" jb ON jb."id" = c."jobVersionId"
         WHERE c."stationId" = ${stationId}::uuid
           AND c."end" IS NOT NULL
           AND c."end" >= ${bucketStart}
@@ -506,7 +506,7 @@ async function queryAndTallyCycles(
         SELECT c."id", c."start", c."end", c."cycleStatus",
                jb."standardCycle"::float8 AS "standardCycle"
         FROM "Cycle" c
-        LEFT JOIN "JobBlob" jb ON jb."id" = c."jobBlobId"
+        LEFT JOIN "JobVersion" jb ON jb."id" = c."jobVersionId"
         WHERE c."stationId" = ${stationId}::uuid
           AND c."end" IS NOT NULL
           AND c."end" >= ${bucketStart}
@@ -540,7 +540,7 @@ async function queryAndTallyCycles(
     totalItems += items;
 
     // For job buckets, use the job's standardCycle consistently.
-    // For station buckets, use each cycle's own blob snapshot.
+    // For station buckets, use each cycle's own version snapshot.
     if (jobFilter?.standardCycle != null) {
       idealCycleSeconds += jobFilter.standardCycle;
     } else {

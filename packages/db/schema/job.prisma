@@ -1,6 +1,6 @@
 model Tool {
-  id            String  @id @default(uuid()) @db.Uuid
-  currentBlobId String? @unique @db.Uuid
+  id               String  @id @default(uuid()) @db.Uuid
+  currentVersionId String? @unique @db.Uuid
 
   pmCount   Int? @default(0)
   lifeCount Int? @default(0)
@@ -8,8 +8,8 @@ model Tool {
   siteId String @db.Uuid
   site   Site   @relation(fields: [siteId], references: [id])
 
-  currentBlob ToolBlob?  @relation("ToolCurrent", fields: [currentBlobId], references: [id])
-  blobs       ToolBlob[] @relation("ToolBlobs")
+  currentVersion ToolVersion?  @relation("ToolCurrent", fields: [currentVersionId], references: [id])
+  versions       ToolVersion[] @relation("ToolVersions")
 
   // Status (optional, single)
   toolStatusId String?     @db.Uuid
@@ -34,7 +34,7 @@ model Tool {
   @@index([toolLocationId])
 }
 
-model ToolBlob {
+model ToolVersion {
   id          String  @id @default(uuid()) @db.Uuid
   version     Int
   name        String
@@ -44,7 +44,7 @@ model ToolBlob {
   cavityCount Int?
 
   toolId String @db.Uuid
-  tool   Tool   @relation("ToolBlobs", fields: [toolId], references: [id])
+  tool   Tool   @relation("ToolVersions", fields: [toolId], references: [id])
 
   currentOfTool       Tool?                @relation("ToolCurrent")
   inventoryItems      InventoryItem[]
@@ -60,14 +60,14 @@ model ToolBlob {
 }
 
 model ToolCavity {
-  id            String  @id @default(uuid()) @db.Uuid
-  currentBlobId String? @unique @db.Uuid
+  id               String  @id @default(uuid()) @db.Uuid
+  currentVersionId String? @unique @db.Uuid
 
   toolId String @db.Uuid
   tool   Tool   @relation(fields: [toolId], references: [id], onDelete: Cascade)
 
-  currentBlob ToolCavityBlob?  @relation("ToolCavityCurrent", fields: [currentBlobId], references: [id])
-  blobs       ToolCavityBlob[] @relation("ToolCavityBlobs")
+  currentVersion ToolCavityVersion?  @relation("ToolCavityCurrent", fields: [currentVersionId], references: [id])
+  versions       ToolCavityVersion[] @relation("ToolCavityVersions")
 
   jobProducts JobProduct[]
 
@@ -78,14 +78,14 @@ model ToolCavity {
   @@index([toolId])
 }
 
-model ToolCavityBlob {
+model ToolCavityVersion {
   id       String @id @default(uuid()) @db.Uuid
   version  Int
   name     String
   position Int?
 
   toolCavityId String     @db.Uuid
-  toolCavity   ToolCavity @relation("ToolCavityBlobs", fields: [toolCavityId], references: [id])
+  toolCavity   ToolCavity @relation("ToolCavityVersions", fields: [toolCavityId], references: [id])
 
   currentOfToolCavity ToolCavity?          @relation("ToolCavityCurrent")
   inventoryItems      InventoryItem[]
@@ -98,14 +98,14 @@ model ToolCavityBlob {
 }
 
 model Job {
-  id            String  @id @default(uuid()) @db.Uuid
-  currentBlobId String? @unique @db.Uuid
+  id               String  @id @default(uuid()) @db.Uuid
+  currentVersionId String? @unique @db.Uuid
 
   siteId String @db.Uuid
   site   Site   @relation(fields: [siteId], references: [id])
 
-  currentBlob JobBlob?  @relation("JobCurrent", fields: [currentBlobId], references: [id])
-  blobs       JobBlob[] @relation("JobBlobs")
+  currentVersion JobVersion?  @relation("JobCurrent", fields: [currentVersionId], references: [id])
+  versions       JobVersion[] @relation("JobVersions")
 
   tools       JobTool[]
   jobProducts JobProduct[]
@@ -132,7 +132,7 @@ enum StandardCycleUnit {
   SECONDS
 }
 
-model JobBlob {
+model JobVersion {
   id                String            @id @default(uuid()) @db.Uuid
   version           Int
   name              String
@@ -143,7 +143,7 @@ model JobBlob {
   attrs             Json              @default("{}")
 
   jobId String @db.Uuid
-  job   Job    @relation("JobBlobs", fields: [jobId], references: [id])
+  job   Job    @relation("JobVersions", fields: [jobId], references: [id])
 
   currentOfJob Job?              @relation("JobCurrent")
   cycles       Cycle[]
@@ -176,10 +176,10 @@ model JobTool {
   @@index([toolId])
 }
 
-/// Assignment: links a Product (and optional Tool/ToolCavity) to a Job (versioned via JobProductBlob)
+/// Assignment: links a Product (and optional Tool/ToolCavity) to a Job (versioned via JobProductVersion)
 model JobProduct {
-  id            String  @id @default(uuid()) @db.Uuid
-  currentBlobId String? @unique @db.Uuid
+  id               String  @id @default(uuid()) @db.Uuid
+  currentVersionId String? @unique @db.Uuid
 
   jobId        String  @db.Uuid
   productId    String  @db.Uuid
@@ -191,8 +191,8 @@ model JobProduct {
   tool       Tool?       @relation(fields: [toolId], references: [id])
   toolCavity ToolCavity? @relation(fields: [toolCavityId], references: [id])
 
-  currentBlob JobProductBlob?  @relation("JobProductCurrent", fields: [currentBlobId], references: [id])
-  blobs       JobProductBlob[] @relation("JobProductBlobs")
+  currentVersion JobProductVersion?  @relation("JobProductCurrent", fields: [currentVersionId], references: [id])
+  versions       JobProductVersion[] @relation("JobProductVersions")
 
   createdAt DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt DateTime  @updatedAt @db.Timestamptz(3)
@@ -204,14 +204,14 @@ model JobProduct {
   @@index([toolCavityId])
 }
 
-model JobProductBlob {
+model JobProductVersion {
   id       String  @id @default(uuid()) @db.Uuid
   version  Int
   isActive Boolean @default(true)
   quantity Int     @default(1)
 
   jobProductId String     @db.Uuid
-  jobProduct   JobProduct @relation("JobProductBlobs", fields: [jobProductId], references: [id])
+  jobProduct   JobProduct @relation("JobProductVersions", fields: [jobProductId], references: [id])
 
   currentOfJobProduct JobProduct?          @relation("JobProductCurrent")
   inventoryItems      InventoryItem[]

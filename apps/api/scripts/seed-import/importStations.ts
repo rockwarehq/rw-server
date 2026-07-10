@@ -96,7 +96,7 @@ export async function importStations(
         assignedJobIds.add(currentJobId);
       }
 
-      // Resolve processTypeId for the station blob
+      // Resolve processTypeId for the station version
       const processTypeId = idMap.get("processType", row.ProcessType) ?? null;
 
       // Station has @@unique([siteId, name]); use findFirst with a
@@ -104,7 +104,7 @@ export async function importStations(
       // as the same station instead of creating a duplicate.
       const existing = await prisma.station.findFirst({
         where: { siteId, name: { equals: name, mode: "insensitive" } },
-        include: { currentBlob: true },
+        include: { currentVersion: true },
       });
 
       let stationId: string;
@@ -116,11 +116,11 @@ export async function importStations(
           data: { workcenterId, currentJobId },
         });
 
-        const blob = existing.currentBlob;
+        const version = existing.currentVersion;
 
-        if (!blob) {
-          // Existing station with no current blob — create v1.
-          const newBlob = await prisma.stationBlob.create({
+        if (!version) {
+          // Existing station with no current version — create v1.
+          const newVersion = await prisma.stationVersion.create({
             data: {
               version: 1,
               standardCycle,
@@ -133,19 +133,19 @@ export async function importStations(
           });
           await prisma.station.update({
             where: { id: existing.id },
-            data: { currentBlobId: newBlob.id },
+            data: { currentVersionId: newVersion.id },
           });
         } else {
           const changed =
-            (blob.standardCycle !== null ? Number(blob.standardCycle) : null) !== standardCycle ||
-            (blob.downtimeDetect !== null ? Number(blob.downtimeDetect) : null) !== downtimeDetect ||
-            (blob.slowDetect !== null ? Number(blob.slowDetect) : null) !== slowDetect ||
-            blob.inLineCalculations !== inLineCalculations ||
-            blob.processTypeId !== processTypeId;
+            (version.standardCycle !== null ? Number(version.standardCycle) : null) !== standardCycle ||
+            (version.downtimeDetect !== null ? Number(version.downtimeDetect) : null) !== downtimeDetect ||
+            (version.slowDetect !== null ? Number(version.slowDetect) : null) !== slowDetect ||
+            version.inLineCalculations !== inLineCalculations ||
+            version.processTypeId !== processTypeId;
 
           if (changed) {
-            await prisma.stationBlob.update({
-              where: { id: blob.id },
+            await prisma.stationVersion.update({
+              where: { id: version.id },
               data: {
                 standardCycle,
                 downtimeDetect,
@@ -159,7 +159,7 @@ export async function importStations(
 
         stationId = existing.id;
       } else {
-        // Create new station + blob v1
+        // Create new station + version v1
         const station = await prisma.station.create({
           data: {
             name,
@@ -169,7 +169,7 @@ export async function importStations(
           },
         });
 
-        const blob = await prisma.stationBlob.create({
+        const version = await prisma.stationVersion.create({
           data: {
             version: 1,
             standardCycle,
@@ -183,7 +183,7 @@ export async function importStations(
 
         await prisma.station.update({
           where: { id: station.id },
-          data: { currentBlobId: blob.id },
+          data: { currentVersionId: version.id },
         });
 
         stationId = station.id;

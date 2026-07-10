@@ -103,7 +103,7 @@ interface ActiveJobLog {
   id: string;
   stationId: string;
   jobId: string;
-  jobBlobId: string;
+  jobVersionId: string;
   startTime: Date;
   endTime: Date | null;
   standardCycle: number | null;
@@ -124,13 +124,13 @@ async function getActiveJobLogsForRange(stationId: string, rangeStart: Date, ran
       id: string;
       stationId: string;
       jobId: string;
-      jobBlobId: string;
+      jobVersionId: string;
       startTime: Date;
       endTime: Date | null;
       standardCycle: number | null;
     }>
   >`
-    SELECT id, "stationId", "jobId", "jobBlobId", "startTime", "endTime",
+    SELECT id, "stationId", "jobId", "jobVersionId", "startTime", "endTime",
            "standardCycle"::float8 AS "standardCycle"
     FROM "StationJobLog"
     WHERE "stationId" = ${stationId}
@@ -164,7 +164,7 @@ async function queryItemsPerCycle(jobId: string): Promise<number> {
   const rows = await prisma.$queryRaw<Array<{ total: number }>>`
     SELECT COALESCE(SUM(jpb.quantity), 0)::int AS total
     FROM "JobProduct" jp
-    JOIN "JobProductBlob" jpb ON jpb.id = jp."currentBlobId"
+    JOIN "JobProductVersion" jpb ON jpb.id = jp."currentVersionId"
     WHERE jp."jobId" = ${jobId}
       AND jp."deletedAt" IS NULL
       AND jpb."isActive" = true
@@ -180,7 +180,7 @@ async function queryItemsPerCycle(jobId: string): Promise<number> {
 function toJobFilter(log: ActiveJobLog): JobFilter {
   return {
     jobId: log.jobId,
-    jobBlobId: log.jobBlobId,
+    jobVersionId: log.jobVersionId,
     jobLogStartTime: log.startTime,
     jobLogEndTime: log.endTime,
     standardCycle: log.standardCycle,
@@ -402,7 +402,7 @@ async function recomputeJobBucketsForRange(
 export interface CycleIncrement {
   /** Number of inventory items produced by this cycle. */
   itemsCount: number;
-  /** Standard cycle time in seconds from the job blob (for idealCycleSeconds). Null if unknown. */
+  /** Standard cycle time in seconds from the job version (for idealCycleSeconds). Null if unknown. */
   standardCycleSeconds: number | null;
   /** Number of items produced per cycle for this job (for expectedItems). */
   itemsPerCycle: number;
@@ -510,7 +510,7 @@ export async function processDirtyBuckets(
              jb."standardCycle"::float8 AS "standardCycle"
       FROM "Station" s
       LEFT JOIN "Job" j ON j.id = s."currentJobId"
-      LEFT JOIN "JobBlob" jb ON jb.id = j."currentBlobId"
+      LEFT JOIN "JobVersion" jb ON jb.id = j."currentVersionId"
       WHERE s.id IN (${Prisma.join(stationIdSqlArray)})
     `;
     const stationInfoMap = new Map(stationInfoRows.map((r) => [r.stationId, r]));
@@ -524,7 +524,7 @@ export async function processDirtyBuckets(
       const ipcRows = await prisma.$queryRaw<Array<{ jobId: string; total: number }>>`
         SELECT jp."jobId", COALESCE(SUM(jpb.quantity), 0)::int AS total
         FROM "JobProduct" jp
-        JOIN "JobProductBlob" jpb ON jpb.id = jp."currentBlobId"
+        JOIN "JobProductVersion" jpb ON jpb.id = jp."currentVersionId"
         WHERE jp."jobId" IN (${Prisma.join(jobIdSqlArray)})
           AND jp."deletedAt" IS NULL
           AND jpb."isActive" = true
@@ -769,7 +769,7 @@ export async function updateCountBased(
            jb.name AS "currentJobName"
     FROM "Station" s
     LEFT JOIN "Job" j ON j.id = s."currentJobId"
-    LEFT JOIN "JobBlob" jb ON jb.id = j."currentBlobId"
+    LEFT JOIN "JobVersion" jb ON jb.id = j."currentVersionId"
     WHERE s.id = ${stationId}
   `;
   const currentJobId = stationJobRows2[0]?.currentJobId ?? null;
@@ -1036,7 +1036,7 @@ export async function updateTimeBased(
            jb."standardCycle"::float8 AS "jobStandardCycle"
     FROM "Station" s
     LEFT JOIN "Job" j ON j.id = s."currentJobId"
-    LEFT JOIN "JobBlob" jb ON jb.id = j."currentBlobId"
+    LEFT JOIN "JobVersion" jb ON jb.id = j."currentVersionId"
     WHERE s.id = ${stationId}
   `;
   const currentJobId = stationJobRows3[0]?.currentJobId ?? null;
@@ -1282,7 +1282,7 @@ export async function recalcAll(
            jb.name AS "currentJobName"
     FROM "Station" s
     LEFT JOIN "Job" j ON j.id = s."currentJobId"
-    LEFT JOIN "JobBlob" jb ON jb.id = j."currentBlobId"
+    LEFT JOIN "JobVersion" jb ON jb.id = j."currentVersionId"
     WHERE s.id = ${stationId}
   `;
   const currentJobId = stationJobRows4[0]?.currentJobId ?? null;
