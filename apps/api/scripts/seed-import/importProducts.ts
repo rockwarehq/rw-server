@@ -48,24 +48,24 @@ export async function importProducts(
       const weight = parseNumber(row.weight);
       const itemCost = parseDecimalCommaNumber(row.itemCost);
 
-      // Look up existing product by matching current blob SKU + siteId
+      // Look up existing product by matching current version SKU + siteId
       // (case-insensitive so re-imports don't duplicate on casing changes).
       const existing = await prisma.product.findFirst({
-        where: { siteId, currentBlob: { sku: { equals: sku, mode: "insensitive" } } },
-        include: { currentBlob: true },
+        where: { siteId, currentVersion: { sku: { equals: sku, mode: "insensitive" } } },
+        include: { currentVersion: true },
       });
 
       if (existing) {
-        // Check if data changed — compare against current blob
-        const blob = existing.currentBlob;
+        // Check if data changed — compare against current version
+        const version = existing.currentVersion;
         const changed =
-          blob?.name !== name ||
-          (blob?.weight !== null ? Number(blob.weight) : null) !== weight ||
-          (blob?.itemCost !== null ? Number(blob.itemCost) : null) !== itemCost;
+          version?.name !== name ||
+          (version?.weight !== null ? Number(version.weight) : null) !== weight ||
+          (version?.itemCost !== null ? Number(version.itemCost) : null) !== itemCost;
 
-        if (changed && blob) {
-          await prisma.productBlob.update({
-            where: { id: blob.id },
+        if (changed && version) {
+          await prisma.productVersion.update({
+            where: { id: version.id },
             data: { sku, name, weight, itemCost },
           });
         }
@@ -74,12 +74,12 @@ export async function importProducts(
         return;
       }
 
-      // Create new product + blob v1
+      // Create new product + version v1
       const product = await prisma.product.create({
         data: { siteId },
       });
 
-      const blob = await prisma.productBlob.create({
+      const version = await prisma.productVersion.create({
         data: {
           version: 1,
           sku,
@@ -92,7 +92,7 @@ export async function importProducts(
 
       await prisma.product.update({
         where: { id: product.id },
-        data: { currentBlobId: blob.id },
+        data: { currentVersionId: version.id },
       });
 
       idMap.set("product", row.Name, product.id);

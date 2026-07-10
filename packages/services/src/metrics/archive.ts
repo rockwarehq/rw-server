@@ -111,6 +111,12 @@ async function archiveSiteBuckets(siteId: string, ctx: MetricsContext): Promise<
         1,
       );
 
+      // Freeze ONLY the duration fields. The expected* fields on the row
+      // are job-clipped values maintained by syncExpectedCyclesFromJobs
+      // (summed per job with each job's own standardCycle and real
+      // items-per-cycle); recomputing them here would use the station-level
+      // standardCycle and itemsPerCycle=1, undercounting expectedItems for
+      // any multi-item job.
       await prisma.metricBucket.update({
         where: { id: bucket.id },
         data: {
@@ -119,10 +125,6 @@ async function archiveSiteBuckets(siteId: string, ctx: MetricsContext): Promise<
           plannedDownSeconds: d.plannedDownSeconds,
           unplannedDownSeconds: d.unplannedDownSeconds,
           elapsedPlannedProductionSeconds: d.elapsedPlannedProductionSeconds,
-          expectedCycles: d.expectedCycles,
-          expectedItems: d.expectedItems,
-          elapsedExpectedCycles: d.elapsedExpectedCycles,
-          elapsedExpectedItems: d.elapsedExpectedItems,
         },
       });
 

@@ -2,17 +2,17 @@
 //   - Automation         — the user-authored row (event + conditions + ordered actions)
 //   - AutomationRun       — one row per fw.fire() call (audit + run history)
 //   - AutomationActionRun — one row per action attempt within a run
-/*
-  All valid fires        ──► AutomationRun       ("event was raised")
-    │
-    └─ filtered to: same event type + enabled + conditions truthy
-       │
-       └────────────────► AutomationRunMatch     ("automation said yes")
-          │
-          └─ filtered to: each action in that automation's actions[]
-             │
-             └─────────► AutomationActionRun    ("an action was attempted")
-*/
+/**
+ * All valid fires        ──► AutomationRun       ("event was raised")
+ * │
+ * └─ filtered to: same event type + enabled + conditions truthy
+ * │
+ * └────────────────► AutomationRunMatch     ("automation said yes")
+ * │
+ * └─ filtered to: each action in that automation's actions[]
+ * │
+ * └─────────► AutomationActionRun    ("an action was attempted")
+ */
 
 model Automation {
   id      String  @id @default(uuid()) @db.Uuid
@@ -21,7 +21,7 @@ model Automation {
 
   /// Event type this automation listens to (e.g. "job.changed"). Matches an `EventSchema.type`
   /// declared in apps/api/src/automations/events/.
-  event String
+  event        String
   eventVersion String
 
   /// react-querybuilder condition tree (RuleGroupType from @rw/automations). Evaluated by

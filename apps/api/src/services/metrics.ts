@@ -411,7 +411,7 @@ export async function getCurrentStationJobValues(input: {
       updatedAt: true,
       currentJob: {
         select: {
-          currentBlob: {
+          currentVersion: {
             select: { name: true },
           },
         },
@@ -424,7 +424,7 @@ export async function getCurrentStationJobValues(input: {
   return Promise.all(
     input.requests.map(async (request) => {
       const station = stationById.get(request.entityId);
-      const jobName = station?.currentJob?.currentBlob?.name ?? null;
+      const jobName = station?.currentJob?.currentVersion?.name ?? null;
       const metadata = await resolveMetadata(
         input.siteId,
         request.entityType,
@@ -752,7 +752,7 @@ export async function getCurrentStationStandardCycleValues(input: {
       updatedAt: true,
       currentJob: {
         select: {
-          currentBlob: {
+          currentVersion: {
             select: { standardCycle: true },
           },
         },
@@ -765,7 +765,7 @@ export async function getCurrentStationStandardCycleValues(input: {
   return Promise.all(
     input.requests.map(async (request) => {
       const station = stationById.get(request.entityId);
-      const standardCycle = station?.currentJob?.currentBlob?.standardCycle;
+      const standardCycle = station?.currentJob?.currentVersion?.standardCycle;
       const value = standardCycle == null ? null : roundToTenth(Number(standardCycle));
       const metadata = await resolveMetadata(
         input.siteId,

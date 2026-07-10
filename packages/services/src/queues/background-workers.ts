@@ -203,20 +203,20 @@ export async function runMetricBucketEnsureTick(): Promise<{ checked: number; ar
         stationId: string;
         siteId: string;
         jobId: string;
-        jobBlobId: string;
+        jobVersionId: string;
         standardCycle: number | null;
         jobName: string;
       }>
     >`
       SELECT s.id AS "stationId", s."siteId", s."currentJobId" AS "jobId",
-             j."currentBlobId" AS "jobBlobId", jb."standardCycle"::float8 AS "standardCycle",
+             j."currentVersionId" AS "jobVersionId", jb."standardCycle"::float8 AS "standardCycle",
              COALESCE(jb.name, '') AS "jobName"
       FROM "Station" s
       JOIN "Job" j ON j.id = s."currentJobId"
-      LEFT JOIN "JobBlob" jb ON jb.id = j."currentBlobId"
+      LEFT JOIN "JobVersion" jb ON jb.id = j."currentVersionId"
       WHERE s."currentJobId" IS NOT NULL
         AND s."deletedAt" IS NULL
-        AND j."currentBlobId" IS NOT NULL
+        AND j."currentVersionId" IS NOT NULL
         AND NOT EXISTS (
           SELECT 1 FROM "StationJobLog" sjl
           WHERE sjl."stationId" = s.id AND sjl."endTime" IS NULL
@@ -225,8 +225,8 @@ export async function runMetricBucketEnsureTick(): Promise<{ checked: number; ar
 
     for (const station of stationsNeedingLog) {
       await prisma.$executeRaw`
-        INSERT INTO "StationJobLog" (id, "stationId", "jobId", "jobBlobId", "startTime", "standardCycle", "createdAt", "updatedAt")
-        VALUES (gen_random_uuid(), ${station.stationId}::uuid, ${station.jobId}::uuid, ${station.jobBlobId}::uuid, ${now}, ${station.standardCycle}, NOW(), NOW())
+        INSERT INTO "StationJobLog" (id, "stationId", "jobId", "jobVersionId", "startTime", "standardCycle", "createdAt", "updatedAt")
+        VALUES (gen_random_uuid(), ${station.stationId}::uuid, ${station.jobId}::uuid, ${station.jobVersionId}::uuid, ${now}, ${station.standardCycle}, NOW(), NOW())
       `;
       console.log(
         `[metric-bucket-ensure] Reconciled missing StationJobLog for station ${station.stationId}, job ${station.jobId}`,

@@ -56,31 +56,31 @@ export async function importJobs(
       const description = nullable(row.description);
       const standardCycle = parseNumber(row.standardCycle);
 
-      // Look up existing job by matching current blob name + siteId
+      // Look up existing job by matching current version name + siteId
       // (case-insensitive so "ARB35" / "arb35" match as the same job).
       const existing = await prisma.job.findFirst({
         where: {
           siteId,
-          currentBlob: { name: { equals: name, mode: "insensitive" } },
+          currentVersion: { name: { equals: name, mode: "insensitive" } },
           deletedAt: null,
         },
-        include: { currentBlob: true },
+        include: { currentVersion: true },
       });
 
       let jobId: string;
 
       if (existing) {
         // Check if data changed
-        const blob = existing.currentBlob;
-        const attrs = (blob?.attrs as Record<string, unknown>) ?? {};
+        const version = existing.currentVersion;
+        const attrs = (version?.attrs as Record<string, unknown>) ?? {};
         const changed =
-          blob?.description !== description ||
-          (blob?.standardCycle !== null ? Number(blob.standardCycle) : null) !== standardCycle ||
+          version?.description !== description ||
+          (version?.standardCycle !== null ? Number(version.standardCycle) : null) !== standardCycle ||
           attrs.cavityTrackingEnabled !== true;
 
-        if (changed && blob) {
-          await prisma.jobBlob.update({
-            where: { id: blob.id },
+        if (changed && version) {
+          await prisma.jobVersion.update({
+            where: { id: version.id },
             data: {
               name,
               description,
@@ -98,12 +98,12 @@ export async function importJobs(
 
         jobId = existing.id;
       } else {
-        // Create new job + blob v1
+        // Create new job + version v1
         const job = await prisma.job.create({
           data: { siteId, processTypeId },
         });
 
-        const blob = await prisma.jobBlob.create({
+        const version = await prisma.jobVersion.create({
           data: {
             version: 1,
             name,
@@ -116,7 +116,7 @@ export async function importJobs(
 
         await prisma.job.update({
           where: { id: job.id },
-          data: { currentBlobId: blob.id },
+          data: { currentVersionId: version.id },
         });
 
         jobId = job.id;
@@ -136,12 +136,12 @@ export async function importJobs(
           const tool = await prisma.tool.create({
             data: { siteId },
           });
-          const toolBlob = await prisma.toolBlob.create({
+          const toolVersion = await prisma.toolVersion.create({
             data: { version: 1, name, toolId: tool.id },
           });
           await prisma.tool.update({
             where: { id: tool.id },
-            data: { currentBlobId: toolBlob.id },
+            data: { currentVersionId: toolVersion.id },
           });
           toolId = tool.id;
           idMap.set("tool", name, toolId);
@@ -162,12 +162,12 @@ export async function importJobs(
           const cavity = await prisma.toolCavity.create({
             data: { toolId },
           });
-          const cavityBlob = await prisma.toolCavityBlob.create({
+          const cavityVersion = await prisma.toolCavityVersion.create({
             data: { version: 1, name: "1", position: 1, toolCavityId: cavity.id },
           });
           await prisma.toolCavity.update({
             where: { id: cavity.id },
-            data: { currentBlobId: cavityBlob.id },
+            data: { currentVersionId: cavityVersion.id },
           });
           idMap.set("toolCavity", `${name}:1`, cavity.id);
         }

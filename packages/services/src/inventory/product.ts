@@ -86,7 +86,7 @@ export interface AddPictureInput {
 // ============================================================================
 
 /**
- * Create a new product with initial blob (version 1)
+ * Create a new product with initial version (version 1)
  */
 export async function create(input: CreateProductInput) {
   const { siteId, sku, name, description, externalSku, weight, weightUnits, itemCost, attrs } = input;
@@ -101,15 +101,15 @@ export async function create(input: CreateProductInput) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
 
-  // Create product and initial blob in transaction
+  // Create product and initial version in transaction
   const product = await prisma.$transaction(async (tx) => {
     // 1. Create Product entity
     const p = await tx.product.create({
       data: { siteId },
     });
 
-    // 2. Create initial ProductBlob (version 1)
-    const blob = await tx.productBlob.create({
+    // 2. Create initial ProductVersion (version 1)
+    const version = await tx.productVersion.create({
       data: {
         productId: p.id,
         version: 1,
@@ -124,14 +124,14 @@ export async function create(input: CreateProductInput) {
       },
     });
 
-    // 3. Link blob as current and return
+    // 3. Link version as current and return
     return tx.product.update({
       where: { id: p.id },
-      data: { currentBlobId: blob.id },
+      data: { currentVersionId: version.id },
       include: {
-        currentBlob: true,
+        currentVersion: true,
         site: { select: { id: true, name: true } },
-        _count: { select: { materials: true, jobProducts: true, blobs: true, pictures: true } },
+        _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
       },
     });
   });
@@ -170,16 +170,16 @@ export async function list(filter: ListProductsFilter = {}) {
 
   // Free-text search OR'd across the columns shown in the UI.
   if (q) {
-    where.currentBlob = {
+    where.currentVersion = {
       OR: [{ sku: { contains: q, mode: "insensitive" } }, { name: { contains: q, mode: "insensitive" } }],
     };
   } else if (sku || name) {
-    where.currentBlob = {};
+    where.currentVersion = {};
     if (sku) {
-      where.currentBlob.sku = { contains: sku, mode: "insensitive" };
+      where.currentVersion.sku = { contains: sku, mode: "insensitive" };
     }
     if (name) {
-      where.currentBlob.name = { contains: name, mode: "insensitive" };
+      where.currentVersion.name = { contains: name, mode: "insensitive" };
     }
   }
 
@@ -187,9 +187,9 @@ export async function list(filter: ListProductsFilter = {}) {
     prisma.product.findMany({
       where,
       include: {
-        currentBlob: true,
+        currentVersion: true,
         site: { select: { id: true, name: true } },
-        _count: { select: { materials: true, jobProducts: true, blobs: true, pictures: true } },
+        _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
       },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
       skip: Number(offset),
@@ -207,20 +207,20 @@ export async function list(filter: ListProductsFilter = {}) {
 }
 
 /**
- * Get product by ID with current blob, materials, pictures, and primary picture URL
+ * Get product by ID with current version, materials, pictures, and primary picture URL
  */
 export async function getById(id: string) {
   const product = await prisma.product.findUnique({
     where: { id },
     include: {
-      currentBlob: true,
+      currentVersion: true,
       site: { select: { id: true, name: true } },
       materials: {
         include: {
-          currentBlob: true,
+          currentVersion: true,
           material: {
             include: {
-              currentBlob: true,
+              currentVersion: true,
             },
           },
           altGroup: {
@@ -231,7 +231,7 @@ export async function getById(id: string) {
       pictures: {
         orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
       },
-      _count: { select: { materials: true, jobProducts: true, blobs: true, pictures: true } },
+      _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
     },
   });
 
@@ -270,15 +270,15 @@ export async function getById(id: string) {
 }
 
 /**
- * Update product (creates new blob version)
+ * Update product (creates new version version)
  */
 export async function update(id: string, input: UpdateProductInput) {
   const { sku, name, description, externalSku, weight, weightUnits, itemCost, attrs } = input;
 
-  // Get current product with blob
+  // Get current product with version
   const current = await prisma.product.findUnique({
     where: { id },
-    include: { currentBlob: true, site: { select: { workspaceId: true } } },
+    include: { currentVersion: true, site: { select: { workspaceId: true } } },
   });
 
   if (!current) {
@@ -289,45 +289,45 @@ export async function update(id: string, input: UpdateProductInput) {
     return { error: "Product has been deleted", code: "PRODUCT_DELETED" };
   }
 
-  if (!current.currentBlob) {
-    return { error: "Product has no current blob", code: "NO_CURRENT_BLOB" };
+  if (!current.currentVersion) {
+    return { error: "Product has no current version", code: "NO_CURRENT_VERSION" };
   }
 
-  const currentBlob = current.currentBlob;
+  const currentVersion = current.currentVersion;
 
   // Get next version number
-  const latestBlob = await prisma.productBlob.findFirst({
+  const latestVersion = await prisma.productVersion.findFirst({
     where: { productId: id },
     orderBy: { version: "desc" },
     select: { version: true },
   });
 
-  const nextVersion = (latestBlob?.version ?? 0) + 1;
+  const nextVersion = (latestVersion?.version ?? 0) + 1;
 
-  // Create new blob with merged data
+  // Create new version with merged data
   const product = await prisma.$transaction(async (tx) => {
-    const blob = await tx.productBlob.create({
+    const version = await tx.productVersion.create({
       data: {
         productId: id,
         version: nextVersion,
-        sku: sku ?? currentBlob.sku,
-        name: name !== undefined ? name : currentBlob.name,
-        description: description !== undefined ? description : currentBlob.description,
-        externalSku: externalSku !== undefined ? externalSku : currentBlob.externalSku,
-        weight: weight !== undefined ? weight : currentBlob.weight,
-        weightUnits: weightUnits !== undefined ? weightUnits : currentBlob.weightUnits,
-        itemCost: itemCost !== undefined ? itemCost : currentBlob.itemCost,
-        attrs: attrs !== undefined ? attrs : (currentBlob.attrs as Record<string, unknown>),
+        sku: sku ?? currentVersion.sku,
+        name: name !== undefined ? name : currentVersion.name,
+        description: description !== undefined ? description : currentVersion.description,
+        externalSku: externalSku !== undefined ? externalSku : currentVersion.externalSku,
+        weight: weight !== undefined ? weight : currentVersion.weight,
+        weightUnits: weightUnits !== undefined ? weightUnits : currentVersion.weightUnits,
+        itemCost: itemCost !== undefined ? itemCost : currentVersion.itemCost,
+        attrs: attrs !== undefined ? attrs : (currentVersion.attrs as Record<string, unknown>),
       },
     });
 
     return tx.product.update({
       where: { id },
-      data: { currentBlobId: blob.id },
+      data: { currentVersionId: version.id },
       include: {
-        currentBlob: true,
+        currentVersion: true,
         site: { select: { id: true, name: true } },
-        _count: { select: { materials: true, jobProducts: true, blobs: true, pictures: true } },
+        _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
       },
     });
   });
@@ -401,27 +401,27 @@ export async function exists(id: string) {
 }
 
 /**
- * Get product version history (all blobs)
+ * Get product version history (all versions)
  */
 export async function getVersionHistory(id: string) {
   const product = await prisma.product.findUnique({
     where: { id },
-    select: { id: true, deletedAt: true, currentBlobId: true },
+    select: { id: true, deletedAt: true, currentVersionId: true },
   });
 
   if (!product) {
     return { error: "Product not found", code: "PRODUCT_NOT_FOUND" };
   }
 
-  const blobs = await prisma.productBlob.findMany({
+  const versions = await prisma.productVersion.findMany({
     where: { productId: id },
     orderBy: { version: "desc" },
   });
 
   return {
-    data: blobs.map((blob) => ({
-      ...blob,
-      isCurrent: blob.id === product.currentBlobId,
+    data: versions.map((version) => ({
+      ...version,
+      isCurrent: version.id === product.currentVersionId,
     })),
   };
 }
@@ -455,9 +455,9 @@ export async function archive(id: string) {
     where: { id },
     data: { archivedAt: new Date() },
     include: {
-      currentBlob: true,
+      currentVersion: true,
       site: { select: { id: true, name: true } },
-      _count: { select: { materials: true, jobProducts: true, blobs: true, pictures: true } },
+      _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
     },
   });
 
@@ -498,9 +498,9 @@ export async function unarchive(id: string) {
     where: { id },
     data: { archivedAt: null },
     include: {
-      currentBlob: true,
+      currentVersion: true,
       site: { select: { id: true, name: true } },
-      _count: { select: { materials: true, jobProducts: true, blobs: true, pictures: true } },
+      _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
     },
   });
 
@@ -518,7 +518,7 @@ export async function unarchive(id: string) {
 
 /**
  * Duplicate a product with a new SKU
- * Copies current blob data, materials, and picture references (shared S3 keys)
+ * Copies current version data, materials, and picture references (shared S3 keys)
  */
 export async function duplicate(input: DuplicateProductInput) {
   const { id, sku, name } = input;
@@ -527,11 +527,11 @@ export async function duplicate(input: DuplicateProductInput) {
   const source = await prisma.product.findUnique({
     where: { id },
     include: {
-      currentBlob: true,
+      currentVersion: true,
       materials: {
         include: {
-          currentBlob: true,
-          material: { select: { currentBlobId: true } },
+          currentVersion: true,
+          material: { select: { currentVersionId: true } },
         },
       },
       pictures: true,
@@ -547,18 +547,18 @@ export async function duplicate(input: DuplicateProductInput) {
     return { error: "Cannot duplicate a deleted product", code: "PRODUCT_DELETED" };
   }
 
-  if (!source.currentBlob) {
-    return { error: "Product has no current blob", code: "NO_CURRENT_BLOB" };
+  if (!source.currentVersion) {
+    return { error: "Product has no current version", code: "NO_CURRENT_VERSION" };
   }
 
-  const sourceBlob = source.currentBlob;
-  const sourceMaterials: Array<(typeof source.materials)[number] & { materialBlobId: string }> = [];
+  const sourceVersion = source.currentVersion;
+  const sourceMaterials: Array<(typeof source.materials)[number] & { materialVersionId: string }> = [];
   for (const material of source.materials) {
-    const materialBlobId = material.material.currentBlobId;
-    if (!materialBlobId) {
-      return { error: "Material has no current blob", code: "NO_CURRENT_BLOB" };
+    const materialVersionId = material.material.currentVersionId;
+    if (!materialVersionId) {
+      return { error: "Material has no current version", code: "NO_CURRENT_VERSION" };
     }
-    sourceMaterials.push({ ...material, materialBlobId });
+    sourceMaterials.push({ ...material, materialVersionId });
   }
 
   // Create duplicate in transaction
@@ -568,30 +568,30 @@ export async function duplicate(input: DuplicateProductInput) {
       data: { siteId: source.siteId },
     });
 
-    // 2. Create new ProductBlob (version 1) with source data
-    const defaultName = name ?? `Copy of ${sourceBlob.name || sourceBlob.sku}`;
-    const blob = await tx.productBlob.create({
+    // 2. Create new ProductVersion (version 1) with source data
+    const defaultName = name ?? `Copy of ${sourceVersion.name || sourceVersion.sku}`;
+    const version = await tx.productVersion.create({
       data: {
         productId: p.id,
         version: 1,
         sku, // New SKU (required)
         name: defaultName,
-        description: sourceBlob.description,
-        externalSku: sourceBlob.externalSku,
-        weight: sourceBlob.weight,
-        weightUnits: sourceBlob.weightUnits,
-        itemCost: sourceBlob.itemCost,
-        attrs: sourceBlob.attrs as Record<string, unknown>,
+        description: sourceVersion.description,
+        externalSku: sourceVersion.externalSku,
+        weight: sourceVersion.weight,
+        weightUnits: sourceVersion.weightUnits,
+        itemCost: sourceVersion.itemCost,
+        attrs: sourceVersion.attrs as Record<string, unknown>,
       },
     });
 
-    // 3. Link blob as current
+    // 3. Link version as current
     await tx.product.update({
       where: { id: p.id },
-      data: { currentBlobId: blob.id },
+      data: { currentVersionId: version.id },
     });
 
-    // 4. Copy ProductMaterial links with initial blobs
+    // 4. Copy ProductMaterial links with initial versions
     for (const m of sourceMaterials) {
       const pm = await tx.productMaterial.create({
         data: {
@@ -601,21 +601,21 @@ export async function duplicate(input: DuplicateProductInput) {
         },
       });
 
-      const pmBlob = await tx.productMaterialBlob.create({
+      const pmVersion = await tx.productMaterialVersion.create({
         data: {
           productMaterialId: pm.id,
           version: 1,
-          weight: m.currentBlob?.weight ?? null,
-          weightUnits: m.currentBlob?.weightUnits ?? null,
-          itemCost: m.currentBlob?.itemCost ?? null,
-          materialBlobId: m.materialBlobId,
-          productBlobId: blob.id,
+          weight: m.currentVersion?.weight ?? null,
+          weightUnits: m.currentVersion?.weightUnits ?? null,
+          itemCost: m.currentVersion?.itemCost ?? null,
+          materialVersionId: m.materialVersionId,
+          productVersionId: version.id,
         },
       });
 
       await tx.productMaterial.update({
         where: { id: pm.id },
-        data: { currentBlobId: pmBlob.id },
+        data: { currentVersionId: pmVersion.id },
       });
     }
 
@@ -637,9 +637,9 @@ export async function duplicate(input: DuplicateProductInput) {
     return tx.product.findUnique({
       where: { id: p.id },
       include: {
-        currentBlob: true,
+        currentVersion: true,
         site: { select: { id: true, name: true } },
-        _count: { select: { materials: true, jobProducts: true, blobs: true, pictures: true } },
+        _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
       },
     });
   });
@@ -670,7 +670,7 @@ export async function addMaterial(input: AddMaterialInput) {
   // Verify product exists and is not deleted
   const product = await prisma.product.findUnique({
     where: { id: productId },
-    select: { id: true, siteId: true, deletedAt: true, currentBlobId: true, site: { select: { workspaceId: true } } },
+    select: { id: true, siteId: true, deletedAt: true, currentVersionId: true, site: { select: { workspaceId: true } } },
   });
 
   if (!product) {
@@ -684,7 +684,7 @@ export async function addMaterial(input: AddMaterialInput) {
   // Verify material exists and is not deleted
   const material = await prisma.material.findUnique({
     where: { id: materialId },
-    select: { id: true, siteId: true, deletedAt: true, currentBlobId: true },
+    select: { id: true, siteId: true, deletedAt: true, currentVersionId: true },
   });
 
   if (!material) {
@@ -709,13 +709,13 @@ export async function addMaterial(input: AddMaterialInput) {
     return { error: "Material is already linked to this product", code: "ALREADY_LINKED" };
   }
 
-  const productBlobId = product.currentBlobId;
-  const materialBlobId = material.currentBlobId;
-  if (!productBlobId || !materialBlobId) {
-    return { error: "Material or product has no current blob", code: "NO_CURRENT_BLOB" };
+  const productVersionId = product.currentVersionId;
+  const materialVersionId = material.currentVersionId;
+  if (!productVersionId || !materialVersionId) {
+    return { error: "Material or product has no current version", code: "NO_CURRENT_VERSION" };
   }
 
-  // Create link and initial blob in transaction
+  // Create link and initial version in transaction
   const productMaterial = await prisma.$transaction(async (tx) => {
     const pm = await tx.productMaterial.create({
       data: {
@@ -724,26 +724,26 @@ export async function addMaterial(input: AddMaterialInput) {
       },
     });
 
-    const blob = await tx.productMaterialBlob.create({
+    const version = await tx.productMaterialVersion.create({
       data: {
         productMaterialId: pm.id,
         version: 1,
         weight: weight ?? null,
         weightUnits: weightUnits ?? null,
         itemCost: itemCost ?? null,
-        materialBlobId,
-        productBlobId,
+        materialVersionId,
+        productVersionId,
       },
     });
 
     return tx.productMaterial.update({
       where: { id: pm.id },
-      data: { currentBlobId: blob.id },
+      data: { currentVersionId: version.id },
       include: {
-        currentBlob: true,
+        currentVersion: true,
         material: {
           include: {
-            currentBlob: true,
+            currentVersion: true,
           },
         },
       },
@@ -776,13 +776,13 @@ export async function addMaterial(input: AddMaterialInput) {
 export async function updateMaterial(input: UpdateMaterialInput) {
   const { productId, materialId, weight, weightUnits, itemCost } = input;
 
-  // Find existing link with current blob and parent entities for blob snapshots
+  // Find existing link with current version and parent entities for version snapshots
   const existing = await prisma.productMaterial.findUnique({
     where: { productId_materialId: { productId, materialId } },
     include: {
-      currentBlob: true,
-      product: { select: { id: true, siteId: true, currentBlobId: true, site: { select: { workspaceId: true } } } },
-      material: { select: { id: true, currentBlobId: true } },
+      currentVersion: true,
+      product: { select: { id: true, siteId: true, currentVersionId: true, site: { select: { workspaceId: true } } } },
+      material: { select: { id: true, currentVersionId: true } },
     },
   });
 
@@ -790,50 +790,50 @@ export async function updateMaterial(input: UpdateMaterialInput) {
     return { error: "Material is not linked to this product", code: "NOT_LINKED" };
   }
 
-  const materialBlobId = existing.material.currentBlobId;
-  const productBlobId = existing.product.currentBlobId;
-  if (!materialBlobId || !productBlobId) {
-    return { error: "Material or product has no current blob", code: "NO_CURRENT_BLOB" };
+  const materialVersionId = existing.material.currentVersionId;
+  const productVersionId = existing.product.currentVersionId;
+  if (!materialVersionId || !productVersionId) {
+    return { error: "Material or product has no current version", code: "NO_CURRENT_VERSION" };
   }
 
   // Get next version number
-  const latestBlob = await prisma.productMaterialBlob.findFirst({
+  const latestVersion = await prisma.productMaterialVersion.findFirst({
     where: { productMaterialId: existing.id },
     orderBy: { version: "desc" },
     select: { version: true },
   });
 
-  const nextVersion = (latestBlob?.version ?? 0) + 1;
+  const nextVersion = (latestVersion?.version ?? 0) + 1;
 
-  // Create new blob version
+  // Create new version version
   const productMaterial = await prisma.$transaction(async (tx) => {
-    const currentBlob = existing.currentBlob;
-    const newWeight = weight !== undefined ? weight : (currentBlob?.weight ?? null);
-    const newWeightUnits = weightUnits !== undefined ? weightUnits : (currentBlob?.weightUnits ?? null);
-    const newItemCost = itemCost !== undefined ? itemCost : (currentBlob?.itemCost ?? null);
+    const currentVersion = existing.currentVersion;
+    const newWeight = weight !== undefined ? weight : (currentVersion?.weight ?? null);
+    const newWeightUnits = weightUnits !== undefined ? weightUnits : (currentVersion?.weightUnits ?? null);
+    const newItemCost = itemCost !== undefined ? itemCost : (currentVersion?.itemCost ?? null);
 
-    const blob = await tx.productMaterialBlob.create({
+    const version = await tx.productMaterialVersion.create({
       data: {
         productMaterialId: existing.id,
         version: nextVersion,
         weight: newWeight,
         weightUnits: newWeightUnits,
         itemCost: newItemCost,
-        materialBlobId,
-        productBlobId,
+        materialVersionId,
+        productVersionId,
       },
     });
 
     return tx.productMaterial.update({
       where: { id: existing.id },
       data: {
-        currentBlobId: blob.id,
+        currentVersionId: version.id,
       },
       include: {
-        currentBlob: true,
+        currentVersion: true,
         material: {
           include: {
-            currentBlob: true,
+            currentVersion: true,
           },
         },
       },
@@ -982,7 +982,7 @@ export async function listMaterials(productId: string) {
     include: {
       material: {
         include: {
-          currentBlob: true,
+          currentVersion: true,
         },
       },
       altGroup: {
@@ -1002,8 +1002,8 @@ export async function listMaterials(productId: string) {
 const altGroupInclude = {
   options: {
     include: {
-      material: { include: { currentBlob: true } },
-      currentBlob: true,
+      material: { include: { currentVersion: true } },
+      currentVersion: true,
     },
     orderBy: { createdAt: "asc" },
   },
@@ -1057,8 +1057,8 @@ export async function createAltGroup(productMaterialId: string) {
  * Two paths:
  *   - If the material is already a standalone ProductMaterial on the same
  *     product (not in any group), move that existing row into the group,
- *     preserving its blob history and any archivedAt state.
- *   - Else, create a new ProductMaterial + initial blob in the group.
+ *     preserving its version history and any archivedAt state.
+ *   - Else, create a new ProductMaterial + initial version in the group.
  *
  * Rejects cross-group moves: if the material already belongs to a different
  * alt group on this product, the caller must first `removeFromAltGroup` it.
@@ -1074,7 +1074,7 @@ export async function createAltGroup(productMaterialId: string) {
  *   MATERIAL_DELETED    - material is soft-deleted
  *   SITE_MISMATCH       - material belongs to a different site than the product
  *   IN_OTHER_GROUP      - material is already in a different alt group on this product
- *   NO_CURRENT_BLOB     - material or product has no current blob to snapshot
+ *   NO_CURRENT_VERSION     - material or product has no current version to snapshot
  */
 export async function addMaterialToAltGroup(altGroupId: string, materialId: string) {
   const group = await prisma.productMaterialAltGroup.findUnique({
@@ -1082,7 +1082,7 @@ export async function addMaterialToAltGroup(altGroupId: string, materialId: stri
     select: {
       id: true,
       productId: true,
-      product: { select: { id: true, siteId: true, currentBlobId: true, deletedAt: true } },
+      product: { select: { id: true, siteId: true, currentVersionId: true, deletedAt: true } },
     },
   });
 
@@ -1092,7 +1092,7 @@ export async function addMaterialToAltGroup(altGroupId: string, materialId: stri
 
   const material = await prisma.material.findUnique({
     where: { id: materialId },
-    select: { id: true, siteId: true, deletedAt: true, currentBlobId: true },
+    select: { id: true, siteId: true, deletedAt: true, currentVersionId: true },
   });
 
   if (!material) {
@@ -1129,23 +1129,23 @@ export async function addMaterialToAltGroup(altGroupId: string, materialId: stri
           });
         }
       } else {
-        if (!material.currentBlobId || !group.product.currentBlobId) {
-          throw new Error("NO_CURRENT_BLOB");
+        if (!material.currentVersionId || !group.product.currentVersionId) {
+          throw new Error("NO_CURRENT_VERSION");
         }
         const pm = await tx.productMaterial.create({
           data: { productId: group.productId, materialId, altGroupId },
         });
-        const blob = await tx.productMaterialBlob.create({
+        const version = await tx.productMaterialVersion.create({
           data: {
             productMaterialId: pm.id,
             version: 1,
-            materialBlobId: material.currentBlobId,
-            productBlobId: group.product.currentBlobId,
+            materialVersionId: material.currentVersionId,
+            productVersionId: group.product.currentVersionId,
           },
         });
         await tx.productMaterial.update({
           where: { id: pm.id },
-          data: { currentBlobId: blob.id },
+          data: { currentVersionId: version.id },
         });
       }
 
@@ -1155,8 +1155,8 @@ export async function addMaterialToAltGroup(altGroupId: string, materialId: stri
       });
     })
     .catch((err: Error) => {
-      if (err.message === "NO_CURRENT_BLOB") {
-        return { error: "Material or product has no current blob", code: "NO_CURRENT_BLOB" } as const;
+      if (err.message === "NO_CURRENT_VERSION") {
+        return { error: "Material or product has no current version", code: "NO_CURRENT_VERSION" } as const;
       }
       throw err;
     });

@@ -227,29 +227,29 @@ async function fixStateEntries(tx: TransactionClient, stationId: string, minTs: 
 
   console.log(`[replay] Soft-deleted ${deleted} state entries for station ${stationId}`);
 
-  // Look up the active job blob for the new state entries
+  // Look up the active job version for the new state entries
   const activeJob = await tx.stationJobLog.findFirst({
     where: { stationId, endTime: null },
-    select: { jobBlobId: true },
+    select: { jobVersionId: true },
     orderBy: { startTime: "desc" },
   });
-  const jobBlobId = activeJob?.jobBlobId ?? null;
+  const jobVersionId = activeJob?.jobVersionId ?? null;
 
   // Create a closed UP entry spanning the replay window
   const blockId = randomUUID();
   await tx.$executeRaw`
     INSERT INTO "StationStateLog"
-      (id, "stationId", "startTime", "endTime", state, status, "blockId", "jobBlobId", "createdAt", "updatedAt")
+      (id, "stationId", "startTime", "endTime", state, status, "blockId", "jobVersionId", "createdAt", "updatedAt")
     VALUES
-      (gen_random_uuid(), ${stationId}, ${minTs}, ${maxTs}, 'UP', 'UP', ${blockId}, ${jobBlobId}, NOW(), NOW())
+      (gen_random_uuid(), ${stationId}, ${minTs}, ${maxTs}, 'UP', 'UP', ${blockId}, ${jobVersionId}, NOW(), NOW())
   `;
 
   // Create an open UP entry from maxTs onward (station is live)
   await tx.$executeRaw`
     INSERT INTO "StationStateLog"
-      (id, "stationId", "startTime", state, status, "blockId", "jobBlobId", "createdAt", "updatedAt")
+      (id, "stationId", "startTime", state, status, "blockId", "jobVersionId", "createdAt", "updatedAt")
     VALUES
-      (gen_random_uuid(), ${stationId}, ${maxTs}, 'UP', 'UP', ${blockId}, ${jobBlobId}, NOW(), NOW())
+      (gen_random_uuid(), ${stationId}, ${maxTs}, 'UP', 'UP', ${blockId}, ${jobVersionId}, NOW(), NOW())
   `;
 }
 

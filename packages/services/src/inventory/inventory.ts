@@ -11,8 +11,8 @@ type TransactionClient = Prisma.TransactionClient;
 export interface ListInventoryFilter {
   siteId?: string;
   cycleId?: string;
-  productBlobId?: string;
-  jobProductBlobId?: string;
+  productVersionId?: string;
+  jobProductVersionId?: string;
   dateFrom?: Date;
   dateTo?: Date;
   limit?: number;
@@ -22,34 +22,34 @@ export interface ListInventoryFilter {
 /**
  * Create inventory items for a completed cycle.
  *
- * Resolves current blob IDs at close time and creates InventoryItems for each
+ * Resolves current version IDs at close time and creates InventoryItems for each
  * active JobProduct on the given job.  The quantity field on the current
- * JobProductBlob determines how many identical items are created per JobProduct.
+ * JobProductVersion determines how many identical items are created per JobProduct.
  * Accepts a transaction client so the caller can wrap cycle-close + inventory
  * creation in a single atomic operation.
  */
 export async function createFromCycle(tx: TransactionClient, cycleId: string, jobId: string) {
-  // Fetch active JobProducts with blob refs in a single raw query
+  // Fetch active JobProducts with version refs in a single raw query
   const jobProducts = await (tx as unknown as { $queryRaw: typeof prisma.$queryRaw }).$queryRaw<
     Array<{
       productId: string;
-      currentBlobId: string;
+      currentVersionId: string;
       quantity: number;
-      productBlobId: string;
-      toolBlobId: string | null;
-      toolCavityBlobId: string | null;
-      materialBlobIds: string[];
+      productVersionId: string;
+      toolVersionId: string | null;
+      toolCavityVersionId: string | null;
+      materialVersionIds: string[];
     }>
   >`
     SELECT
       jp."productId",
-      jp."currentBlobId",
+      jp."currentVersionId",
       COALESCE(jpb.quantity, 1)::int AS quantity,
-      p."currentBlobId" AS "productBlobId",
-      t."currentBlobId" AS "toolBlobId",
-      tc."currentBlobId" AS "toolCavityBlobId",
+      p."currentVersionId" AS "productVersionId",
+      t."currentVersionId" AS "toolVersionId",
+      tc."currentVersionId" AS "toolCavityVersionId",
       COALESCE(
-        (SELECT array_agg(pm."currentBlobId") FILTER (WHERE pm."currentBlobId" IS NOT NULL)
+        (SELECT array_agg(pm."currentVersionId") FILTER (WHERE pm."currentVersionId" IS NOT NULL)
          FROM "ProductMaterial" pm
          JOIN "Material" m ON m.id = pm."materialId"
          LEFT JOIN "ProductMaterialAltGroup" mag ON mag.id = pm."altGroupId"
@@ -59,17 +59,17 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
            AND m."deletedAt" IS NULL
            AND (pm."altGroupId" IS NULL OR mag."activeProductMaterialId" = pm.id)),
         '{}'
-      ) AS "materialBlobIds"
+      ) AS "materialVersionIds"
     FROM "JobProduct" jp
-    JOIN "JobProductBlob" jpb ON jpb.id = jp."currentBlobId"
+    JOIN "JobProductVersion" jpb ON jpb.id = jp."currentVersionId"
     JOIN "Product" p ON p.id = jp."productId"
     LEFT JOIN "Tool" t ON t.id = jp."toolId"
     LEFT JOIN "ToolCavity" tc ON tc.id = jp."toolCavityId"
     WHERE jp."jobId" = ${jobId}
       AND jp."deletedAt" IS NULL
       AND jpb."isActive" = true
-      AND jp."currentBlobId" IS NOT NULL
-      AND p."currentBlobId" IS NOT NULL
+      AND jp."currentVersionId" IS NOT NULL
+      AND p."currentVersionId" IS NOT NULL
   `;
 
   if (jobProducts.length === 0) {
@@ -81,11 +81,11 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
   // Build flat list of items to insert
   const itemSpecs: Array<{
     productId: string;
-    currentBlobId: string;
-    productBlobId: string;
-    toolBlobId: string | null;
-    toolCavityBlobId: string | null;
-    materialBlobIds: string[];
+    currentVersionId: string;
+    productVersionId: string;
+    toolVersionId: string | null;
+    toolCavityVersionId: string | null;
+    materialVersionIds: string[];
   }> = [];
   for (const jp of jobProducts) {
     for (let i = 0; i < jp.quantity; i++) {
@@ -97,24 +97,24 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
   const insertValues = Prisma.join(
     itemSpecs.map(
       (s) =>
-        Prisma.sql`(gen_random_uuid(), ${cycleId}::uuid, ${s.currentBlobId}::uuid, ${s.productBlobId}::uuid, ${s.toolBlobId}::uuid, ${s.toolCavityBlobId}::uuid, NOW(), NOW())`,
+        Prisma.sql`(gen_random_uuid(), ${cycleId}::uuid, ${s.currentVersionId}::uuid, ${s.productVersionId}::uuid, ${s.toolVersionId}::uuid, ${s.toolCavityVersionId}::uuid, NOW(), NOW())`,
     ),
   );
   const itemRows = await txRaw.$queryRaw<Array<{ id: string }>>`
-    INSERT INTO "InventoryItem" (id, "cycleId", "jobProductBlobId", "productBlobId", "toolBlobId", "toolCavityBlobId", "createdAt", "updatedAt")
+    INSERT INTO "InventoryItem" (id, "cycleId", "jobProductVersionId", "productVersionId", "toolVersionId", "toolCavityVersionId", "createdAt", "updatedAt")
     VALUES ${insertValues}
     RETURNING id
   `;
 
-  // Batch INSERT all material blob M2M relations in one query
+  // Batch INSERT all material version M2M relations in one query
   const matValues: Prisma.Sql[] = [];
   for (let i = 0; i < itemRows.length; i++) {
-    for (const matBlobId of itemSpecs[i].materialBlobIds) {
-      matValues.push(Prisma.sql`(${itemRows[i].id}::uuid, ${matBlobId}::uuid)`);
+    for (const matVersionId of itemSpecs[i].materialVersionIds) {
+      matValues.push(Prisma.sql`(${itemRows[i].id}::uuid, ${matVersionId}::uuid)`);
     }
   }
   if (matValues.length > 0) {
-    await txRaw.$executeRaw`INSERT INTO "_InventoryItemToProductMaterialBlob" ("A", "B") VALUES ${Prisma.join(matValues)} ON CONFLICT DO NOTHING`;
+    await txRaw.$executeRaw`INSERT INTO "_InventoryItemToProductMaterialVersion" ("A", "B") VALUES ${Prisma.join(matValues)} ON CONFLICT DO NOTHING`;
 
     // Roll this cycle's material consumption into the staging table.
     //
@@ -134,10 +134,10 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
       materialId: string;
       qty: Prisma.Decimal;
       itemCount: number;
-      // Unit declared on the ProductMaterialBlob (how the operator entered weight
+      // Unit declared on the ProductMaterialVersion (how the operator entered weight
       // for this product). May differ from the material's canonical unit.
       pmUnit: WeightUnit | null;
-      // Material's canonical/storage unit (from currentBlob). All staging and
+      // Material's canonical/storage unit (from currentVersion). All staging and
       // ledger writes are normalized to this unit.
       materialUnit: WeightUnit | null;
     };
@@ -168,13 +168,13 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
         COUNT(DISTINCT ii.id)::int AS "itemCount",
         pmb."weightUnits"      AS "pmUnit",
         mbc."weightUnits"      AS "materialUnit"
-      FROM "_InventoryItemToProductMaterialBlob" x
+      FROM "_InventoryItemToProductMaterialVersion" x
       JOIN "InventoryItem"        ii  ON ii.id = x."A"
-      JOIN "ProductBlob"          pb  ON pb.id = ii."productBlobId"
-      JOIN "ProductMaterialBlob"  pmb ON pmb.id = x."B"
-      JOIN "MaterialBlob"         mb  ON mb.id = pmb."materialBlobId"
+      JOIN "ProductVersion"          pb  ON pb.id = ii."productVersionId"
+      JOIN "ProductMaterialVersion"  pmb ON pmb.id = x."B"
+      JOIN "MaterialVersion"         mb  ON mb.id = pmb."materialVersionId"
       JOIN "Material"             m   ON m.id  = mb."materialId"
-      LEFT JOIN "MaterialBlob"    mbc ON mbc.id = m."currentBlobId"
+      LEFT JOIN "MaterialVersion"    mbc ON mbc.id = m."currentVersionId"
       CROSS JOIN cycle_shift cs
       WHERE x."A" = ANY(${itemIds}::uuid[])
         AND pmb.weight IS NOT NULL
@@ -264,7 +264,7 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
  * List inventory items with optional filtering
  */
 export async function list(filter: ListInventoryFilter = {}) {
-  const { siteId, cycleId, productBlobId, jobProductBlobId, dateFrom, dateTo, limit = 50, offset = 0 } = filter;
+  const { siteId, cycleId, productVersionId, jobProductVersionId, dateFrom, dateTo, limit = 50, offset = 0 } = filter;
 
   const where: Prisma.InventoryItemWhereInput = {
     deletedAt: null,
@@ -274,12 +274,12 @@ export async function list(filter: ListInventoryFilter = {}) {
     where.cycleId = cycleId;
   }
 
-  if (productBlobId) {
-    where.productBlobId = productBlobId;
+  if (productVersionId) {
+    where.productVersionId = productVersionId;
   }
 
-  if (jobProductBlobId) {
-    where.jobProductBlobId = jobProductBlobId;
+  if (jobProductVersionId) {
+    where.jobProductVersionId = jobProductVersionId;
   }
 
   // Filter by site through the cycle -> site relation
@@ -318,7 +318,7 @@ export async function list(filter: ListInventoryFilter = {}) {
             },
           },
         },
-        productBlob: {
+        productVersion: {
           select: {
             id: true,
             version: true,
@@ -326,21 +326,21 @@ export async function list(filter: ListInventoryFilter = {}) {
             name: true,
           },
         },
-        jobProductBlob: {
+        jobProductVersion: {
           select: {
             id: true,
             version: true,
             isActive: true,
           },
         },
-        toolBlob: {
+        toolVersion: {
           select: {
             id: true,
             version: true,
             name: true,
           },
         },
-        toolCavityBlob: {
+        toolCavityVersion: {
           select: {
             id: true,
             version: true,
@@ -348,14 +348,14 @@ export async function list(filter: ListInventoryFilter = {}) {
             position: true,
           },
         },
-        productMaterialBlobs: {
+        productMaterialVersions: {
           select: {
             id: true,
             version: true,
             weight: true,
             weightUnits: true,
             itemCost: true,
-            materialBlob: {
+            materialVersion: {
               select: {
                 id: true,
                 version: true,
@@ -383,7 +383,7 @@ export async function list(filter: ListInventoryFilter = {}) {
 }
 
 /**
- * Get inventory item by ID with full blob details
+ * Get inventory item by ID with full version details
  */
 export async function getById(id: string) {
   const item = await prisma.inventoryItem.findUnique({
@@ -411,13 +411,13 @@ export async function getById(id: string) {
           },
         },
       },
-      productBlob: true,
-      jobProductBlob: true,
-      toolBlob: true,
-      toolCavityBlob: true,
-      productMaterialBlobs: {
+      productVersion: true,
+      jobProductVersion: true,
+      toolVersion: true,
+      toolCavityVersion: true,
+      productMaterialVersions: {
         include: {
-          materialBlob: true,
+          materialVersion: true,
         },
       },
     },
@@ -473,7 +473,7 @@ export async function getByCycle(cycleId: string) {
       deletedAt: null,
     },
     include: {
-      productBlob: {
+      productVersion: {
         select: {
           id: true,
           version: true,
@@ -481,21 +481,21 @@ export async function getByCycle(cycleId: string) {
           name: true,
         },
       },
-      jobProductBlob: {
+      jobProductVersion: {
         select: {
           id: true,
           version: true,
           isActive: true,
         },
       },
-      toolBlob: {
+      toolVersion: {
         select: {
           id: true,
           version: true,
           name: true,
         },
       },
-      toolCavityBlob: {
+      toolCavityVersion: {
         select: {
           id: true,
           version: true,
@@ -503,14 +503,14 @@ export async function getByCycle(cycleId: string) {
           position: true,
         },
       },
-      productMaterialBlobs: {
+      productMaterialVersions: {
         select: {
           id: true,
           version: true,
           weight: true,
           weightUnits: true,
           itemCost: true,
-          materialBlob: {
+          materialVersion: {
             select: {
               id: true,
               version: true,

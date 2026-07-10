@@ -52,20 +52,20 @@ export async function importToolCavities(
       // Composite key for IdMap: "TOOLNAME:CAVITYID"
       const compositeKey = `${toolName}:${cavityName}`;
 
-      // Look up existing cavity by toolId + current blob name (case-insensitive)
+      // Look up existing cavity by toolId + current version name (case-insensitive)
       const existing = await prisma.toolCavity.findFirst({
-        where: { toolId, currentBlob: { name: { equals: cavityName, mode: "insensitive" } } },
-        include: { currentBlob: true },
+        where: { toolId, currentVersion: { name: { equals: cavityName, mode: "insensitive" } } },
+        include: { currentVersion: true },
       });
 
       if (existing) {
         // Check if data changed
-        const blob = existing.currentBlob;
-        const changed = blob?.position !== position;
+        const version = existing.currentVersion;
+        const changed = version?.position !== position;
 
-        if (changed && blob) {
-          await prisma.toolCavityBlob.update({
-            where: { id: blob.id },
+        if (changed && version) {
+          await prisma.toolCavityVersion.update({
+            where: { id: version.id },
             data: { name: cavityName, position },
           });
         }
@@ -74,12 +74,12 @@ export async function importToolCavities(
         return;
       }
 
-      // Create new tool cavity + blob v1
+      // Create new tool cavity + version v1
       const toolCavity = await prisma.toolCavity.create({
         data: { toolId },
       });
 
-      const blob = await prisma.toolCavityBlob.create({
+      const version = await prisma.toolCavityVersion.create({
         data: {
           version: 1,
           name: cavityName,
@@ -90,7 +90,7 @@ export async function importToolCavities(
 
       await prisma.toolCavity.update({
         where: { id: toolCavity.id },
-        data: { currentBlobId: blob.id },
+        data: { currentVersionId: version.id },
       });
 
       idMap.set("toolCavity", compositeKey, toolCavity.id);

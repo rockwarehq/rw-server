@@ -98,7 +98,7 @@ async function createStateEntry(
     state: "UP" | "DOWN";
     status: "FAST" | "SLOW" | "UP" | "DOWN";
     blockId: string;
-    jobBlobId?: string | null;
+    jobVersionId?: string | null;
   },
 ) {
   return client.stationStateLog.create({
@@ -108,7 +108,7 @@ async function createStateEntry(
       state: data.state,
       status: data.status,
       blockId: data.blockId,
-      jobBlobId: data.jobBlobId ?? null,
+      jobVersionId: data.jobVersionId ?? null,
     },
   });
 }
@@ -413,7 +413,7 @@ export async function applyCycleCompleteTransition(
     cycleWasSlow: boolean;
     /** Start of the completed cycle (== previous cycle's end); backdates the SLOW fallback. */
     cycleStart: Date;
-    jobBlobId?: string | null;
+    jobVersionId?: string | null;
     openRow: CycleTransitionOpenRow | null;
   },
 ): Promise<CycleCompleteTransitionResult> {
@@ -426,7 +426,7 @@ export async function applyCycleCompleteTransition(
       state: "UP",
       status: "UP",
       blockId,
-      jobBlobId: opts.jobBlobId,
+      jobVersionId: opts.jobVersionId,
     });
   };
 
@@ -479,7 +479,7 @@ export async function applyCycleCompleteTransition(
     state: "UP",
     status: "SLOW",
     blockId: openRow.blockId,
-    jobBlobId: opts.jobBlobId,
+    jobVersionId: opts.jobVersionId,
   });
   return { newStatus: "SLOW", statusChanged: true, closedEntry: closed(slowStart) };
 }
@@ -487,20 +487,20 @@ export async function applyCycleCompleteTransition(
 /**
  * Split the open state entry at a job change so entries stay
  * job-homogeneous: close the open row and continue it with the same
- * state/status/blockId/statusReasonId under the new job blob. Caller
+ * state/status/blockId/statusReasonId under the new job version. Caller
  * must hold the station advisory lock in `tx`.
  */
 export async function splitOpenStateEntryForJobChange(
   tx: TransactionClient,
   stationId: string,
   timestamp: Date,
-  newJobBlobId: string | null,
+  newJobVersionId: string | null,
 ): Promise<void> {
   const current = await findOpenStateEntry(tx, stationId);
-  if (!current || current.jobBlobId === newJobBlobId) return;
+  if (!current || current.jobVersionId === newJobVersionId) return;
 
   if (current.startTime >= timestamp) {
-    await tx.stationStateLog.update({ where: { id: current.id }, data: { jobBlobId: newJobBlobId } });
+    await tx.stationStateLog.update({ where: { id: current.id }, data: { jobVersionId: newJobVersionId } });
     return;
   }
 
@@ -513,7 +513,7 @@ export async function splitOpenStateEntryForJobChange(
       status: current.status,
       blockId: current.blockId,
       statusReasonId: current.statusReasonId,
-      jobBlobId: newJobBlobId,
+      jobVersionId: newJobVersionId,
     },
   });
 }
@@ -579,7 +579,7 @@ export async function transitionToSlow(stationId: string, timestamp: Date) {
         state: "UP",
         status: "SLOW",
         blockId: current.blockId,
-        jobBlobId: current.jobBlobId,
+        jobVersionId: current.jobVersionId,
       },
     });
     return { entry: created, statusChanged: true };
@@ -619,10 +619,10 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
     // Look up the active job for this station (open StationJobLog entry)
     const activeJob = await tx.stationJobLog.findFirst({
       where: { stationId, endTime: null },
-      select: { jobBlobId: true },
+      select: { jobVersionId: true },
       orderBy: { startTime: "desc" },
     });
-    const jobBlobId = activeJob?.jobBlobId ?? null;
+    const jobVersionId = activeJob?.jobVersionId ?? null;
 
     if (!current) {
       // No open entry — create a DOWN one
@@ -633,7 +633,7 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
         state: "DOWN",
         status: "DOWN",
         blockId,
-        jobBlobId,
+        jobVersionId,
       });
       return { entry, convertedRange: null as { startTime: Date; endTime: Date } | null, statusChanged: true };
     }
@@ -662,13 +662,13 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
       });
       entry = await tx.stationStateLog.update({
         where: { id: current.id },
-        data: { state: "DOWN", status: "DOWN", blockId, jobBlobId },
+        data: { state: "DOWN", status: "DOWN", blockId, jobVersionId },
       });
     } else {
       // Long-lived RUNNING entry — close it at the last cycle and continue as DOWN.
       await closeOpenStateEntries(tx, stationId, downStart);
       entry = await tx.stationStateLog.create({
-        data: { stationId, startTime: downStart, state: "DOWN", status: "DOWN", blockId, jobBlobId },
+        data: { stationId, startTime: downStart, state: "DOWN", status: "DOWN", blockId, jobVersionId },
       });
     }
 
@@ -799,7 +799,7 @@ export async function splitDownEntry(entryId: string, splitAt: Date): Promise<Sp
         status: entry.status,
         blockId: entry.blockId,
         statusReasonId: entry.statusReasonId,
-        jobBlobId: entry.jobBlobId,
+        jobVersionId: entry.jobVersionId,
       },
     });
 
@@ -981,7 +981,7 @@ export async function listStateLogs(filter: ListStateLogsFilter) {
             category: { select: { id: true, name: true } },
           },
         },
-        jobBlob: {
+        jobVersion: {
           select: { id: true, name: true },
         },
       },

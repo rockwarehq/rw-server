@@ -22,13 +22,13 @@ const MESSAGE_FRAGMENT_TO_KIND: Array<[RegExp, DbTimeoutKind]> = [
 export function classifyDbTimeout(err: unknown): DbTimeoutKind | null {
   if (!err || typeof err !== "object") return null;
 
-  const blob = serializeForMatching(err);
+  const version = serializeForMatching(err);
 
   for (const [code, kind] of Object.entries(SQLSTATE_TO_KIND)) {
-    if (blob.includes(code)) return kind;
+    if (version.includes(code)) return kind;
   }
   for (const [pattern, kind] of MESSAGE_FRAGMENT_TO_KIND) {
-    if (pattern.test(blob)) return kind;
+    if (pattern.test(version)) return kind;
   }
   return null;
 }

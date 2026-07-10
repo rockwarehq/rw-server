@@ -132,7 +132,7 @@ model ProcessType {
   site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
   workcenters            Workcenter[]
-  stationBlobs           StationBlob[]
+  stationVersions        StationVersion[]
   statusReasons          StatusReason[]
   jobs                   Job[]
   itemDispositionReasons ItemDispositionReason[]

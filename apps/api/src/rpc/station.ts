@@ -31,7 +31,7 @@ const createInputSchema = z.object({
   attrs: z.record(z.string(), z.unknown()).optional(),
   siteId: z.uuid(),
   workcenterId: z.uuid().optional(),
-  // Config fields (stored on StationBlob)
+  // Config fields (stored on StationVersion)
   standardCycle: z.number().positive().optional(),
   downtimeDetect: z.number().positive().optional(),
   downtimeDetectUnit: z.enum(["SECONDS"]).optional(),
@@ -47,7 +47,7 @@ const updateInputSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().optional(),
   attrs: z.record(z.string(), z.unknown()).optional(),
-  // Config fields (stored on StationBlob)
+  // Config fields (stored on StationVersion)
   standardCycle: z.number().positive().nullable().optional(),
   downtimeDetect: z.number().positive().nullable().optional(),
   downtimeDetectUnit: z.enum(["SECONDS"]).optional(),

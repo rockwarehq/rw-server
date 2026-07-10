@@ -241,7 +241,7 @@ export async function resolveEntityName(
       WHEN ${entityType} = 'WORKCENTER' THEN (SELECT name FROM "Workcenter" WHERE id = ${entityId}::uuid)
       WHEN ${entityType} = 'JOB' THEN COALESCE(
         (SELECT mb."entityName" FROM "MetricBucket" mb WHERE mb."entityType" = 'JOB' AND mb."entityId" = ${entityId}::uuid LIMIT 1),
-        (SELECT jb.name FROM "Job" j JOIN "JobBlob" jb ON jb.id = j."currentBlobId" WHERE j.id = ${entityId}::uuid)
+        (SELECT jb.name FROM "Job" j JOIN "JobVersion" jb ON jb.id = j."currentVersionId" WHERE j.id = ${entityId}::uuid)
       )
       WHEN ${entityType} = 'STATION' THEN (SELECT name FROM "Station" WHERE id = ${entityId}::uuid)
     END AS name

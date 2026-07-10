@@ -43,10 +43,10 @@ const DISPOSITION_LOG_QUERYABLE_FIELDS: FieldAllowlist = {
   quantity: { column: "quantity", type: "number" },
   dispositionName: { column: "itemDisposition.name", type: "string" },
   reasonName: { column: "dispositionReason.name", type: "string" },
-  productName: { column: "productBlob.name", type: "string" },
-  productSku: { column: "productBlob.sku", type: "string" },
-  toolName: { column: "toolBlob.name", type: "string" },
-  cavityName: { column: "toolCavityBlob.name", type: "string" },
+  productName: { column: "productVersion.name", type: "string" },
+  productSku: { column: "productVersion.sku", type: "string" },
+  toolName: { column: "toolVersion.name", type: "string" },
+  cavityName: { column: "toolCavityVersion.name", type: "string" },
   shiftName: { column: "shiftInstance.shiftName", type: "string" },
 };
 
@@ -503,8 +503,8 @@ export const downtimeLogSearch = authRequired.input(downtimeLogSearchInputSchema
       },
     },
     station: { select: { name: true, workcenterId: true } },
-    jobBlobId: true,
-    jobBlob: { select: { id: true, name: true } },
+    jobVersionId: true,
+    jobVersion: { select: { id: true, name: true } },
   };
 
   const entries = await prisma.stationStateLog.findMany({
@@ -527,7 +527,7 @@ export const downtimeLogSearch = authRequired.input(downtimeLogSearchInputSchema
     statusReasonName: string | null;
     isPlannedDown: boolean | null;
     categoryName: string | null;
-    jobBlobId: string | null;
+    jobVersionId: string | null;
     jobName: string | null;
   }> = [];
 
@@ -567,8 +567,8 @@ export const downtimeLogSearch = authRequired.input(downtimeLogSearchInputSchema
           statusReasonName: entry.statusReason?.name ?? null,
           isPlannedDown: entry.statusReason?.isPlannedDown ?? null,
           categoryName: entry.statusReason?.category?.name ?? null,
-          jobBlobId: entry.jobBlobId ?? null,
-          jobName: entry.jobBlob?.name ?? null,
+          jobVersionId: entry.jobVersionId ?? null,
+          jobName: entry.jobVersion?.name ?? null,
         });
       }
     }
@@ -592,8 +592,8 @@ export const downtimeLogSearch = authRequired.input(downtimeLogSearchInputSchema
         statusReasonName: entry.statusReason?.name ?? null,
         isPlannedDown: entry.statusReason?.isPlannedDown ?? null,
         categoryName: entry.statusReason?.category?.name ?? null,
-        jobBlobId: entry.jobBlobId ?? null,
-        jobName: entry.jobBlob?.name ?? null,
+        jobVersionId: entry.jobVersionId ?? null,
+        jobName: entry.jobVersion?.name ?? null,
       });
     }
   }
@@ -710,9 +710,9 @@ export const dispositionLogSearch = authRequired.input(dispositionLogSearchInput
     station: { select: { id: true, name: true } },
     itemDisposition: { select: { id: true, name: true } },
     dispositionReason: { select: { id: true, name: true } },
-    productBlob: { select: { id: true, name: true, sku: true } },
-    toolBlob: { select: { id: true, name: true } },
-    toolCavityBlob: { select: { id: true, name: true } },
+    productVersion: { select: { id: true, name: true, sku: true } },
+    toolVersion: { select: { id: true, name: true } },
+    toolCavityVersion: { select: { id: true, name: true } },
     shiftInstance: { select: { id: true, shiftName: true, businessDate: true } },
   };
 
@@ -724,7 +724,7 @@ export const dispositionLogSearch = authRequired.input(dispositionLogSearchInput
     stationName: { station: { name: input.sortDir } },
     dispositionName: { itemDisposition: { name: input.sortDir } },
     reasonName: { dispositionReason: { name: input.sortDir } },
-    productName: { productBlob: { name: input.sortDir } },
+    productName: { productVersion: { name: input.sortDir } },
     shiftName: { shiftInstance: { shiftName: input.sortDir } },
   };
 
@@ -757,10 +757,10 @@ export const dispositionLogSearch = authRequired.input(dispositionLogSearchInput
     stationName: row.station.name,
     dispositionName: row.itemDisposition?.name ?? null,
     reasonName: row.dispositionReason?.name ?? null,
-    productName: row.productBlob?.name ?? null,
-    productSku: row.productBlob?.sku ?? null,
-    toolName: row.toolBlob?.name ?? null,
-    cavityName: row.toolCavityBlob?.name ?? null,
+    productName: row.productVersion?.name ?? null,
+    productSku: row.productVersion?.sku ?? null,
+    toolName: row.toolVersion?.name ?? null,
+    cavityName: row.toolCavityVersion?.name ?? null,
     shiftName: row.shiftInstance?.shiftName ?? null,
     businessDate: row.shiftInstance?.businessDate ?? null,
   }));
@@ -771,8 +771,8 @@ export const dispositionLogSearch = authRequired.input(dispositionLogSearchInput
 // ============================================================================
 // Material Usage Log search (aggregated, paginated)
 //
-// Joins InventoryItem → ProductMaterialBlob (weight) → MaterialBlob (name),
-// plus Cycle → JobBlob (job name) and ProductBlob (part name).
+// Joins InventoryItem → ProductMaterialVersion (weight) → MaterialVersion (name),
+// plus Cycle → JobVersion (job name) and ProductVersion (part name).
 // Cross-references with ShiftInstances for shift/date attribution.
 // Aggregates (sums) weight by Date, Shift, Job, Part, Material.
 // ============================================================================
@@ -837,7 +837,7 @@ export const materialUsageSearch = authRequired.input(materialUsageSearchInputSc
       })()
     : new Date("2100-01-01");
 
-  // Fetch InventoryItems with material blobs, cycle/job, and product
+  // Fetch InventoryItems with material versions, cycle/job, and product
   const cycleWhere: Record<string, unknown> = {
     siteId: input.siteId,
     deletedAt: null,
@@ -851,7 +851,7 @@ export const materialUsageSearch = authRequired.input(materialUsageSearchInputSc
     where: {
       deletedAt: null,
       cycle: cycleWhere,
-      productMaterialBlobs: { some: {} }, // only items that have materials
+      productMaterialVersions: { some: {} }, // only items that have materials
     },
     select: {
       id: true,
@@ -860,15 +860,15 @@ export const materialUsageSearch = authRequired.input(materialUsageSearchInputSc
           end: true,
           start: true,
           stationId: true,
-          jobBlob: { select: { name: true } },
+          jobVersion: { select: { name: true } },
         },
       },
-      productBlob: { select: { name: true } },
-      productMaterialBlobs: {
+      productVersion: { select: { name: true } },
+      productMaterialVersions: {
         select: {
           weight: true,
           weightUnits: true,
-          materialBlob: { select: { name: true } },
+          materialVersion: { select: { name: true } },
         },
       },
     },
@@ -939,11 +939,11 @@ export const materialUsageSearch = authRequired.input(materialUsageSearchInputSc
       ? shift.businessDate.toISOString().slice(0, 10)
       : cycleTime.toISOString().slice(0, 10);
     const shiftName = shift?.shiftName ?? null;
-    const jobName = input.groupByJob ? item.cycle.jobBlob.name : null;
-    const partName = input.groupByPart ? (item.productBlob.name ?? "—") : null;
+    const jobName = input.groupByJob ? item.cycle.jobVersion.name : null;
+    const partName = input.groupByPart ? (item.productVersion.name ?? "—") : null;
 
-    for (const pmb of item.productMaterialBlobs) {
-      const materialName = pmb.materialBlob.name ?? "—";
+    for (const pmb of item.productMaterialVersions) {
+      const materialName = pmb.materialVersion.name ?? "—";
       const weightUnits = pmb.weightUnits ?? null;
       const weight = pmb.weight ? Number(pmb.weight) : 0;
 
@@ -1140,7 +1140,7 @@ export const cycleSearch = authRequired.input(cycleSearchInputSchema).handler(as
         )                  AS "businessDate"
       FROM "Cycle" c
       JOIN "Station" s ON s.id = c."stationId"
-      JOIN "JobBlob" jb ON jb.id = c."jobBlobId"
+      JOIN "JobVersion" jb ON jb.id = c."jobVersionId"
       LEFT JOIN LATERAL (
         SELECT si."shiftName", si."businessDate"
         FROM "ShiftInstance" si
@@ -1541,7 +1541,7 @@ export const partLogSearch = authRequired.input(partLogSearchInputSchema).handle
     },
     select: {
       cycle: { select: { end: true, start: true, stationId: true } },
-      productBlob: { select: { name: true, sku: true } },
+      productVersion: { select: { name: true, sku: true } },
     },
   });
 
@@ -1553,8 +1553,8 @@ export const partLogSearch = authRequired.input(partLogSearchInputSchema).handle
       ? shift.businessDate.toISOString().slice(0, 10)
       : ts.toISOString().slice(0, 10);
     const shiftName = shift?.shiftName ?? null;
-    const partName = item.productBlob?.name ?? "\u2014";
-    const partSku = item.productBlob?.sku ?? null;
+    const partName = item.productVersion?.name ?? "\u2014";
+    const partSku = item.productVersion?.sku ?? null;
     const stationName = stationNameMap.get(stationId) ?? "";
 
     const key = keyOf(businessDate, shiftName, stationId, partName);
@@ -1590,7 +1590,7 @@ export const partLogSearch = authRequired.input(partLogSearchInputSchema).handle
       stationId: true,
       createdAt: true,
       quantity: true,
-      productBlob: { select: { name: true, sku: true } },
+      productVersion: { select: { name: true, sku: true } },
       shiftInstance: { select: { shiftName: true, businessDate: true } },
     },
   });
@@ -1610,8 +1610,8 @@ export const partLogSearch = authRequired.input(partLogSearchInputSchema).handle
         : d.createdAt.toISOString().slice(0, 10);
       shiftName = shift?.shiftName ?? null;
     }
-    const partName = d.productBlob?.name ?? "\u2014";
-    const partSku = d.productBlob?.sku ?? null;
+    const partName = d.productVersion?.name ?? "\u2014";
+    const partSku = d.productVersion?.sku ?? null;
     const stationName = stationNameMap.get(stationId) ?? "";
 
     const key = keyOf(businessDate, shiftName, stationId, partName);

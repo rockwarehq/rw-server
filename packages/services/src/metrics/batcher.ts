@@ -6,11 +6,13 @@
 //   Just marks dirty buckets via Redis. Zero cascade work.
 //
 // Combined tick phases (worker process, every 5s):
-//   1. batchCountRollup    — recompute count KPIs from Cycle table
-//   2. batchDurationRollup — compute duration KPIs from StationStateLog
-//   3. cascadeStationShiftDay — re-sum STATION HOUR → SHIFT/DAY
-//   4. cascadeParentRollup — sum STATION → WORKCENTER/SITE
-//   5. cascadeJobRollup    — recompute JOB-entity buckets
+//   1. batchDurationRollup        — duration KPIs from StationStateLog
+//   2. cascadeJobRollup           — recompute JOB-entity buckets
+//   3. syncExpectedCyclesFromJobs — job-clipped expected* back onto STATION HOUR
+//   4. cascadeStationShiftDay     — re-sum STATION HOUR → SHIFT/DAY
+//   5. cascadeParentRollup        — sum STATION → WORKCENTER/SITE
+// (Counts are NOT recomputed here — they arrive via the per-cycle
+//  incrementHourCounts increment in cycle.ts.)
 //
 // Usage:
 //   // Server process (called from cycle.ts):
@@ -51,7 +53,7 @@ export interface MetricsUpdateRequest {
   timestamp: Date;
   /** Number of inventory items produced by this cycle. */
   itemsCount: number;
-  /** Standard cycle time in seconds from the job blob (for idealCycleSeconds). Null if unknown. */
+  /** Standard cycle time in seconds from the job version (for idealCycleSeconds). Null if unknown. */
   standardCycleSeconds: number | null;
   /** Number of items produced per cycle for this job (for expectedItems). */
   itemsPerCycle: number;

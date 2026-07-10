@@ -17,7 +17,7 @@ export type PreparedDetection =
   | { stationId: string; cancel: false; slowStartAfter: Date | null; downStartAfter: Date | null };
 
 /**
- * DB-only half of detection scheduling. Reads the station/job blob
+ * DB-only half of detection scheduling. Reads the station/job version
  * config and computes the slow/down fire times. Accepts a transaction
  * client so the reads can ride inside the cycle-complete transaction.
  */
@@ -26,8 +26,8 @@ export async function prepareDetection(
   stationId: string,
   jobId: string,
 ): Promise<PreparedDetection> {
-  const [stationWithBlob, jobWithBlob] = await Promise.all([
-    client.stationBlob.findFirst({
+  const [stationWithVersion, jobWithVersion] = await Promise.all([
+    client.stationVersion.findFirst({
       where: {
         station: { id: stationId },
         currentOfStation: { isNot: null },
@@ -39,7 +39,7 @@ export async function prepareDetection(
         downtimeDetectUnit: true,
       },
     }),
-    client.jobBlob.findFirst({
+    client.jobVersion.findFirst({
       where: {
         job: { id: jobId },
         currentOfJob: { isNot: null },
@@ -50,18 +50,18 @@ export async function prepareDetection(
     }),
   ]);
 
-  const blob = stationWithBlob;
-  const standardCycleSeconds = jobWithBlob?.standardCycle ? Number(jobWithBlob.standardCycle) : null;
+  const version = stationWithVersion;
+  const standardCycleSeconds = jobWithVersion?.standardCycle ? Number(jobWithVersion.standardCycle) : null;
 
-  if (!blob || standardCycleSeconds == null || standardCycleSeconds <= 0) {
+  if (!version || standardCycleSeconds == null || standardCycleSeconds <= 0) {
     return { stationId, cancel: true };
   }
 
   const now = Date.now();
 
   let slowStartAfter: Date | null = null;
-  if (blob.slowDetect != null) {
-    const slowFraction = Number(blob.slowDetect);
+  if (version.slowDetect != null) {
+    const slowFraction = Number(version.slowDetect);
     if (slowFraction > 0) {
       const delayMs = standardCycleSeconds * (1 + slowFraction) * 1000;
       slowStartAfter = new Date(now + delayMs);
@@ -69,8 +69,8 @@ export async function prepareDetection(
   }
 
   let downStartAfter: Date | null = null;
-  if (blob.downtimeDetect != null) {
-    const downtimeSeconds = Number(blob.downtimeDetect);
+  if (version.downtimeDetect != null) {
+    const downtimeSeconds = Number(version.downtimeDetect);
     if (downtimeSeconds > 0) {
       const delayMs = (standardCycleSeconds + downtimeSeconds) * 1000;
       downStartAfter = new Date(now + delayMs);

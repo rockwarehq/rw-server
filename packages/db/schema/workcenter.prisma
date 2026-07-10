@@ -88,10 +88,10 @@ model Station {
   currentJobId String? @db.Uuid
   currentJob   Job?    @relation("StationCurrentJob", fields: [currentJobId], references: [id], onDelete: SetNull)
 
-  // Blob versioning (config fields)
-  currentBlobId String?       @unique @db.Uuid
-  currentBlob   StationBlob?  @relation("StationCurrent", fields: [currentBlobId], references: [id])
-  blobs         StationBlob[] @relation("StationBlobs")
+  // Version versioning (config fields)
+  currentVersionId String?          @unique @db.Uuid
+  currentVersion   StationVersion?  @relation("StationCurrent", fields: [currentVersionId], references: [id])
+  versions         StationVersion[] @relation("StationVersions")
 
   classifications StationClassification[]
 
@@ -131,11 +131,11 @@ model StationStateLog {
   stationId String  @db.Uuid
   station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
 
-  stationBlobId String?      @db.Uuid
-  stationBlob   StationBlob? @relation(fields: [stationBlobId], references: [id])
+  stationVersionId String?         @db.Uuid
+  stationVersion   StationVersion? @relation(fields: [stationVersionId], references: [id])
 
-  jobBlobId String?  @db.Uuid
-  jobBlob   JobBlob? @relation(fields: [jobBlobId], references: [id])
+  jobVersionId String?     @db.Uuid
+  jobVersion   JobVersion? @relation(fields: [jobVersionId], references: [id])
 
   status         StationStatus?
   statusReasonId String?        @db.Uuid
@@ -145,7 +145,7 @@ model StationStateLog {
   @@index([stationId, endTime])
   @@index([stationId, startTime])
   @@index([statusReasonId])
-  @@index([jobBlobId])
+  @@index([jobVersionId])
 }
 
 /// Assignment: links a Datasource to a Station
@@ -208,7 +208,7 @@ model StationEventExecution {
   @@index([stationEventId, status])
 }
 
-model StationBlob {
+model StationVersion {
   id      String @id @default(uuid()) @db.Uuid
   version Int
 
@@ -225,7 +225,7 @@ model StationBlob {
   processType   ProcessType? @relation(fields: [processTypeId], references: [id], onDelete: SetNull)
 
   stationId String  @db.Uuid
-  station   Station @relation("StationBlobs", fields: [stationId], references: [id], onDelete: Cascade)
+  station   Station @relation("StationVersions", fields: [stationId], references: [id], onDelete: Cascade)
 
   currentOfStation    Station?             @relation("StationCurrent")
   cycles              Cycle[]
@@ -269,12 +269,12 @@ model StationJobLog {
   jobId String @db.Uuid
   job   Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
-  /// Snapshot of the job blob version at assignment time.
-  jobBlobId String @db.Uuid
+  /// Snapshot of the job version version at assignment time.
+  jobVersionId String @db.Uuid
 
   startTime         DateTime  @db.Timestamptz(3)
   endTime           DateTime? @db.Timestamptz(3) // null = currently running
-  /// Standard cycle time (seconds) snapshotted from the job blob at assignment time.
+  /// Standard cycle time (seconds) snapshotted from the job version at assignment time.
   standardCycle     Decimal?  @db.Decimal(10, 2)
   /// Watermark for incremental bucket accumulation. The background worker
   /// advances this on each tick so only the delta since the last tick is processed.

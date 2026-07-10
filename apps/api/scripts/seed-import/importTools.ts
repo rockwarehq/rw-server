@@ -46,23 +46,23 @@ export async function importTools(
       const pmWarn = parseNumber(row.pmWarn) as number | null;
       const pmCount = parseNumber(row.pmCount) as number | null;
 
-      // Look up existing tool by matching current blob name + siteId
+      // Look up existing tool by matching current version name + siteId
       // (case-insensitive so re-imports treat "ABC123" / "abc123" as same tool).
       const existing = await prisma.tool.findFirst({
-        where: { siteId, currentBlob: { name: { equals: name, mode: "insensitive" } } },
-        include: { currentBlob: true },
+        where: { siteId, currentVersion: { name: { equals: name, mode: "insensitive" } } },
+        include: { currentVersion: true },
       });
 
       if (existing) {
         // Check if data changed
-        const blob = existing.currentBlob;
+        const version = existing.currentVersion;
         const changed =
-          blob?.pmLimit !== pmLimit ||
-          blob?.pmWarn !== pmWarn;
+          version?.pmLimit !== pmLimit ||
+          version?.pmWarn !== pmWarn;
 
-        if (changed && blob) {
-          await prisma.toolBlob.update({
-            where: { id: blob.id },
+        if (changed && version) {
+          await prisma.toolVersion.update({
+            where: { id: version.id },
             data: { name, pmLimit, pmWarn },
           });
         }
@@ -77,7 +77,7 @@ export async function importTools(
         return;
       }
 
-      // Create new tool + blob v1
+      // Create new tool + version v1
       const tool = await prisma.tool.create({
         data: {
           siteId,
@@ -85,7 +85,7 @@ export async function importTools(
         },
       });
 
-      const blob = await prisma.toolBlob.create({
+      const version = await prisma.toolVersion.create({
         data: {
           version: 1,
           name,
@@ -97,7 +97,7 @@ export async function importTools(
 
       await prisma.tool.update({
         where: { id: tool.id },
-        data: { currentBlobId: blob.id },
+        data: { currentVersionId: version.id },
       });
 
       idMap.set("tool", row.Name, tool.id);

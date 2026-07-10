@@ -26,14 +26,14 @@ model Cycle {
   orderId String?    @db.Uuid
   order   WorkOrder? @relation(fields: [orderId], references: [id])
 
-  // Snapshot: blob IDs at point in time
-  stationBlobId String?      @db.Uuid
-  stationBlob   StationBlob? @relation(fields: [stationBlobId], references: [id])
+  // Snapshot: version IDs at point in time
+  stationVersionId String?         @db.Uuid
+  stationVersion   StationVersion? @relation(fields: [stationVersionId], references: [id])
 
-  jobBlobId String  @db.Uuid
-  jobBlob   JobBlob @relation(fields: [jobBlobId], references: [id])
+  jobVersionId String     @db.Uuid
+  jobVersion   JobVersion @relation(fields: [jobVersionId], references: [id])
 
-  toolBlobs ToolBlob[]
+  toolVersions ToolVersion[]
 
   jobTools JobTool[]
 
@@ -48,6 +48,6 @@ model Cycle {
   @@index([siteId, end])
   @@index([siteId, deletedAt, end])
   @@index([stationId, deletedAt, end])
-  @@index([jobBlobId])
+  @@index([jobVersionId])
   @@index([orderId])
 }

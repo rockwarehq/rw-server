@@ -8,7 +8,7 @@ export interface CreateStationInput {
   attrs?: Record<string, unknown>;
   siteId: string;
   workcenterId?: string;
-  // Config fields (stored on StationBlob)
+  // Config fields (stored on StationVersion)
   standardCycle?: number;
   downtimeDetect?: number;
   downtimeDetectUnit?: "SECONDS";
@@ -23,7 +23,7 @@ export interface UpdateStationInput {
   name?: string;
   description?: string;
   attrs?: Record<string, unknown>;
-  // Config fields (stored on StationBlob)
+  // Config fields (stored on StationVersion)
   standardCycle?: number | null;
   downtimeDetect?: number | null;
   downtimeDetectUnit?: "SECONDS";
@@ -52,17 +52,17 @@ const stationInclude = {
   workcenter: {
     select: { id: true, name: true },
   },
-  currentBlob: true,
+  currentVersion: true,
   currentJob: {
     select: {
       id: true,
-      currentBlob: { select: { name: true } },
+      currentVersion: { select: { name: true } },
     },
   },
 };
 
-/** Config field keys that belong on StationBlob */
-const BLOB_FIELDS = [
+/** Config field keys that belong on StationVersion */
+const VERSION_FIELDS = [
   "standardCycle",
   "downtimeDetect",
   "downtimeDetectUnit",
@@ -73,9 +73,9 @@ const BLOB_FIELDS = [
   "inStationCalculations",
 ] as const;
 
-/** Check if any blob config fields are provided in input */
-function hasBlobFields(input: Record<string, unknown>): boolean {
-  return BLOB_FIELDS.some((key) => input[key] !== undefined);
+/** Check if any version config fields are provided in input */
+function hasVersionFields(input: Record<string, unknown>): boolean {
+  return VERSION_FIELDS.some((key) => input[key] !== undefined);
 }
 
 function publishStationEntityEvent(args: {
@@ -160,10 +160,10 @@ export async function create(input: CreateStationInput) {
     }
   }
 
-  const wantBlob = hasBlobFields(input as unknown as Record<string, unknown>);
+  const wantVersion = hasVersionFields(input as unknown as Record<string, unknown>);
 
-  if (wantBlob) {
-    // 3-step transaction: create station -> create blob v1 -> link blob
+  if (wantVersion) {
+    // 3-step transaction: create station -> create version v1 -> link version
     const station = await prisma.$transaction(async (tx) => {
       // 1. Create station entity
       const s = await tx.station.create({
@@ -176,8 +176,8 @@ export async function create(input: CreateStationInput) {
         },
       });
 
-      // 2. Create initial StationBlob (version 1)
-      const blob = await tx.stationBlob.create({
+      // 2. Create initial StationVersion (version 1)
+      const version = await tx.stationVersion.create({
         data: {
           stationId: s.id,
           version: 1,
@@ -192,10 +192,10 @@ export async function create(input: CreateStationInput) {
         },
       });
 
-      // 3. Link blob as current and return with includes
+      // 3. Link version as current and return with includes
       return tx.station.update({
         where: { id: s.id },
-        data: { currentBlobId: blob.id },
+        data: { currentVersionId: version.id },
         include: stationInclude,
       });
     });
@@ -210,7 +210,7 @@ export async function create(input: CreateStationInput) {
     return { data: station };
   }
 
-  // No config fields — simple create without blob
+  // No config fields — simple create without version
   const station = await prisma.station.create({
     data: {
       name,
@@ -303,7 +303,7 @@ export async function getById(id: string, workspaceId?: string) {
 }
 
 /**
- * Update station (creates new blob version if config fields change)
+ * Update station (creates new version version if config fields change)
  */
 export async function update(id: string, input: UpdateStationInput, workspaceId?: string) {
   const {
@@ -320,12 +320,12 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
     inStationCalculations,
   } = input;
 
-  // Get current station with workspace info and current blob
+  // Get current station with workspace info and current version
   const current = await prisma.station.findUnique({
     where: { id },
     include: {
       site: { select: { workspaceId: true } },
-      currentBlob: true,
+      currentVersion: true,
     },
   });
 
@@ -360,8 +360,8 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
   if (description !== undefined) stationUpdateData.description = description;
   if (attrs !== undefined) stationUpdateData.attrs = attrs;
 
-  // Check if any blob config fields are being updated
-  const blobInput = {
+  // Check if any version config fields are being updated
+  const versionInput = {
     standardCycle,
     downtimeDetect,
     downtimeDetectUnit,
@@ -371,45 +371,45 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
     inLineCalculations,
     inStationCalculations,
   };
-  const wantBlobUpdate = hasBlobFields(blobInput as unknown as Record<string, unknown>);
+  const wantVersionUpdate = hasVersionFields(versionInput as unknown as Record<string, unknown>);
 
-  if (wantBlobUpdate) {
-    // Create new blob version with merged data
-    const latestBlob = await prisma.stationBlob.findFirst({
+  if (wantVersionUpdate) {
+    // Create new version version with merged data
+    const latestVersion = await prisma.stationVersion.findFirst({
       where: { stationId: id },
       orderBy: { version: "desc" },
       select: { version: true },
     });
 
-    const nextVersion = (latestBlob?.version ?? 0) + 1;
-    const oldBlob = current.currentBlob;
+    const nextVersion = (latestVersion?.version ?? 0) + 1;
+    const oldVersion = current.currentVersion;
 
     const station = await prisma.$transaction(async (tx) => {
-      // 1. Create new blob version
-      const blob = await tx.stationBlob.create({
+      // 1. Create new version version
+      const version = await tx.stationVersion.create({
         data: {
           stationId: id,
           version: nextVersion,
-          standardCycle: standardCycle !== undefined ? standardCycle : (oldBlob?.standardCycle ?? null),
-          downtimeDetect: downtimeDetect !== undefined ? downtimeDetect : (oldBlob?.downtimeDetect ?? null),
+          standardCycle: standardCycle !== undefined ? standardCycle : (oldVersion?.standardCycle ?? null),
+          downtimeDetect: downtimeDetect !== undefined ? downtimeDetect : (oldVersion?.downtimeDetect ?? null),
           downtimeDetectUnit:
-            downtimeDetectUnit !== undefined ? downtimeDetectUnit : (oldBlob?.downtimeDetectUnit ?? "SECONDS"),
-          slowDetect: slowDetect !== undefined ? slowDetect : (oldBlob?.slowDetect ?? null),
-          slowDetectUnit: slowDetectUnit !== undefined ? slowDetectUnit : (oldBlob?.slowDetectUnit ?? "PERCENTAGE"),
-          processTypeId: processTypeId !== undefined ? processTypeId : (oldBlob?.processTypeId ?? null),
+            downtimeDetectUnit !== undefined ? downtimeDetectUnit : (oldVersion?.downtimeDetectUnit ?? "SECONDS"),
+          slowDetect: slowDetect !== undefined ? slowDetect : (oldVersion?.slowDetect ?? null),
+          slowDetectUnit: slowDetectUnit !== undefined ? slowDetectUnit : (oldVersion?.slowDetectUnit ?? "PERCENTAGE"),
+          processTypeId: processTypeId !== undefined ? processTypeId : (oldVersion?.processTypeId ?? null),
           inLineCalculations:
-            inLineCalculations !== undefined ? inLineCalculations : (oldBlob?.inLineCalculations ?? false),
+            inLineCalculations !== undefined ? inLineCalculations : (oldVersion?.inLineCalculations ?? false),
           inStationCalculations:
-            inStationCalculations !== undefined ? inStationCalculations : (oldBlob?.inStationCalculations ?? false),
+            inStationCalculations !== undefined ? inStationCalculations : (oldVersion?.inStationCalculations ?? false),
         },
       });
 
-      // 2. Update station: entity fields + swing blob pointer
+      // 2. Update station: entity fields + swing version pointer
       return tx.station.update({
         where: { id },
         data: {
           ...stationUpdateData,
-          currentBlobId: blob.id,
+          currentVersionId: version.id,
         },
         include: stationInclude,
       });
@@ -422,7 +422,7 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
       workspaceId: current.site.workspaceId,
       changedFields: [
         ...Object.keys(stationUpdateData),
-        ...Object.entries(blobInput)
+        ...Object.entries(versionInput)
           .filter(([, value]) => value !== undefined)
           .map(([key]) => key),
       ],

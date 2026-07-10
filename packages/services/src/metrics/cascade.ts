@@ -158,7 +158,7 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
   // Why resolve here instead of a `target_bucket` CTE: when hour_start/hour_end
   // came from a CTE, the planner could not estimate the selectivity of
   // `Cycle."end" >= hour_start AND < hour_end`, so cycle_stats (below) scanned
-  // every cycle the job had ever produced via Cycle_jobBlobId_idx and filtered
+  // every cycle the job had ever produced via Cycle_jobVersionId_idx and filtered
   // down. Passing the bounds as parameters lets the planner use
   // Cycle_stationId_end_idx and read only the hour's rows.
   const bucket = await prisma.$queryRaw<Array<{ hour_start: Date; hour_end: Date; duration_seconds: number }>>`
@@ -188,7 +188,7 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
         NOW() AS v_now
     ),
     active_job AS (
-      SELECT sjl."jobId", sjl."jobBlobId", sjl."startTime" AS job_start,
+      SELECT sjl."jobId", sjl."jobVersionId", sjl."startTime" AS job_start,
              sjl."endTime" AS job_end, sjl."standardCycle"::float8 AS std_cycle
       FROM "StationJobLog" sjl, params p
       WHERE sjl."stationId" = p.station_id
@@ -198,8 +198,8 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
     ),
     job_meta AS (
       SELECT aj.*,
-        COALESCE((SELECT jb.name FROM "JobBlob" jb WHERE jb.id = aj."jobBlobId"), '') AS job_name,
-        COALESCE((SELECT SUM(jpb.quantity)::int FROM "JobProduct" jp JOIN "JobProductBlob" jpb ON jpb.id = jp."currentBlobId" WHERE jp."jobId" = aj."jobId" AND jp."deletedAt" IS NULL AND jpb."isActive" = true), 1) AS items_per_cycle,
+        COALESCE((SELECT jb.name FROM "JobVersion" jb WHERE jb.id = aj."jobVersionId"), '') AS job_name,
+        COALESCE((SELECT SUM(jpb.quantity)::int FROM "JobProduct" jp JOIN "JobProductVersion" jpb ON jpb.id = jp."currentVersionId" WHERE jp."jobId" = aj."jobId" AND jp."deletedAt" IS NULL AND jpb."isActive" = true), 1) AS items_per_cycle,
         COALESCE((SELECT mb.path FROM "MetricBucket" mb WHERE mb."entityType" = 'STATION' AND mb."entityId" = (SELECT station_id FROM params) AND mb.granularity = 'HOUR' AND mb."startTime" = (SELECT hour_start FROM params) LIMIT 1), 'site.' || (SELECT site_id FROM params) || '.station.' || (SELECT station_id FROM params)) || '.job.' || aj."jobId" AS job_path,
         md5((SELECT station_id FROM params)::text || ':job:' || aj."jobId"::text)::uuid AS job_entity_id
       FROM active_job aj
@@ -224,10 +224,10 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
       ORDER BY sa."rotationStartDate" DESC NULLS LAST LIMIT 1
     ),
     -- Count cycles for this job in this hour.
-    -- Match by Job.id (via JobBlob.jobId), not by the snapshotted jobBlobId,
-    -- so cycles produced under any blob version of the same job are counted.
-    -- Re-blobbing a job mid-shift creates a new JobBlob; without this, cycles
-    -- under newer blob versions are silently dropped from the JOB bucket.
+    -- Match by Job.id (via JobVersion.jobId), not by the snapshotted jobVersionId,
+    -- so cycles produced under any version version of the same job are counted.
+    -- Re-versioning a job mid-shift creates a new JobVersion; without this, cycles
+    -- under newer version versions are silently dropped from the JOB bucket.
     cycle_stats AS (
       SELECT
         COUNT(*)::int AS total_cycles,
@@ -235,12 +235,12 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
         COALESCE(SUM(CASE WHEN jm.std_cycle > 0 THEN ROUND(jm.std_cycle)::int ELSE 0 END), 0)::int AS ideal_cycle_seconds,
         COALESCE(SUM(EXTRACT(EPOCH FROM (c."end" - c.start))::int), 0)::int AS total_cycle_seconds
       FROM "Cycle" c
-      JOIN "JobBlob" jbc ON jbc.id = c."jobBlobId"
+      JOIN "JobVersion" jbc ON jbc.id = c."jobVersionId"
       CROSS JOIN job_meta jm
       -- Filter by station + end-range using bound parameters (not params-CTE
       -- columns, which are materialized and opaque to the planner) so the
       -- planner can estimate the range and use Cycle_stationId_end_idx instead
-      -- of scanning the job's entire cycle history via Cycle_jobBlobId_idx.
+      -- of scanning the job's entire cycle history via Cycle_jobVersionId_idx.
       WHERE c."stationId" = ${stationId}::uuid
         AND jbc."jobId" = jm."jobId"
         AND c."end" IS NOT NULL
@@ -248,9 +248,9 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
     ),
     -- Sum dispositioned items for this job in this hour.
     -- Attribute via two paths, in order of preference:
-    --   1. ItemDispositionLog.cycleId → Cycle → JobBlob.jobId
+    --   1. ItemDispositionLog.cycleId → Cycle → JobVersion.jobId
     --      (used when the disposition was tied to a specific cycle)
-    --   2. ItemDispositionLog.jobProductBlobId → JobProductBlob → JobProduct.jobId
+    --   2. ItemDispositionLog.jobProductVersionId → JobProductVersion → JobProduct.jobId
     --      (fallback for cycle-less dispositions — manual scrap entries
     --      snapshot the active JobProduct, which carries the jobId)
     -- Dispositions where neither path resolves to a job are excluded from
@@ -265,11 +265,11 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
         AND idl."createdAt" >= p.hour_start AND idl."createdAt" < p.hour_end
         AND COALESCE(
           (SELECT jbd."jobId" FROM "Cycle" cd
-             JOIN "JobBlob" jbd ON jbd.id = cd."jobBlobId"
+             JOIN "JobVersion" jbd ON jbd.id = cd."jobVersionId"
              WHERE cd.id = idl."cycleId"),
-          (SELECT jp."jobId" FROM "JobProductBlob" jpb
+          (SELECT jp."jobId" FROM "JobProductVersion" jpb
              JOIN "JobProduct" jp ON jp.id = jpb."jobProductId"
-             WHERE jpb.id = idl."jobProductBlobId")
+             WHERE jpb.id = idl."jobProductVersionId")
         ) = jm."jobId"
     ),
     -- Narrow state rows to those overlapping the current hour.
@@ -555,10 +555,10 @@ export async function batchCountRollup(timestamp: Date): Promise<Array<{ station
         ssl."stationId" AS station_id,
         s."siteId" AS site_id,
         (SELECT jb."standardCycle"::float8
-         FROM "Job" j JOIN "JobBlob" jb ON jb.id = j."currentBlobId"
+         FROM "Job" j JOIN "JobVersion" jb ON jb.id = j."currentVersionId"
          WHERE j.id = s."currentJobId") AS std_cycle,
         (SELECT COALESCE((SELECT SUM(jpb.quantity)::int
-         FROM "JobProduct" jp JOIN "JobProductBlob" jpb ON jpb.id = jp."currentBlobId"
+         FROM "JobProduct" jp JOIN "JobProductVersion" jpb ON jpb.id = jp."currentVersionId"
          WHERE jp."jobId" = s."currentJobId" AND jp."deletedAt" IS NULL AND jpb."isActive" = true), 1)) AS items_per_cycle
       FROM "StationStateLog" ssl
       JOIN "Station" s ON s.id = ssl."stationId"
@@ -689,13 +689,13 @@ export async function batchDurationRollup(timestamp: Date): Promise<Array<{ stat
       CASE WHEN mb."totalCycles" > 0 AND mb."idealCycleSeconds" > 0
         THEN (mb."idealCycleSeconds"::float8 / mb."totalCycles"::float8)
         ELSE (SELECT jb."standardCycle"::float8
-              FROM "Job" j JOIN "JobBlob" jb ON jb.id = j."currentBlobId"
+              FROM "Job" j JOIN "JobVersion" jb ON jb.id = j."currentVersionId"
               WHERE j.id = s."currentJobId")
       END AS std_cycle,
       CASE WHEN mb."totalCycles" > 0 AND mb."totalItems" > 0
         THEN ROUND(mb."totalItems"::float8 / mb."totalCycles"::float8)::int
         ELSE COALESCE((SELECT SUM(jpb.quantity)::int
-              FROM "JobProduct" jp JOIN "JobProductBlob" jpb ON jpb.id = jp."currentBlobId"
+              FROM "JobProduct" jp JOIN "JobProductVersion" jpb ON jpb.id = jp."currentVersionId"
               WHERE jp."jobId" = s."currentJobId" AND jp."deletedAt" IS NULL AND jpb."isActive" = true), 1)
       END AS items_per_cycle
     FROM "StationStateLog" ssl

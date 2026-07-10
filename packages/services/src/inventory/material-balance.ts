@@ -3,7 +3,7 @@ import { Prisma, type WeightUnit } from "@rw/db";
 
 export interface MaterialBalance {
   materialId: string;
-  /** Canonical weight unit of the material (from its current MaterialBlob). */
+  /** Canonical weight unit of the material (from its current MaterialVersion). */
   unit: WeightUnit | null;
   /** Sum of RECEIPT + TRANSFER_IN + OPENING_BALANCE ledger entries. */
   received: Prisma.Decimal;
@@ -70,7 +70,7 @@ export async function balance(materialId: string, asOf?: Date): Promise<Material
 
   const material = await prisma.material.findUnique({
     where: { id: materialId },
-    select: { currentBlob: { select: { weightUnits: true } } },
+    select: { currentVersion: { select: { weightUnits: true } } },
   });
 
   const row = rows[0];
@@ -78,7 +78,7 @@ export async function balance(materialId: string, asOf?: Date): Promise<Material
 
   return {
     materialId,
-    unit: material?.currentBlob?.weightUnits ?? null,
+    unit: material?.currentVersion?.weightUnits ?? null,
     received: row?.received ?? zero,
     adjusted: row?.adjusted ?? zero,
     consumed: row?.consumed ?? zero,

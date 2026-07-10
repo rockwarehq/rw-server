@@ -46,7 +46,7 @@ export interface ListMaterialsFilter {
 // ============================================================================
 
 /**
- * Create a new material with initial blob (version 1)
+ * Create a new material with initial version (version 1)
  */
 export async function create(input: CreateMaterialInput) {
   const { siteId, materialNumber, name, shortCode, description, externalNumber, weightUnits, unitCost, attrs } = input;
@@ -61,15 +61,15 @@ export async function create(input: CreateMaterialInput) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
 
-  // Create material and initial blob in transaction
+  // Create material and initial version in transaction
   const material = await prisma.$transaction(async (tx) => {
     // 1. Create Material entity
     const mat = await tx.material.create({
       data: { siteId },
     });
 
-    // 2. Create initial MaterialBlob (version 1)
-    const blob = await tx.materialBlob.create({
+    // 2. Create initial MaterialVersion (version 1)
+    const version = await tx.materialVersion.create({
       data: {
         materialId: mat.id,
         version: 1,
@@ -84,14 +84,14 @@ export async function create(input: CreateMaterialInput) {
       },
     });
 
-    // 3. Link blob as current and return
+    // 3. Link version as current and return
     return tx.material.update({
       where: { id: mat.id },
-      data: { currentBlobId: blob.id },
+      data: { currentVersionId: version.id },
       include: {
-        currentBlob: true,
+        currentVersion: true,
         site: { select: { id: true, name: true } },
-        _count: { select: { products: true, blobs: true } },
+        _count: { select: { products: true, versions: true } },
       },
     });
   });
@@ -123,7 +123,7 @@ export async function list(filter: ListMaterialsFilter = {}) {
 
   // Free-text search OR'd across the columns shown in the UI.
   if (q) {
-    where.currentBlob = {
+    where.currentVersion = {
       OR: [
         { materialNumber: { contains: q, mode: "insensitive" } },
         { name: { contains: q, mode: "insensitive" } },
@@ -133,15 +133,15 @@ export async function list(filter: ListMaterialsFilter = {}) {
     };
   } else if (name || materialNumber || shortCode) {
     // Legacy field-specific filters (AND).
-    where.currentBlob = {};
+    where.currentVersion = {};
     if (name) {
-      where.currentBlob.name = { contains: name, mode: "insensitive" };
+      where.currentVersion.name = { contains: name, mode: "insensitive" };
     }
     if (materialNumber) {
-      where.currentBlob.materialNumber = { contains: materialNumber, mode: "insensitive" };
+      where.currentVersion.materialNumber = { contains: materialNumber, mode: "insensitive" };
     }
     if (shortCode) {
-      where.currentBlob.shortCode = { contains: shortCode, mode: "insensitive" };
+      where.currentVersion.shortCode = { contains: shortCode, mode: "insensitive" };
     }
   }
 
@@ -149,9 +149,9 @@ export async function list(filter: ListMaterialsFilter = {}) {
     prisma.material.findMany({
       where,
       include: {
-        currentBlob: true,
+        currentVersion: true,
         site: { select: { id: true, name: true } },
-        _count: { select: { products: true, blobs: true } },
+        _count: { select: { products: true, versions: true } },
       },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
       skip: Number(offset),
@@ -169,24 +169,24 @@ export async function list(filter: ListMaterialsFilter = {}) {
 }
 
 /**
- * Get material by ID with current blob
+ * Get material by ID with current version
  */
 export async function getById(id: string) {
   const material = await prisma.material.findUnique({
     where: { id },
     include: {
-      currentBlob: true,
+      currentVersion: true,
       site: { select: { id: true, name: true } },
       products: {
         include: {
           product: {
             include: {
-              currentBlob: true,
+              currentVersion: true,
             },
           },
         },
       },
-      _count: { select: { products: true, blobs: true } },
+      _count: { select: { products: true, versions: true } },
     },
   });
 
@@ -202,15 +202,15 @@ export async function getById(id: string) {
 }
 
 /**
- * Update material (creates new blob version)
+ * Update material (creates new version version)
  */
 export async function update(id: string, input: UpdateMaterialInput) {
   const { materialNumber, name, shortCode, description, externalNumber, weightUnits, unitCost, attrs } = input;
 
-  // Get current material with blob
+  // Get current material with version
   const current = await prisma.material.findUnique({
     where: { id },
-    include: { currentBlob: true, site: { select: { workspaceId: true } } },
+    include: { currentVersion: true, site: { select: { workspaceId: true } } },
   });
 
   if (!current) {
@@ -221,46 +221,46 @@ export async function update(id: string, input: UpdateMaterialInput) {
     return { error: "Material has been deleted", code: "MATERIAL_DELETED" };
   }
 
-  if (!current.currentBlob) {
-    return { error: "Material has no current blob", code: "NO_CURRENT_BLOB" };
+  if (!current.currentVersion) {
+    return { error: "Material has no current version", code: "NO_CURRENT_VERSION" };
   }
 
-  const currentBlob = current.currentBlob;
+  const currentVersion = current.currentVersion;
 
   // Get next version number
-  const latestBlob = await prisma.materialBlob.findFirst({
+  const latestVersion = await prisma.materialVersion.findFirst({
     where: { materialId: id },
     orderBy: { version: "desc" },
     select: { version: true },
   });
 
-  const nextVersion = (latestBlob?.version ?? 0) + 1;
+  const nextVersion = (latestVersion?.version ?? 0) + 1;
 
-  // Create new blob with merged data
+  // Create new version with merged data
   const material = await prisma.$transaction(async (tx) => {
-    const blob = await tx.materialBlob.create({
+    const version = await tx.materialVersion.create({
       data: {
         materialId: id,
         version: nextVersion,
-        materialNumber: materialNumber ?? currentBlob.materialNumber,
-        name: name !== undefined ? name : currentBlob.name,
-        shortCode: shortCode !== undefined ? shortCode : currentBlob.shortCode,
-        description: description !== undefined ? description : currentBlob.description,
-        externalNumber: externalNumber !== undefined ? externalNumber : currentBlob.externalNumber,
-        weightUnits: weightUnits !== undefined ? weightUnits : currentBlob.weightUnits,
+        materialNumber: materialNumber ?? currentVersion.materialNumber,
+        name: name !== undefined ? name : currentVersion.name,
+        shortCode: shortCode !== undefined ? shortCode : currentVersion.shortCode,
+        description: description !== undefined ? description : currentVersion.description,
+        externalNumber: externalNumber !== undefined ? externalNumber : currentVersion.externalNumber,
+        weightUnits: weightUnits !== undefined ? weightUnits : currentVersion.weightUnits,
         unitCost:
-          unitCost !== undefined ? (unitCost != null ? new Prisma.Decimal(unitCost) : null) : currentBlob.unitCost,
-        attrs: attrs !== undefined ? attrs : (currentBlob.attrs as Record<string, unknown>),
+          unitCost !== undefined ? (unitCost != null ? new Prisma.Decimal(unitCost) : null) : currentVersion.unitCost,
+        attrs: attrs !== undefined ? attrs : (currentVersion.attrs as Record<string, unknown>),
       },
     });
 
     return tx.material.update({
       where: { id },
-      data: { currentBlobId: blob.id },
+      data: { currentVersionId: version.id },
       include: {
-        currentBlob: true,
+        currentVersion: true,
         site: { select: { id: true, name: true } },
-        _count: { select: { products: true, blobs: true } },
+        _count: { select: { products: true, versions: true } },
       },
     });
   });
@@ -334,27 +334,27 @@ export async function exists(id: string) {
 }
 
 /**
- * Get material version history (all blobs)
+ * Get material version history (all versions)
  */
 export async function getVersionHistory(id: string) {
   const material = await prisma.material.findUnique({
     where: { id },
-    select: { id: true, deletedAt: true, currentBlobId: true },
+    select: { id: true, deletedAt: true, currentVersionId: true },
   });
 
   if (!material) {
     return { error: "Material not found", code: "MATERIAL_NOT_FOUND" };
   }
 
-  const blobs = await prisma.materialBlob.findMany({
+  const versions = await prisma.materialVersion.findMany({
     where: { materialId: id },
     orderBy: { version: "desc" },
   });
 
   return {
-    data: blobs.map((blob) => ({
-      ...blob,
-      isCurrent: blob.id === material.currentBlobId,
+    data: versions.map((version) => ({
+      ...version,
+      isCurrent: version.id === material.currentVersionId,
     })),
   };
 }

@@ -63,7 +63,7 @@ const orderInclude = {
       product: {
         select: {
           id: true,
-          currentBlob: { select: { sku: true, name: true } },
+          currentVersion: { select: { sku: true, name: true } },
         },
       },
     },
@@ -485,7 +485,7 @@ export async function addLineItem(orderId: string, input: { productId: string; t
       product: {
         select: {
           id: true,
-          currentBlob: { select: { sku: true, name: true } },
+          currentVersion: { select: { sku: true, name: true } },
         },
       },
     },
@@ -540,7 +540,7 @@ export async function updateLineItem(lineItemId: string, input: { targetQuantity
       product: {
         select: {
           id: true,
-          currentBlob: { select: { sku: true, name: true } },
+          currentVersion: { select: { sku: true, name: true } },
         },
       },
     },

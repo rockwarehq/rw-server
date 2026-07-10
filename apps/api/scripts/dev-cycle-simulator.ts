@@ -35,14 +35,14 @@ async function tick() {
   if (station?.currentJobId) {
     const job = await prisma.job.findUnique({
       where: { id: station.currentJobId },
-      select: { id: true, currentBlobId: true, currentBlob: { select: { name: true } } },
+      select: { id: true, currentVersionId: true, currentVersion: { select: { name: true } } },
     });
-    if (!job?.currentBlobId) {
-      console.log("[cycle-simulator] Assigned job has no blob. Skipping.");
+    if (!job?.currentVersionId) {
+      console.log("[cycle-simulator] Assigned job has no version. Skipping.");
       return;
     }
     jobId = job.id;
-    jobName = job.currentBlob?.name ?? "Unknown";
+    jobName = job.currentVersion?.name ?? "Unknown";
   } else {
     // Fallback: any station + any job in the same site
     station = await prisma.station.findFirst({
@@ -57,16 +57,16 @@ async function tick() {
       where: {
         siteId: station.siteId,
         deletedAt: null,
-        currentBlobId: { not: null },
+        currentVersionId: { not: null },
       },
-      select: { id: true, currentBlob: { select: { name: true } } },
+      select: { id: true, currentVersion: { select: { name: true } } },
     });
     if (!job) {
-      console.log("[cycle-simulator] No jobs with a blob found. Create one first.");
+      console.log("[cycle-simulator] No jobs with a version found. Create one first.");
       return;
     }
     jobId = job.id;
-    jobName = job.currentBlob?.name ?? "Unknown";
+    jobName = job.currentVersion?.name ?? "Unknown";
   }
 
   count++;

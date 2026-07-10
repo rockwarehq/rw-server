@@ -409,24 +409,24 @@ async function main() {
 
   // ── Normalize job standard cycle times ──────────────────────────
   const updatedJobs = await prisma.$executeRaw`
-    UPDATE "JobBlob" SET "standardCycle" = 20
-    WHERE id IN (SELECT "currentBlobId" FROM "Job" WHERE "currentBlobId" IS NOT NULL)
+    UPDATE "JobVersion" SET "standardCycle" = 20
+    WHERE id IN (SELECT "currentVersionId" FROM "Job" WHERE "currentVersionId" IS NOT NULL)
   `;
-  console.log(`[Job] Set standardCycle=20 on ${updatedJobs} job blobs`);
+  console.log(`[Job] Set standardCycle=20 on ${updatedJobs} job versions`);
 
   // ── Activate all job products ─────────────────────────────────
   const activatedProducts = await prisma.$executeRaw`
-    UPDATE "JobProductBlob" SET "isActive" = true
+    UPDATE "JobProductVersion" SET "isActive" = true
     WHERE "isActive" = false
   `;
-  console.log(`[JobProduct] Activated ${activatedProducts} inactive job product blobs`);
+  console.log(`[JobProduct] Activated ${activatedProducts} inactive job product versions`);
 
   // ── Copy standard cycle to active station job logs ────────────
   const updatedJobLogs = await prisma.$executeRaw`
     UPDATE "StationJobLog" jl
     SET "standardCycle" = jb."standardCycle"
-    FROM "JobBlob" jb
-    WHERE jb.id = jl."jobBlobId"
+    FROM "JobVersion" jb
+    WHERE jb.id = jl."jobVersionId"
       AND jl."endTime" IS NULL
       AND (jl."standardCycle" IS NULL OR jl."standardCycle" = 0)
   `;
@@ -440,11 +440,11 @@ async function main() {
   console.log();
 
   const unnamedCavities = await prisma.$queryRaw<
-    Array<{ blobId: string; toolId: string }>
+    Array<{ versionId: string; toolId: string }>
   >`
-    SELECT tcb.id AS "blobId", tc."toolId"
-    FROM "ToolCavityBlob" tcb
-    JOIN "ToolCavity" tc ON tc."currentBlobId" = tcb.id
+    SELECT tcb.id AS "versionId", tc."toolId"
+    FROM "ToolCavityVersion" tcb
+    JOIN "ToolCavity" tc ON tc."currentVersionId" = tcb.id
     WHERE tcb.name = '' OR tcb.name IS NULL
     ORDER BY tc."toolId", tc."createdAt"
   `;
@@ -453,8 +453,8 @@ async function main() {
   for (const row of unnamedCavities) {
     const count = (cavityCountByTool.get(row.toolId) ?? 0) + 1;
     cavityCountByTool.set(row.toolId, count);
-    await prisma.toolCavityBlob.update({
-      where: { id: row.blobId },
+    await prisma.toolCavityVersion.update({
+      where: { id: row.versionId },
       data: { name: String(count), position: count },
     });
   }
@@ -466,11 +466,11 @@ async function main() {
   console.log("── Product → Material Assignment ────────────────────────");
   console.log();
 
-  const materials = await prisma.$queryRaw<Array<{ id: string; currentBlobId: string }>>`
-    SELECT id, "currentBlobId" FROM "Material" WHERE "currentBlobId" IS NOT NULL
+  const materials = await prisma.$queryRaw<Array<{ id: string; currentVersionId: string }>>`
+    SELECT id, "currentVersionId" FROM "Material" WHERE "currentVersionId" IS NOT NULL
   `;
-  const products = await prisma.$queryRaw<Array<{ id: string; currentBlobId: string }>>`
-    SELECT id, "currentBlobId" FROM "Product" WHERE "currentBlobId" IS NOT NULL
+  const products = await prisma.$queryRaw<Array<{ id: string; currentVersionId: string }>>`
+    SELECT id, "currentVersionId" FROM "Product" WHERE "currentVersionId" IS NOT NULL
   `;
 
   let materialLinks = 0;
@@ -482,18 +482,18 @@ async function main() {
       data: { productId: product.id, materialId: material.id },
     });
 
-    const blob = await prisma.productMaterialBlob.create({
+    const version = await prisma.productMaterialVersion.create({
       data: {
         version: 1,
         productMaterialId: pm.id,
-        materialBlobId: material.currentBlobId,
-        productBlobId: product.currentBlobId,
+        materialVersionId: material.currentVersionId,
+        productVersionId: product.currentVersionId,
       },
     });
 
     await prisma.productMaterial.update({
       where: { id: pm.id },
-      data: { currentBlobId: blob.id },
+      data: { currentVersionId: version.id },
     });
 
     materialLinks++;
@@ -542,13 +542,13 @@ async function main() {
         data: { jobId: jt.jobId, productId, toolId: jt.toolId, toolCavityId: cavity.id },
       });
 
-      const blob = await prisma.jobProductBlob.create({
+      const version = await prisma.jobProductVersion.create({
         data: { version: 1, isActive: true, quantity: 1, jobProductId: jobProduct.id },
       });
 
       await prisma.jobProduct.update({
         where: { id: jobProduct.id },
-        data: { currentBlobId: blob.id },
+        data: { currentVersionId: version.id },
       });
 
       cavityAssignments++;

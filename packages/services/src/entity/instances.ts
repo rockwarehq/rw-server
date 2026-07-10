@@ -169,12 +169,12 @@ async function listSystemInstances(
       siteId: scope.siteId,
       site: { workspaceId: scope.workspaceId },
       deletedAt: null,
-      ...(name ? { currentBlob: { is: { name: { contains: name, mode: "insensitive" as const } } } } : {}),
+      ...(name ? { currentVersion: { is: { name: { contains: name, mode: "insensitive" as const } } } } : {}),
     };
     const [jobs, total] = await Promise.all([
       prisma.job.findMany({
         where,
-        include: { currentBlob: true },
+        include: { currentVersion: true },
         ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
         skip: Number(offset),
         orderBy: { createdAt: "desc" },
@@ -185,14 +185,14 @@ async function listSystemInstances(
       data: jobs.map((job) =>
         systemInstance(
           key,
-          { id: job.id, name: job.currentBlob?.name ?? job.id },
+          { id: job.id, name: job.currentVersion?.name ?? job.id },
           {
             id: job.id,
-            name: job.currentBlob?.name ?? null,
-            description: job.currentBlob?.description ?? null,
-            standardCycle: job.currentBlob?.standardCycle != null ? Number(job.currentBlob.standardCycle) : null,
-            standardCycleUnit: job.currentBlob?.standardCycleUnit ?? null,
-            productsPerCycle: job.currentBlob?.productsPerCycle ?? null,
+            name: job.currentVersion?.name ?? null,
+            description: job.currentVersion?.description ?? null,
+            standardCycle: job.currentVersion?.standardCycle != null ? Number(job.currentVersion.standardCycle) : null,
+            standardCycleUnit: job.currentVersion?.standardCycleUnit ?? null,
+            productsPerCycle: job.currentVersion?.productsPerCycle ?? null,
             siteId: job.siteId,
             createdAt: job.createdAt,
             updatedAt: job.updatedAt,
@@ -215,8 +215,8 @@ async function listSystemInstances(
       ...(name
         ? {
             OR: [
-              { currentBlob: { is: { name: { contains: name, mode: "insensitive" as const } } } },
-              { currentBlob: { is: { sku: { contains: name, mode: "insensitive" as const } } } },
+              { currentVersion: { is: { name: { contains: name, mode: "insensitive" as const } } } },
+              { currentVersion: { is: { sku: { contains: name, mode: "insensitive" as const } } } },
             ],
           }
         : {}),
@@ -224,7 +224,7 @@ async function listSystemInstances(
     const [products, total] = await Promise.all([
       prisma.product.findMany({
         where,
-        include: { currentBlob: true },
+        include: { currentVersion: true },
         ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
         skip: Number(offset),
         orderBy: { createdAt: "desc" },
@@ -235,15 +235,15 @@ async function listSystemInstances(
       data: products.map((product) =>
         systemInstance(
           key,
-          { id: product.id, name: product.currentBlob?.name ?? product.currentBlob?.sku ?? product.id },
+          { id: product.id, name: product.currentVersion?.name ?? product.currentVersion?.sku ?? product.id },
           {
             id: product.id,
-            sku: product.currentBlob?.sku ?? null,
-            name: product.currentBlob?.name ?? null,
-            description: product.currentBlob?.description ?? null,
-            externalSku: product.currentBlob?.externalSku ?? null,
-            weight: product.currentBlob?.weight != null ? Number(product.currentBlob.weight) : null,
-            weightUnits: product.currentBlob?.weightUnits ?? null,
+            sku: product.currentVersion?.sku ?? null,
+            name: product.currentVersion?.name ?? null,
+            description: product.currentVersion?.description ?? null,
+            externalSku: product.currentVersion?.externalSku ?? null,
+            weight: product.currentVersion?.weight != null ? Number(product.currentVersion.weight) : null,
+            weightUnits: product.currentVersion?.weightUnits ?? null,
             siteId: product.siteId,
             createdAt: product.createdAt,
             updatedAt: product.updatedAt,
@@ -266,9 +266,9 @@ async function listSystemInstances(
       ...(name
         ? {
             OR: [
-              { currentBlob: { is: { name: { contains: name, mode: "insensitive" as const } } } },
-              { currentBlob: { is: { materialNumber: { contains: name, mode: "insensitive" as const } } } },
-              { currentBlob: { is: { shortCode: { contains: name, mode: "insensitive" as const } } } },
+              { currentVersion: { is: { name: { contains: name, mode: "insensitive" as const } } } },
+              { currentVersion: { is: { materialNumber: { contains: name, mode: "insensitive" as const } } } },
+              { currentVersion: { is: { shortCode: { contains: name, mode: "insensitive" as const } } } },
             ],
           }
         : {}),
@@ -276,7 +276,7 @@ async function listSystemInstances(
     const [materials, total] = await Promise.all([
       prisma.material.findMany({
         where,
-        include: { currentBlob: true },
+        include: { currentVersion: true },
         ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
         skip: Number(offset),
         orderBy: { createdAt: "desc" },
@@ -287,16 +287,16 @@ async function listSystemInstances(
       data: materials.map((material) =>
         systemInstance(
           key,
-          { id: material.id, name: material.currentBlob?.name ?? material.currentBlob?.materialNumber ?? material.id },
+          { id: material.id, name: material.currentVersion?.name ?? material.currentVersion?.materialNumber ?? material.id },
           {
             id: material.id,
-            materialNumber: material.currentBlob?.materialNumber ?? null,
-            shortCode: material.currentBlob?.shortCode ?? null,
-            name: material.currentBlob?.name ?? null,
-            classification: material.currentBlob?.classification ?? null,
-            description: material.currentBlob?.description ?? null,
-            externalNumber: material.currentBlob?.externalNumber ?? null,
-            weightUnits: material.currentBlob?.weightUnits ?? null,
+            materialNumber: material.currentVersion?.materialNumber ?? null,
+            shortCode: material.currentVersion?.shortCode ?? null,
+            name: material.currentVersion?.name ?? null,
+            classification: material.currentVersion?.classification ?? null,
+            description: material.currentVersion?.description ?? null,
+            externalNumber: material.currentVersion?.externalNumber ?? null,
+            weightUnits: material.currentVersion?.weightUnits ?? null,
             siteId: material.siteId,
             createdAt: material.createdAt,
             updatedAt: material.updatedAt,
@@ -316,12 +316,12 @@ async function listSystemInstances(
       siteId: scope.siteId,
       site: { workspaceId: scope.workspaceId },
       deletedAt: null,
-      ...(name ? { currentBlob: { is: { name: { contains: name, mode: "insensitive" as const } } } } : {}),
+      ...(name ? { currentVersion: { is: { name: { contains: name, mode: "insensitive" as const } } } } : {}),
     };
     const [tools, total] = await Promise.all([
       prisma.tool.findMany({
         where,
-        include: { currentBlob: true },
+        include: { currentVersion: true },
         ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
         skip: Number(offset),
         orderBy: { createdAt: "desc" },
@@ -332,14 +332,14 @@ async function listSystemInstances(
       data: tools.map((tool) =>
         systemInstance(
           key,
-          { id: tool.id, name: tool.currentBlob?.name ?? tool.id },
+          { id: tool.id, name: tool.currentVersion?.name ?? tool.id },
           {
             id: tool.id,
-            name: tool.currentBlob?.name ?? null,
-            description: tool.currentBlob?.description ?? null,
-            pmLimit: tool.currentBlob?.pmLimit ?? null,
-            pmWarn: tool.currentBlob?.pmWarn ?? null,
-            cavityCount: tool.currentBlob?.cavityCount ?? null,
+            name: tool.currentVersion?.name ?? null,
+            description: tool.currentVersion?.description ?? null,
+            pmLimit: tool.currentVersion?.pmLimit ?? null,
+            pmWarn: tool.currentVersion?.pmWarn ?? null,
+            cavityCount: tool.currentVersion?.cavityCount ?? null,
             pmCount: tool.pmCount,
             lifeCount: tool.lifeCount,
             siteId: tool.siteId,

@@ -11,13 +11,13 @@ export interface CreateDispositionLogInput {
   dispositionReasonId?: string;
   cycleId?: string;
   shiftInstanceId?: string;
-  /** If not provided, blob IDs are auto-resolved from current station/job state */
-  productBlobId: string;
-  stationBlobId?: string;
-  jobProductBlobId?: string;
-  toolBlobId?: string;
-  toolCavityBlobId?: string;
-  productMaterialBlobIds?: string[];
+  /** If not provided, version IDs are auto-resolved from current station/job state */
+  productVersionId: string;
+  stationVersionId?: string;
+  jobProductVersionId?: string;
+  toolVersionId?: string;
+  toolCavityVersionId?: string;
+  productMaterialVersionIds?: string[];
 }
 
 export interface UpdateDispositionLogInput {
@@ -47,19 +47,19 @@ const logInclude = {
       processType: { select: { id: true, name: true } },
     },
   },
-  productBlob: { select: { id: true, version: true, name: true, sku: true } },
-  stationBlob: { select: { id: true, version: true } },
-  toolBlob: { select: { id: true, version: true, name: true } },
-  toolCavityBlob: { select: { id: true, version: true, name: true } },
-  jobProductBlob: { select: { id: true, version: true } },
-  productMaterialBlobs: {
+  productVersion: { select: { id: true, version: true, name: true, sku: true } },
+  stationVersion: { select: { id: true, version: true } },
+  toolVersion: { select: { id: true, version: true, name: true } },
+  toolCavityVersion: { select: { id: true, version: true, name: true } },
+  jobProductVersion: { select: { id: true, version: true } },
+  productMaterialVersions: {
     select: {
       id: true,
       version: true,
       weight: true,
       weightUnits: true,
       itemCost: true,
-      materialBlob: {
+      materialVersion: {
         select: { id: true, version: true, name: true, materialNumber: true, shortCode: true },
       },
     },
@@ -68,12 +68,12 @@ const logInclude = {
   cycle: { select: { id: true } },
 };
 
-// Extended include for list — resolves entity IDs from blobs for UI aggregation
+// Extended include for list — resolves entity IDs from versions for UI aggregation
 const logListInclude = {
   ...logInclude,
-  productBlob: { select: { id: true, version: true, name: true, sku: true, productId: true } },
-  toolCavityBlob: { select: { id: true, version: true, name: true, toolCavityId: true } },
-  jobProductBlob: { select: { id: true, version: true, jobProduct: { select: { jobId: true } } } },
+  productVersion: { select: { id: true, version: true, name: true, sku: true, productId: true } },
+  toolCavityVersion: { select: { id: true, version: true, name: true, toolCavityId: true } },
+  jobProductVersion: { select: { id: true, version: true, jobProduct: { select: { jobId: true } } } },
 };
 
 export interface RecordDispositionLogInput {
@@ -153,16 +153,16 @@ async function validateDispositionReasonPair(
 
 /**
  * Create a disposition log entry from entity IDs, auto-resolving
- * the current blob snapshots for station, product, jobProduct,
+ * the current version snapshots for station, product, jobProduct,
  * tool, and toolCavity.
  */
 export async function record(input: RecordDispositionLogInput) {
   const { siteId, stationId, productId, jobId, toolCavityId, ...passthrough } = input;
 
-  // Resolve station → stationBlobId
+  // Resolve station → stationVersionId
   const station = await prisma.station.findUnique({
     where: { id: stationId },
-    select: { id: true, siteId: true, currentBlobId: true },
+    select: { id: true, siteId: true, currentVersionId: true },
   });
 
   if (!station) {
@@ -172,14 +172,14 @@ export async function record(input: RecordDispositionLogInput) {
     return { error: "Station must belong to the specified site", code: "SITE_MISMATCH" };
   }
 
-  // Resolve product → productBlobId and product material blob IDs
+  // Resolve product → productVersionId and product material version IDs
   const product = await prisma.product.findUnique({
     where: { id: productId },
     select: {
-      currentBlobId: true,
+      currentVersionId: true,
       deletedAt: true,
       materials: {
-        select: { currentBlobId: true },
+        select: { currentVersionId: true },
       },
     },
   });
@@ -187,68 +187,68 @@ export async function record(input: RecordDispositionLogInput) {
   if (!product || product.deletedAt) {
     return { error: "Product not found", code: "PRODUCT_NOT_FOUND" };
   }
-  if (!product.currentBlobId) {
-    return { error: "Product has no current blob version", code: "NO_CURRENT_BLOB" };
+  if (!product.currentVersionId) {
+    return { error: "Product has no current version version", code: "NO_CURRENT_VERSION" };
   }
 
-  // Resolve jobProduct → jobProductBlobId (if jobId provided)
-  let jobProductBlobId: string | undefined;
+  // Resolve jobProduct → jobProductVersionId (if jobId provided)
+  let jobProductVersionId: string | undefined;
   if (jobId) {
     const jobProduct = await prisma.jobProduct.findFirst({
       where: { jobId, productId, deletedAt: null },
-      select: { currentBlobId: true },
+      select: { currentVersionId: true },
     });
 
     if (!jobProduct) {
       return { error: "JobProduct not found for given job and product", code: "JOB_PRODUCT_NOT_FOUND" };
     }
-    if (!jobProduct.currentBlobId) {
-      return { error: "JobProduct has no current blob version", code: "NO_CURRENT_BLOB" };
+    if (!jobProduct.currentVersionId) {
+      return { error: "JobProduct has no current version version", code: "NO_CURRENT_VERSION" };
     }
-    jobProductBlobId = jobProduct.currentBlobId;
+    jobProductVersionId = jobProduct.currentVersionId;
   }
 
-  // Resolve toolCavity → toolCavityBlobId + toolBlobId (if provided)
-  let toolCavityBlobId: string | undefined;
-  let toolBlobId: string | undefined;
+  // Resolve toolCavity → toolCavityVersionId + toolVersionId (if provided)
+  let toolCavityVersionId: string | undefined;
+  let toolVersionId: string | undefined;
   if (toolCavityId) {
     const toolCavity = await prisma.toolCavity.findUnique({
       where: { id: toolCavityId },
       select: {
-        currentBlobId: true,
+        currentVersionId: true,
         deletedAt: true,
-        tool: { select: { currentBlobId: true } },
+        tool: { select: { currentVersionId: true } },
       },
     });
 
     if (!toolCavity || toolCavity.deletedAt) {
       return { error: "Tool cavity not found", code: "TOOL_CAVITY_NOT_FOUND" };
     }
-    if (!toolCavity.currentBlobId) {
-      return { error: "Tool cavity has no current blob version", code: "NO_CURRENT_BLOB" };
+    if (!toolCavity.currentVersionId) {
+      return { error: "Tool cavity has no current version version", code: "NO_CURRENT_VERSION" };
     }
-    toolCavityBlobId = toolCavity.currentBlobId;
-    toolBlobId = toolCavity.tool.currentBlobId ?? undefined;
+    toolCavityVersionId = toolCavity.currentVersionId;
+    toolVersionId = toolCavity.tool.currentVersionId ?? undefined;
   }
 
-  // Resolve product material blob IDs
-  const productMaterialBlobIds = product.materials
-    .map((pm) => pm.currentBlobId)
+  // Resolve product material version IDs
+  const productMaterialVersionIds = product.materials
+    .map((pm) => pm.currentVersionId)
     .filter((id): id is string => id != null);
 
   const result = await create({
     siteId,
     stationId,
-    productBlobId: product.currentBlobId,
-    stationBlobId: station.currentBlobId ?? undefined,
-    jobProductBlobId,
-    toolBlobId,
-    toolCavityBlobId,
-    productMaterialBlobIds,
+    productVersionId: product.currentVersionId,
+    stationVersionId: station.currentVersionId ?? undefined,
+    jobProductVersionId,
+    toolVersionId,
+    toolCavityVersionId,
+    productMaterialVersionIds,
     ...passthrough,
   });
 
-  // Order deduction is handled inside create() (via the resolved productBlob),
+  // Order deduction is handled inside create() (via the resolved productVersion),
   // so we must not call deductScrap again here or scrap would be double-counted
   // against the order line item.
   return result;
@@ -264,12 +264,12 @@ export async function create(input: CreateDispositionLogInput) {
     dispositionReasonId,
     cycleId,
     shiftInstanceId,
-    productBlobId,
-    stationBlobId,
-    jobProductBlobId,
-    toolBlobId,
-    toolCavityBlobId,
-    productMaterialBlobIds,
+    productVersionId,
+    stationVersionId,
+    jobProductVersionId,
+    toolVersionId,
+    toolCavityVersionId,
+    productMaterialVersionIds,
   } = input;
 
   // Validate station exists and belongs to site
@@ -291,14 +291,14 @@ export async function create(input: CreateDispositionLogInput) {
     return dispositionPair;
   }
 
-  // Validate productBlob exists and resolve productId for order deduction
-  const productBlob = await prisma.productBlob.findUnique({
-    where: { id: productBlobId },
+  // Validate productVersion exists and resolve productId for order deduction
+  const productVersion = await prisma.productVersion.findUnique({
+    where: { id: productVersionId },
     select: { id: true, productId: true },
   });
 
-  if (!productBlob) {
-    return { error: "Product blob not found", code: "PRODUCT_BLOB_NOT_FOUND" };
+  if (!productVersion) {
+    return { error: "Product version not found", code: "PRODUCT_VERSION_NOT_FOUND" };
   }
 
   const log = await prisma.itemDispositionLog.create({
@@ -311,14 +311,14 @@ export async function create(input: CreateDispositionLogInput) {
       dispositionReasonId: dispositionPair.data.dispositionReasonId,
       cycleId: cycleId ?? null,
       shiftInstanceId: shiftInstanceId ?? null,
-      productBlobId,
-      stationBlobId: stationBlobId ?? null,
-      jobProductBlobId: jobProductBlobId ?? null,
-      toolBlobId: toolBlobId ?? null,
-      toolCavityBlobId: toolCavityBlobId ?? null,
-      productMaterialBlobs:
-        productMaterialBlobIds && productMaterialBlobIds.length > 0
-          ? { connect: productMaterialBlobIds.map((id) => ({ id })) }
+      productVersionId,
+      stationVersionId: stationVersionId ?? null,
+      jobProductVersionId: jobProductVersionId ?? null,
+      toolVersionId: toolVersionId ?? null,
+      toolCavityVersionId: toolCavityVersionId ?? null,
+      productMaterialVersions:
+        productMaterialVersionIds && productMaterialVersionIds.length > 0
+          ? { connect: productMaterialVersionIds.map((id) => ({ id })) }
           : undefined,
     },
     include: logInclude,
@@ -330,9 +330,9 @@ export async function create(input: CreateDispositionLogInput) {
   });
 
   // Deduct from the highest-priority order for this product
-  if (productBlob?.productId) {
-    deductScrap(siteId, productBlob.productId, quantity ?? 1).catch((err) => {
-      console.error(`[disposition-log] Failed to deduct from order for product ${productBlob.productId}:`, err);
+  if (productVersion?.productId) {
+    deductScrap(siteId, productVersion.productId, quantity ?? 1).catch((err) => {
+      console.error(`[disposition-log] Failed to deduct from order for product ${productVersion.productId}:`, err);
     });
   }
 

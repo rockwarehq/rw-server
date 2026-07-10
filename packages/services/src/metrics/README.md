@@ -4,6 +4,16 @@ Real-time OEE (Overall Equipment Effectiveness) metric bucket system.
 Tracks cycle counts, durations, and computed ratios across a
 station -> workcenter -> site entity hierarchy, with per-job breakdowns.
 
+> **Field semantics:** ADR 0006 (`apps/docs` → Internal → ADRs) is the
+> definition of record for every KPI field and the OEE formulas.
+>
+> **Live pipeline note:** the per-cycle hot path now only does an atomic
+> HOUR count increment (`incrementHourCounts` in `cascade.ts`, called
+> from `cycle.ts`); durations, JOB buckets, and all rollups run on the
+> 5s combined tick (`batcher.ts` → `cascade.ts`). The `recalc.ts` entry
+> points described below remain live for state transitions, disposition
+> increments, and job-change / replay recalcs.
+
 ## Architecture Overview
 
 ```
@@ -61,22 +71,32 @@ state for one entity at one time-granularity window.
 
 | Group | Columns |
 |-------|---------|
-| Counting | `totalCycles`, `goodCycles`, `badCycles`, `totalItems`, `goodItems`, `badItems`, `expectedCycles`, `expectedItems` |
-| Duration (seconds) | `runSeconds`, `downSeconds`, `plannedDownSeconds`, `unplannedDownSeconds`, `plannedProductionSeconds` |
+| Counting | `totalCycles`, `badCycles`, `totalItems`, `badItems`, `expectedCycles`, `expectedItems` |
+| Duration (seconds) | `runSeconds`, `downSeconds`, `plannedDownSeconds`, `unplannedDownSeconds` |
 | Time (seconds) | `idealCycleSeconds`, `totalCycleSeconds` |
 | Elapsed | `elapsedExpectedCycles`, `elapsedExpectedItems`, `elapsedPlannedProductionSeconds` |
 | Display | `currentStandardCycle` (Decimal, nullable) |
+
+(`goodCycles`, `goodItems`, and `plannedProductionSeconds` are DB-generated,
+see below — application code never writes them.)
 
 **Computed columns (PostgreSQL GENERATED ALWAYS AS, read-only):**
 
 | Column | Formula | Type |
 |--------|---------|------|
-| `availability` | `runSeconds / elapsedPlannedProductionSeconds` | Decimal(7,6) nullable |
-| `performance` | `idealCycleSeconds / runSeconds` | Decimal(7,6) nullable |
-| `quality` | `goodCycles / totalCycles` | Decimal(7,6) nullable |
-| `oee` | `availability * performance * quality` (inlined) | Decimal(7,6) nullable |
+| `goodCycles` | `totalCycles - badCycles` | Int nullable |
+| `goodItems` | `totalItems - badItems` | Int nullable |
+| `plannedProductionSeconds` | `durationSeconds - plannedDownSeconds` | Int nullable |
+| `availability` | `runSeconds / elapsedPlannedProductionSeconds` | Decimal(10,6) nullable |
+| `performance` | `idealCycleSeconds / runSeconds` | Decimal(10,6) nullable |
+| `quality` | `(totalItems - badItems) / totalItems` | Decimal(10,6) nullable |
+| `oee` | `(idealCycleSeconds * (totalItems - badItems)) / (elapsedPlannedProductionSeconds * totalItems)` | Decimal(10,6) nullable |
 
-All four return `NULL` when the denominator is zero.
+All four ratios are `NULL` when `elapsedPlannedProductionSeconds = 0`
+(no production window). `performance`, `quality`, and `oee` return `0`
+when there is a production window but no run time / no items produced.
+SQL source: `20260325000000_oee_zero_not_null/migration.sql`. See ADR 0006
+for full field semantics.
 
 ### Hierarchy & Rollup Structure
 
@@ -131,13 +151,13 @@ When no shift schedule exists, falls back to 24 clock-aligned hours.
 
 ## KPI Key Classification
 
-Three constant arrays in `compute.ts` classify the 18 additive KPI fields:
+Three constant arrays in `compute.ts` classify the 15 additive KPI fields:
 
 | Array | Fields | Used by |
 |-------|--------|---------|
-| `ADDITIVE_KPI_KEYS` (18) | All KPI fields | Rollup summation, `recalcAll` full replacement |
-| `DURATION_KPI_KEYS` (10) | `runSeconds`, `downSeconds`, `plannedDownSeconds`, `unplannedDownSeconds`, `plannedProductionSeconds`, `idealCycleSeconds`, `totalCycleSeconds`, `elapsedPlannedProductionSeconds`, `elapsedExpectedCycles`, `elapsedExpectedItems` | `updateTimeBased` and `updateCountBased` Step 2 (partial recompute via `extractDurationKPIs`) |
-| `COUNT_KPI_KEYS` (8) | `totalCycles`, `goodCycles`, `badCycles`, `totalItems`, `goodItems`, `badItems`, `expectedCycles`, `expectedItems` | Type narrowing only; not used for write logic |
+| `ADDITIVE_KPI_KEYS` (15) | All writable KPI fields | Rollup summation, `recalcAll` full replacement |
+| `DURATION_KPI_KEYS` (7) | `runSeconds`, `downSeconds`, `plannedDownSeconds`, `unplannedDownSeconds`, `elapsedPlannedProductionSeconds`, `elapsedExpectedCycles`, `elapsedExpectedItems` | `updateTimeBased` and `updateCountBased` Step 2 (partial recompute via `extractDurationKPIs`) |
+| `COUNT_KPI_KEYS` (6) | `totalCycles`, `badCycles`, `totalItems`, `badItems`, `expectedCycles`, `expectedItems` | Type narrowing only; not used for write logic |
 
 **Non-additive field:** `currentStandardCycle` is excluded from all three
 arrays. In rollups it takes the latest sub-bucket's value (not summed).
@@ -339,11 +359,11 @@ The test scenario uses a single station. Workcenter/site entity rollups
 are verified to match the station (since there's only one), but
 multi-station summation is not tested.
 
-### BAD / DISCARD cycle status testing
-All test cycles are GOOD. The `goodCycles`/`badCycles` split and DISCARD
-handling (counted in total but neither good nor bad) are not exercised
-by the test. The computation logic in `compute.ts` handles all three
-statuses.
+### badItems testing
+All test cycles are GOOD and no dispositions are logged. `badItems`
+(driven by `ItemDispositionLog.quantity`, not cycle status) is not
+exercised by the test. `badCycles` is always written as 0 by current
+writers — badness is tracked per item via disposition logs.
 
 ### Planned downtime
 All test downtime is unplanned. `plannedDownSeconds` computation exists
@@ -382,5 +402,7 @@ in `compute.ts` but is not tested.
    its workcenter's `ShiftInstance` first, then falls back to site-level.
    This allows different production lines to run different shift schedules.
 
-8. **`goodCycles != totalCycles - badCycles`** because of the DISCARD
-   status. DISCARD cycles count in totals but not in good or bad.
+8. **`badCycles` is vestigial.** Current writers always set it to 0 —
+   badness is item-level via `ItemDispositionLog` (`badItems`). The
+   generated column `goodCycles = totalCycles - badCycles` therefore
+   equals `totalCycles` today. The column is kept for schema compat.
