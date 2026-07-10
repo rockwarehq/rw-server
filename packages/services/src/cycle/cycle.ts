@@ -1,17 +1,17 @@
-import crypto from "node:crypto";
 import prisma from "@rw/db";
 import { Prisma } from "@rw/db";
 import { inventory } from "../inventory/index.js";
 import { allocateInventory } from "../order/allocation.js";
 import {
+  acquireStationLock,
+  applyCycleCompleteTransition,
+  findOpenStateEntry,
   loadStationMetricContext,
   publishStationLastCycleMetricEvent,
   publishStationStatusEntityEvent,
   publishStationStatusMetricEvent,
   publishStationStatusReasonMetricEvent,
-  transitionToUp,
   type StationMetricContext,
-  type TransitionToUpOptions,
 } from "../facility/station/state.js";
 import { enqueueDetection, prepareDetection, type PreparedDetection } from "../facility/station/state-detection.js";
 import { batchedMetricsUpdate } from "../metrics/batcher.js";
@@ -38,9 +38,10 @@ export interface StartCycleInput {
 interface StrategyResult {
   cycle: { id: string; start: Date; end: Date | null };
   items: Array<{ id: string; productId: string }>;
+  /** Populated only when a state-log row actually closed (period model: most cycles close nothing). */
   closedEntry: { startTime: Date; endTime: Date; state: "UP" | "DOWN" } | null;
-  /** Status written on the new state-log row ("UP" or "SLOW"), or null when
-   * the strategy did not write a state transition (replayed paths). */
+  /** Open status after the cycle ("UP" or "SLOW"), or null when the
+   * strategy did not evaluate state (replayed paths). */
   newStatus: "UP" | "SLOW" | null;
   /** Status/reason changed vs the prior open row — gates the entity.changes publish. */
   statusChanged: boolean;
@@ -211,28 +212,24 @@ export async function complete(input: StartCycleInput) {
   }
 
   if (stationCtx) {
-    if (newStatus) {
-      // Publish live status so any DOWN→UP recovery (or UP→UP / UP→SLOW) flips
-      // immediately on connected clients.
+    // Period model: publish only on a real transition (SLOW→RUNNING,
+    // DOWN→RUNNING, slow fallback) — most cycles change nothing.
+    if (newStatus && statusChanged) {
       try {
         publishStationStatusMetricEvent(stationCtx, newStatus, timestamp);
       } catch (err) {
         console.error(`[cycle] publishStationStatusMetric failed for station ${stationId}:`, err);
       }
-      // A new state-log row opened on cycle complete always has no reason, so
-      // push null to clear any prior reason that applied to the closed DOWN row.
+      // A transition clears any reason carried by the closed DOWN row.
       try {
         publishStationStatusReasonMetricEvent(stationCtx, null, timestamp);
       } catch (err) {
         console.error(`[cycle] publishStationStatusReasonMetric failed for station ${stationId}:`, err);
       }
-      // Only on real change; includes statusReasonId since the new row cleared any reason.
-      if (statusChanged) {
-        try {
-          publishStationStatusEntityEvent(stationCtx, ["status", "statusReasonId"]);
-        } catch (err) {
-          console.error(`[cycle] publishStationStatusEntityEvent failed for station ${stationId}:`, err);
-        }
+      try {
+        publishStationStatusEntityEvent(stationCtx, ["status", "statusReasonId", "statusStartAt"]);
+      } catch (err) {
+        console.error(`[cycle] publishStationStatusEntityEvent failed for station ${stationId}:`, err);
       }
     }
 
@@ -330,26 +327,18 @@ async function completeImmediate(
 
     const row = cycleRows[0];
     const cycle = { id: row.cycle_id, start: row.cycle_start, end: row.cycle_end };
-    const closedEntry = row.state_id
-      ? // biome-ignore lint/style/noNonNullAssertion: LEFT JOIN co-nullability — when state_id is non-null, all state_* columns from the same row are non-null
-        { startTime: row.state_start!, endTime: timestamp, state: row.state_state! as "UP" | "DOWN" }
-      : null;
-
-    // ── Close open state + open new state ──
-    await tx.$executeRaw`
-      UPDATE "StationStateLog"
-      SET "endTime" = ${timestamp}, "updatedAt" = NOW()
-      WHERE "stationId" = ${stationId} AND "endTime" IS NULL AND "deletedAt" IS NULL
-    `;
-
-    const blockId = row.state_state === "UP" && row.state_block_id ? row.state_block_id : crypto.randomUUID();
-
-    const newStateRows = await tx.$queryRaw<Array<{ id: string }>>`
-      INSERT INTO "StationStateLog" (id, "stationId", "startTime", state, status, "blockId", "jobBlobId", "createdAt", "updatedAt")
-      VALUES (gen_random_uuid(), ${stationId}, ${timestamp}, 'UP', 'UP', ${blockId}, ${blobConnects.jobBlobId}, NOW(), NOW())
-      RETURNING id
-    `;
-    const newStateId = newStateRows[0].id;
+    // LEFT JOIN co-nullability: when state_id is non-null, all state_* columns are too.
+    const openRow =
+      row.state_id && row.state_start && row.state_state && row.state_block_id
+        ? {
+            id: row.state_id,
+            startTime: row.state_start,
+            state: row.state_state as "UP" | "DOWN",
+            status: row.state_status as "FAST" | "SLOW" | "UP" | "DOWN" | null,
+            statusReasonId: row.state_status_reason_id,
+            blockId: row.state_block_id,
+          }
+        : null;
 
     // ── Batch M2M inserts ──
     if (blobConnects.toolBlobs && blobConnects.toolBlobs.connect.length > 0) {
@@ -365,19 +354,20 @@ async function completeImmediate(
       await tx.$executeRaw`INSERT INTO "_CycleToJobTool" ("A", "B") VALUES ${values} ON CONFLICT DO NOTHING`;
     }
 
-    // Upgrade to SLOW if the just-completed cycle exceeded the slow threshold.
-    // This makes SLOW persist across cycle completions — the dashboard stays on
-    // SLOW as long as the station keeps running slow, instead of flickering back
-    // to UP for a split second between every slow cycle.
+    // Period model: the state log only changes on a real transition
+    // (SLOW→RUNNING, DOWN→RUNNING, slow fallback) — most cycles write nothing.
     const cycleDurationSeconds = (timestamp.getTime() - cycle.start.getTime()) / 1000;
     const isSlow =
       cycleDurationSeconds > 0 &&
       slowThresholdSeconds != null &&
       slowThresholdSeconds > 0 &&
       cycleDurationSeconds > slowThresholdSeconds;
-    if (isSlow) {
-      await tx.$executeRaw`UPDATE "StationStateLog" SET status = 'SLOW', "updatedAt" = NOW() WHERE id = ${newStateId}::uuid`;
-    }
+    const transition = await applyCycleCompleteTransition(tx, stationId, timestamp, {
+      cycleWasSlow: isSlow,
+      cycleStart: cycle.start,
+      jobBlobId: blobConnects.jobBlobId,
+      openRow,
+    });
 
     const items = await inventory.createFromCycle(tx, cycle.id, jobId);
 
@@ -388,12 +378,6 @@ async function completeImmediate(
     for (const { id, productId } of items) {
       await allocateInventory(tx, siteId, productId, id);
     }
-
-    const newStatus = isSlow ? ("SLOW" as const) : ("UP" as const);
-
-    // The new row always clears statusReasonId, so a prior reason also counts as a change.
-    const prevStatus = row.state_id ? (row.state_status ?? row.state_state) : null;
-    const statusChanged = prevStatus !== newStatus || row.state_status_reason_id != null;
 
     // Live-publish & detection-schedule data — read inside the tx so the
     // post-commit fire-and-forget block holds no DB connection.
@@ -414,7 +398,15 @@ async function completeImmediate(
       totalCycleIncrement,
     );
 
-    return { cycle, items, closedEntry, newStatus, statusChanged, stationCtx, detectionPrepared };
+    return {
+      cycle,
+      items,
+      closedEntry: transition.closedEntry,
+      newStatus: transition.newStatus,
+      statusChanged: transition.statusChanged,
+      stationCtx,
+      detectionPrepared,
+    };
   });
 }
 
@@ -467,13 +459,32 @@ async function completeOpenClose(
       }
     }
 
-    const stateOptions: TransitionToUpOptions = {
-      cycleDurationSeconds:
-        openCycles.length > 0 ? (timestamp.getTime() - openCycles[0].start.getTime()) / 1000 : undefined,
-      slowThresholdSeconds,
+    // Serialize with other state transitions (the lock previously came from transitionToUp).
+    await acquireStationLock(tx, stationId);
+    const openEntry = await findOpenStateEntry(tx, stationId);
+    const cycleDurationSeconds =
+      openCycles.length > 0 ? (timestamp.getTime() - openCycles[0].start.getTime()) / 1000 : null;
+    const isSlow =
+      cycleDurationSeconds != null &&
+      cycleDurationSeconds > 0 &&
+      slowThresholdSeconds != null &&
+      slowThresholdSeconds > 0 &&
+      cycleDurationSeconds > slowThresholdSeconds;
+    const transition = await applyCycleCompleteTransition(tx, stationId, timestamp, {
+      cycleWasSlow: isSlow,
+      cycleStart: openCycles[0]?.start ?? timestamp,
       jobBlobId: blobConnects.jobBlobId,
-    };
-    const { entry, closedEntry } = await transitionToUp(tx, stationId, timestamp, stateOptions);
+      openRow: openEntry
+        ? {
+            id: openEntry.id,
+            startTime: openEntry.startTime,
+            state: openEntry.state,
+            status: openEntry.status,
+            statusReasonId: openEntry.statusReasonId,
+            blockId: openEntry.blockId,
+          }
+        : null,
+    });
 
     const newCycle = await tx.cycle.create({
       data: {
@@ -499,11 +510,15 @@ async function completeOpenClose(
     // batchDurationRollup on the 5s combined tick, not this per-cycle bump.
     await incrementHourCounts(tx, stationId, siteId, timestamp, 1, items.length, idealCycleIncrement, 0);
 
-    const newStatus = entry.status === "SLOW" ? ("SLOW" as const) : ("UP" as const);
-    // The new row always clears statusReasonId, so a prior reason also counts as a change.
-    const statusChanged =
-      !closedEntry || (closedEntry.status ?? closedEntry.state) !== newStatus || closedEntry.statusReasonId != null;
-    return { cycle: newCycle, items, closedEntry, newStatus, statusChanged, stationCtx, detectionPrepared };
+    return {
+      cycle: newCycle,
+      items,
+      closedEntry: transition.closedEntry,
+      newStatus: transition.newStatus,
+      statusChanged: transition.statusChanged,
+      stationCtx,
+      detectionPrepared,
+    };
   });
 }
 

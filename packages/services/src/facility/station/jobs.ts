@@ -2,7 +2,11 @@ import prisma from "@rw/db";
 import { recalcAll } from "../../metrics/recalc.js";
 import { ensureBuckets } from "../../metrics/bucket.js";
 import { jobEntityId } from "../../metrics/cascade.js";
-import { publishStationCurrentJobMetric, publishStationStandardCycleMetric } from "./state.js";
+import {
+  publishStationCurrentJobMetric,
+  publishStationStandardCycleMetric,
+  splitOpenStateEntryForJobChange,
+} from "./state.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 
@@ -128,6 +132,9 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
         },
       });
     }
+
+    // Keep state-log entries job-homogeneous under the period model.
+    await splitOpenStateEntryForJobChange(tx, stationId, timestamp, job?.currentBlobId ?? null);
 
     return { station, previousJobId, openLogs };
   });
