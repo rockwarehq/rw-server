@@ -1,0 +1,50 @@
+export const metadata = {
+  title: '0005 – Station Status: Running, Slow, and Down',
+  description:
+    'ADR 0005: what the three station statuses mean, when they change, and why history keeps one entry per status period instead of one per cycle.',
+}
+
+# 0005 – Station Status: Running, Slow, and Down
+
+- **Status:** Accepted
+- **Date:** 2026-07-10
+- **Deciders:** Michael St John
+
+## Context
+
+Every time a machine finishes a part, it reports a "cycle" to us. From those cycles we work out whether the machine is doing fine, struggling, or stopped — and we show that on dashboards and keep a history of it.
+
+The old way kept a history entry for **every single cycle**. A machine making a part every 20 seconds wrote thousands of near-identical "still running" entries a day (over two million entries on the dev system), and the status on screen could flicker between Running and Slow with every part. The history told you what every cycle did, but not the thing people actually ask: *"how long has this machine been down?"* or *"when did it start running slow?"*
+
+## Decision
+
+A station is always in exactly one of three statuses, and we keep **one history entry per stretch of time in a status** — a new entry is written only when the status actually changes.
+
+**Running** — the machine finished a cycle recently and is keeping pace. As long as parts keep coming out on time, nothing changes: no new history entries, no dashboard updates.
+
+**Slow** — the machine is still making parts, but the current one is taking too long. The moment a cycle runs past its expected time plus the slow allowance (for example, 10% over), the station flips to Slow — we don't wait for the part to finish. Slow is **sticky**: finishing a slow part does not flip the station back to Running for a split second. It stays Slow until a part finishes **on pace**. This is deliberate — a machine limping through slow cycles reads as "Slow" on the wall, not as a strobe light.
+
+**Down** — no part has come out for too long (expected cycle time plus the downtime allowance, for example 120 seconds). Two things matter here:
+
+- Downtime is **backdated to the last finished part**. If the machine stopped at 2:00 and we noticed at 2:02, the record says the downtime started at 2:00 — when it actually stopped producing, not when our timer went off. Any Slow period in between is folded into the downtime.
+- **Any finished part ends the downtime** and the station goes back to Running — never straight to Slow, even though the first part after a stoppage technically "took" the whole stoppage to arrive.
+
+People can attach a **reason** to a downtime (planned maintenance, no material, …) and can **split** one long downtime into parts so different stretches get different reasons. A reason applied to a downtime covers the whole contiguous stoppage, including split pieces.
+
+One more rule keeps the history honest: when the station's **job changes**, the current entry is cut at that moment and a fresh one continues with the new job — so every history entry belongs to exactly one status *and* one job.
+
+> **Note: "Fast" is not used.** A fourth status name, Fast, exists in the data model (the idea being "running quicker than expected"), but we decided not to implement it. Nothing ever sets it, dashboards never show it, and anything reading status data can treat a Fast value as Running if one ever appears.
+
+## Consequences
+
+- History reads the way people think: "Running 6:00–9:14, Down 9:14–9:40 (no material), Running since 9:40." "Down since" and "status started at" are just the start of the current entry — no reconstruction needed.
+- Dashboards stop flickering: a status update goes out only when the status genuinely changes.
+- The history table stops growing by thousands of rows per station per day; entries now appear only at real transitions.
+- Status can only change at a handful of moments: a part finishes, the slow timer fires, the down timer fires, a job changes, or someone edits a downtime. If the detection timers aren't running, stations silently stick at their last status — keeping those timers healthy is now the thing to watch (see the queue-initialization incident of 2026-07-09).
+- Old per-cycle history entries remain valid — everything that reads history treats entries as time spans, so old and new styles coexist without a migration.
+
+## Alternatives Considered
+
+- **Keep one entry per cycle** — the status quo. Rejected: millions of redundant entries, flickering dashboards, and "how long has it been down?" required stitching entries back together.
+- **Let Slow flip back to Running after every slow cycle** — the old behavior, patched over per-cycle. Rejected: it's exactly the flapping operators complained about.
+- **Start downtime when the timer notices, not when the machine stopped** — simpler to implement. Rejected: it systematically undercounts downtime by the detection delay, and the numbers feed OEE.

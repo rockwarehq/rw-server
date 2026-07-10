@@ -286,6 +286,10 @@ export const internalNavigation: Array<NavGroup> = [
         title: '0004 – App-Owned Composition Roots',
         href: '/internal/adrs/0004-app-owned-composition-roots',
       },
+      {
+        title: '0005 – Station Status: Running, Slow, Down',
+        href: '/internal/adrs/0005-station-status-running-slow-down',
+      },
     ],
   },
   {
