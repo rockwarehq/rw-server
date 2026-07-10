@@ -6,11 +6,13 @@
 //   Just marks dirty buckets via Redis. Zero cascade work.
 //
 // Combined tick phases (worker process, every 5s):
-//   1. batchCountRollup    — recompute count KPIs from Cycle table
-//   2. batchDurationRollup — compute duration KPIs from StationStateLog
-//   3. cascadeStationShiftDay — re-sum STATION HOUR → SHIFT/DAY
-//   4. cascadeParentRollup — sum STATION → WORKCENTER/SITE
-//   5. cascadeJobRollup    — recompute JOB-entity buckets
+//   1. batchDurationRollup        — duration KPIs from StationStateLog
+//   2. cascadeJobRollup           — recompute JOB-entity buckets
+//   3. syncExpectedCyclesFromJobs — job-clipped expected* back onto STATION HOUR
+//   4. cascadeStationShiftDay     — re-sum STATION HOUR → SHIFT/DAY
+//   5. cascadeParentRollup        — sum STATION → WORKCENTER/SITE
+// (Counts are NOT recomputed here — they arrive via the per-cycle
+//  incrementHourCounts increment in cycle.ts.)
 //
 // Usage:
 //   // Server process (called from cycle.ts):

@@ -1,0 +1,145 @@
+export const metadata = {
+  title: '0006 – Metric Bucket Fields and OEE Calculation',
+  description:
+    'ADR 0006: what every MetricBucket KPI field means, exactly how each is calculated, which code path writes it, and the OEE formulas derived from them.',
+}
+
+# 0006 – Metric Bucket Fields and OEE Calculation
+
+- **Status:** Accepted
+- **Date:** 2026-07-10
+- **Deciders:** Michael St John
+
+## Context
+
+Every KPI we show — cycle counts, downtime, availability, OEE — comes from one table: `MetricBucket` (and its archive twin `MetricBucketLog`). A bucket is one entity (station, workcenter, site, or job) over one time window (hour, shift, or day). Several code paths write these rows: a per-cycle increment, a 5-second worker tick, state-transition recomputes, and a full recalculation on job change. Without a single written definition of each field, "why is OEE X?" requires reading four files of SQL.
+
+This ADR is the definition of record for every field: what it means, how it is calculated, and who writes it. The OEE ratio formulas live as PostgreSQL generated columns (migration `20260325000000_oee_zero_not_null`) mirrored in TypeScript in `packages/metrics/src/index.ts` — if those change, this document gets superseded.
+
+## Decision
+
+### Bucket structure
+
+- **HOUR + STATION is the base.** Only hour buckets are computed from raw events (`Cycle`, `StationStateLog`, `ItemDispositionLog`). Everything else is a sum of hour buckets.
+- **Hours are shift-aligned, not clock-aligned.** The hour grid ticks from the first shift start of the business date, so buckets at shift boundaries are partial (e.g. 1800 s). With no shift schedule, hours are clock-aligned.
+- **SHIFT** = sum of the station's HOUR buckets inside the `ShiftInstance` window. **DAY** = sum of HOUR buckets in the site-local calendar day (local midnight to midnight — *not* the business date; a shift crossing midnight splits across two DAY buckets).
+- **WORKCENTER / SITE** = sum of descendant stations' buckets at each granularity.
+- **JOB** buckets reuse the station's events but clip everything to the job's active period (`StationJobLog` start/end) within each hour. JOB rolls up HOUR → SHIFT/DAY only, no entity rollup.
+- **All rollups are idempotent replacements** — they re-sum and overwrite, never increment, so re-running is always safe and the system self-heals.
+
+### Who writes what
+
+| Writer | When | Fields written |
+| --- | --- | --- |
+| `incrementHourCounts` (cycle.ts) | Every cycle completion, in the cycle transaction | `totalCycles` +1, `totalItems` +N, `idealCycleSeconds` +std, `totalCycleSeconds` +duration — STATION HOUR only |
+| `updateDispositionBadItems` (recalc.ts) | Every scrap/disposition log | `badItems` +quantity, then rollup |
+| Combined 5 s tick (batcher.ts) | Every 5 s for stations with an open state-log entry | Durations + expected on STATION HOUR (`batchDurationRollup`), JOB HOUR/SHIFT (`cascadeJobRollup`), job-accurate expected synced back to STATION (`syncExpectedCyclesFromJobs`), HOUR→SHIFT/DAY (`cascadeStationShiftDay`), STATION→WORKCENTER/SITE (`cascadeParentRollup`) |
+| `updateTimeBased` (recalc.ts) | State transitions, downtime edits, 60 s heartbeat | Duration KPIs recomputed from state logs, then rollup |
+| `recalcAll` (recalc.ts) | Job change (closed job's full range), cycle replay | Every additive field replaced from raw events, then rollup |
+
+### Field definitions
+
+All duration fields are integer seconds. All counting fields are integers. A cycle belongs to the bucket containing its **end** timestamp. State-log entries are clipped to the bucket window; open entries (no `endTime`) are clipped to *now*.
+
+#### Counting
+
+| Field | Definition |
+| --- | --- |
+| `totalCycles` | Number of cycles whose `end` falls in `[startTime, startTime + durationSeconds)`. Open (unfinished) cycles are not counted. |
+| `badCycles` | **Always 0 from current writers.** Badness is tracked at item level via disposition logs, not cycle status. The column is kept for schema compatibility. |
+| `goodCycles` | *Generated:* `totalCycles - badCycles`. With `badCycles` always 0, this equals `totalCycles`. |
+| `totalItems` | Count of `InventoryItem` rows created by the cycles counted in `totalCycles` (a cycle can produce multiple items — `itemsPerCycle`). |
+| `badItems` | Sum of `ItemDispositionLog.quantity` for the station where the log's `createdAt` falls in the bucket window (soft-deleted logs excluded). Attribution is by **when the scrap was logged**, not when the item was produced. For JOB buckets the disposition must resolve to the job, via `cycleId → Cycle → JobVersion.jobId`, falling back to `jobProductVersionId → JobProduct.jobId`; unresolvable dispositions count at station level only. |
+| `goodItems` | *Generated:* `totalItems - badItems`. |
+
+#### Durations (from StationStateLog)
+
+Each state-log period overlapping the bucket is clipped to the bucket bounds (and to the job window for JOB buckets); milliseconds are summed and rounded once at the end.
+
+| Field | Definition |
+| --- | --- |
+| `runSeconds` | Time in state `UP` (this includes *Slow* — slow is a status within UP, not downtime). |
+| `downSeconds` | Time in state `DOWN`. |
+| `plannedDownSeconds` | Subset of `downSeconds` where the entry's `StatusReason.isPlannedDown = true`. |
+| `unplannedDownSeconds` | Subset of `downSeconds` with no reason or `isPlannedDown` false/null. Unattributed downtime is unplanned: `plannedDownSeconds + unplannedDownSeconds = downSeconds`. |
+| `plannedProductionSeconds` | *Generated:* `durationSeconds - plannedDownSeconds`. The **full-window** production target — how much production time this bucket holds once planned stops are removed, regardless of how much of the bucket has elapsed. |
+| `elapsedPlannedProductionSeconds` | `runSeconds + unplannedDownSeconds`. The production time that has actually **elapsed so far**, derived from the same state rows as `runSeconds` — which guarantees `availability <= 1.0` and makes in-progress buckets show live OEE instead of a number that climbs toward its final value as the hour fills in. Time not covered by any state log counts as neither run nor down. |
+
+#### Time earned (from cycles)
+
+| Field | Definition |
+| --- | --- |
+| `idealCycleSeconds` | Sum over completed cycles of the job's **standard cycle time** (from the cycle's `JobVersion.standardCycle` snapshot; JOB buckets use the job's snapshot uniformly). This is "earned time" — what the cycles *should* have taken — and is the numerator of Performance. |
+| `totalCycleSeconds` | Sum of actual cycle durations (`end - start`), clipped to the bucket window. Diagnostic — not used in any OEE ratio. |
+| `currentStandardCycle` | Display only, **not additive**. The standard cycle of the station's latest job. Time rollups take the latest sub-bucket's non-null value; WORKCENTER/SITE rollups set it NULL. |
+
+#### Expected production
+
+`standardCycle` comes from the active job; `itemsPerCycle` is the summed quantity of the job's active `JobProductVersion`s (fallback: derived from actual `totalItems / totalCycles`, else 1).
+
+| Field | Definition |
+| --- | --- |
+| `expectedCycles` | `floor(plannedProductionSeconds / standardCycle)` — cycles the **full window** should yield. On the live tick this is computed per job clipped to the job's active window (JOB buckets), then summed back onto the station hour, so mid-hour job changes are handled correctly. |
+| `expectedItems` | `expectedCycles * itemsPerCycle`. |
+| `elapsedExpectedCycles` | `floor(elapsedPlannedProductionSeconds / standardCycle)` — cycles expected **so far**. This is what live "ahead/behind" comparisons should use. |
+| `elapsedExpectedItems` | `elapsedExpectedCycles * itemsPerCycle`. |
+
+#### OEE ratios (PostgreSQL generated columns — never written by application code)
+
+All four are NULL when `elapsedPlannedProductionSeconds = 0` — the bucket had no production window (e.g. entirely planned downtime, or nothing has elapsed yet). NULL means "not expected to produce"; 0 means "expected to produce, produced nothing."
+
+| Field | Formula | Zero case |
+| --- | --- | --- |
+| `availability` | `runSeconds / elapsedPlannedProductionSeconds` | naturally 0 when `runSeconds = 0` |
+| `performance` | `idealCycleSeconds / runSeconds` | 0 when `runSeconds = 0` |
+| `quality` | `(totalItems - badItems) / totalItems` | 0 when `totalItems = 0` |
+| `oee` | `(idealCycleSeconds * (totalItems - badItems)) / (elapsedPlannedProductionSeconds * totalItems)` | 0 when `totalItems = 0` |
+
+The `oee` formula is the algebraic product `availability * performance * quality` — the `runSeconds` terms cancel — computed directly so the stored value is exact rather than a product of three rounded decimals.
+
+Because rollups sum the **inputs** and the ratios regenerate on every write, a SHIFT bucket's OEE is the correctly time-weighted aggregate of its hours — never an average of hourly percentages.
+
+### Worked example
+
+One shift-aligned hour (3600 s), standard cycle 30 s, 2 items per cycle. The station ran 40 minutes, sat in unplanned downtime 15 minutes, planned maintenance 5 minutes; 70 cycles completed, 140 items made, 6 scrapped:
+
+- `runSeconds` 2400, `unplannedDownSeconds` 900, `plannedDownSeconds` 300, `downSeconds` 1200
+- `plannedProductionSeconds` = 3600 − 300 = 3300; `elapsedPlannedProductionSeconds` = 2400 + 900 = 3300 (hour complete, so they agree)
+- `expectedCycles` = floor(3300 / 30) = 110; `expectedItems` = 220
+- `idealCycleSeconds` = 70 × 30 = 2100
+- `availability` = 2400 / 3300 ≈ **0.727**
+- `performance` = 2100 / 2400 = **0.875**
+- `quality` = (140 − 6) / 140 ≈ **0.957**
+- `oee` = 2100 × 134 / (3300 × 140) ≈ **0.609** (= 0.727 × 0.875 × 0.957)
+
+### Known caveats
+
+These are accepted behaviors, documented so nobody rediscovers them as bugs:
+
+- **`badItems` is bucketed by disposition time, not production time.** Scrapping at 15:10 a part made at 14:50 puts the `badItems` in the 15:00 bucket. In that hour `badItems` can exceed `totalItems`, making `quality` (and `oee`) **negative** for the hour. It washes out at shift/day level as long as scrap is logged within the same shift/day.
+- **`performance` is uncapped.** Cycles running faster than standard push `performance` (and `oee`) above 1.0. We show the true number rather than clamping.
+- **Expected-cycle flooring quantizes per hour.** SHIFT `expectedCycles` is the sum of per-hour floors, which can undercount by up to ~1 cycle per hour versus flooring at shift level.
+- **`idealCycleSeconds` rounding differs slightly by writer.** The per-cycle increment rounds the standard cycle per cycle; recomputes sum floats and round once. A fractional standard cycle (e.g. 22.5 s) drifts a few seconds between live values and a later `recalcAll`.
+- **State-log gaps are invisible.** Time not covered by any state-log period is neither run nor down; availability simply ignores it.
+
+### Flagged for review
+
+Found while writing this ADR (2026-07-10). None of these change numbers on dashboards today, but each needs a decision:
+
+1. **`batchCountRollup` (cascade.ts) is dead code with contradictory semantics.** Nothing calls it — the tick starts at `batchDurationRollup`; counts come from the per-cycle `incrementHourCounts`. If ever wired back in, it would write `badCycles = COUNT(cycleStatus != 'GOOD')` and `badItems` from cycle status, clobbering the disposition-based `badItems` and the `badCycles = 0` convention above. **Proposed: delete it.**
+2. **Negative quality has no clamp.** The `badItems`-by-disposition-time caveat above means an hour bucket's `quality`/`oee` generated columns can go negative. **Decide: clamp at 0 in the generated column, clamp in display layers, or accept as-is.**
+3. **`syncExpectedCyclesFromJobs` zeroes `expected*` when a station has no JOB HOUR buckets.** Its aggregate always returns one row (zeros when nothing matches), so each tick overwrites what `batchDurationRollup` just wrote on the STATION HOUR bucket. Harmless while every cycling station always has a `StationJobLog` row; silent clobber otherwise. **Proposed: skip the UPDATE when no JOB rows matched.**
+4. **`idealCycleSeconds` rounding differs by writer.** The per-cycle increment rounds the standard cycle per cycle (`Math.round` in cycle.ts); `computeBucketFromEvents` sums floats and rounds once; `cascadeJobRollup` rounds per cycle in SQL. A fractional standard cycle (e.g. 22.5 s) drifts a few seconds between the live value and a later `recalcAll`, and keeps skip-unchanged checks from ever matching. **Proposed: standardize on sum-then-round everywhere.**
+5. **`performance` is uncapped** (also listed under caveats). Currently treated as a deliberate design choice — revisit only if >100% values confuse users. Display layers may clamp.
+
+## Consequences
+
+- There is now one place to answer "how is this number computed" without reading the SQL. Changes to any formula must supersede this ADR.
+- The generated columns guarantee the ratios can never disagree with their inputs, on either the live or archive table, no matter which writer touched the row.
+- Anything comparing actual to expected in real time must use the `elapsed*` fields; the full-window fields answer "what should this whole hour/shift produce."
+
+## Alternatives Considered
+
+- **Compute ratios in application code** and store them. Rejected: five writers would each need to get it right; generated columns make wrong ratios impossible.
+- **Cap performance/OEE at 1.0 in the column.** Rejected for now: clamping hides real signal (standards set too loose); display layers can clamp if they choose.
+- **Attribute `badItems` to the production bucket** (via the disposed item's cycle). Deferred: dispositions can lack a cycle link (manual scrap), and re-opening old buckets on late scrap entries complicates archival. The shift-level wash-out is acceptable today.

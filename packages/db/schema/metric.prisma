@@ -30,8 +30,8 @@ enum BucketGranularity {
 /// |--------------------------|--------------------------------------------------------------------------------|
 /// | totalCycles              | Total completed cycles in this bucket                                          |
 /// | goodCycles               | Generated: totalCycles - badCycles                                             |
-/// | badCycles                | Cycles with status BAD                                                         |
-/// | badItems                 | Items produced by BAD cycles                                                   |
+/// | badCycles                | Always 0 from current writers (badness is item-level); kept for compat        |
+/// | badItems                 | Sum of ItemDispositionLog.quantity with createdAt in this bucket              |
 /// | expectedCycles           | How many cycles should complete in the full bucket: floor(pps / standardCycle) |
 /// | expectedItems            | expectedCycles * items-per-cycle                                               |
 /// | downSeconds              | Total seconds the station was in DOWN state                                    |

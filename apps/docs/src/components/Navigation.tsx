@@ -290,6 +290,10 @@ export const internalNavigation: Array<NavGroup> = [
         title: '0005 – Station Status: Running, Slow, Down',
         href: '/internal/adrs/0005-station-status-running-slow-down',
       },
+      {
+        title: '0006 – Metric Bucket Fields & OEE',
+        href: '/internal/adrs/0006-metric-bucket-field-definitions',
+      },
     ],
   },
   {
