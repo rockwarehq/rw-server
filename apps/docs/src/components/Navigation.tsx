@@ -294,6 +294,10 @@ export const internalNavigation: Array<NavGroup> = [
         title: '0006 – Metric Bucket Fields & OEE',
         href: '/internal/adrs/0006-metric-bucket-field-definitions',
       },
+      {
+        title: '0007 – MES History Correctness Defaults',
+        href: '/internal/adrs/0007-mes-history-correctness-defaults',
+      },
     ],
   },
   {
