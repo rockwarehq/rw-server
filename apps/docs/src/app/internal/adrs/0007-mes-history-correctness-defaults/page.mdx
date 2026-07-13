@@ -1,0 +1,92 @@
+export const metadata = {
+  title: '0007 – MES History Correctness Defaults',
+  description:
+    'ADR 0007: five product-default decisions that unblock the historical-data correctness work — soft-delete history visibility, Cycle/InventoryItem soft-delete story, Station delete semantics, negative quality clamping, and itemsPerCycle snapshotting.',
+}
+
+# 0007 – MES History Correctness Defaults
+
+- **Status:** Accepted
+- **Date:** 2026-07-12
+- **Deciders:** Michael Lindenau
+
+## Context
+
+The 2026-07 review of cycle capture, historical tracking, and downtime/OEE reporting
+(see `ROADMAP.md`) surfaced a set of correctness fixes that were blocked not on code
+but on five unanswered product questions. The soft-delete audit found the codebase in
+an accidental-mixed state — some queries filter `deletedAt`, some don't, and there is
+no global middleware, so every query decides for itself. The metrics review (ADR 0006
+"Flagged for review") left the negative-quality clamp and live `itemsPerCycle`
+resolution as open calls. Leaving these undecided would stall the Phase 1 correctness
+work, so this ADR records the defaults we proceed on. Each is reversible by a
+superseding ADR; none forecloses a different product decision later.
+
+## Decision
+
+1. **History remains visible for soft-deleted entities.** Manufacturing records are
+   an audit trail of what physically happened: cycles, downtime, scrap, and shift
+   recaps keep showing rows that reference soft-deleted stations, jobs, products,
+   and reasons. Soft-deleted entities are filtered only from *live* surfaces —
+   pickers, assignment lists, current-state views. Consequently the unfiltered
+   Station scope queries in `apps/api/src/rpc/logs.ts` and `shift-recap.ts` are
+   correct as written and are now intentional, not accidental.
+
+2. **Cycle and InventoryItem keep their soft-delete capability, and the missing
+   filters get added now.** Nothing soft-deletes these rows today, but the columns
+   stay (e.g. for a future phantom-cycle deletion feature), and the known unfiltered
+   query sites (metrics cascade cycle stats, item counts, previous-cycle and
+   open-cycle lookups) gain `deletedAt IS NULL` preemptively — the failure mode if
+   soft-deletion ever lands without them is silent JOB-vs-STATION bucket divergence
+   on every 5-second tick.
+
+3. **Station deletion becomes a soft delete.** `station.remove()` hard-deletes today,
+   which would orphan Cycle and StationStateLog history; about half the queries
+   already filter `Station.deletedAt`. Soft delete is the smaller diff and the only
+   option consistent with decision 1. The metrics tick discovery and the operator
+   logon check gain the filter.
+
+4. **Quality and OEE are clamped at 0 at read and archive time; raw counters stay
+   unclamped.** `badItems` is attributed by disposition time, not production time, so
+   an hour can record more scrap than production and push the generated `quality`
+   (and `oee`) negative. The negative value is a bucketing artifact, not information.
+   We clamp where ratios are served and frozen, and keep the underlying counters
+   truthful so shift/day aggregation still washes out correctly.
+
+5. **`itemsPerCycle` is snapshotted onto `StationJobLog` at assignment**, the same
+   pattern as `standardCycle`, and all recompute paths read the snapshot. Live
+   resolution from `JobProduct.currentVersionId` means recomputing a historical
+   window values `expectedItems` with *today's* quantities — the same bug class as
+   the archive expected\*-clobber fixed in `ae22d84`. Historical KPIs must not change
+   when someone edits a job's current product quantities.
+
+## Consequences
+
+- The Phase 1 roadmap items proceed without waiting on further product input; this
+  document is the reference when a reviewer asks "why does this query (not) filter
+  `deletedAt`?".
+- A convention now exists to enforce: every query on a model with `deletedAt` either
+  filters it or is a history/audit read (decision 1). Worth a CLAUDE.md note or lint
+  since there is no middleware safety net.
+- Clamping at read/archive means live `MetricBucket` rows can still hold negative
+  generated ratios; anything reading the table directly (rather than through the API)
+  must be aware.
+- Snapshotting `itemsPerCycle` adds a column and a backfill for open StationJobLog
+  rows, and mid-run product-quantity changes only take effect at the next job
+  (re)assignment boundary — which is the desired semantics.
+
+## Alternatives Considered
+
+- **Hide history for soft-deleted entities** — rejected: an MES report that loses
+  downtime or production history when someone deletes a station is worse than one
+  that shows a tombstoned name.
+- **Drop the `deletedAt` columns from Cycle/InventoryItem** — rejected: cheap to keep
+  the capability with filters in place; dropping forecloses phantom-cycle deletion.
+- **Keep Station hard-delete and drop its `deletedAt`** — rejected: hard delete
+  destroys referential history and contradicts decision 1.
+- **Clamp quality in the generated columns themselves** — rejected for now: keeping
+  stored ratios truthful preserves the signal for diagnosing attribution issues;
+  clamping is a presentation concern.
+- **Keep resolving `itemsPerCycle` live and document the caveat** — rejected: it
+  makes closed historical buckets mutable via unrelated edits, which contradicts the
+  versioning model used everywhere else.
