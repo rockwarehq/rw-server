@@ -1,0 +1,21 @@
+export const metadata = {
+  title: 'Code Reviews',
+  description: 'Deep subsystem code reviews: verified findings, evidence, and remediation state.',
+}
+
+# Code Reviews
+
+Deep, adversarially-verified reviews of critical subsystems. Unlike an ADR (which records a decision), a review records **findings at a point in time**: what was checked, what was confirmed with evidence, what was ruled out, and what was deliberately deferred. {{ className: 'lead' }}
+
+## Conventions
+
+- Pages live at `apps/docs/src/app/internal/reviews/YYYY-MM-topic/page.mdx`.
+- Every finding carries `file:line` evidence and a verdict: **Confirmed**, **Rejected** (checked and disproven — kept so nobody re-litigates it), or **Deferred** (real, deliberately not fixed yet, with a pointer to the tracking issue).
+- Line numbers are accurate as of the review's stated commit and will drift — the evidence text is written so the site can be re-found by searching, not just by line.
+- When findings are fixed, annotate the finding with the fixing commit/PR rather than deleting it.
+
+## Log
+
+| Review | Scope | Date |
+| --- | --- | --- |
+| [Cycle subsystem](/internal/reviews/2026-07-cycle-subsystem) | `packages/services/src/cycle`, imm-events consumer, cycle-adjacent state logic | 2026-07-12 |
