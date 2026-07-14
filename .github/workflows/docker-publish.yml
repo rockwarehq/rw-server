@@ -1,0 +1,58 @@
+name: Publish Docker Images
+
+# Publishes the three runtime images the local/on-prem provisioner pulls:
+#   ghcr.io/rockwarehq/rw-server-api
+#   ghcr.io/rockwarehq/rw-server-workers
+#   ghcr.io/rockwarehq/rw-server-livestore
+# Multi-arch (amd64 + arm64). Fly deploys are unaffected — they build their
+# own images via fly-deploy.yml.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [api, workers, livestore]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set VERSION (git short sha)
+        run: echo "VERSION=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/rw-server-${{ matrix.target }}:latest
+            ghcr.io/${{ github.repository_owner }}/rw-server-${{ matrix.target }}:${{ env.VERSION }}
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
