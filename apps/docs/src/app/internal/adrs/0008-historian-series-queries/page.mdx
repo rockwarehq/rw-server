@@ -1,0 +1,334 @@
+export const metadata = {
+  title: '0008 – Historian Series Queries',
+  description:
+    'ADR 0008: a general range/series query interface over IMM history — an initial range query hands back a cursor that supports poll-based delta requery and a live delta subscription, backed by DB watermark polling with no event bus.',
+}
+
+# 0008 – Historian Series Queries
+
+- **Status:** Proposed
+- **Date:** 2026-07-13
+- **Deciders:** Michael Lindenau
+
+## Context
+
+Dashboards and reports need historical range queries with continuation: "station
+status for the last 8 hours, then keep me updated on changes to that range";
+"hourly production counts for the last X hours, then push the next hour as it
+accrues"; "the current shift's production by hour". Today the codebase has two
+partial answers and no general one:
+
+- **livestore** is a live-only reactive graph — latest value per property, no
+  history, no range queries. It is explicitly not the owner of this problem.
+- **Offset/limit searches** (`logs.cycleSearch`, `logs.downtimeLogSearch`,
+  `shiftRecap.metricBucketLogList`, `metrics.getBuckets`) answer the initial
+  range question but offer no way to ask "what changed since my last query" —
+  callers re-fetch the whole window or diff client-side.
+
+The missing piece is a **historian**: a query surface owned by the IMM domain
+where an initial range query returns a snapshot plus a cursor, and the caller
+then either re-queries with the cursor (poll) or subscribes to a delta stream
+(push) — with identical semantics either way, so clients can switch or
+reconnect losslessly.
+
+Two facts about the data make this harder than "return new rows":
+
+1. **Rows mutate.** A live hour bucket accrues on every rollup tick; archived
+   buckets are retroactively corrected (`packages/services/src/metrics/recalc.ts`
+   updates `MetricBucketLog` when the live row is gone); downtime stretches get
+   split and re-annotated (`packages/services/src/facility/station/state.ts` —
+   `splitDownEntry`, `assignDowntimeReason`), and the roadmap expands that.
+   "Deltas since cursor" must express *revisions of rows already delivered*.
+2. **Rows move.** Completed buckets are copied from `MetricBucket` to
+   `MetricBucketLog` and hard-deleted from the live table
+   (`packages/services/src/metrics/archive.ts`). A series must present one
+   logical timeline spanning both tables.
+
+Constraint from parallel work: **Redis is deprecated** (direction: NATS), and
+the metrics-bus (`publishMetricChange`/`subscribeMetricChanges`) plus the
+`metrics.stream`/`streamValues` endpoints are being removed. The historian must
+not depend on any of it.
+
+A future "advanced query" interface for engineering users (ad-hoc filters,
+complex queries) is out of scope but must not be foreclosed.
+
+## Decision
+
+We will add a `historian.*` oRPC router in `apps/api` backed by a new
+top-level `packages/historian` package (`@rw/historian`). Like `@rw/livestore`
+— its live-scalar sibling — the historian is a cross-domain data-plane
+subsystem, not a business domain, so it does not live inside `@rw/services`;
+ADR 0002 permits this because the historian is a read-only surface (writes
+stay in services). The design has five parts.
+
+### 1. Series model
+
+A **series** is identified by `seriesType` plus a typed scope, discriminated at
+the schema level (`z.discriminatedUnion`, as in `apps/api/src/rpc/events.ts`):
+
+```ts
+const seriesSelectorSchema = z.discriminatedUnion('seriesType', [
+  z.object({
+    seriesType: z.literal('metricBucket'),
+    siteId: z.uuid(),
+    entityType: z.enum(['STATION', 'WORKCENTER', 'SITE', 'JOB']),
+    entityId: z.uuid(),
+    granularity: z.enum(['HOUR', 'SHIFT', 'DAY']),
+  }),
+  z.object({
+    seriesType: z.literal('stationState'),
+    siteId: z.uuid(),
+    stationId: z.uuid(),
+  }),
+  z.object({
+    seriesType: z.literal('cycle'),
+    siteId: z.uuid(),
+    stationId: z.uuid(),
+  }),
+])
+
+const rangeSchema = z.union([
+  z.object({ from: z.iso.datetime(), to: z.iso.datetime().nullable() }), // to: null = open-ended forward
+  z.object({ lastSeconds: z.number().int().positive() }),
+  z.object({ shift: z.literal('current') }),
+])
+```
+
+**Relative windows resolve server-side, once, at query time** into a fixed
+`resolvedRange` with `to: null`. "Last 8 hours plus updates" becomes
+`from: now − 8h, to: null`: the next hour's bucket, new cycles, and new
+stretches all fall *inside* the open-ended range and arrive as ordinary
+upserts — no window-sliding machinery. The client trims the stale left edge
+locally; re-basing the window is a fresh `query`. The server never re-resolves
+a relative window against a cursor. `shift: 'current'` resolves via the
+`ShiftInstance` lookup used by `apps/api/src/rpc/shift-recap.ts`.
+
+Row schemas are per-type and reuse existing shapes (bucket snapshot rows from
+the metrics service, `station.listStateLogs` rows, `logs.cycleSearch` rows).
+Every row schema carries its delta identity key, its change timestamp, and
+`deletedAt` where the column exists. Two read-time rules:
+
+- Rows are returned **unclamped to the query window** (unlike shift-recap's
+  window clamping): clamping would make the same row's shape depend on the
+  query that fetched it and break upsert identity across deltas. Display
+  clamping is the client's job.
+- `quality`/`oee` are **clamped at 0 at read time** per ADR 0007 §4, and
+  soft-deleted rows are **never filtered** from results per ADR 0007 §1 — the
+  historian is a history surface.
+
+### 2. Three verbs, one delta contract
+
+```ts
+historian.query({ series, range, limit, pageToken? })
+  → { resolvedRange, rows, nextPageToken, cursor }
+
+historian.changes({ series, cursor, limit })
+  → { deltas, cursor, hasMore }
+
+historian.subscribe({ series, cursor })            // oRPC eventIterator
+  → stream of { kind: 'delta', op: 'upsert' | 'delete', row }
+            | { kind: 'checkpoint', cursor }
+```
+
+`query` returns the snapshot with keyset pagination and issues the change
+cursor on the first page. `changes` is the poll verb. `subscribe` is the push
+verb, and it is defined as *`changes` run continuously server-side*: the same
+`fetchChanges` function backs both, so a dropped stream resumed via
+`changes(lastCheckpoint)` or a re-`subscribe(lastCheckpoint)` delivers exactly
+what the stream would have — lossless reconnect by construction.
+
+The shared delta contract:
+
+- Every delta is a **full-row upsert** (or a soft-delete marker), never a diff
+  or an increment.
+- Delivery is **at-least-once**; redelivery is harmless because clients apply
+  upserts idempotently by row identity (last-write-wins by change timestamp).
+- `op: 'delete'` means "`deletedAt` was set" — the row is still delivered in
+  full so clients can tombstone rather than drop.
+
+Rows that mutate while a client pages through the snapshot are simply
+redelivered by the first `changes` call — the cursor was stamped at first-page
+time, so nothing is lost.
+
+### 3. Cursor: DB-clock watermark with an overlap window
+
+The cursor is an opaque base64url token, structured server-side:
+
+```ts
+interface CursorV1 {
+  v: 1
+  fp: string // fingerprint of seriesType + normalized scope + resolvedRange
+  wm: number // watermark: epoch-ms change-timestamp frontier
+}
+```
+
+A fingerprint mismatch (cursor presented against a different series or range)
+is rejected with `BAD_REQUEST`. No HMAC: the server re-validates scope and site
+access on every call, so a forged cursor can only replay data the caller is
+already authorized to read.
+
+The watermark is a **change timestamp, not an event timestamp** — `startTime`
+cannot express "this already-delivered hour was retroactively corrected".
+Verified facts the scheme rests on:
+
+- `updatedAt @updatedAt` exists on all three row types **and is maintained by
+  every write path**, including the raw-SQL metric writes which all set
+  `"updatedAt" = NOW()` explicitly
+  (`packages/services/src/metrics/recalc.ts`, `cascade.ts`, `rollup.ts`).
+- **Trap:** `archive.ts` copies the live row's `updatedAt` verbatim into
+  `MetricBucketLog`, so freshly archived rows carry a *past* `updatedAt`. The
+  log table's change timestamp is therefore **`archivedAt`**
+  (`@default(now())`, `packages/db/schema/metric.prisma`); live tables use
+  `updatedAt`.
+- Watermarks are computed from the **database clock inside the delta query**
+  (`select now() − ε`), never an app clock — writers span Postgres `NOW()` and
+  the JS clocks of multiple api/worker processes.
+- Postgres `NOW()` is transaction-*start* time, and the cycle transaction can
+  commit late, so a naive `change_ts > wm` scan can miss late-committing rows.
+  The delta query therefore selects `change_ts > wm − OVERLAP` with `OVERLAP`
+  ≈ 30–60s (max plausible transaction duration plus clock skew). Bounded
+  redelivery is safe under the idempotent-upsert contract; exactly-once would
+  require commit-ordered change-feed infrastructure the contract doesn't need.
+- **Escape hatch:** cursors older than a TTL (tied to retention policy) and
+  epoch-invalidating events (e.g. `cycle/replay.ts` hard-deletes
+  `MetricBucketLog` rows with no tombstones) are rejected with `BAD_REQUEST`;
+  the client re-runs `query`. Hard-delete detection is an explicit non-goal.
+
+### 4. Per-series mapping
+
+|  | metricBucket | stationState | cycle |
+| --- | --- | --- | --- |
+| Fetch | union of `MetricBucket` + `MetricBucketLog` (two-table pattern: `logs.hourlyBucketSearch`); `startTime >= from and (to is null or startTime < to)` | interval overlap including open stretches: `startTime < to and (endTime > from or endTime is null)` (pattern: `shift-recap.ts`) | range on `start` |
+| Delta identity | logical key `(entityType, entityId, granularity, startTime)` — unique on both tables; row `id` also survives archive, but the logical key makes the union seamless | row `id` | row `id` |
+| Change-ts | `updatedAt` (live) / `archivedAt` (log) | `updatedAt` | `updatedAt` |
+| Delta semantics | pure upsert: live accrual, archive freeze, retro correction of archived rows (`recalc.ts`, `rollup.ts` update `MetricBucketLog` today) | open = insert with `endTime: null`; close/split/re-annotate = upserts | append, plus rare correction; disposition corrections land on `ItemDispositionLog` and surface via bucket deltas, not cycle deltas |
+
+Two semantics worth stating explicitly:
+
+- **Open stretches receive zero writes while they grow.** A station's current
+  state row is inserted with `endTime: null` and untouched until it closes.
+  Clients render `endTime: null` as "until now" (client-side extrapolation);
+  the historian does not synthesize heartbeat updates.
+- The **partial current hour** is just a bucket row that keeps upserting; its
+  snapshot already carries the elapsed-aware expected fields.
+
+Volume sanity: cycles run tens of seconds, so a station produces roughly
+60–360 cycle rows/hour and a 50-station site peaks around 1–5 rows/sec —
+trivial for paged polling. Bulk edits (`assignDowntimeReason` across a
+multi-day block, `recalcAll`) touch hundreds of rows in one action; the poll
+delivers them coalesced, where per-write event replay would flood.
+
+### 5. Change detection: DB polling only — no event bus in v1
+
+`subscribe` is a plain server-side poll loop over `fetchChanges`:
+
+```
+loop {
+  page fetchChanges(cursor) to exhaustion, yielding deltas
+  yield checkpoint(newCursor)
+  sleep pollInterval (~2s, per-series default), abortable via signal
+}
+```
+
+We deliberately ship **no push transport**:
+
+- The Redis machinery is deprecated and being removed; there is nothing to
+  build on, and Redis is off-limits going forward.
+- Even when the buses existed they were provably incomplete as a source of
+  truth: `syncExpectedCyclesFromJobs` writes buckets without emitting
+  (`cascade.ts`), the archive freeze emits nothing, and
+  `splitDownEntry`/`assignDowntimeReason` publish no row events. Every one of
+  those writes *does* bump the watermark column, so the cursor catches them
+  all. The database is the only complete change record we have.
+- Poll cost is bounded: the delta scan is an index-range scan that is usually
+  empty (indexes below), and a shared poller keyed by cursor fingerprint can
+  coalesce N subscribers of one series into one query per interval.
+- ~2s delta latency is acceptable for dashboards — HOUR buckets only change on
+  ~5s rollup ticks anyway, and truly-live values remain livestore's job.
+
+**Deferred, not foreclosed:** if sub-second latency is ever required, a
+NATS-based hint layer (aligned with wherever the Redis→NATS migration lands)
+can be added behind the same interface — hints would only wake the poller
+early; correctness would still come from `fetchChanges`.
+
+### 6. Registry and extensibility
+
+Series live in a registry in `packages/historian`; the three RPC
+handlers are generic dispatchers and never grow per-type code:
+
+```ts
+interface SeriesDefinition<Scope, Row> {
+  seriesType: string
+  scopeSchema: z.ZodType<Scope>
+  rowSchema: z.ZodType<Row>
+  siteIdOf(scope: Scope): string // → assertRuntimeSiteAccess
+  fetchRange(scope, range, page): Promise<{ rows: Row[]; nextPageToken }>
+  fetchChanges(scope, range, watermark, limit): Promise<{ deltas; nextWatermark; hasMore }>
+  pollIntervalMs?: number
+  // reserved: wakeHint (future NATS hints), queryableFields (future historian.search)
+}
+```
+
+Adding a series type is one definition file plus a registry entry — no
+write-site changes, because polling detects everything via the watermark. The
+door to the advanced query interface is the reserved `queryableFields`
+allowlist feeding a future `historian.search` verb built on the existing
+query-filter system (`packages/services/src/lib/query-filter/`); filters
+compose with the range predicate, and the cursor already fingerprints the full
+request.
+
+## Consequences
+
+- **Prerequisite indexes** (none exist today; they also keep the poll loop
+  cheap): `MetricBucket @@index([siteId, updatedAt])`,
+  `MetricBucketLog @@index([siteId, archivedAt])`,
+  `StationStateLog @@index([stationId, updatedAt])`,
+  `Cycle @@index([stationId, updatedAt])` — `Cycle` currently only indexes
+  `end`-based columns.
+- The historian read path must implement the ADR 0007 §4 quality/OEE clamp
+  (not yet implemented anywhere) and must not filter soft-deleted rows
+  (ADR 0007 §1).
+- Every future write path to a historian-served table must maintain its
+  change-timestamp column — raw SQL must keep setting `"updatedAt" = NOW()`.
+  This is now a correctness contract, not a convention.
+- Existing `logs.*` / `shiftRecap.*` / `metrics.getBuckets` endpoints stay;
+  new dashboard and report features should prefer the historian.
+- Clients must apply deltas as idempotent upserts keyed by the per-series
+  identity and tolerate bounded redelivery. The published `rpc-client` gains
+  the three verbs for free via the `AppRouter` type.
+- **Non-goals for v1:** MINUTE granularity, site-wide cycle series, ad-hoc
+  filters, exactly-once delivery, server-side window clamping or sliding,
+  hard-delete detection, livestore involvement, any event-bus/push transport.
+
+Open questions to resolve at implementation time: `OVERLAP` tuning; poll
+interval and checkpoint cadence per series type; shared-poller coalescing vs
+per-subscription polling in v1; cursor TTL vs retention policy; whether
+`Cycle` needs a `start`-leading index for the range fetch; MINUTE archival
+behavior if that granularity ever gains writers; the concrete latency
+requirement (if any) that would justify the NATS hint layer.
+
+## Alternatives Considered
+
+- **Event-driven push as the delta source** (bus events, with or without a
+  catch-up query) — rejected: the existing buses are being removed, were
+  fire-and-forget with drop-oldest buffers, and had verified coverage gaps;
+  every gap is caught by the watermark column. Push demotes to a deferred
+  latency optimization.
+- **Postgres LISTEN/NOTIFY or logical-replication CDC** — rejected: new
+  infrastructure and a new failure domain for what is only a latency
+  optimization once the DB cursor is authoritative.
+- **Outbox / change-log table** (commit-ordered, exactly-once) — rejected:
+  write amplification on the per-cycle hot path that the metrics batcher
+  deliberately thinned; the idempotent-upsert contract makes at-least-once
+  with an overlap window sufficient.
+- **`xmin` or a trigger-maintained sequence as the watermark** — rejected:
+  `xmin` wraps around and isn't monotonic across freezes; the codebase has
+  zero triggers (app-level convention), and insert-time sequences still need
+  the overlap trick because assignment order isn't commit order.
+- **Server-side sliding relative windows** ("last 8h" re-resolved per poll) —
+  rejected: makes the cursor's range unstable and pushes trim/eviction
+  complexity into the protocol; a fixed resolved range with an open end plus
+  client-side trimming needs no new machinery.
+- **Extending `logs.*`/`metrics.*` with per-endpoint cursor+subscribe
+  variants** — rejected: N bespoke protocols instead of one; the registry
+  gives new series types the full contract for free.

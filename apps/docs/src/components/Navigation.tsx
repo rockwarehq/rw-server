@@ -298,6 +298,10 @@ export const internalNavigation: Array<NavGroup> = [
         title: '0007 – MES History Correctness Defaults',
         href: '/internal/adrs/0007-mes-history-correctness-defaults',
       },
+      {
+        title: '0008 – Historian Series Queries',
+        href: '/internal/adrs/0008-historian-series-queries',
+      },
     ],
   },
   {
