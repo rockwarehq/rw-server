@@ -18,6 +18,14 @@ export {
 
 const REFRESH_TOKEN_EXPIRY = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+// Reuse-grace interval: a rotated (revoked) token presented again within this
+// window refreshes normally instead of tripping theft detection. Benign
+// re-presentations are common — a rotation response lost when the API restarts
+// mid-request (deploys run a single machine), or two tabs sharing one token
+// refreshing concurrently — and family-wide revocation on those logs every
+// session out. Reuse AFTER the window is still treated as theft.
+export const REFRESH_REUSE_GRACE_MS = 60 * 1000;
+
 export async function createRefreshToken(
   userId: string,
   metadata?: { userAgent?: string; ipAddress?: string },
@@ -68,20 +76,32 @@ export type RefreshTokenStatus = "valid" | "revoked" | "expired" | "unknown";
 
 export async function inspectRefreshToken(
   token: string,
-): Promise<{ status: RefreshTokenStatus; userId?: string; tokenId?: string }> {
+): Promise<{ status: RefreshTokenStatus; userId?: string; tokenId?: string; rotatedAt?: Date }> {
   const record = await prisma.refreshToken.findUnique({ where: { tokenHash: hashToken(token) } });
   if (!record) return { status: "unknown" };
-  if (record.revokedAt) return { status: "revoked", userId: record.userId, tokenId: record.id };
+  if (record.revokedAt)
+    return {
+      status: "revoked",
+      userId: record.userId,
+      tokenId: record.id,
+      rotatedAt: record.rotatedAt ?? undefined,
+    };
   if (record.expiresAt < new Date()) return { status: "expired", userId: record.userId, tokenId: record.id };
   return { status: "valid", userId: record.userId, tokenId: record.id };
 }
 
 export async function inspectDisplayRefreshToken(
   token: string,
-): Promise<{ status: RefreshTokenStatus; displayId?: string; tokenId?: string }> {
+): Promise<{ status: RefreshTokenStatus; displayId?: string; tokenId?: string; rotatedAt?: Date }> {
   const record = await prisma.displayRefreshToken.findUnique({ where: { tokenHash: hashToken(token) } });
   if (!record) return { status: "unknown" };
-  if (record.revokedAt) return { status: "revoked", displayId: record.displayId, tokenId: record.id };
+  if (record.revokedAt)
+    return {
+      status: "revoked",
+      displayId: record.displayId,
+      tokenId: record.id,
+      rotatedAt: record.rotatedAt ?? undefined,
+    };
   if (record.expiresAt < new Date()) return { status: "expired", displayId: record.displayId, tokenId: record.id };
   return { status: "valid", displayId: record.displayId, tokenId: record.id };
 }
@@ -146,13 +166,20 @@ export async function verifyDisplayRefreshToken(token: string): Promise<{
   };
 }
 
-export async function revokeRefreshToken(token: string): Promise<boolean> {
+// `rotated: true` marks a rotation revocation (the token was replaced by a
+// successor), which the reuse grace window honors. Security revocations
+// (logout, logout-all, theft response) leave rotatedAt null and get no grace.
+export async function revokeRefreshToken(
+  token: string,
+  options?: { rotated?: boolean },
+): Promise<boolean> {
   const tokenHash = hashToken(token);
+  const now = new Date();
 
   try {
     await prisma.refreshToken.update({
       where: { tokenHash },
-      data: { revokedAt: new Date() },
+      data: { revokedAt: now, ...(options?.rotated ? { rotatedAt: now } : {}) },
     });
     return true;
   } catch {
@@ -160,13 +187,17 @@ export async function revokeRefreshToken(token: string): Promise<boolean> {
   }
 }
 
-export async function revokeDisplayRefreshToken(token: string): Promise<boolean> {
+export async function revokeDisplayRefreshToken(
+  token: string,
+  options?: { rotated?: boolean },
+): Promise<boolean> {
   const tokenHash = hashToken(token);
+  const now = new Date();
 
   try {
     await prisma.displayRefreshToken.update({
       where: { tokenHash },
-      data: { revokedAt: new Date() },
+      data: { revokedAt: now, ...(options?.rotated ? { rotatedAt: now } : {}) },
     });
     return true;
   } catch {

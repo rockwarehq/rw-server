@@ -5,6 +5,7 @@ import {
   createDisplayRefreshToken,
   hashToken,
   inspectDisplayRefreshToken,
+  REFRESH_REUSE_GRACE_MS,
   revokeAllDisplayRefreshTokens,
   revokeDisplayRefreshToken,
   type DisplayAccessTokenPayload,
@@ -130,18 +131,30 @@ export async function refreshDisplaySession(
 ): Promise<{ success: true; data: DisplayTokenPair } | { success: false; error: string }> {
   const inspection = await inspectDisplayRefreshToken(refreshToken);
 
-  // Reuse detection: replay of an already-rotated token signals theft; revoke
-  // the whole family so the display must re-authenticate with its bootstrap secret.
-  if (inspection.status === "revoked" && inspection.displayId) {
+  // Reuse detection with a grace interval (see refreshSession): a token
+  // rotated within REFRESH_REUSE_GRACE_MS refreshes normally — displays
+  // refresh unattended and are the most exposed to a rotation response lost
+  // when the API restarts mid-request. Replay after the grace window signals
+  // theft; revoke the whole family so the display must re-authenticate with
+  // its bootstrap secret.
+  // Only rotation revocations qualify (rotatedAt set) — see revokeRefreshToken.
+  const graceReuse =
+    inspection.status === "revoked" &&
+    inspection.rotatedAt !== undefined &&
+    Date.now() - inspection.rotatedAt.getTime() <= REFRESH_REUSE_GRACE_MS;
+
+  if (inspection.status === "revoked" && inspection.displayId && !graceReuse) {
     await revokeAllDisplayRefreshTokens(inspection.displayId);
     return { success: false, error: "Invalid or expired refresh token" };
   }
 
-  if (inspection.status !== "valid" || !inspection.displayId) {
+  if ((inspection.status !== "valid" && !graceReuse) || !inspection.displayId) {
     return { success: false, error: "Invalid or expired refresh token" };
   }
 
-  await revokeDisplayRefreshToken(refreshToken);
+  if (!graceReuse) {
+    await revokeDisplayRefreshToken(refreshToken, { rotated: true });
+  }
 
   const display = await getDisplayAuthRecord(inspection.displayId);
 
