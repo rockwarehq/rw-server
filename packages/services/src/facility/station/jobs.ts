@@ -176,7 +176,8 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
     publishStationCurrentJobMetric(stationId, job.currentVersion?.name ?? null, timestamp).catch((err) => {
       console.error(`[changeJob] publishStationCurrentJobMetric failed for station ${stationId}:`, err);
     });
-    const standardCycleSeconds = job.currentVersion?.standardCycle != null ? Number(job.currentVersion.standardCycle) : null;
+    const standardCycleSeconds =
+      job.currentVersion?.standardCycle != null ? Number(job.currentVersion.standardCycle) : null;
     publishStationStandardCycleMetric(stationId, standardCycleSeconds, timestamp).catch((err) => {
       console.error(`[changeJob] publishStationStandardCycleMetric failed for station ${stationId}:`, err);
     });
@@ -192,7 +193,10 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
   // Resolve the previous job's display name (the new job's name is already loaded above). Used to
   // populate the job.changed automation event payload so messages can show names, not uuids.
   const previousJob = previousJobId
-    ? await prisma.job.findUnique({ where: { id: previousJobId }, select: { currentVersion: { select: { name: true } } } })
+    ? await prisma.job.findUnique({
+        where: { id: previousJobId },
+        select: { currentVersion: { select: { name: true } } },
+      })
     : null;
 
   return {

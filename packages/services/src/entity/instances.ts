@@ -287,7 +287,10 @@ async function listSystemInstances(
       data: materials.map((material) =>
         systemInstance(
           key,
-          { id: material.id, name: material.currentVersion?.name ?? material.currentVersion?.materialNumber ?? material.id },
+          {
+            id: material.id,
+            name: material.currentVersion?.name ?? material.currentVersion?.materialNumber ?? material.id,
+          },
           {
             id: material.id,
             materialNumber: material.currentVersion?.materialNumber ?? null,

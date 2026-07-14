@@ -169,10 +169,7 @@ export async function verifyDisplayRefreshToken(token: string): Promise<{
 // `rotated: true` marks a rotation revocation (the token was replaced by a
 // successor), which the reuse grace window honors. Security revocations
 // (logout, logout-all, theft response) leave rotatedAt null and get no grace.
-export async function revokeRefreshToken(
-  token: string,
-  options?: { rotated?: boolean },
-): Promise<boolean> {
+export async function revokeRefreshToken(token: string, options?: { rotated?: boolean }): Promise<boolean> {
   const tokenHash = hashToken(token);
   const now = new Date();
 
@@ -187,10 +184,7 @@ export async function revokeRefreshToken(
   }
 }
 
-export async function revokeDisplayRefreshToken(
-  token: string,
-  options?: { rotated?: boolean },
-): Promise<boolean> {
+export async function revokeDisplayRefreshToken(token: string, options?: { rotated?: boolean }): Promise<boolean> {
   const tokenHash = hashToken(token);
   const now = new Date();
 
