@@ -50,6 +50,11 @@ model RefreshToken {
   tokenHash String    @unique
   expiresAt DateTime  @db.Timestamptz(3)
   revokedAt DateTime? @db.Timestamptz(3)
+  // Set (alongside revokedAt) when the token was replaced by a successor
+  // during refresh rotation. A rotated token re-presented within the reuse
+  // grace window refreshes normally; a token revoked WITHOUT rotatedAt
+  // (logout-all, theft response) never does.
+  rotatedAt DateTime? @db.Timestamptz(3)
   userAgent String?
   ipAddress String?
 

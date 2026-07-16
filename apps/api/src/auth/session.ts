@@ -9,6 +9,7 @@ import {
   inspectRefreshToken,
   revokeRefreshToken,
   revokeAllUserRefreshTokens,
+  REFRESH_REUSE_GRACE_MS,
   type AccessTokenPayload,
 } from "@rw/auth/tokens";
 import { listAccessibleSites } from "@rw/auth/iam/index";
@@ -274,20 +275,48 @@ export async function refreshSession(
 ): Promise<{ success: true; data: TokenPair } | { success: false; error: string }> {
   const inspection = await inspectRefreshToken(refreshToken);
 
-  // Reuse detection: a token that was already rotated (revoked) but is being
-  // presented again signals theft. Revoke the entire family so neither the
-  // attacker nor the victim can continue, forcing a fresh login.
-  if (inspection.status === "revoked" && inspection.userId) {
+  // Reuse detection with a grace interval: a rotated (revoked) token presented
+  // again within REFRESH_REUSE_GRACE_MS is a benign re-presentation — a
+  // rotation response lost to a deploy/restart, or two tabs sharing one token
+  // refreshing concurrently — and refreshes normally (the row is already
+  // revoked, so no re-revocation; the earlier replacement token stays valid
+  // too). Reuse after the grace window signals theft: revoke the entire family
+  // so neither the attacker nor the victim can continue, forcing a fresh login.
+  // Only rotation revocations qualify (rotatedAt set): tokens revoked by
+  // logout/logout-all/theft-response never refresh again, grace or not.
+  const graceReuse =
+    inspection.status === "revoked" &&
+    inspection.rotatedAt !== undefined &&
+    Date.now() - inspection.rotatedAt.getTime() <= REFRESH_REUSE_GRACE_MS;
+
+  if (inspection.status === "revoked" && inspection.userId && !graceReuse) {
     await revokeAllUserRefreshTokens(inspection.userId);
+    await logEvent({
+      action: "REFRESH_REUSE_DETECTED",
+      userId: inspection.userId,
+      ipAddress: metadata?.ipAddress,
+      userAgent: metadata?.userAgent,
+      metadata: { tokenId: inspection.tokenId, familyRevoked: true },
+    });
     return { success: false, error: "Invalid or expired refresh token" };
   }
 
-  if (inspection.status !== "valid" || !inspection.userId) {
+  if ((inspection.status !== "valid" && !graceReuse) || !inspection.userId) {
     return { success: false, error: "Invalid or expired refresh token" };
   }
 
-  // Revoke the old refresh token (rotation)
-  await revokeRefreshToken(refreshToken);
+  if (graceReuse) {
+    await logEvent({
+      action: "REFRESH_REUSE_GRACE",
+      userId: inspection.userId,
+      ipAddress: metadata?.ipAddress,
+      userAgent: metadata?.userAgent,
+      metadata: { tokenId: inspection.tokenId },
+    });
+  } else {
+    // Revoke the old refresh token (rotation — eligible for the grace window)
+    await revokeRefreshToken(refreshToken, { rotated: true });
+  }
 
   const user = await prisma.user.findUnique({
     where: { id: inspection.userId },

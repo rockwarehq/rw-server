@@ -1,5 +1,11 @@
 primary_region = 'iad'
 
+# Must exceed CLOSE_GRACE_DELAY (8s, apps/api/src/config.ts) so the drain
+# window actually elapses before fly SIGKILLs the machine (fly default is 5s).
+# In-flight /auth/refresh responses lost to a hard kill make clients retry
+# with an already-rotated token.
+kill_timeout = '12s'
+
 [build]
 
 # Applies pending Prisma migrations in a temporary machine before the main

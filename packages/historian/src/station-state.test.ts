@@ -15,17 +15,15 @@ function at(iso: string) {
 const T0 = "2026-07-13T06:00:00.000Z"; // shift start
 const RANGE: ResolvedRange = { from: at(T0), to: null };
 
-describe("historian stationState series", () => {
+// Skip (like the api Tier 2 suites) rather than throw when no database is
+// configured — CI's unit-test job runs without one.
+describe.skipIf(!process.env.DATABASE_URL)("historian stationState series", () => {
   let siteId: string;
   let otherSiteId: string;
   let workcenterId: string;
   let stationId: string;
 
   beforeAll(async () => {
-    if (!process.env.DATABASE_URL) {
-      throw new Error("DATABASE_URL is required to run historian service tests");
-    }
-
     const suffix = randomUUID();
     const workspace = await prisma.workspace.create({
       data: { name: `Historian Test ${suffix}`, slug: `historian-test-${suffix}` },
