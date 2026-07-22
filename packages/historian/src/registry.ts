@@ -1,3 +1,4 @@
+import { metricBucketSeries } from "./metric-bucket.js";
 import { stationStateSeries } from "./station-state.js";
 import type { SeriesDefinition } from "./types.js";
 
@@ -7,7 +8,10 @@ import type { SeriesDefinition } from "./types.js";
 // types the published rpc-client).
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const definitions = new Map<string, SeriesDefinition<any, any>>([[stationStateSeries.seriesType, stationStateSeries]]);
+const definitions = new Map<string, SeriesDefinition<any, any>>([
+  [stationStateSeries.seriesType, stationStateSeries],
+  [metricBucketSeries.seriesType, metricBucketSeries],
+]);
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function getSeries(seriesType: string): SeriesDefinition<any, any> | undefined {
