@@ -316,6 +316,13 @@ export const hourlyBucketSearch = userOrDisplayRequired
       performance: true,
       quality: true,
       oee: true,
+      // OEE components, so clients can roll up station subsets by summation.
+      runSeconds: true,
+      elapsedPlannedProductionSeconds: true,
+      idealCycleSeconds: true,
+      totalCycles: true,
+      goodCycles: true,
+      badCycles: true,
     };
 
     const orderBy = [{ startTime: "asc" as const }, { entityName: "asc" as const }];
