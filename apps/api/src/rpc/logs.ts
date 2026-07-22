@@ -312,6 +312,10 @@ export const hourlyBucketSearch = userOrDisplayRequired
       totalItems: true,
       badItems: true,
       goodItems: true,
+      availability: true,
+      performance: true,
+      quality: true,
+      oee: true,
     };
 
     const orderBy = [{ startTime: "asc" as const }, { entityName: "asc" as const }];
