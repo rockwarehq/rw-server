@@ -670,7 +670,13 @@ export async function addMaterial(input: AddMaterialInput) {
   // Verify product exists and is not deleted
   const product = await prisma.product.findUnique({
     where: { id: productId },
-    select: { id: true, siteId: true, deletedAt: true, currentVersionId: true, site: { select: { workspaceId: true } } },
+    select: {
+      id: true,
+      siteId: true,
+      deletedAt: true,
+      currentVersionId: true,
+      site: { select: { workspaceId: true } },
+    },
   });
 
   if (!product) {

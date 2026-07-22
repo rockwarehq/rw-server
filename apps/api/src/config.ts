@@ -15,7 +15,10 @@ const EnvSchema = z.object({
   NODE_ID: z.string().default("gateway-001"),
   PORT: z.coerce.number().int().min(1).max(65535).default(30000),
   HOST: z.string().default("::"),
-  CLOSE_GRACE_DELAY: z.coerce.number().int().positive().default(500),
+  // Shutdown drain window. Must be long enough for in-flight requests to
+  // finish — a dropped /auth/refresh response makes the client retry with an
+  // already-rotated token (see REFRESH_REUSE_GRACE_MS in @rw/auth/tokens).
+  CLOSE_GRACE_DELAY: z.coerce.number().int().positive().default(8000),
 
   // Infrastructure the app cannot run without in production. Both are already
   // listed in every tenant's _meta.required_secrets; validating here turns a

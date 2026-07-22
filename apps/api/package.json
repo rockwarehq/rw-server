@@ -39,6 +39,7 @@
     "@rw/auth": "workspace:*",
     "@rw/automations": "workspace:*",
     "@rw/db": "workspace:*",
+    "@rw/historian": "workspace:*",
     "@rw/livestore": "workspace:*",
     "@rw/runtime": "workspace:*",
     "@rw/services": "workspace:*",

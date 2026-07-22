@@ -46,6 +46,8 @@ model DisplayRefreshToken {
   tokenHash String    @unique
   expiresAt DateTime  @db.Timestamptz(3)
   revokedAt DateTime? @db.Timestamptz(3)
+  // See RefreshToken.rotatedAt: rotation marker enabling the reuse grace window.
+  rotatedAt DateTime? @db.Timestamptz(3)
   userAgent String?
   ipAddress String?
 

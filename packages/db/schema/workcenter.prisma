@@ -144,6 +144,9 @@ model StationStateLog {
   @@index([stationId])
   @@index([stationId, endTime])
   @@index([stationId, startTime])
+  // Historian delta scans (ADR 0008): changes are fetched by change-timestamp
+  // watermark, so the poll loop needs an updatedAt-leading index per station.
+  @@index([stationId, updatedAt])
   @@index([statusReasonId])
   @@index([jobVersionId])
 }
