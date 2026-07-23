@@ -12,6 +12,7 @@
     "./device/*": "./dist/device/*.js",
     "./document/*": "./dist/document/*.js",
     "./display/*": "./dist/display/*.js",
+    "./saved-view/*": "./dist/saved-view/*.js",
     "./email/*": "./dist/email/*.js",
     "./employee/*": "./dist/employee/*.js",
     "./entity/*": "./dist/entity/*.js",
