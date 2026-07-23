@@ -31,6 +31,13 @@ const seriesSelectorSchema = z.discriminatedUnion("seriesType", [
     siteId: z.uuid(),
     stationId: z.uuid(),
   }),
+  z.object({
+    seriesType: z.literal("metricBucket"),
+    siteId: z.uuid(),
+    entityType: z.enum(["STATION", "WORKCENTER"]),
+    entityId: z.uuid(),
+    granularity: z.enum(["HOUR", "SHIFT", "DAY"]),
+  }),
 ]);
 
 type SeriesSelector = z.infer<typeof seriesSelectorSchema>;

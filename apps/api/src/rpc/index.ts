@@ -8,6 +8,7 @@ import * as metricCatalog from "./metric-catalog.js";
 import * as inventory from "./inventory.js";
 import * as job from "./job.js";
 import * as dashboard from "./dashboard.js";
+import * as savedViewRpc from "./saved-view.js";
 import * as display from "./display.js";
 import * as document from "./document.js";
 import * as processType from "./process-type.js";
@@ -289,6 +290,12 @@ export const router = {
     get: dashboard.get,
     update: dashboard.update,
     delete: dashboard.remove,
+  },
+  savedView: {
+    create: savedViewRpc.create,
+    list: savedViewRpc.list,
+    update: savedViewRpc.update,
+    delete: savedViewRpc.remove,
   },
   display: {
     register: display.register,
