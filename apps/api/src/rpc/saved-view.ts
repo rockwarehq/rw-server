@@ -16,7 +16,12 @@ import { throwServiceError } from "./errors.js";
 // ============================================================================
 
 const shiftViewConfigSchema = z.object({
+  // Filter dimension selections (null = no filter on that dimension). Views
+  // save selections, not resolved stations, so they stay correct as station
+  // attributes change.
   stationIds: z.array(z.uuid()).nullable(),
+  processTypeIds: z.array(z.uuid()).nullable(),
+  classificationIds: z.array(z.uuid()).nullable(),
   stationsLayout: z.enum(["list", "cards"]),
   chartMode: z.enum(["production", "oee"]),
   showChart: z.boolean(),

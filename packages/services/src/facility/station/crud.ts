@@ -52,7 +52,14 @@ const stationInclude = {
   workcenter: {
     select: { id: true, name: true },
   },
-  currentVersion: true,
+  currentVersion: {
+    include: {
+      processType: { select: { id: true, name: true } },
+    },
+  },
+  classifications: {
+    select: { id: true, name: true, type: true },
+  },
   currentJob: {
     select: {
       id: true,
