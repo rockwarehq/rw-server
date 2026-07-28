@@ -143,6 +143,7 @@ model MetricBucket {
   @@unique([entityType, entityId, granularity, startTime])
   @@index([siteId, granularity, startTime])
   @@index([siteId, businessDate])
+  @@index([siteId, updatedAt])
 }
 
 /// Historical (archived) metric buckets. Same schema as MetricBucket
@@ -232,4 +233,5 @@ model MetricBucketLog {
   @@unique([entityType, entityId, granularity, startTime])
   @@index([siteId, granularity, startTime])
   @@index([siteId, businessDate])
+  @@index([siteId, archivedAt])
 }

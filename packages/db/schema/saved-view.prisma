@@ -1,0 +1,37 @@
+/// A saved page view (Linear-style): a named, shareable snapshot of a page's
+/// filter + display configuration. Generic across pages — `page` discriminates
+/// (e.g. "shift-view") and `config` is validated per-page at the RPC boundary.
+/// `scopeId` is a soft scope anchor (workCenterId for shift-view); no
+/// polymorphic FK — scoped queries simply never request orphaned rows.
+model SavedView {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  /// Page discriminator, e.g. "shift-view".
+  page String
+
+  /// Optional scope anchor within the page (workCenterId for shift-view).
+  scopeId String? @db.Uuid
+
+  name        String
+  description String?
+
+  /// "PRIVATE" (creator only) or "WORKSPACE" (visible to all workspace members).
+  visibility String @default("PRIVATE")
+
+  /// Creator; nullable + SetNull so deleting a user keeps their shared views.
+  createdById String? @db.Uuid
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  /// Page-specific configuration (filters + display settings).
+  config Json @default("{}")
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([siteId, page, scopeId])
+  @@index([createdById])
+}
