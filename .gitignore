@@ -56,6 +56,3 @@ lib-cov
 profile-*
 *clinic*
 *flamegraph*
-
-# Local-only load-test seeder (never committed)
-apps/workers/scripts/seed-loadtest.ts
