@@ -14,6 +14,7 @@ app = 'dev-processor'
 # - NATS_URL               (imm-events event source; rollups graph bridge)
 # - PROCESSOR_SHARED_SECRET (must match rw-dev-api's value)
 # - MQTT_PASSWORD (broker URL + username are non-sensitive, in [env] below)
+# - INTEGRATION_ENCRYPTION_KEY (64 hex; must match the api app's value)
 [_meta]
 required_secrets = [
   'DATABASE_URL',
@@ -23,6 +24,7 @@ required_secrets = [
   'NATS_URL',
   'PROCESSOR_SHARED_SECRET',
   'MQTT_PASSWORD',
+  'INTEGRATION_ENCRYPTION_KEY',
 ]
 
 [env]

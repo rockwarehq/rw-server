@@ -256,10 +256,23 @@ export class HookManager {
     const payload: Record<string, unknown> = {};
     const context: Record<string, LivestoreHookEventContextMetadata> = {};
 
-    for (const [field, fieldSchema] of Object.entries(schema.contextFields)) {
+    // Catalog fields, then author-declared ones on a dynamicContext event.
+    // Author fields default to required — skip rather than emit them missing.
+    const resolvable: [string, LivestoreHookContextFieldType, boolean][] = Object.entries(schema.contextFields).map(
+      ([field, fieldSchema]) => [field, fieldSchema.type, fieldSchema.required],
+    );
+
+    if (schema.dynamicContext) {
+      for (const [field, binding] of Object.entries(hook.eventContext)) {
+        if (schema.contextFields[field] || !binding.valueType) continue;
+        resolvable.push([field, binding.valueType, binding.required ?? true]);
+      }
+    }
+
+    for (const [field, fieldType, fieldRequired] of resolvable) {
       const binding = hook.eventContext[field];
       if (!binding) {
-        if (fieldSchema.required) {
+        if (fieldRequired) {
           this.logger.warn(
             { hookId: hook.id, field },
             "livestore hook event skipped because required context is unbound",
@@ -272,7 +285,7 @@ export class HookManager {
       const propertyId = binding.source.propertyId;
       const envelope = getCurrent(propertyId);
       if (!envelope || envelope.value == null || envelope.quality !== "good") {
-        if (fieldSchema.required) {
+        if (fieldRequired) {
           this.logger.warn(
             { hookId: hook.id, field, propertyId },
             "livestore hook event skipped because required context is not good",
@@ -282,8 +295,8 @@ export class HookManager {
         continue;
       }
 
-      if (!valueMatchesFieldType(envelope.value, fieldSchema.type)) {
-        if (fieldSchema.required) {
+      if (!valueMatchesFieldType(envelope.value, fieldType)) {
+        if (fieldRequired) {
           this.logger.warn(
             { hookId: hook.id, field, propertyId },
             "livestore hook event skipped because required context has wrong type",

@@ -19,6 +19,7 @@
     { "path": "../../packages/services" },
     { "path": "../../packages/runtime" },
     { "path": "../../packages/automations" },
+    { "path": "../../packages/integrations" },
     { "path": "../../packages/livestore" }
   ]
 }

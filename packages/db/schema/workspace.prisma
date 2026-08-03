@@ -114,6 +114,8 @@ model Site {
   objectInstances        ObjectInstance[]
   apiTokens              ApiToken[]
   savedViews             SavedView[]
+  integrations           Integration[]
+  integrationTriggers    IntegrationTrigger[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId])

@@ -1,0 +1,25 @@
+{
+  "name": "@rw/integrations",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "mssql": "^12.7.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/mssql": "^12.3.0",
+    "@types/node": "^24.10.8",
+    "typescript": "~6.0.2",
+    "vitest": "^4.0.14"
+  }
+}

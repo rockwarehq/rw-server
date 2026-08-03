@@ -1,3 +1,5 @@
+import type { LivestoreHookContextFieldType } from "./events.js";
+
 export type GraphHookConditionOperator =
   | "changed"
   | "increases"
@@ -29,6 +31,10 @@ export interface GraphHookPropertyContextBinding {
     type: "property";
     propertyId: string;
   };
+  // dynamicContext events only: the author declares the type the catalog lacks.
+  valueType?: LivestoreHookContextFieldType;
+  // Author-declared fields default to required: skip rather than emit it missing.
+  required?: boolean;
 }
 
 export type GraphHookEventContextBinding = GraphHookPropertyContextBinding;
@@ -47,6 +53,8 @@ const OPERATORS = new Set<GraphHookConditionOperator>([
   "crossesAbove",
   "crossesBelow",
 ]);
+
+const CONTEXT_VALUE_TYPES = new Set<LivestoreHookContextFieldType>(["string", "number", "boolean", "object"]);
 
 const VALUE_OPERATORS = new Set<GraphHookConditionOperator>(["equals", "notEquals"]);
 const THRESHOLD_OPERATORS = new Set<GraphHookConditionOperator>([
@@ -103,14 +111,31 @@ export function parseGraphHookEventContext(value: unknown): GraphHookEventContex
   for (const [field, binding] of Object.entries(value)) {
     if (!isRecord(binding) || !isRecord(binding.source)) return null;
     if (binding.source.type !== "property" || typeof binding.source.propertyId !== "string") return null;
+    if (
+      binding.valueType !== undefined &&
+      !CONTEXT_VALUE_TYPES.has(binding.valueType as LivestoreHookContextFieldType)
+    ) {
+      return null;
+    }
+    if (binding.required !== undefined && typeof binding.required !== "boolean") return null;
+
     context[field] = {
       source: {
         type: "property",
         propertyId: binding.source.propertyId,
       },
+      ...(binding.valueType !== undefined ? { valueType: binding.valueType as LivestoreHookContextFieldType } : {}),
+      ...(typeof binding.required === "boolean" ? { required: binding.required } : {}),
     };
   }
   return context;
+}
+
+// Becomes a payload key and then a SQL parameter name, so restrict not escape.
+const CONTEXT_FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+
+export function isValidHookContextFieldName(field: string): boolean {
+  return CONTEXT_FIELD_NAME.test(field);
 }
 
 export function graphHookEventContextPropertyIds(context: GraphHookEventContext): string[] {

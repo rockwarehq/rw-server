@@ -171,7 +171,8 @@ model GraphHook {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  site                Site                 @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  integrationTriggers IntegrationTrigger[]
 
   @@unique([siteId, name])
   @@index([siteId, enabled])

@@ -1,0 +1,117 @@
+enum IntegrationRunStatus {
+  PENDING // started, no result yet
+  SUCCEEDED
+  FAILED
+}
+
+/// A configured outbound target. @rw/integrations declares the shape of config and the sealed secret.
+model Integration {
+  id     String @id @default(uuid()) @db.Uuid
+  siteId String @db.Uuid
+  name   String
+
+  /// Type key from @rw/integrations. String not enum: adding a type must not need a migration.
+  type    String
+  enabled Boolean @default(true)
+
+  /// Validated against the type's configSchema. Plaintext by design; safe to read and log.
+  config Json @default("{}")
+
+  /// Sealed with AES-256-GCM (packages/integrations/src/crypto.ts); never returned over RPC.
+  /// The key lives in the environment, NOT this database. Null when the type needs no secret.
+  /// No gatewayId: actions run in rw-server, which on-prem sits on the plant network.
+  secretCipher Bytes?
+
+  /// Soft delete matches GraphHook so run history survives removal.
+  isDeleted Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  site     Site                 @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  runs     IntegrationRun[]
+  triggers IntegrationTrigger[]
+
+  @@unique([siteId, name])
+  @@index([siteId, enabled])
+  @@index([isDeleted])
+  // Definition reconcile filters on updatedAt (mirrors GraphHook).
+  @@index([updatedAt])
+}
+
+/// Binds a LiveStore hook event to an integration action — the layer that keeps hooks
+/// terminal (spec.md §4.8) and leaves the integration reusable by automations and manual runs.
+model IntegrationTrigger {
+  id      String  @id @default(uuid()) @db.Uuid
+  siteId  String  @db.Uuid
+  name    String
+  enabled Boolean @default(true)
+
+  /// Matches the emitted subject livestore.events.<site>.<namespace>.<name>.v<version>.
+  eventNamespace String
+  eventName      String
+  eventVersion   String @default("1")
+
+  /// Narrows to one hook; null means every hook at this site emitting that event.
+  hookId String?    @db.Uuid
+  hook   GraphHook? @relation(fields: [hookId], references: [id], onDelete: Cascade)
+
+  integrationId String      @db.Uuid
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  actionKey     String
+  actionVersion String @default("1")
+
+  /// Literal JSON with { "$from": "field" } nodes pulling values off the event payload
+  /// (packages/integrations/src/template.ts). Resolved before the action's schema validates it.
+  input Json @default("{}")
+
+  isDeleted Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // No IntegrationRun relation: runs record origin in triggerType/triggerId so history survives deletion.
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, name])
+  // The consumer's hot path: match an inbound event to its triggers.
+  @@index([siteId, eventNamespace, eventName, eventVersion, enabled])
+  @@index([integrationId])
+  @@index([hookId])
+  @@index([isDeleted])
+}
+
+/// One execution of one action — otherwise a failure at a customer site leaves no trace.
+model IntegrationRun {
+  id            String      @id @default(uuid()) @db.Uuid
+  integrationId String      @db.Uuid
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// Action key and version from the type's catalog, e.g. "procedure.execute" @ "1".
+  actionKey     String
+  actionVersion String
+
+  status IntegrationRunStatus @default(PENDING)
+
+  /// What asked for this run ("hook", "automation", "manual") and its id. Loose so a new consumer needs no migration.
+  triggerType String
+  triggerId   String?
+
+  /// Resolved action input. Secrets are never part of an action input, so this is safe to retain.
+  input Json @default("{}")
+
+  result Json?
+  error  String?
+
+  /// Source event id. Delivery is at-least-once, so unique turns a redelivery into a detectable duplicate.
+  dedupeKey String? @unique
+
+  startedAt  DateTime  @default(now()) @db.Timestamptz(3)
+  finishedAt DateTime? @db.Timestamptz(3)
+  durationMs Int?
+
+  @@index([integrationId, startedAt])
+  @@index([status])
+  @@index([triggerType, triggerId])
+}

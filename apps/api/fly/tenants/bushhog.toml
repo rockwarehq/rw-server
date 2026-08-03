@@ -17,6 +17,7 @@ required_secrets = [
   'MQTT_GATEWAY_REALY_URL',
   'MQTT_GATEWAY_REALY_USER',
   'MQTT_GATEWAY_REALY_PASSWORD',
+  'INTEGRATION_ENCRYPTION_KEY',
 ]
 domain = 'bushhog-api.rockware.io'
 

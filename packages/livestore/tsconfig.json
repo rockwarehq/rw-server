@@ -3,14 +3,29 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "noUncheckedIndexedAccess": false
   },
-  "include": ["src/**/*.ts"],
+  "include": [
+    "src/**/*.ts"
+  ],
   "references": [
-    { "path": "../auth" },
-    { "path": "../db" },
-    { "path": "../runtime" },
-    { "path": "../services" }
+    {
+      "path": "../auth"
+    },
+    {
+      "path": "../db"
+    },
+    {
+      "path": "../integrations"
+    },
+    {
+      "path": "../runtime"
+    },
+    {
+      "path": "../services"
+    }
   ]
 }

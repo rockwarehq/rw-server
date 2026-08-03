@@ -27,6 +27,9 @@ export interface LivestoreHookEventSchema {
   integration: string;
   description: string;
   contextFields: Record<string, LivestoreHookContextFieldSchema>;
+  // Lets a hook bind fields this schema does not declare, with its own valueType.
+  // Opt-in per event: strict events keep the fixed shape consumers depend on.
+  dynamicContext?: boolean;
 }
 
 // Composed from the catalog fragments; order (core, then imm) matches the

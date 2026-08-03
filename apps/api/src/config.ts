@@ -68,6 +68,15 @@ const EnvSchema = z.object({
   NATS_GATEWAY_RELAY_PASS: z.string().optional(),
 
   STATION_ACTION_WEBHOOK_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+
+  // 32 bytes of hex sealing integration credentials. Losing it makes every
+  // stored credential unrecoverable, so back it up WITH the database.
+  INTEGRATION_ENCRYPTION_KEY: isProduction
+    ? z.string().regex(/^[0-9a-fA-F]{64}$/, "must be 64 hex characters")
+    : z
+        .string()
+        .regex(/^[0-9a-fA-F]{64}$/, "must be 64 hex characters")
+        .optional(),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
@@ -147,6 +156,12 @@ export const processorConfig = {
 
 export const stationActionConfig = {
   webhookTimeoutMs: config.STATION_ACTION_WEBHOOK_TIMEOUT_MS,
+};
+
+// @rw/integrations reads the key from process.env; surfaced here so a missing
+// key fails at boot rather than on the first integration write.
+export const integrationConfig = {
+  encryptionKeyConfigured: Boolean(config.INTEGRATION_ENCRYPTION_KEY),
 };
 
 // Re-exported from the shared runtime package.
