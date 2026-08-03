@@ -17,6 +17,10 @@ model Cycle {
 
   attrs Json @default("{}")
 
+  // Livestore hook-event id that produced this cycle — unique so a
+  // redelivered event records at most one cycle.
+  sourceEventId String? @unique @db.Uuid
+
   siteId String @db.Uuid
   site   Site   @relation(fields: [siteId], references: [id])
 

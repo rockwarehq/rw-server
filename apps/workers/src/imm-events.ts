@@ -11,7 +11,14 @@ import { initQueues, stopQueues } from "@rw/services/queues/station-detection";
 import { livestoreEventType, type LivestoreHookEvent } from "@rw/livestore/catalog/events";
 
 import { ImmEventConsumer, type ImmEventHandlers } from "./imm-event-consumer.js";
+import { immEventsProcessed } from "./imm-events-metrics.js";
 import { installEntityEventSink, uninstallEntityEventSink } from "./entity-event-publisher.js";
+
+// Parallel completes across stations (per-station stays strictly serial).
+// ~10 lanes × ~20ms/tx ≈ 400-500 cycles/s ceiling; the imm-events DB pool (15)
+// leaves headroom over the lane cap.
+const CONCURRENCY = Number.parseInt(process.env.IMM_EVENTS_CONCURRENCY ?? "", 10) || 10;
+const MAX_IN_FLIGHT = Number.parseInt(process.env.IMM_EVENTS_MAX_INFLIGHT ?? "", 10) || 300;
 
 let nc: NatsConnection | null = null;
 let consumer: ImmEventConsumer | null = null;
@@ -33,7 +40,7 @@ export async function startImmEvents(): Promise<void> {
   const js = jetstream(nc);
   const jsm = await jetstreamManager(nc);
   await installEntityEventSink(js, jsm);
-  consumer = new ImmEventConsumer(js, jsm, handlers);
+  consumer = new ImmEventConsumer(js, jsm, handlers, { concurrency: CONCURRENCY, maxInFlight: MAX_IN_FLIGHT });
   await consumer.start();
   console.log(`[imm-events] connected to NATS at ${nc.getServer()}`);
 
@@ -44,7 +51,7 @@ export async function startImmEvents(): Promise<void> {
 
 export async function stopImmEvents(): Promise<void> {
   uninstallEntityEventSink();
-  consumer?.stop();
+  await consumer?.stop();
   consumer = null;
   if (nc && !nc.isClosed()) await nc.drain();
   nc = null;
@@ -54,6 +61,7 @@ export async function stopImmEvents(): Promise<void> {
 async function handleCycleCompleted(event: LivestoreHookEvent): Promise<void> {
   if (alreadyHandled(event.id)) {
     console.warn(`[imm-events] cycle_completed ${event.id} already handled; skipping redelivery`);
+    immEventsProcessed.inc({ result: "deduped" });
     return;
   }
 
@@ -61,6 +69,7 @@ async function handleCycleCompleted(event: LivestoreHookEvent): Promise<void> {
   if (!stationId) {
     console.warn(`[imm-events] cycle_completed ${event.id} missing stationId; skipping`);
     markHandled(event.id);
+    immEventsProcessed.inc({ result: "invalid" });
     return;
   }
 
@@ -69,22 +78,35 @@ async function handleCycleCompleted(event: LivestoreHookEvent): Promise<void> {
   if (!jobId) {
     console.warn(`[imm-events] cycle_completed ${event.id}: station ${stationId} has no current job; skipping`);
     markHandled(event.id);
+    immEventsProcessed.inc({ result: "invalid" });
     return;
   }
 
-  const result = await completeCycle({ stationId, timestamp: parseEmittedAt(event.emittedAt), jobId });
+  const result = await completeCycle({
+    stationId,
+    timestamp: parseEmittedAt(event.emittedAt),
+    jobId,
+    sourceEventId: event.id,
+  });
   if ("error" in result) {
     console.error(`[imm-events] cycle.record failed for station ${stationId}: ${result.error} (${result.code})`);
     markHandled(event.id); // validation failure — don't retry a bad event
+    immEventsProcessed.inc({ result: result.code === "DUPLICATE_EVENT" ? "deduped" : "invalid" });
     return;
   }
 
   markHandled(event.id);
+  if ("alreadyRecorded" in result && result.alreadyRecorded) {
+    console.warn(`[imm-events] cycle_completed ${event.id} already recorded as cycle ${result.data.id}; skipping`);
+    immEventsProcessed.inc({ result: "deduped" });
+    return;
+  }
+  immEventsProcessed.inc({ result: "ok" });
   console.log(`[imm-events] recorded cycle ${result.data.id} station=${stationId} job=${jobId} hook=${event.hookId}`);
 }
 
-// complete() is not idempotent — dedup nak redeliveries within this process.
-// (A restart between commit and ack can still redeliver; durable dedup is a follow-up.)
+// Fast-path dedup for redeliveries within this process; the durable guard is
+// complete()'s sourceEventId unique constraint (survives restarts).
 const handled = new Set<string>();
 const HANDLED_MAX = 10_000;
 

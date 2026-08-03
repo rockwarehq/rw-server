@@ -12,22 +12,15 @@
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 
-import {
-  DiscardPolicy,
-  jetstream,
-  jetstreamManager,
-  RetentionPolicy,
-  StorageType,
-} from "@nats-io/jetstream";
+import { jetstream, jetstreamManager } from "@nats-io/jetstream";
 import { connect } from "@nats-io/transport-node";
 import prisma, { createPrismaClient } from "@rw/db";
 import {
   deriveLivestoreEventSubject,
-  LIVESTORE_EVENT_STREAM,
-  LIVESTORE_EVENT_SUBJECT_FILTER,
   livestoreEventType,
   type LivestoreHookEvent,
 } from "@rw/livestore/catalog/events";
+import { ensureLivestoreEventStream } from "@rw/livestore/catalog/event-stream";
 
 createPrismaClient("api");
 
@@ -106,22 +99,7 @@ async function main(): Promise<void> {
   const js = jetstream(nc);
 
   // Ensure the stream exists (idempotent with the livestore hook-manager).
-  try {
-    const info = await jsm.streams.info(LIVESTORE_EVENT_STREAM);
-    const subjects = new Set(info.config.subjects ?? []);
-    if (!subjects.has(LIVESTORE_EVENT_SUBJECT_FILTER)) {
-      await jsm.streams.update(LIVESTORE_EVENT_STREAM, { subjects: [...subjects, LIVESTORE_EVENT_SUBJECT_FILTER] });
-    }
-  } catch {
-    await jsm.streams.add({
-      name: LIVESTORE_EVENT_STREAM,
-      subjects: [LIVESTORE_EVENT_SUBJECT_FILTER],
-      retention: RetentionPolicy.Limits,
-      storage: StorageType.File,
-      discard: DiscardPolicy.Old,
-      max_msgs: 100_000,
-    });
-  }
+  await ensureLivestoreEventStream(jsm);
 
   const targets = await resolveTargets();
   if (targets.length === 0) {
