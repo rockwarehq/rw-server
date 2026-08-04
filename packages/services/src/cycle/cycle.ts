@@ -32,6 +32,8 @@ export interface StartCycleInput {
    *  detection timers, and metric rollups are deferred to the replay
    *  reconciliation job. */
   replayed?: boolean;
+  /** Livestore hook-event id that produced this cycle. */
+  sourceEventId?: string;
 }
 
 /** Result from all strategy functions — unified so post-commit publishes can share one connection. */
@@ -73,8 +75,15 @@ interface StrategyResult {
  * rollback never leaks observable side effects.
  */
 export async function complete(input: StartCycleInput) {
-  const { stationId, timestamp, jobId, keepOpen = false, replayed = false } = input;
+  const { stationId, timestamp, jobId, keepOpen = false, replayed = false, sourceEventId = null } = input;
   const t0 = Date.now();
+
+  // Redelivery fast path: a cycle already recorded for this event returns
+  // without paying the setup query or the transaction.
+  if (sourceEventId) {
+    const existing = await findBySourceEventId(sourceEventId);
+    if (existing) return { data: existing, alreadyRecorded: true as const };
+  }
 
   // ── Single CTE: validate station + job + fetch tools + items-per-cycle ──
   const setupRows = await prisma.$queryRaw<
@@ -160,8 +169,8 @@ export async function complete(input: StartCycleInput) {
 
   const result = replayed
     ? keepOpen
-      ? await completeOpenCloseReplay(stationId, siteId, timestamp, jobId, versionConnects)
-      : await completeImmediateReplay(stationId, siteId, timestamp, jobId, versionConnects)
+      ? await completeOpenCloseReplay(stationId, siteId, timestamp, jobId, versionConnects, sourceEventId)
+      : await completeImmediateReplay(stationId, siteId, timestamp, jobId, versionConnects, sourceEventId)
     : keepOpen
       ? await completeOpenClose(
           stationId,
@@ -170,6 +179,7 @@ export async function complete(input: StartCycleInput) {
           jobId,
           versionConnects,
           idealCycleIncrement,
+          sourceEventId,
           slowThresholdSeconds,
         )
       : await completeImmediate(
@@ -179,8 +189,19 @@ export async function complete(input: StartCycleInput) {
           jobId,
           versionConnects,
           idealCycleIncrement,
+          sourceEventId,
           slowThresholdSeconds,
         );
+
+  // Null strategy result = lost the sourceEventId insert race to a concurrent
+  // delivery of the same event; the winner's row is committed by now.
+  if (!result) {
+    const existing = sourceEventId ? await findBySourceEventId(sourceEventId) : null;
+    if (!existing) return { error: "Cycle already recorded for this event", code: "DUPLICATE_EVENT" };
+    console.log(`[cycle] duplicate event ${sourceEventId} for station ${stationId}; already cycle ${existing.id}`);
+    return { data: existing, alreadyRecorded: true as const };
+  }
+
   const { cycle, items, closedEntry, newStatus, statusChanged, stationCtx, detectionPrepared } = result;
   const t2 = Date.now();
 
@@ -273,10 +294,16 @@ async function completeImmediate(
   jobId: string,
   versionConnects: VersionConnects,
   idealCycleIncrement: number,
+  sourceEventId: string | null,
   slowThresholdSeconds?: number,
-): Promise<StrategyResult> {
+): Promise<StrategyResult | null> {
   return prisma.$transaction(async (tx) => {
-    // ── CTE: insert cycle + lock + read current state ──
+    // Per-station advisory lock as its own statement BEFORE the prev-cycle
+    // read. Taking it via a CTE in the statement below does not serialize:
+    // Postgres evaluates the lock CTE lazily, after the reads.
+    await acquireStationLock(tx, stationId);
+
+    // ── CTE: insert cycle + read current state ──
     const cycleRows = await tx.$queryRaw<
       Array<{
         cycle_id: string;
@@ -290,16 +317,13 @@ async function completeImmediate(
         state_block_id: string | null;
       }>
     >`
-      WITH lock AS (
-        SELECT pg_advisory_xact_lock(hashtext(${stationId}))
-      ),
-      prev AS (
+      WITH prev AS (
         SELECT "end" FROM "Cycle"
         WHERE "stationId" = ${stationId} AND "end" IS NOT NULL
         ORDER BY "end" DESC LIMIT 1
       ),
       new_cycle AS (
-        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", "siteId", "stationId", "jobVersionId", attrs, "createdAt", "updatedAt")
+        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", "siteId", "stationId", "jobVersionId", "sourceEventId", attrs, "createdAt", "updatedAt")
         VALUES (
           gen_random_uuid(),
           COALESCE((SELECT "end" FROM prev), ${timestamp}),
@@ -308,10 +332,12 @@ async function completeImmediate(
           ${siteId},
           ${stationId},
           ${versionConnects.jobVersionId},
+          ${sourceEventId}::uuid,
           '{}',
           NOW(),
           NOW()
         )
+        ON CONFLICT ("sourceEventId") DO NOTHING
         RETURNING id, start, "end"
       )
       SELECT
@@ -322,10 +348,13 @@ async function completeImmediate(
       FROM new_cycle nc
       LEFT JOIN "StationStateLog" cs
         ON cs."stationId" = ${stationId} AND cs."endTime" IS NULL AND cs."deletedAt" IS NULL
-      CROSS JOIN lock
     `;
 
     const row = cycleRows[0];
+    // ON CONFLICT DO NOTHING on sourceEventId: a concurrent delivery already
+    // recorded this event. The insert is the only write so far — bail before
+    // the M2M/transition/inventory/allocation/metric statements.
+    if (!row) return null;
     const cycle = { id: row.cycle_id, start: row.cycle_start, end: row.cycle_end };
     // LEFT JOIN co-nullability: when state_id is non-null, all state_* columns are too.
     const openRow =
@@ -419,107 +448,118 @@ async function completeOpenClose(
   jobId: string,
   versionConnects: VersionConnects,
   idealCycleIncrement: number,
+  sourceEventId: string | null,
   slowThresholdSeconds?: number,
-): Promise<StrategyResult> {
-  return prisma.$transaction(async (tx) => {
-    const openCycles = await tx.cycle.findMany({
-      where: { stationId, end: null },
-      select: { id: true, start: true },
-    });
+): Promise<StrategyResult | null> {
+  return prisma
+    .$transaction(async (tx) => {
+      // Cross-process serialization, before ANY read — see completeImmediate.
+      await acquireStationLock(tx, stationId);
 
-    let items: Array<{ id: string; productId: string }> = [];
-
-    if (openCycles.length > 0) {
-      const itemArrays = await Promise.all(openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId)));
-      items = itemArrays.flat();
-
-      await tx.cycle.updateMany({
+      const openCycles = await tx.cycle.findMany({
         where: { stationId, end: null },
-        data: { end: timestamp },
-      });
-    } else {
-      const hasPrevious = await tx.cycle.findFirst({
-        where: { stationId },
-        select: { id: true },
+        select: { id: true, start: true },
       });
 
-      if (!hasPrevious) {
-        const zeroCycle = await tx.cycle.create({
-          data: {
-            start: timestamp,
-            end: timestamp,
-            cycleStatus: "GOOD",
-            siteId,
-            stationId,
-            ...versionConnects,
-          },
+      let items: Array<{ id: string; productId: string }> = [];
+
+      if (openCycles.length > 0) {
+        const itemArrays = await Promise.all(openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId)));
+        items = itemArrays.flat();
+
+        await tx.cycle.updateMany({
+          where: { stationId, end: null },
+          data: { end: timestamp },
+        });
+      } else {
+        const hasPrevious = await tx.cycle.findFirst({
+          where: { stationId },
+          select: { id: true },
         });
 
-        items = await inventory.createFromCycle(tx, zeroCycle.id, jobId);
+        if (!hasPrevious) {
+          const zeroCycle = await tx.cycle.create({
+            data: {
+              start: timestamp,
+              end: timestamp,
+              cycleStatus: "GOOD",
+              siteId,
+              stationId,
+              ...versionConnects,
+            },
+          });
+
+          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId);
+        }
       }
-    }
 
-    // Serialize with other state transitions (the lock previously came from transitionToUp).
-    await acquireStationLock(tx, stationId);
-    const openEntry = await findOpenStateEntry(tx, stationId);
-    const cycleDurationSeconds =
-      openCycles.length > 0 ? (timestamp.getTime() - openCycles[0].start.getTime()) / 1000 : null;
-    const isSlow =
-      cycleDurationSeconds != null &&
-      cycleDurationSeconds > 0 &&
-      slowThresholdSeconds != null &&
-      slowThresholdSeconds > 0 &&
-      cycleDurationSeconds > slowThresholdSeconds;
-    const transition = await applyCycleCompleteTransition(tx, stationId, timestamp, {
-      cycleWasSlow: isSlow,
-      cycleStart: openCycles[0]?.start ?? timestamp,
-      jobVersionId: versionConnects.jobVersionId,
-      openRow: openEntry
-        ? {
-            id: openEntry.id,
-            startTime: openEntry.startTime,
-            state: openEntry.state,
-            status: openEntry.status,
-            statusReasonId: openEntry.statusReasonId,
-            blockId: openEntry.blockId,
-          }
-        : null,
+      const openEntry = await findOpenStateEntry(tx, stationId);
+      const cycleDurationSeconds =
+        openCycles.length > 0 ? (timestamp.getTime() - openCycles[0].start.getTime()) / 1000 : null;
+      const isSlow =
+        cycleDurationSeconds != null &&
+        cycleDurationSeconds > 0 &&
+        slowThresholdSeconds != null &&
+        slowThresholdSeconds > 0 &&
+        cycleDurationSeconds > slowThresholdSeconds;
+      const transition = await applyCycleCompleteTransition(tx, stationId, timestamp, {
+        cycleWasSlow: isSlow,
+        cycleStart: openCycles[0]?.start ?? timestamp,
+        jobVersionId: versionConnects.jobVersionId,
+        openRow: openEntry
+          ? {
+              id: openEntry.id,
+              startTime: openEntry.startTime,
+              state: openEntry.state,
+              status: openEntry.status,
+              statusReasonId: openEntry.statusReasonId,
+              blockId: openEntry.blockId,
+            }
+          : null,
+      });
+
+      // The event is stamped on the NEW open cycle (not the closed one): a
+      // redelivered event then hits the unique violation here and the rollback
+      // undoes the close above — the first delivery owns that transition.
+      const newCycle = await tx.cycle.create({
+        data: {
+          start: timestamp,
+          cycleStatus: "GOOD",
+          siteId,
+          stationId,
+          sourceEventId,
+          ...versionConnects,
+        },
+      });
+
+      // Order allocation — moved inside the tx; see completeImmediate.
+      for (const { id, productId } of items) {
+        await allocateInventory(tx, siteId, productId, id);
+      }
+
+      const stationCtx = await loadStationMetricContext(tx, stationId);
+      const detectionPrepared = await prepareDetection(tx, stationId, jobId);
+
+      // Match the pre-refactor open/close call: HOUR increment was driven off
+      // the NEW open cycle whose start = end = timestamp, so totalCycleSeconds
+      // contribution per call is 0 on this path. Duration KPIs come from
+      // batchDurationRollup on the 5s combined tick, not this per-cycle bump.
+      await incrementHourCounts(tx, stationId, siteId, timestamp, 1, items.length, idealCycleIncrement, 0);
+
+      return {
+        cycle: newCycle,
+        items,
+        closedEntry: transition.closedEntry,
+        newStatus: transition.newStatus,
+        statusChanged: transition.statusChanged,
+        stationCtx,
+        detectionPrepared,
+      };
+    })
+    .catch((err: unknown) => {
+      if (sourceEventId && isSourceEventConflict(err)) return null;
+      throw err;
     });
-
-    const newCycle = await tx.cycle.create({
-      data: {
-        start: timestamp,
-        cycleStatus: "GOOD",
-        siteId,
-        stationId,
-        ...versionConnects,
-      },
-    });
-
-    // Order allocation — moved inside the tx; see completeImmediate.
-    for (const { id, productId } of items) {
-      await allocateInventory(tx, siteId, productId, id);
-    }
-
-    const stationCtx = await loadStationMetricContext(tx, stationId);
-    const detectionPrepared = await prepareDetection(tx, stationId, jobId);
-
-    // Match the pre-refactor open/close call: HOUR increment was driven off
-    // the NEW open cycle whose start = end = timestamp, so totalCycleSeconds
-    // contribution per call is 0 on this path. Duration KPIs come from
-    // batchDurationRollup on the 5s combined tick, not this per-cycle bump.
-    await incrementHourCounts(tx, stationId, siteId, timestamp, 1, items.length, idealCycleIncrement, 0);
-
-    return {
-      cycle: newCycle,
-      items,
-      closedEntry: transition.closedEntry,
-      newStatus: transition.newStatus,
-      statusChanged: transition.statusChanged,
-      stationCtx,
-      detectionPrepared,
-    };
-  });
 }
 
 // ── Strategy: immediate replay ──────────────────────────────────
@@ -530,8 +570,12 @@ async function completeImmediateReplay(
   timestamp: Date,
   jobId: string,
   versionConnects: VersionConnects,
-): Promise<StrategyResult> {
+  sourceEventId: string | null,
+): Promise<StrategyResult | null> {
   return prisma.$transaction(async (tx) => {
+    // Cross-process serialization, before the prev read — see completeImmediate.
+    await acquireStationLock(tx, stationId);
+
     const cycleRows = await tx.$queryRaw<
       Array<{
         cycle_id: string;
@@ -539,16 +583,13 @@ async function completeImmediateReplay(
         cycle_end: Date;
       }>
     >`
-      WITH lock AS (
-        SELECT pg_advisory_xact_lock(hashtext(${stationId}))
-      ),
-      prev AS (
+      WITH prev AS (
         SELECT "end" FROM "Cycle"
         WHERE "stationId" = ${stationId} AND "end" IS NOT NULL
         ORDER BY "end" DESC LIMIT 1
       ),
       new_cycle AS (
-        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", "siteId", "stationId", "jobVersionId", attrs, "createdAt", "updatedAt")
+        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", "siteId", "stationId", "jobVersionId", "sourceEventId", attrs, "createdAt", "updatedAt")
         VALUES (
           gen_random_uuid(),
           COALESCE((SELECT "end" FROM prev), ${timestamp}),
@@ -557,18 +598,21 @@ async function completeImmediateReplay(
           ${siteId},
           ${stationId},
           ${versionConnects.jobVersionId},
+          ${sourceEventId}::uuid,
           '{}',
           NOW(),
           NOW()
         )
+        ON CONFLICT ("sourceEventId") DO NOTHING
         RETURNING id, start, "end"
       )
       SELECT nc.id AS cycle_id, nc.start AS cycle_start, nc."end" AS cycle_end
       FROM new_cycle nc
-      CROSS JOIN lock
     `;
 
     const row = cycleRows[0];
+    // Duplicate sourceEventId — see completeImmediate.
+    if (!row) return null;
     const cycle = { id: row.cycle_id, start: row.cycle_start, end: row.cycle_end };
 
     // Batch M2M inserts
@@ -613,69 +657,103 @@ async function completeOpenCloseReplay(
   timestamp: Date,
   jobId: string,
   versionConnects: VersionConnects,
-): Promise<StrategyResult> {
-  return prisma.$transaction(async (tx) => {
-    const openCycles = await tx.cycle.findMany({
-      where: { stationId, end: null },
-      select: { id: true, start: true },
-    });
+  sourceEventId: string | null,
+): Promise<StrategyResult | null> {
+  return prisma
+    .$transaction(async (tx) => {
+      // Cross-process serialization, before ANY read — see completeImmediate.
+      await acquireStationLock(tx, stationId);
 
-    let items: Array<{ id: string; productId: string }> = [];
-
-    if (openCycles.length > 0) {
-      const itemArrays = await Promise.all(openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId)));
-      items = itemArrays.flat();
-
-      await tx.cycle.updateMany({
+      const openCycles = await tx.cycle.findMany({
         where: { stationId, end: null },
-        data: { end: timestamp },
-      });
-    } else {
-      const hasPrevious = await tx.cycle.findFirst({
-        where: { stationId },
-        select: { id: true },
+        select: { id: true, start: true },
       });
 
-      if (!hasPrevious) {
-        const zeroCycle = await tx.cycle.create({
-          data: {
-            start: timestamp,
-            end: timestamp,
-            cycleStatus: "GOOD",
-            siteId,
-            stationId,
-            ...versionConnects,
-          },
+      let items: Array<{ id: string; productId: string }> = [];
+
+      if (openCycles.length > 0) {
+        const itemArrays = await Promise.all(openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId)));
+        items = itemArrays.flat();
+
+        await tx.cycle.updateMany({
+          where: { stationId, end: null },
+          data: { end: timestamp },
+        });
+      } else {
+        const hasPrevious = await tx.cycle.findFirst({
+          where: { stationId },
+          select: { id: true },
         });
 
-        items = await inventory.createFromCycle(tx, zeroCycle.id, jobId);
+        if (!hasPrevious) {
+          const zeroCycle = await tx.cycle.create({
+            data: {
+              start: timestamp,
+              end: timestamp,
+              cycleStatus: "GOOD",
+              siteId,
+              stationId,
+              ...versionConnects,
+            },
+          });
+
+          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId);
+        }
       }
-    }
 
-    const newCycle = await tx.cycle.create({
-      data: {
-        start: timestamp,
-        cycleStatus: "GOOD",
-        siteId,
-        stationId,
-        ...versionConnects,
-      },
+      // Stamped on the new open cycle — see completeOpenClose.
+      const newCycle = await tx.cycle.create({
+        data: {
+          start: timestamp,
+          cycleStatus: "GOOD",
+          siteId,
+          stationId,
+          sourceEventId,
+          ...versionConnects,
+        },
+      });
+
+      for (const { id, productId } of items) {
+        await allocateInventory(tx, siteId, productId, id);
+      }
+
+      return {
+        cycle: newCycle,
+        items,
+        closedEntry: null,
+        newStatus: null,
+        statusChanged: false,
+        stationCtx: null,
+        detectionPrepared: null,
+      };
+    })
+    .catch((err: unknown) => {
+      if (sourceEventId && isSourceEventConflict(err)) return null;
+      throw err;
     });
+}
 
-    for (const { id, productId } of items) {
-      await allocateInventory(tx, siteId, productId, id);
-    }
+// ── Idempotency helpers ──────────────────────────────────────────
 
-    return {
-      cycle: newCycle,
-      items,
-      closedEntry: null,
-      newStatus: null,
-      statusChanged: false,
-      stationCtx: null,
-      detectionPrepared: null,
-    };
-  });
+async function findBySourceEventId(
+  sourceEventId: string,
+): Promise<{ id: string; start: Date; end: Date | null } | null> {
+  const rows = await prisma.$queryRaw<Array<{ id: string; start: Date; end: Date | null }>>`
+    SELECT id, start, "end" FROM "Cycle" WHERE "sourceEventId" = ${sourceEventId}::uuid LIMIT 1
+  `;
+  return rows[0] ?? null;
+}
+
+function isSourceEventConflict(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: unknown; meta?: { target?: unknown } };
+  if (e.code !== "P2002") return false;
+  const target = e.meta?.target;
+  if (Array.isArray(target)) return target.includes("sourceEventId");
+  if (typeof target === "string") return target.includes("sourceEventId");
+  // No target reported: don't swallow — rethrow and let the redelivery hit
+  // the sourceEventId fast path instead.
+  return false;
 }
 
 // ── Types ────────────────────────────────────────────────────────

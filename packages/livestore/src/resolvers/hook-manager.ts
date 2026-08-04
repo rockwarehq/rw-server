@@ -1,15 +1,7 @@
 import { randomUUID } from "node:crypto";
-import {
-  DiscardPolicy,
-  RetentionPolicy,
-  StorageType,
-  type JetStreamClient,
-  type JetStreamManager,
-} from "@nats-io/jetstream";
+import type { JetStreamClient, JetStreamManager } from "@nats-io/jetstream";
 import type { PrismaClient } from "@rw/db";
 import {
-  LIVESTORE_EVENT_STREAM,
-  LIVESTORE_EVENT_SUBJECT_FILTER,
   deriveLivestoreEventSubject,
   getLivestoreHookEventSchema,
   livestoreEventType,
@@ -17,6 +9,7 @@ import {
   type LivestoreHookEventContextMetadata,
   type LivestoreHookEvent,
 } from "../catalog/events.js";
+import { ensureLivestoreEventStream } from "../catalog/event-stream.js";
 import {
   graphHookConditionPropertyIds,
   parseGraphHookCondition,
@@ -29,8 +22,6 @@ import { evaluateHookCondition } from "./hook-condition.js";
 import { isRecord, type LivestoreLogger, type ValueEnvelope } from "../types/index.js";
 
 const encoder = new TextEncoder();
-const WEEK_NANOS = 7 * 24 * 60 * 60 * 1_000_000_000;
-const TWO_MINUTES_NANOS = 2 * 60 * 1_000_000_000;
 
 interface GraphHookRuntime {
   id: string;
@@ -314,27 +305,7 @@ export class HookManager {
   }
 
   private async ensureStream(): Promise<void> {
-    try {
-      const info = await this.jsm.streams.info(LIVESTORE_EVENT_STREAM);
-      const subjects = new Set(info.config.subjects ?? []);
-      if (!subjects.has(LIVESTORE_EVENT_SUBJECT_FILTER)) {
-        await this.jsm.streams.update(LIVESTORE_EVENT_STREAM, {
-          subjects: [...subjects, LIVESTORE_EVENT_SUBJECT_FILTER],
-        });
-      }
-      return;
-    } catch {
-      await this.jsm.streams.add({
-        name: LIVESTORE_EVENT_STREAM,
-        subjects: [LIVESTORE_EVENT_SUBJECT_FILTER],
-        retention: RetentionPolicy.Limits,
-        storage: StorageType.File,
-        discard: DiscardPolicy.Old,
-        max_msgs: 100_000,
-        max_age: WEEK_NANOS,
-        duplicate_window: TWO_MINUTES_NANOS,
-      });
-    }
+    await ensureLivestoreEventStream(this.jsm);
   }
 }
 
