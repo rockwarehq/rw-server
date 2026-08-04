@@ -1,8 +1,8 @@
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { hasPermission, type Permission } from "@rw/auth/iam/index";
-import { buildIntegrationCatalog, createDefaultIntegrationRegistry } from "@rw/integrations";
-import { integrations } from "@rw/services/integration/index";
+import { buildIntegrationCatalog, createDefaultIntegrationRegistry, executeAction } from "@rw/integrations";
+import { integrationRuns, integrations } from "@rw/services/integration/index";
 import * as graph from "@rw/livestore/graph/index";
 import type { GraphScope } from "@rw/livestore/graph/types";
 
@@ -102,6 +102,65 @@ export const remove = authRequired.input(scopedIdInputSchema).handler(async ({ i
 
 /** Static per deploy: type list, config/secret JSON Schemas, action inputs. */
 export const typeCatalog = authRequired.handler(async () => ({ data: catalog }));
+
+// ============================================================================
+// Runs + manual execution
+// ============================================================================
+
+const runListInputSchema = z.object({
+  siteId: z.uuid(),
+  integrationId: z.uuid().optional(),
+  status: z.enum(["PENDING", "SUCCEEDED", "FAILED"]).optional(),
+  triggerType: z.string().optional(),
+  limit: z.number().int().min(0).max(200).optional(),
+  offset: z.number().int().min(0).optional(),
+});
+
+export const runList = authRequired.input(runListInputSchema).handler(async ({ input, context }) => {
+  const { siteId, ...filter } = input;
+  const scope = await assertSite(context, siteId);
+  return integrationRuns.list(filter, scope);
+});
+
+const executeInputSchema = z.object({
+  siteId: z.uuid(),
+  id: z.uuid(),
+  actionKey: z.string().min(1),
+  actionVersion: z.string().min(1).optional(),
+  input: jsonObjectSchema,
+});
+
+// Manual run — doubles as "test connection". The action outcome rides the run
+// row (SUCCEEDED/FAILED); only scope/config problems become transport errors.
+export const execute = authRequired.input(executeInputSchema).handler(async ({ input, context }) => {
+  const scope = await assertSite(context, input.siteId);
+  unwrap(await integrations.getById(input.id, scope));
+  const record = unwrap(await integrations.loadForExecution(input.id));
+
+  const inputValid = registry.validateActionInput(record.type, input.actionKey, input.actionVersion, input.input);
+  if ("error" in inputValid) unwrap(inputValid);
+
+  const run = unwrap(
+    await integrationRuns.start({
+      integrationId: input.id,
+      actionKey: input.actionKey,
+      actionVersion: input.actionVersion ?? "1",
+      triggerType: "manual",
+      triggerId: context.iam.id ?? null,
+      input: input.input,
+    }),
+  );
+
+  const outcome = await executeAction(registry, record, input.actionKey, input.actionVersion, input.input);
+  const finished = await integrationRuns.finish(
+    run.id,
+    "error" in outcome
+      ? { status: "FAILED", error: `${outcome.code}: ${outcome.error}` }
+      : { status: "SUCCEEDED", result: outcome.data },
+  );
+
+  return finished;
+});
 
 // ============================================================================
 // Triggers

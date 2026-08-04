@@ -478,6 +478,8 @@ export const router = {
     triggerGet: integration.triggerGet,
     triggerUpdate: integration.triggerUpdate,
     triggerDelete: integration.triggerDelete,
+    runList: integration.runList,
+    execute: integration.execute,
   },
   automations: {
     getCatalog: automations.getCatalog,

@@ -25,6 +25,9 @@ imm-events = 'node dist/main.js --worker imm-events'
 # Needs only NATS_URL. Keep at 1 machine: extra instances just emit duplicate
 # series (distinguished by Fly's instance label) — harmless but noisy.
 gateway-health = 'node dist/main.js --worker gateway-health'
+# Dispatches livestore hook events to IntegrationTriggers (SQL/REST/webhook).
+# Needs DATABASE_URL, NATS_URL, INTEGRATION_ENCRYPTION_KEY. Keep at 1 machine.
+integration-events = 'node dist/main.js --worker integration-events'
 
 [env]
 NODE_ENV = 'production'
@@ -44,7 +47,7 @@ path = '/metrics'
 [[services]]
 internal_port = 9465
 protocol = 'tcp'
-processes = ['rollups', 'imm-events', 'gateway-health']
+processes = ['rollups', 'imm-events', 'gateway-health', 'integration-events']
 
   [[services.tcp_checks]]
   interval = '15s'

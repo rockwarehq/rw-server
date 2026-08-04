@@ -3,14 +3,31 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/processor/_ported/**/*.test.ts"],
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "src/processor/_ported/**/*.test.ts"
+  ],
   "references": [
-    { "path": "../../packages/db" },
-    { "path": "../../packages/services" },
-    { "path": "../../packages/runtime" },
-    { "path": "../../packages/livestore" }
+    {
+      "path": "../../packages/db"
+    },
+    {
+      "path": "../../packages/integrations"
+    },
+    {
+      "path": "../../packages/livestore"
+    },
+    {
+      "path": "../../packages/runtime"
+    },
+    {
+      "path": "../../packages/services"
+    }
   ]
 }
