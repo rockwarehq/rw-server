@@ -10,6 +10,7 @@ import {
 import {
   graphHookConditionPropertyIds,
   graphHookEventContextPropertyIds,
+  isValidHookContextFieldName,
   parseGraphHookCondition,
   parseGraphHookEventContext,
   type GraphHookCondition,
@@ -136,17 +137,34 @@ async function validateEventContext(input: unknown, eventSchema: LivestoreHookEv
   if (!context) return errorResult("INVALID_HOOK_CONTEXT", "Graph hook eventContext is invalid");
 
   const fields = eventSchema.contextFields;
-  for (const field of Object.keys(context)) {
+  for (const [field, binding] of Object.entries(context)) {
     const schema = fields[field];
-    if (!schema)
-      return errorResult(
-        "UNKNOWN_HOOK_CONTEXT_FIELD",
-        `Unknown context field for ${eventSchema.namespace}.${eventSchema.name}: ${field}`,
-      );
-    if (!schema.sourceTypes.includes(context[field].source.type)) {
+
+    // Author-declared field on a dynamicContext event: the catalog says nothing
+    // about it, so the binding has to declare its own type.
+    if (!schema) {
+      if (!eventSchema.dynamicContext) {
+        return errorResult(
+          "UNKNOWN_HOOK_CONTEXT_FIELD",
+          `Unknown context field for ${eventSchema.namespace}.${eventSchema.name}: ${field}`,
+        );
+      }
+      if (!isValidHookContextFieldName(field)) {
+        return errorResult(
+          "INVALID_HOOK_CONTEXT_FIELD",
+          `Context field name must be alphanumeric/underscore and start with a letter: ${field}`,
+        );
+      }
+      if (!binding.valueType) {
+        return errorResult("MISSING_HOOK_CONTEXT_TYPE", `Context field ${field} must declare a valueType`);
+      }
+      continue;
+    }
+
+    if (!schema.sourceTypes.includes(binding.source.type)) {
       return errorResult(
         "INVALID_HOOK_CONTEXT_SOURCE",
-        `Context field ${field} does not allow source type ${context[field].source.type}`,
+        `Context field ${field} does not allow source type ${binding.source.type}`,
       );
     }
   }
@@ -317,6 +335,16 @@ export async function remove(id: string, scope: GraphScope): Promise<ServiceResu
   const currentResult = await getGraphHookForSite(id, scope);
   if (!currentResult) return errorResult("GRAPH_HOOK_NOT_FOUND", "Graph hook not found");
   if ("error" in currentResult) return currentResult;
+
+  // A hookId-pinned trigger goes silently dormant if its hook disappears.
+  const triggers = await prisma.integrationTrigger.findMany({
+    where: { hookId: id, isDeleted: false, enabled: true },
+    select: { name: true },
+  });
+  if (triggers.length > 0) {
+    const names = triggers.map((trigger) => trigger.name).join(", ");
+    return errorResult("HOOK_HAS_TRIGGERS", `Hook is pinned by enabled integration trigger(s): ${names}`);
+  }
 
   await prisma.graphHook.update({ where: { id }, data: { isDeleted: true } });
   publishGraphDefinitionEvent({

@@ -1,6 +1,7 @@
 export * as nodes from "./nodes.js";
 export * as properties from "./properties.js";
 export * as hooks from "./hooks.js";
+export * as triggers from "./triggers.js";
 export * as nodeTypes from "./node-types.js";
 export * as introspect from "./introspect.js";
 export * as planner from "./plan.js";

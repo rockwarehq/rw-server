@@ -12,8 +12,10 @@
     "dev:imm-events": "tsx watch src/main.ts --worker imm-events",
     "start:gateway-health": "node dist/main.js --worker gateway-health",
     "dev:gateway-health": "tsx watch src/main.ts --worker gateway-health",
+    "dev:integration-events": "tsx watch src/main.ts --worker integration-events",
     "publish:cycles": "tsx scripts/publish-cycles.ts",
     "seed:station": "tsx scripts/seed-station.ts",
+    "seed:loadtest": "tsx scripts/seed-loadtest.ts",
     "seed:rollup-set": "tsx scripts/seed-rollup-set.ts",
     "reseed:graph": "tsx scripts/reseed-graph.ts",
     "publish:counter": "tsx scripts/publish-counter.ts"
@@ -27,6 +29,7 @@
     "@prisma/adapter-pg": "^7.5.0",
     "@prisma/client": "^7.5.0",
     "@rw/db": "workspace:*",
+    "@rw/integrations": "workspace:*",
     "@rw/livestore": "workspace:*",
     "@rw/runtime": "workspace:*",
     "@rw/services": "workspace:*",

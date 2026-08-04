@@ -5,11 +5,24 @@
     "rootDir": "./src",
     "noUncheckedIndexedAccess": false
   },
-  "include": ["src/**/*.ts"],
+  "include": [
+    "src/**/*.ts"
+  ],
   "references": [
-    { "path": "../auth" },
-    { "path": "../automations" },
-    { "path": "../db" },
-    { "path": "../runtime" }
+    {
+      "path": "../auth"
+    },
+    {
+      "path": "../automations"
+    },
+    {
+      "path": "../db"
+    },
+    {
+      "path": "../integrations"
+    },
+    {
+      "path": "../runtime"
+    }
   ]
 }

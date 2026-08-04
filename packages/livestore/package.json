@@ -26,6 +26,7 @@
     "@nats-io/transport-node": "^3.4.0",
     "@rw/auth": "workspace:*",
     "@rw/db": "workspace:*",
+    "@rw/integrations": "workspace:*",
     "@rw/runtime": "workspace:*",
     "@rw/services": "workspace:*",
     "fastify": "^5.6.2",

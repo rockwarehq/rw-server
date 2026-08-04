@@ -5,6 +5,7 @@ app = 'rw-dev-api'
 # - DATABASE_URL_MIGRATION (direct, port 5432) — used by [deploy] release_command
 # - REDIS_URL, JWT_SECRET, RESEND_API_KEY, PROCESSOR_SHARED_SECRET
 # - MQTT_GATEWAY_REALY_*, AWS_*
+# - INTEGRATION_ENCRYPTION_KEY (64 hex; seals integration credentials — back up with the DB)
 [_meta]
 required_secrets = [
   'DATABASE_URL',
@@ -16,6 +17,7 @@ required_secrets = [
   'MQTT_GATEWAY_REALY_URL',
   'MQTT_GATEWAY_REALY_USER',
   'MQTT_GATEWAY_REALY_PASSWORD',
+  'INTEGRATION_ENCRYPTION_KEY',
 ]
 domain = 'dev-api.rockware.io'
 

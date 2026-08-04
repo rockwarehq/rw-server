@@ -26,6 +26,7 @@ COPY packages/services/package.json packages/services/
 COPY packages/auth/package.json packages/auth/
 COPY packages/runtime/package.json packages/runtime/
 COPY packages/automations/package.json packages/automations/
+COPY packages/integrations/package.json packages/integrations/
 COPY packages/livestore/package.json packages/livestore/
 COPY packages/historian/package.json packages/historian/
 COPY apps/api/package.json apps/api/
@@ -61,6 +62,7 @@ COPY packages/services/package.json packages/services/
 COPY packages/auth/package.json packages/auth/
 COPY packages/runtime/package.json packages/runtime/
 COPY packages/automations/package.json packages/automations/
+COPY packages/integrations/package.json packages/integrations/
 COPY packages/livestore/package.json packages/livestore/
 COPY packages/historian/package.json packages/historian/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
@@ -78,6 +80,7 @@ COPY packages/services/package.json packages/services/
 COPY packages/auth/package.json packages/auth/
 COPY packages/runtime/package.json packages/runtime/
 COPY packages/automations/package.json packages/automations/
+COPY packages/integrations/package.json packages/integrations/
 COPY packages/livestore/package.json packages/livestore/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --prod --filter '@rw/workers...'
@@ -94,6 +97,7 @@ COPY packages/runtime/package.json packages/runtime/
 COPY packages/services/package.json packages/services/
 COPY packages/auth/package.json packages/auth/
 COPY packages/automations/package.json packages/automations/
+COPY packages/integrations/package.json packages/integrations/
 COPY packages/livestore/package.json packages/livestore/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --prod --filter '@rw/livestore-app...'
@@ -112,6 +116,7 @@ COPY --from=prod-deps-api /repo/packages/services/node_modules packages/services
 COPY --from=prod-deps-api /repo/packages/auth/node_modules packages/auth/node_modules
 COPY --from=prod-deps-api /repo/packages/runtime/node_modules packages/runtime/node_modules
 COPY --from=prod-deps-api /repo/packages/automations/node_modules packages/automations/node_modules
+COPY --from=prod-deps-api /repo/packages/integrations/node_modules packages/integrations/node_modules
 COPY --from=prod-deps-api /repo/packages/livestore/node_modules packages/livestore/node_modules
 COPY --from=prod-deps-api /repo/packages/historian/node_modules packages/historian/node_modules
 
@@ -129,6 +134,8 @@ COPY --from=build /repo/packages/runtime/dist packages/runtime/dist
 COPY --from=build /repo/packages/runtime/package.json packages/runtime/
 COPY --from=build /repo/packages/automations/dist packages/automations/dist
 COPY --from=build /repo/packages/automations/package.json packages/automations/
+COPY --from=build /repo/packages/integrations/dist packages/integrations/dist
+COPY --from=build /repo/packages/integrations/package.json packages/integrations/
 COPY --from=build /repo/packages/livestore/dist packages/livestore/dist
 COPY --from=build /repo/packages/livestore/package.json packages/livestore/
 COPY --from=build /repo/packages/historian/dist packages/historian/dist
@@ -160,6 +167,7 @@ COPY --from=prod-deps-workers /repo/packages/services/node_modules packages/serv
 COPY --from=prod-deps-workers /repo/packages/auth/node_modules packages/auth/node_modules
 COPY --from=prod-deps-workers /repo/packages/runtime/node_modules packages/runtime/node_modules
 COPY --from=prod-deps-workers /repo/packages/automations/node_modules packages/automations/node_modules
+COPY --from=prod-deps-workers /repo/packages/integrations/node_modules packages/integrations/node_modules
 COPY --from=prod-deps-workers /repo/packages/livestore/node_modules packages/livestore/node_modules
 
 COPY --from=build /repo/packages/db/dist packages/db/dist
@@ -178,6 +186,8 @@ COPY --from=build /repo/packages/runtime/dist packages/runtime/dist
 COPY --from=build /repo/packages/runtime/package.json packages/runtime/
 COPY --from=build /repo/packages/automations/dist packages/automations/dist
 COPY --from=build /repo/packages/automations/package.json packages/automations/
+COPY --from=build /repo/packages/integrations/dist packages/integrations/dist
+COPY --from=build /repo/packages/integrations/package.json packages/integrations/
 COPY --from=build /repo/packages/livestore/dist packages/livestore/dist
 COPY --from=build /repo/packages/livestore/package.json packages/livestore/
 COPY --from=build /repo/apps/workers/dist apps/workers/dist
@@ -204,6 +214,7 @@ COPY --from=prod-deps-livestore /repo/packages/runtime/node_modules packages/run
 COPY --from=prod-deps-livestore /repo/packages/services/node_modules packages/services/node_modules
 COPY --from=prod-deps-livestore /repo/packages/auth/node_modules packages/auth/node_modules
 COPY --from=prod-deps-livestore /repo/packages/automations/node_modules packages/automations/node_modules
+COPY --from=prod-deps-livestore /repo/packages/integrations/node_modules packages/integrations/node_modules
 COPY --from=prod-deps-livestore /repo/packages/livestore/node_modules packages/livestore/node_modules
 
 COPY --from=build /repo/packages/db/dist packages/db/dist
@@ -220,6 +231,8 @@ COPY --from=build /repo/packages/services/package.json packages/services/
 COPY --from=build /repo/packages/auth/package.json packages/auth/
 COPY --from=build /repo/packages/automations/dist packages/automations/dist
 COPY --from=build /repo/packages/automations/package.json packages/automations/
+COPY --from=build /repo/packages/integrations/dist packages/integrations/dist
+COPY --from=build /repo/packages/integrations/package.json packages/integrations/
 COPY --from=build /repo/packages/livestore/dist packages/livestore/dist
 COPY --from=build /repo/packages/livestore/package.json packages/livestore/
 COPY --from=build /repo/apps/livestore/dist apps/livestore/dist

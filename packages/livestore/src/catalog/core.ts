@@ -9,8 +9,10 @@ export const coreLivestoreCatalog = {
       version: "1",
       displayName: "LiveStore Hook Triggered",
       integration: "livestore",
-      description: "Generic event emitted whenever a LiveStore hook condition matches.",
+      description:
+        "Generic event emitted whenever a LiveStore hook condition matches. Carries whatever context fields the hook declares, so a consumer needing arbitrary values (e.g. stored procedure parameters) does not require a catalog change.",
       contextFields: {},
+      dynamicContext: true,
     },
   ],
   graphTypeNamespaces: [],

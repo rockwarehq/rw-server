@@ -31,6 +31,7 @@ import * as automations from "./automations.js";
 import * as entity from "./entity.js";
 import * as graph from "./graph.js";
 import * as apiToken from "./api-token.js";
+import * as integration from "./integration.js";
 
 export const router = {
   events: {
@@ -464,6 +465,21 @@ export const router = {
     create: apiToken.create,
     list: apiToken.list,
     revoke: apiToken.revoke,
+  },
+  integration: {
+    create: integration.create,
+    list: integration.list,
+    get: integration.get,
+    update: integration.update,
+    delete: integration.remove,
+    typeCatalog: integration.typeCatalog,
+    triggerCreate: integration.triggerCreate,
+    triggerList: integration.triggerList,
+    triggerGet: integration.triggerGet,
+    triggerUpdate: integration.triggerUpdate,
+    triggerDelete: integration.triggerDelete,
+    runList: integration.runList,
+    execute: integration.execute,
   },
   automations: {
     getCatalog: automations.getCatalog,
