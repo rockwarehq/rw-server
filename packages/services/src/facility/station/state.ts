@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
 import { publishMetricValueChange } from "../../rpc/metrics-bus.js";
+import { publishStationShiftContext } from "../../metrics/graph-context.js";
 import { updateTimeBased } from "../../metrics/recalc.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
@@ -266,6 +267,26 @@ function publishStationCurrentJobMetricEvent(
   });
 }
 
+// Re-stamp the job columns on the shift bucket whose window covers NOW.
+// Closed shifts keep the label they ran under; if no current bucket exists
+// (station idle across a shift boundary) there is nothing to stamp — the
+// next shift-create reads Station.currentJobId fresh anyway.
+async function stampCurrentShiftBucketJob(stationId: string, jobName: string | null): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "MetricBucket" mb
+    SET "currentJobId" = s."currentJobId", "currentJobName" = ${jobName}, "updatedAt" = NOW()
+    FROM "Station" s
+    WHERE s.id = ${stationId}::uuid
+      AND mb.id = (
+        SELECT id FROM "MetricBucket"
+        WHERE "entityType" = 'STATION' AND "entityId" = ${stationId}::uuid AND granularity = 'SHIFT'
+          AND "startTime" <= NOW()
+          AND NOW() < "startTime" + make_interval(secs => "durationSeconds")
+        ORDER BY "startTime" DESC
+        LIMIT 1
+      )`;
+}
+
 async function publishStationCurrentJobMetric(
   stationId: string,
   jobName: string | null,
@@ -274,6 +295,12 @@ async function publishStationCurrentJobMetric(
   const ctx = await loadStationMetricContext(prisma, stationId);
   if (!ctx) return;
   publishStationCurrentJobMetricEvent(ctx, jobName, observedAt);
+  // Livestore's job label rides the SHIFT bucket mirror: stamp the current
+  // bucket (so rollup ticks re-emit the new value, not the old) and publish
+  // the context envelope directly so livestore updates without waiting for
+  // the next tick.
+  await stampCurrentShiftBucketJob(stationId, jobName);
+  await publishStationShiftContext(stationId, { currentJobName: jobName });
 }
 
 function roundToTenth(value: number): number {
@@ -334,6 +361,16 @@ async function publishStationStandardCycleMetric(
   const ctx = await loadStationMetricContext(prisma, stationId);
   if (!ctx) return;
   publishStationStandardCycleMetricEvent(ctx, standardCycleSeconds, observedAt);
+  // Same mirror-staleness handling as the job label: stamp the current shift
+  // bucket and publish the context envelope immediately (job changes swap the
+  // standard cycle too).
+  await prisma.$executeRaw`
+    UPDATE "MetricBucket"
+    SET "currentStandardCycle" = ${standardCycleSeconds}, "updatedAt" = NOW()
+    WHERE "entityType" = 'STATION' AND "entityId" = ${stationId}::uuid AND granularity = 'SHIFT'
+      AND "startTime" <= NOW()
+      AND NOW() < "startTime" + make_interval(secs => "durationSeconds")`;
+  await publishStationShiftContext(stationId, { currentStandardCycle: standardCycleSeconds });
 }
 
 export function publishCurrentShiftMetric(
