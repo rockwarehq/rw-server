@@ -356,6 +356,17 @@ async function resolveSystemEntityRecord(
         statusReason: { select: { name: true } },
       },
     });
+    // Last completed cycle, like status a derived value: cycle completion
+    // publishes entity.changes for these two fields (see station/state.ts).
+    const lastCycle = await prisma.cycle.findFirst({
+      where: { stationId: station.id, end: { not: null } },
+      orderBy: { end: "desc" },
+      select: { start: true, end: true },
+    });
+    const lastCycleSeconds =
+      lastCycle?.end != null
+        ? Math.round(((lastCycle.end.getTime() - lastCycle.start.getTime()) / 1000) * 10) / 10
+        : null;
     return {
       data: {
         ...station,
@@ -366,6 +377,8 @@ async function resolveSystemEntityRecord(
         statusReasonId: openState?.statusReasonId ?? null,
         statusReason: openState?.statusReason?.name ?? null,
         statusStartAt: openState?.startTime ?? null,
+        lastCycleSeconds,
+        lastCycleCompletedAt: lastCycle?.end ?? null,
         currentVersion: station.currentVersion
           ? {
               ...station.currentVersion,

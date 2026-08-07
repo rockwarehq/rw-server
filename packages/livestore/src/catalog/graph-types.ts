@@ -286,6 +286,26 @@ export const IMM_GRAPH_TYPE_NAMESPACE = {
           "date",
           11,
         ),
+        entityField(
+          "lastCycleSeconds",
+          "Last Cycle Time",
+          "Duration in seconds (to the tenth) of the most recent completed cycle",
+          "imm.station",
+          "$input.stationId",
+          "lastCycleSeconds",
+          "number",
+          12,
+        ),
+        entityField(
+          "lastCycleCompletedAt",
+          "Last Cycle Completed",
+          "When the most recent completed cycle ended",
+          "imm.station",
+          "$input.stationId",
+          "lastCycleCompletedAt",
+          "date",
+          13,
+        ),
 
         // Mirrored counters (NATS metric subjects, SHIFT granularity)
         ...counterMetricFields(100),
