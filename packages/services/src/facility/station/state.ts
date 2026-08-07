@@ -323,6 +323,9 @@ function publishStationLastCycleMetricEvent(
     entityName: ctx.name,
     path: ctx.path,
   });
+  // Unlike status, published every cycle: the entity resolver only re-reads
+  // properties bound to these two fields, so the fan-out stays surgical.
+  publishStationStatusEntityEvent(ctx, ["lastCycleSeconds", "lastCycleCompletedAt"]);
 }
 
 async function publishStationLastCycleMetric(
@@ -333,9 +336,6 @@ async function publishStationLastCycleMetric(
   const ctx = await loadStationMetricContext(prisma, stationId);
   if (!ctx) return;
   publishStationLastCycleMetricEvent(ctx, cycleSeconds, observedAt);
-  // Unlike status, published every cycle: the entity resolver only re-reads
-  // properties bound to these two fields, so the fan-out stays surgical.
-  publishStationStatusEntityEvent(ctx, ["lastCycleSeconds", "lastCycleCompletedAt"]);
 }
 
 function publishStationStandardCycleMetricEvent(
