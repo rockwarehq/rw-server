@@ -1,0 +1,43 @@
+app = 'trimlok-elk-api'
+
+# All secrets below are set by rw-provisioner `tenant-provision trimlok-elk`.
+# No MQTT_* on this tenant: ingest comes in via the NATS edge gateway
+# (wss://trimlok-elk-nats.rockware.io:443), not a per-tenant MQTT broker.
+[_meta]
+required_secrets = [
+  'DATABASE_URL',
+  'DATABASE_URL_MIGRATION',
+  'REDIS_URL',
+  'JWT_SECRET',
+  'RESEND_API_KEY',
+  'PROCESSOR_SHARED_SECRET',
+  'INTEGRATION_ENCRYPTION_KEY',
+  'ADMIN_EMAIL',
+  'ADMIN_PASSWORD',
+  'CORS_ALLOWED_ORIGINS',
+  'NATS_URL',
+  'NATS_GATEWAY_RELAY_SERVERS',
+  'NATS_GATEWAY_RELAY_USER',
+  'NATS_GATEWAY_RELAY_PASS',
+  'AWS_ACCESS_KEY_ID',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_REGION',
+  'AWS_ENDPOINT_URL_S3',
+  'BUCKET_NAME',
+]
+domain = 'trimlok-elk-api.rockware.io'
+
+[env]
+LOG_LEVEL = 'info'
+APP_BASE_URL = 'https://trimlok-elk.rockware.io'
+# BUCKET_NAME intentionally NOT set here: the provisioner's Tigris secret
+# ('trimlok-elk-storage') provides it, and Fly secrets override [env] anyway.
+# DEV_CYCLE_SIMULATOR is local-dev only. On fly, cycles ALWAYS come from
+# the gateway/NATS pipeline. Do not set DEV_CYCLE_SIMULATOR here.
+
+[[http_service.checks]]
+interval = '10s'
+timeout = '2s'
+grace_period = '30s'
+method = 'GET'
+path = '/health'

@@ -21,6 +21,7 @@ on:
           - sim
           - dixie
           - bushhog
+          - trimlok-elk
         default: dev
       app:
         description: 'App to deploy'

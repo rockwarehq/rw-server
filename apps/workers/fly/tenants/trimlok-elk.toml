@@ -1,0 +1,52 @@
+app = 'trimlok-elk-workers'
+
+# Fly secrets (set by rw-provisioner `tenant-provision trimlok-elk`):
+# - DATABASE_URL           (pooled, port 6432) — processor + processor-consumer
+# - DATABASE_URL_ROLLUPS   (direct,  port 5432) — rollups only; long CTE queries
+#                           bypass pgbouncer to avoid tx-mode connection-hold
+# - DATABASE_URL_MIGRATION (direct,  port 5432) — used by [deploy] release_command
+# - REDIS_URL              (rollups dirty-buckets; imm-events cycle post-commit)
+# - NATS_URL               (imm-events event source; rollups graph bridge)
+# - PROCESSOR_SHARED_SECRET (must match trimlok-elk-api's value)
+# - INTEGRATION_ENCRYPTION_KEY (64 hex; must match the api app's value)
+# No MQTT_*: this tenant ingests via the NATS edge gateway -> livestore
+# imm events, not a per-tenant MQTT broker.
+[_meta]
+required_secrets = [
+  'DATABASE_URL',
+  'DATABASE_URL_ROLLUPS',
+  'DATABASE_URL_MIGRATION',
+  'REDIS_URL',
+  'NATS_URL',
+  'PROCESSOR_SHARED_SECRET',
+  'INTEGRATION_ENCRYPTION_KEY',
+]
+
+[env]
+LOG_LEVEL = 'info'
+
+# Shrink the Prisma pool so rollups direct (port 5432) + pgbouncer server
+# pool fit the PS_10 cluster's connection cap (same sizing as dev; raise if
+# the cluster is upsized).
+DB_POOL_SIZE = '5'
+
+# processor → api RPC (triggerEvent / listEventsForProcessor / getTagSnapshots).
+# Use fly's private 6PN DNS for IPv6 cross-app traffic; NO trailing /rpc — the
+# client wrapper appends /rpc itself.
+STATION_EVENTS_ENABLED = 'true'
+STATION_EVENTS_URL = 'http://trimlok-elk-api.internal:3000'
+
+# Downstream processors. WORKSPACE_HTTP_EVENTS forwards every parsed point
+# value to the api for general processing (NOT the same path as station-events).
+WORKSPACE_HTTP_EVENTS_ENABLED = 'true'
+WORKSPACE_HTTP_EVENTS_URL = 'http://trimlok-elk-api.internal:3000'
+# DB_EVENTS persists raw point values via the shared Prisma pool. Off for
+# first deploy — flip to 'true' once point-value persistence is wanted here.
+DB_EVENTS_ENABLED = 'false'
+POINTS_SPLIT_ENRICH_ENABLED = 'true'
+
+# Cache-refresh server defaults to port 9465 which collides with the healthz
+# host server. Disabled until we expose 9468 in [[services]] + set
+# STATION_EVENTS_CACHE_REFRESH_PORT='9468' + set PROCESSOR_CACHE_REFRESH_URL
+# on trimlok-elk-api pointing to http://trimlok-elk-workers.internal:9468/internal/cache/refresh.
+STATION_EVENTS_CACHE_REFRESH_ENABLED = 'false'
