@@ -1,0 +1,21 @@
+app = 'trimlok-elk-livestore'
+
+# Fly secrets (set by rw-provisioner `tenant-provision trimlok-elk`):
+# JWT_SECRET is SHARED with trimlok-elk-api (livestore verifies api-issued
+# JWTs); NATS_TAGS_SOURCE_DOMAIN/STREAM ('edge'/'TAGS') make the cloud RW_TAGS
+# stream source the edge gateway's leaf JetStream domain. The domain is public
+# because the BROWSER connects to livestore directly (rw-ui bakes
+# VITE_LIVESTORE_URL into the bundle).
+[_meta]
+required_secrets = [
+  'DATABASE_URL',
+  'DATABASE_URL_MIGRATION',
+  'NATS_URL',
+  'JWT_SECRET',
+  'NATS_TAGS_SOURCE_DOMAIN',
+  'NATS_TAGS_SOURCE_STREAM',
+]
+domain = 'trimlok-elk-livestore.rockware.io'
+
+[env]
+LOG_LEVEL = 'info'
