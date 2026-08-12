@@ -1,0 +1,70 @@
+{
+  "name": "ethernet-ip",
+  "displayName": "EtherNet/IP (Allen-Bradley)",
+  "description": "Connect to Rockwell ControlLogix/CompactLogix controllers over EtherNet/IP (CIP)",
+  "version": "1.0.0",
+  "vendor": "Rockware",
+  "category": "device",
+  "status": "active",
+  "connectionSchema": {
+    "type": "object",
+    "properties": {
+      "host": {
+        "type": "string",
+        "title": "IP Address",
+        "examples": ["192.168.1.10"]
+      },
+      "slot": {
+        "type": "integer",
+        "title": "Processor Slot",
+        "description": "Backplane slot of the controller (0 for CompactLogix)",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 16
+      },
+      "timeout": {
+        "type": "integer",
+        "title": "Timeout (ms)",
+        "default": 10000,
+        "minimum": 100
+      }
+    },
+    "required": ["host"]
+  },
+  "pointSchema": {
+    "type": "object",
+    "properties": {
+      "address": {
+        "type": "string",
+        "title": "Tag Name",
+        "description": "Controller-scope tag name, or Program:<program>.<tag> for program scope. Supports UDT members and array elements.",
+        "examples": ["Counter", "Program:MainProgram.Motor.Speed", "DataArray[3]"]
+      },
+      "dataType": {
+        "type": "string",
+        "title": "Data Type",
+        "description": "Informational — tag types are discovered from the controller",
+        "enum": ["bool", "sint", "int", "dint", "real", "string"]
+      }
+    },
+    "required": ["address"]
+  },
+  "capabilities": {
+    "read": true,
+    "write": false,
+    "subscribe": false,
+    "browse": false
+  },
+  "ui": {
+    "connectionForm": {
+      "layout": "grid",
+      "fieldOrder": ["host", "slot", "timeout"],
+      "fieldGroups": {
+        "Connection": ["host", "slot"],
+        "Advanced": ["timeout"]
+      }
+    },
+    "icon": "🏭",
+    "color": "#EF4444"
+  }
+}
