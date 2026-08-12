@@ -24,10 +24,10 @@
 import { Redis } from "ioredis";
 import {
   batchDurationRollup,
-  cascadeStationShiftDay,
+  cascadeStationShiftDayBatch,
   cascadeJobRollup,
   cascadeParentRollup,
-  syncExpectedCyclesFromJobs,
+  syncExpectedCyclesFromJobsBatch,
 } from "./cascade.js";
 import { classifyDbTimeout } from "@rw/db";
 
@@ -233,38 +233,27 @@ async function combinedTick(): Promise<void> {
     const t2 = Date.now();
 
     // Phase 3: JOB HOUR → STATION HOUR — overwrites batchDurationRollup's
-    // naive expectedCycles with the job-clipped sum.
-    for (let i = 0; i < allStations.length; i += CONCURRENCY) {
-      await Promise.all(
-        allStations.slice(i, i + CONCURRENCY).map(({ stationId, siteId }) =>
-          syncExpectedCyclesFromJobs(stationId, siteId, now).catch((err) => {
-            const kind = classifyDbTimeout(err);
-            if (kind)
-              console.error(
-                `[metrics:tick] DB timeout fired (${kind}) in syncExpectedCyclesFromJobs for station ${stationId}`,
-              );
-            console.error(`[metrics:tick] Sync expected failed for station ${stationId}:`, err);
-          }),
-        ),
-      );
+    // naive expectedCycles with the job-clipped sum. Set-based: one statement
+    // for all stations (was one statement per station).
+    const stationIds = allStations.map((s) => s.stationId);
+    try {
+      await syncExpectedCyclesFromJobsBatch(stationIds, now);
+    } catch (err) {
+      const kind = classifyDbTimeout(err);
+      if (kind) console.error(`[metrics:tick] DB timeout fired (${kind}) in syncExpectedCyclesFromJobsBatch`);
+      console.error("[metrics:tick] Sync expected (batch) failed:", err);
     }
 
     const t3 = Date.now();
 
     // Phase 4: STATION HOUR → STATION SHIFT/DAY — picks up corrected expected.
-    for (let i = 0; i < allStations.length; i += CONCURRENCY) {
-      await Promise.all(
-        allStations.slice(i, i + CONCURRENCY).map(({ stationId, siteId }) =>
-          cascadeStationShiftDay(stationId, siteId, now).catch((err) => {
-            const kind = classifyDbTimeout(err);
-            if (kind)
-              console.error(
-                `[metrics:tick] DB timeout fired (${kind}) in cascadeStationShiftDay for station ${stationId}`,
-              );
-            console.error(`[metrics:tick] Shift/day rollup failed for station ${stationId}:`, err);
-          }),
-        ),
-      );
+    // Set-based: one statement for all stations.
+    try {
+      await cascadeStationShiftDayBatch(stationIds, now);
+    } catch (err) {
+      const kind = classifyDbTimeout(err);
+      if (kind) console.error(`[metrics:tick] DB timeout fired (${kind}) in cascadeStationShiftDayBatch`);
+      console.error("[metrics:tick] Shift/day rollup (batch) failed:", err);
     }
 
     const t4 = Date.now();
