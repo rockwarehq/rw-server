@@ -1,0 +1,95 @@
+{
+  "name": "s7",
+  "displayName": "Siemens S7",
+  "description": "Connect to Siemens S7-300/400/1200/1500 PLCs over S7 communication (RFC1006). For S7-1200/1500, PUT/GET must be enabled and accessed data blocks must have optimized block access disabled — prefer the OPC UA driver on those models where available.",
+  "version": "1.0.0",
+  "vendor": "Rockware",
+  "category": "device",
+  "status": "active",
+  "connectionSchema": {
+    "type": "object",
+    "properties": {
+      "host": {
+        "type": "string",
+        "title": "IP Address",
+        "examples": ["192.168.0.2"]
+      },
+      "port": {
+        "type": "integer",
+        "title": "Port",
+        "default": 102,
+        "minimum": 1,
+        "maximum": 65535
+      },
+      "rack": {
+        "type": "integer",
+        "title": "Rack",
+        "description": "0 for S7-1200/1500 and most S7-300",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 7
+      },
+      "slot": {
+        "type": "integer",
+        "title": "Slot",
+        "description": "1 for S7-1200/1500, 2 for S7-300/400",
+        "default": 1,
+        "minimum": 0,
+        "maximum": 31
+      },
+      "localTSAP": {
+        "type": "integer",
+        "title": "Local TSAP",
+        "description": "Optional TSAP addressing (e.g. S7-200/LOGO!); overrides rack/slot when set"
+      },
+      "remoteTSAP": {
+        "type": "integer",
+        "title": "Remote TSAP"
+      },
+      "timeout": {
+        "type": "integer",
+        "title": "Timeout (ms)",
+        "default": 1500,
+        "minimum": 100
+      }
+    },
+    "required": ["host"]
+  },
+  "pointSchema": {
+    "type": "object",
+    "properties": {
+      "address": {
+        "type": "string",
+        "title": "S7 Address",
+        "description": "nodes7 syntax: DB<n>,<TYPE><offset> for data blocks (e.g. DB1,REAL0, DB5,INT2, DB2,S0.20 for strings, DB1,X0.0 for bits), or memory/IO areas like M0.0, IB1, QW2",
+        "examples": ["DB1,REAL0", "DB5,INT2", "M0.0", "DB1,X0.0"]
+      },
+      "dataType": {
+        "type": "string",
+        "title": "Data Type",
+        "description": "Informational — the S7 type is part of the address (REAL, INT, X, ...)",
+        "enum": ["bool", "int16", "uint16", "int32", "uint32", "float", "string"]
+      }
+    },
+    "required": ["address"]
+  },
+  "capabilities": {
+    "read": true,
+    "write": false,
+    "subscribe": false,
+    "browse": false
+  },
+  "ui": {
+    "connectionForm": {
+      "layout": "grid",
+      "fieldOrder": ["host", "port", "rack", "slot", "localTSAP", "remoteTSAP", "timeout"],
+      "fieldGroups": {
+        "Connection": ["host", "port"],
+        "Addressing": ["rack", "slot", "localTSAP", "remoteTSAP"],
+        "Advanced": ["timeout"]
+      }
+    },
+    "icon": "⚙️",
+    "color": "#0EA5E9"
+  }
+}

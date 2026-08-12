@@ -1,0 +1,96 @@
+{
+  "name": "opc-ua",
+  "displayName": "OPC UA",
+  "description": "Connect to OPC UA servers using server-push subscriptions (monitored items)",
+  "version": "1.0.0",
+  "vendor": "Rockware",
+  "category": "device",
+  "status": "active",
+  "connectionSchema": {
+    "type": "object",
+    "properties": {
+      "endpointUrl": {
+        "type": "string",
+        "title": "Endpoint URL",
+        "description": "Full OPC UA endpoint. Takes precedence over Host/Port when set.",
+        "pattern": "^opc\\.tcp://.+",
+        "examples": ["opc.tcp://192.168.1.50:4840"]
+      },
+      "host": {
+        "type": "string",
+        "title": "Host",
+        "description": "Used with Port to build the endpoint when Endpoint URL is not set",
+        "examples": ["192.168.1.50"]
+      },
+      "port": {
+        "type": "integer",
+        "title": "Port",
+        "default": 4840,
+        "minimum": 1,
+        "maximum": 65535
+      },
+      "securityMode": {
+        "type": "string",
+        "title": "Security Mode",
+        "enum": ["None", "Sign", "SignAndEncrypt"],
+        "default": "None"
+      },
+      "securityPolicy": {
+        "type": "string",
+        "title": "Security Policy",
+        "enum": ["None", "Basic128Rsa15", "Basic256", "Basic256Sha256", "Aes128_Sha256_RsaOaep", "Aes256_Sha256_RsaPss"],
+        "default": "None"
+      },
+      "username": {
+        "type": "string",
+        "title": "Username",
+        "description": "Leave empty for anonymous access"
+      },
+      "password": {
+        "type": "string",
+        "title": "Password"
+      }
+    },
+    "anyOf": [
+      { "required": ["endpointUrl"] },
+      { "required": ["host", "port"] }
+    ]
+  },
+  "pointSchema": {
+    "type": "object",
+    "properties": {
+      "address": {
+        "type": "string",
+        "title": "Node ID",
+        "description": "OPC UA NodeId, e.g. ns=2;s=Machine.Temperature or ns=0;i=2258",
+        "pattern": "^(ns=\\d+;)?(i=\\d+|s=.+|g=[0-9a-fA-F-]+|b=.+)$",
+        "examples": ["ns=2;s=Machine.Temperature", "ns=0;i=2258"]
+      },
+      "dataType": {
+        "type": "string",
+        "title": "Data Type",
+        "description": "Informational — OPC UA values are self-describing on the wire",
+        "enum": ["boolean", "int16", "uint16", "int32", "uint32", "float", "double", "string"]
+      }
+    },
+    "required": ["address"]
+  },
+  "capabilities": {
+    "read": true,
+    "write": false,
+    "subscribe": true,
+    "browse": false
+  },
+  "ui": {
+    "connectionForm": {
+      "layout": "grid",
+      "fieldOrder": ["endpointUrl", "host", "port", "securityMode", "securityPolicy", "username", "password"],
+      "fieldGroups": {
+        "Endpoint": ["endpointUrl", "host", "port"],
+        "Security": ["securityMode", "securityPolicy", "username", "password"]
+      }
+    },
+    "icon": "🛰️",
+    "color": "#8B5CF6"
+  }
+}
