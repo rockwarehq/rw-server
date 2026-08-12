@@ -124,7 +124,19 @@ export async function incrementHourCounts(
     WHERE mb."entityType" = 'STATION'::"BucketEntityType"
       AND mb."entityId" = ${stationId}::uuid
       AND mb.granularity = 'HOUR'::"BucketGranularity"
-      AND mb."startTime" <= ${timestamp}::timestamptz
+      -- Buckets for an entity never overlap, so the only possible container of
+      -- the timestamp is the newest bucket starting at-or-before it — resolved
+      -- with one reverse index probe instead of an unbounded startTime range
+      -- scan (which walks the entity's whole history and grows forever).
+      -- The containment predicate stays as the guard for the no-bucket case.
+      AND mb."startTime" = (
+        SELECT "startTime" FROM "MetricBucket"
+        WHERE "entityType" = 'STATION'::"BucketEntityType"
+          AND "entityId" = ${stationId}::uuid
+          AND granularity = 'HOUR'::"BucketGranularity"
+          AND "startTime" <= ${timestamp}::timestamptz
+        ORDER BY "startTime" DESC LIMIT 1
+      )
       AND mb."startTime" + mb."durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
     RETURNING mb."entityType", mb."entityId"::text, mb."entityName", mb.path, mb.granularity::text, mb."granularityName",
               mb."siteId"::text, mb."startTime", mb."durationSeconds", mb."shiftInstanceId"::text, mb."businessDate", mb."businessShift",
@@ -162,16 +174,20 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
   // down. Passing the bounds as parameters lets the planner use
   // Cycle_stationId_end_idx and read only the hour's rows.
   const bucket = await prisma.$queryRaw<Array<{ hour_start: Date; hour_end: Date; duration_seconds: number }>>`
-    SELECT "startTime" AS hour_start,
-           "startTime" + "durationSeconds" * INTERVAL '1 second' AS hour_end,
-           "durationSeconds" AS duration_seconds
-    FROM "MetricBucket"
-    WHERE "entityType" = 'STATION'::"BucketEntityType"
-      AND "entityId" = ${stationId}::uuid
-      AND granularity = 'HOUR'::"BucketGranularity"
-      AND "startTime" <= ${timestamp}::timestamptz
-      AND "startTime" + "durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
-    LIMIT 1
+    SELECT hour_start, hour_end, duration_seconds FROM (
+      -- Newest bucket starting at-or-before the timestamp (one reverse index
+      -- probe; buckets never overlap so it is the only containment candidate).
+      SELECT "startTime" AS hour_start,
+             "startTime" + "durationSeconds" * INTERVAL '1 second' AS hour_end,
+             "durationSeconds" AS duration_seconds
+      FROM "MetricBucket"
+      WHERE "entityType" = 'STATION'::"BucketEntityType"
+        AND "entityId" = ${stationId}::uuid
+        AND granularity = 'HOUR'::"BucketGranularity"
+        AND "startTime" <= ${timestamp}::timestamptz
+      ORDER BY "startTime" DESC LIMIT 1
+    ) b
+    WHERE b.hour_end > ${timestamp}::timestamptz
   `;
   if (bucket.length === 0) return;
   const { hour_start: hourStart, hour_end: hourEnd, duration_seconds: durationSeconds } = bucket[0];
@@ -470,14 +486,19 @@ export async function syncExpectedCyclesFromJobs(stationId: string, siteId: stri
     -- Resolve the STATION HOUR bucket; JOB HOUR aligns with STATION HOUR
     -- (see cascadeJobRollup), so we match JOB HOUR by this startTime.
     target_bucket AS (
-      SELECT "startTime" AS hour_start
-      FROM "MetricBucket"
-      WHERE "entityType" = 'STATION'::"BucketEntityType"
-        AND "entityId" = ${stationId}::uuid
-        AND granularity = 'HOUR'::"BucketGranularity"
-        AND "startTime" <= ${timestamp}::timestamptz
-        AND "startTime" + "durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
-      LIMIT 1
+      -- Newest bucket starting at-or-before the timestamp (one reverse index
+      -- probe; buckets never overlap), containment-checked in the outer WHERE.
+      SELECT hour_start FROM (
+        SELECT "startTime" AS hour_start,
+               "startTime" + "durationSeconds" * INTERVAL '1 second' AS hour_end
+        FROM "MetricBucket"
+        WHERE "entityType" = 'STATION'::"BucketEntityType"
+          AND "entityId" = ${stationId}::uuid
+          AND granularity = 'HOUR'::"BucketGranularity"
+          AND "startTime" <= ${timestamp}::timestamptz
+        ORDER BY "startTime" DESC LIMIT 1
+      ) b
+      WHERE b.hour_end > ${timestamp}::timestamptz
     ),
     params AS (
       SELECT ${stationId}::uuid AS station_id, tb.hour_start
@@ -517,8 +538,9 @@ export async function syncExpectedCyclesFromJobs(stationId: string, siteId: stri
     WHERE mb."entityType" = 'STATION'
       AND mb."entityId" = p.station_id
       AND mb.granularity = 'HOUR'
-      AND mb."startTime" <= ${timestamp}::timestamptz
-      AND mb."startTime" + mb."durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
+      -- target_bucket already resolved the containing bucket's startTime;
+      -- match it exactly instead of re-running the containment range scan.
+      AND mb."startTime" = p.hour_start
   `;
 }
 
@@ -574,11 +596,17 @@ export async function batchCountRollup(timestamp: Date): Promise<Array<{ station
              mb."startTime" AS hour_start,
              mb."startTime" + mb."durationSeconds" * INTERVAL '1 second' AS hour_end
       FROM open_stations os
-      JOIN "MetricBucket" mb ON mb."entityType" = 'STATION'::"BucketEntityType"
-        AND mb."entityId" = os.station_id
-        AND mb.granularity = 'HOUR'::"BucketGranularity"
-        AND mb."startTime" <= ${timestamp}::timestamptz
-        AND mb."startTime" + mb."durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
+      -- Per station: newest bucket starting at-or-before the timestamp (one
+      -- reverse index probe; buckets never overlap), containment in the ON.
+      JOIN LATERAL (
+        SELECT "startTime", "durationSeconds"
+        FROM "MetricBucket"
+        WHERE "entityType" = 'STATION'::"BucketEntityType"
+          AND "entityId" = os.station_id
+          AND granularity = 'HOUR'::"BucketGranularity"
+          AND "startTime" <= ${timestamp}::timestamptz
+        ORDER BY "startTime" DESC LIMIT 1
+      ) mb ON mb."startTime" + mb."durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
     ),
     cycle_counts AS (
       SELECT c."stationId" AS station_id,
@@ -634,7 +662,16 @@ export async function batchCountRollup(timestamp: Date): Promise<Array<{ station
             WHERE mb."entityType" = 'STATION'::"BucketEntityType"
               AND mb."entityId" = ${c.station_id}::uuid
               AND mb.granularity = 'HOUR'::"BucketGranularity"
-              AND mb."startTime" <= ${timestamp}::timestamptz
+              -- Newest-starting candidate via one reverse probe (buckets never
+              -- overlap); containment below guards the no-bucket case.
+              AND mb."startTime" = (
+                SELECT "startTime" FROM "MetricBucket"
+                WHERE "entityType" = 'STATION'::"BucketEntityType"
+                  AND "entityId" = ${c.station_id}::uuid
+                  AND granularity = 'HOUR'::"BucketGranularity"
+                  AND "startTime" <= ${timestamp}::timestamptz
+                ORDER BY "startTime" DESC LIMIT 1
+              )
               AND mb."startTime" + mb."durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
             RETURNING mb.*
           )
@@ -700,10 +737,16 @@ export async function batchDurationRollup(timestamp: Date): Promise<Array<{ stat
       END AS items_per_cycle
     FROM "StationStateLog" ssl
     JOIN "Station" s ON s.id = ssl."stationId"
-    LEFT JOIN "MetricBucket" mb ON mb."entityType" = 'STATION' AND mb."entityId" = ssl."stationId"
-      AND mb.granularity = 'HOUR'
-      AND mb."startTime" <= ${timestamp}::timestamptz
-      AND mb."startTime" + mb."durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
+    -- Per station: newest bucket starting at-or-before the timestamp (one
+    -- reverse index probe; buckets never overlap), containment in the ON.
+    LEFT JOIN LATERAL (
+      SELECT "startTime", "durationSeconds", "totalCycles", "totalItems", "idealCycleSeconds"
+      FROM "MetricBucket"
+      WHERE "entityType" = 'STATION' AND "entityId" = ssl."stationId"
+        AND granularity = 'HOUR'
+        AND "startTime" <= ${timestamp}::timestamptz
+      ORDER BY "startTime" DESC LIMIT 1
+    ) mb ON mb."startTime" + mb."durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
     WHERE ssl."endTime" IS NULL AND ssl."deletedAt" IS NULL
     ORDER BY ssl."stationId"
   `;
@@ -725,15 +768,19 @@ export async function batchDurationRollup(timestamp: Date): Promise<Array<{ stat
           -- exists (e.g. start at :30 past, partial at shift boundaries),
           -- so use containment rather than date_trunc('hour', ...).
           target_bucket AS (
-            SELECT "startTime", "durationSeconds",
-                   "startTime" + "durationSeconds" * INTERVAL '1 second' AS end_time
-            FROM "MetricBucket"
-            WHERE "entityType" = 'STATION'::"BucketEntityType"
-              AND "entityId" = ${s.station_id}::uuid
-              AND granularity = 'HOUR'::"BucketGranularity"
-              AND "startTime" <= ${timestamp}::timestamptz
-              AND "startTime" + "durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
-            LIMIT 1
+            -- Newest bucket starting at-or-before the timestamp (one reverse
+            -- index probe; buckets never overlap), containment-checked below.
+            SELECT "startTime", "durationSeconds", end_time FROM (
+              SELECT "startTime", "durationSeconds",
+                     "startTime" + "durationSeconds" * INTERVAL '1 second' AS end_time
+              FROM "MetricBucket"
+              WHERE "entityType" = 'STATION'::"BucketEntityType"
+                AND "entityId" = ${s.station_id}::uuid
+                AND granularity = 'HOUR'::"BucketGranularity"
+                AND "startTime" <= ${timestamp}::timestamptz
+              ORDER BY "startTime" DESC LIMIT 1
+            ) b
+            WHERE b.end_time > ${timestamp}::timestamptz
           ),
           params AS (
             SELECT

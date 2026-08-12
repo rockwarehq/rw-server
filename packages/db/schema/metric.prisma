@@ -143,7 +143,11 @@ model MetricBucket {
   @@unique([entityType, entityId, granularity, startTime])
   @@index([siteId, granularity, startTime])
   @@index([siteId, businessDate])
-  @@index([siteId, updatedAt])
+  // NOTE deliberately NO index on updatedAt: the metrics tick updates these
+  // rows every 5s, and any index containing updatedAt makes every one of those
+  // updates non-HOT (full index churn on all indexes + planner edge-probe
+  // bloat). A [siteId, updatedAt] index existed and had zero scans in
+  // production; see migration 20260812_metricbucket_hot_updates.
 }
 
 /// Historical (archived) metric buckets. Same schema as MetricBucket
