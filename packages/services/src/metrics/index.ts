@@ -8,6 +8,7 @@ export * as sync from "./sync.js";
 export * as compute from "./compute.js";
 export * as rollup from "./rollup.js";
 export * as recalc from "./recalc.js";
+export * as restamp from "./restamp.js";
 export * as archive from "./archive.js";
 
 // ── Per-pipeline cache ───────────────────────────────────────────
@@ -44,6 +45,16 @@ export {
   recalcAll,
   type CycleIncrement,
 } from "./recalc.js";
+
+// ── Context restamp repair ───────────────────────────────────────
+
+export {
+  restampWindow,
+  restampAfterScheduleChange,
+  type RestampWindowInput,
+  type RestampWindowResult,
+  type ScheduleChangeRestampInput,
+} from "./restamp.js";
 
 // ── Computation primitives ───────────────────────────────────────
 

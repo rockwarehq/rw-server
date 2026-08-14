@@ -10,6 +10,11 @@
  *   rw-server/prisma/migrations/20260325000000_oee_zero_not_null/migration.sql
  */
 
+import { BUCKET_ADDITIVE_KEYS, evaluateRatioMeasure, getMeasure } from "./catalog.js";
+
+export * from "./catalog.js";
+export * from "./formula.js";
+
 // ── Types ────────────────────────────────────────────────────────
 
 /**
@@ -76,23 +81,9 @@ export interface ComputedKPIs {
  * Keys of all additive KPI fields (summed in rollups).
  * `currentStandardCycle` is excluded — it is NOT additive.
  */
-export const ADDITIVE_KPI_KEYS: ReadonlyArray<keyof BucketKPIs> = [
-  "totalCycles",
-  "badCycles",
-  "totalItems",
-  "badItems",
-  "expectedCycles",
-  "expectedItems",
-  "runSeconds",
-  "downSeconds",
-  "plannedDownSeconds",
-  "unplannedDownSeconds",
-  "idealCycleSeconds",
-  "totalCycleSeconds",
-  "elapsedExpectedCycles",
-  "elapsedExpectedItems",
-  "elapsedPlannedProductionSeconds",
-] as const;
+// Derived from the catalog's bucket additive measures — same keys, same
+// order. The assignment type-checks each catalog key against BucketKPIs.
+export const ADDITIVE_KPI_KEYS: ReadonlyArray<keyof BucketKPIs> = BUCKET_ADDITIVE_KEYS;
 
 export const DURATION_KPI_KEYS: ReadonlyArray<keyof DurationKPIs> = [
   "runSeconds",
@@ -159,10 +150,17 @@ export function sumKPIs(buckets: ReadonlyArray<BucketKPIs>): BucketKPIs {
 //
 // These functions mirror the PostgreSQL generated columns on
 // MetricBucket and MetricBucketLog. The CASE logic, NULL semantics,
-// and zero-handling match the SQL exactly.
+// and zero-handling match the SQL exactly. Each is now a thin wrapper
+// over the catalog's ratio measure (formula AST + guards) — the
+// catalog is the single source of the formulas.
 //
 // SQL source: 20260325000000_oee_zero_not_null/migration.sql
 //             20260311200000_widen_oee_decimal_precision/migration.sql
+
+// BucketKPIs' only non-number field (currentStandardCycle) is never
+// referenced by ratio formulas, so the widening cast is safe.
+const computeRatio = (measureKey: string, kpis: BucketKPIs): number | null =>
+  evaluateRatioMeasure(getMeasure(measureKey), kpis as unknown as Record<string, number>);
 
 /**
  * Availability = runSeconds / elapsedPlannedProductionSeconds
@@ -171,8 +169,7 @@ export function sumKPIs(buckets: ReadonlyArray<BucketKPIs>): BucketKPIs {
  * (elapsedPlannedProductionSeconds = 0).
  */
 export function computeAvailability(kpis: BucketKPIs): number | null {
-  if (kpis.elapsedPlannedProductionSeconds <= 0) return null;
-  return kpis.runSeconds / kpis.elapsedPlannedProductionSeconds;
+  return computeRatio("availability", kpis);
 }
 
 /**
@@ -182,9 +179,7 @@ export function computeAvailability(kpis: BucketKPIs): number | null {
  * Returns 0 when there is a production window but no run time.
  */
 export function computePerformance(kpis: BucketKPIs): number | null {
-  if (kpis.elapsedPlannedProductionSeconds <= 0) return null;
-  if (kpis.runSeconds <= 0) return 0;
-  return kpis.idealCycleSeconds / kpis.runSeconds;
+  return computeRatio("performance", kpis);
 }
 
 /**
@@ -194,9 +189,7 @@ export function computePerformance(kpis: BucketKPIs): number | null {
  * Returns 0 when there is a production window but no items produced.
  */
 export function computeQuality(kpis: BucketKPIs): number | null {
-  if (kpis.elapsedPlannedProductionSeconds <= 0) return null;
-  if (kpis.totalItems <= 0) return 0;
-  return (kpis.totalItems - kpis.badItems) / kpis.totalItems;
+  return computeRatio("quality", kpis);
 }
 
 /**
@@ -210,12 +203,7 @@ export function computeQuality(kpis: BucketKPIs): number | null {
  * Returns 0 when there is a production window but no items produced.
  */
 export function computeOee(kpis: BucketKPIs): number | null {
-  if (kpis.elapsedPlannedProductionSeconds <= 0) return null;
-  if (kpis.totalItems <= 0) return 0;
-  return (
-    (kpis.idealCycleSeconds * (kpis.totalItems - kpis.badItems)) /
-    (kpis.elapsedPlannedProductionSeconds * kpis.totalItems)
-  );
+  return computeRatio("oee", kpis);
 }
 
 /** Compute all four OEE ratios at once. */

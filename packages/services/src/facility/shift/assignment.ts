@@ -1,5 +1,17 @@
 import prisma from "@rw/db";
 import { reconcileShiftInstances } from "@rw/services/facility/shift/materialize";
+import { restampAfterScheduleChange } from "@rw/services/metrics/restamp";
+
+/**
+ * Fire-and-forget context repair after a schedule change commits:
+ * re-stamps Cycle / ItemDispositionLog shiftInstanceId + businessDate
+ * in the affected window and recalculates the metric buckets.
+ */
+function triggerRestamp(action: string, input: { siteId: string; workCenterId?: string | null; from: Date }): void {
+  restampAfterScheduleChange(input).catch((err) => {
+    console.error(`[shift:assignment] Failed to restamp context after ${action}:`, err);
+  });
+}
 
 export interface CreateShiftAssignmentInput {
   patternId: string;
@@ -139,6 +151,13 @@ export async function create(input: CreateShiftAssignmentInput) {
   // unused future ShiftInstances, and materialize the new assignment's shifts.
   await reconcileShiftInstances(assignment.id);
 
+  // Repair stamps on rows the new schedule now covers.
+  triggerRestamp("create", {
+    siteId: assignment.siteId,
+    workCenterId: assignment.workCenterId,
+    from: assignment.rotationStartDate,
+  });
+
   return { data: assignment };
 }
 
@@ -201,7 +220,7 @@ export async function update(id: string, input: UpdateShiftAssignmentInput) {
 
   const current = await prisma.shiftAssignment.findUnique({
     where: { id },
-    select: { id: true, patternId: true },
+    select: { id: true, patternId: true, siteId: true, workCenterId: true, rotationStartDate: true },
   });
 
   if (!current) {
@@ -241,6 +260,18 @@ export async function update(id: string, input: UpdateShiftAssignmentInput) {
   // Re-reconcile when start parameters change
   if (rotationStartDate !== undefined || rotationStartDefinitionId !== undefined) {
     await reconcileShiftInstances(assignment.id);
+
+    // Repair stamps from the earlier of the old and new effective starts —
+    // both the previously-covered and newly-covered windows are affected.
+    const from =
+      current.rotationStartDate < assignment.rotationStartDate
+        ? current.rotationStartDate
+        : assignment.rotationStartDate;
+    triggerRestamp("update", {
+      siteId: assignment.siteId,
+      workCenterId: assignment.workCenterId,
+      from,
+    });
   }
 
   return { data: assignment };
@@ -252,7 +283,7 @@ export async function update(id: string, input: UpdateShiftAssignmentInput) {
 export async function remove(id: string) {
   const assignment = await prisma.shiftAssignment.findUnique({
     where: { id },
-    select: { id: true },
+    select: { id: true, siteId: true, workCenterId: true, rotationStartDate: true },
   });
 
   if (!assignment) {
@@ -260,6 +291,14 @@ export async function remove(id: string) {
   }
 
   await prisma.shiftAssignment.delete({ where: { id } });
+
+  // Deleting cascades the assignment's ShiftInstances (Cycle FKs are
+  // set null) — repair stamps for the window it used to cover.
+  triggerRestamp("delete", {
+    siteId: assignment.siteId,
+    workCenterId: assignment.workCenterId,
+    from: assignment.rotationStartDate,
+  });
 
   return { success: true };
 }

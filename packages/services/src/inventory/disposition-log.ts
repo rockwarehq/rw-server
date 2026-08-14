@@ -1,5 +1,7 @@
 import prisma from "@rw/db";
+import { resolveBusinessDate } from "@rw/services/metrics/bucket";
 import { updateDispositionBadItems } from "@rw/services/metrics/recalc";
+import { getShiftForEntity } from "@rw/services/metrics/shift";
 import { deductScrap } from "@rw/services/order/allocation";
 
 export interface CreateDispositionLogInput {
@@ -11,6 +13,8 @@ export interface CreateDispositionLogInput {
   dispositionReasonId?: string;
   cycleId?: string;
   shiftInstanceId?: string;
+  /** When the scrap actually happened; defaults to now. createdAt stays the record time. */
+  occurredAt?: Date;
   /** If not provided, version IDs are auto-resolved from current station/job state */
   productVersionId: string;
   stationVersionId?: string;
@@ -88,6 +92,8 @@ export interface RecordDispositionLogInput {
   dispositionReasonId?: string;
   cycleId?: string;
   shiftInstanceId?: string;
+  /** When the scrap actually happened; defaults to now. */
+  occurredAt?: Date;
 }
 
 async function validateDispositionReasonPair(
@@ -275,7 +281,7 @@ export async function create(input: CreateDispositionLogInput) {
   // Validate station exists and belongs to site
   const station = await prisma.station.findUnique({
     where: { id: stationId },
-    select: { id: true, siteId: true },
+    select: { id: true, siteId: true, workcenterId: true, site: { select: { timezone: true } } },
   });
 
   if (!station) {
@@ -284,6 +290,24 @@ export async function create(input: CreateDispositionLogInput) {
 
   if (station.siteId !== siteId) {
     return { error: "Station must belong to the specified site", code: "SITE_MISMATCH" };
+  }
+
+  // Conformed context: resolve shift + business date for the event time.
+  // Resolution failure never fails the record — stamp NULL and repair later.
+  const occurredAt = input.occurredAt ?? new Date();
+  let resolvedShiftInstanceId = shiftInstanceId ?? null;
+  let businessDate: Date | null = null;
+  try {
+    if (!resolvedShiftInstanceId) {
+      const shift = await getShiftForEntity("STATION", stationId, siteId, occurredAt);
+      resolvedShiftInstanceId = shift?.shiftInstanceId ?? null;
+      if (shift) businessDate = shift.businessDate;
+    }
+    if (!businessDate) {
+      businessDate = await resolveBusinessDate(occurredAt, resolvedShiftInstanceId, station.site.timezone);
+    }
+  } catch (err) {
+    console.warn(`[disposition-log] context resolution failed for station ${stationId}; stamping NULL shift:`, err);
   }
 
   const dispositionPair = await validateDispositionReasonPair(siteId, itemDispositionId, dispositionReasonId);
@@ -305,12 +329,14 @@ export async function create(input: CreateDispositionLogInput) {
     data: {
       siteId,
       stationId,
-      workcenterId: workcenterId ?? null,
+      workcenterId: workcenterId ?? station.workcenterId ?? null,
       quantity: quantity ?? 1,
       itemDispositionId: dispositionPair.data.itemDispositionId,
       dispositionReasonId: dispositionPair.data.dispositionReasonId,
       cycleId: cycleId ?? null,
-      shiftInstanceId: shiftInstanceId ?? null,
+      shiftInstanceId: resolvedShiftInstanceId,
+      occurredAt,
+      businessDate,
       productVersionId,
       stationVersionId: stationVersionId ?? null,
       jobProductVersionId: jobProductVersionId ?? null,
@@ -324,8 +350,8 @@ export async function create(input: CreateDispositionLogInput) {
     include: logInclude,
   });
 
-  // Trigger metric recalculation for badItems
-  updateDispositionBadItems(stationId, siteId, log.createdAt, quantity ?? 1).catch((err) => {
+  // Trigger metric recalculation for badItems, attributed to the event time
+  updateDispositionBadItems(stationId, siteId, log.occurredAt ?? log.createdAt, quantity ?? 1).catch((err) => {
     console.error(`[disposition-log] Failed to update badItems metrics for station ${stationId}:`, err);
   });
 

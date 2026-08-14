@@ -9,6 +9,7 @@ import {
 } from "./state.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
+import { getJobItemsPerCycle } from "../../job/job.js";
 
 type ChangeJobResult =
   | {
@@ -120,6 +121,7 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
     // Create a new StationJobLog entry
     if (newJobId && job) {
       const standardCycle = job.currentVersion?.standardCycle ?? null;
+      const itemsPerCycle = await getJobItemsPerCycle(tx, newJobId);
 
       await tx.stationJobLog.create({
         data: {
@@ -129,6 +131,7 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
           jobVersionId: job.currentVersionId!,
           startTime: timestamp,
           standardCycle,
+          itemsPerCycle,
         },
       });
     }

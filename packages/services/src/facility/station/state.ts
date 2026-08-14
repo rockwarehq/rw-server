@@ -4,6 +4,7 @@ import type { Prisma } from "@rw/db";
 import { publishMetricValueChange } from "../../rpc/metrics-bus.js";
 import { publishStationShiftContext } from "../../metrics/graph-context.js";
 import { updateTimeBased } from "../../metrics/recalc.js";
+import { getShiftForEntity } from "../../metrics/shift.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 
@@ -88,8 +89,47 @@ async function closeOpenStateEntries(client: TransactionClient | typeof prisma, 
   });
 }
 
+/** Shift-context columns stamped onto every state log row at open time. */
+interface StateEntryShiftStamps {
+  workcenterId: string | null;
+  shiftInstanceId: string | null;
+  businessDate: Date | null;
+}
+
+const NULL_STAMPS: StateEntryShiftStamps = { workcenterId: null, shiftInstanceId: null, businessDate: null };
+
 /**
- * Create a new state log entry.
+ * Resolve the shift-context stamps for a state log row opened at `at`.
+ *
+ * Never throws: a state transition is never failed because context
+ * resolution failed — stamp NULL (repaired by the batched backfill) and
+ * warn instead.
+ */
+async function resolveShiftStamps(
+  client: TransactionClient | typeof prisma,
+  stationId: string,
+  at: Date,
+): Promise<StateEntryShiftStamps> {
+  try {
+    const station = await client.station.findUnique({
+      where: { id: stationId },
+      select: { siteId: true, workcenterId: true },
+    });
+    if (!station) return NULL_STAMPS;
+    const shift = await getShiftForEntity("STATION", stationId, station.siteId, at);
+    return {
+      workcenterId: station.workcenterId,
+      shiftInstanceId: shift?.shiftInstanceId ?? null,
+      businessDate: shift?.businessDate ?? null,
+    };
+  } catch (err) {
+    console.warn(`[state] Failed to resolve shift stamps for station ${stationId} at ${at.toISOString()}:`, err);
+    return NULL_STAMPS;
+  }
+}
+
+/**
+ * Create a new state log entry, stamped with the shift context at startTime.
  */
 async function createStateEntry(
   client: TransactionClient | typeof prisma,
@@ -102,6 +142,7 @@ async function createStateEntry(
     jobVersionId?: string | null;
   },
 ) {
+  const stamps = await resolveShiftStamps(client, data.stationId, data.startTime);
   return client.stationStateLog.create({
     data: {
       stationId: data.stationId,
@@ -110,6 +151,7 @@ async function createStateEntry(
       status: data.status,
       blockId: data.blockId,
       jobVersionId: data.jobVersionId ?? null,
+      ...stamps,
     },
   });
 }
@@ -554,8 +596,102 @@ export async function splitOpenStateEntryForJobChange(
       blockId: current.blockId,
       statusReasonId: current.statusReasonId,
       jobVersionId: newJobVersionId,
+      ...(await resolveShiftStamps(tx, stationId, timestamp)),
     },
   });
+}
+
+/**
+ * Split open state entries that span a shift boundary so every
+ * StationStateLog row lies within a single shift and carries that
+ * shift's stamps: per station, close the open row at `boundaryTime`
+ * and continue it with the same state/status/blockId/statusReasonId
+ * (blockId is exactly the "segments of one logical period" grouping),
+ * stamped with the NEW shift's instance id + businessDate.
+ *
+ * Scope narrows the candidate stations to the shift-change scope that
+ * fired (a workcenter-level schedule, a site-level schedule, or an
+ * explicit station list). A site-level boundary is not a boundary for
+ * stations governed by a workcenter-level schedule (and vice versa), so
+ * each station only splits when ITS resolved shift actually changes
+ * across the boundary — this also makes the function idempotent under
+ * duplicate fires (the continuation row starts AT the boundary and is
+ * never re-split).
+ *
+ * Returns the number of stations whose open row was split.
+ */
+export async function splitOpenStateEntriesAtShiftBoundary(
+  scope: { siteId: string } | { workcenterId: string } | { stationIds: string[] },
+  boundaryTime: Date,
+): Promise<number> {
+  const scopeWhere =
+    "siteId" in scope
+      ? { siteId: scope.siteId }
+      : "workcenterId" in scope
+        ? { workcenterId: scope.workcenterId }
+        : { id: { in: scope.stationIds } };
+
+  const candidates = await prisma.station.findMany({
+    where: {
+      ...scopeWhere,
+      deletedAt: null,
+      stateLogs: { some: { endTime: null, deletedAt: null, startTime: { lt: boundaryTime } } },
+    },
+    select: { id: true, siteId: true, workcenterId: true },
+  });
+  if (candidates.length === 0) return 0;
+
+  const justBefore = new Date(boundaryTime.getTime() - 1);
+  let split = 0;
+
+  for (const station of candidates) {
+    let outgoing: Awaited<ReturnType<typeof getShiftForEntity>>;
+    let incoming: Awaited<ReturnType<typeof getShiftForEntity>>;
+    try {
+      [outgoing, incoming] = await Promise.all([
+        getShiftForEntity("STATION", station.id, station.siteId, justBefore),
+        getShiftForEntity("STATION", station.id, station.siteId, boundaryTime),
+      ]);
+    } catch (err) {
+      console.warn(`[state] Shift resolution failed for boundary split of station ${station.id}:`, err);
+      continue;
+    }
+    // No shift change for this station at this boundary (or no schedule).
+    if ((outgoing?.shiftInstanceId ?? null) === (incoming?.shiftInstanceId ?? null)) continue;
+
+    try {
+      await prisma.$transaction(async (tx) => {
+        // Serialize with other state transitions for this station
+        await acquireStationLock(tx, station.id);
+
+        // Re-check under the lock: a concurrent transition may have closed
+        // or replaced the row since the candidate query.
+        const current = await findOpenStateEntry(tx, station.id);
+        if (!current || current.startTime >= boundaryTime) return;
+
+        await closeOpenStateEntries(tx, station.id, boundaryTime);
+        await tx.stationStateLog.create({
+          data: {
+            stationId: station.id,
+            startTime: boundaryTime,
+            state: current.state,
+            status: current.status,
+            blockId: current.blockId,
+            statusReasonId: current.statusReasonId,
+            jobVersionId: current.jobVersionId,
+            workcenterId: station.workcenterId,
+            shiftInstanceId: incoming?.shiftInstanceId ?? null,
+            businessDate: incoming?.businessDate ?? null,
+          },
+        });
+        split += 1;
+      });
+    } catch (err) {
+      console.error(`[state] Failed to split open state entry at shift boundary for station ${station.id}:`, err);
+    }
+  }
+
+  return split;
 }
 
 /**
@@ -620,6 +756,7 @@ export async function transitionToSlow(stationId: string, timestamp: Date) {
         status: "SLOW",
         blockId: current.blockId,
         jobVersionId: current.jobVersionId,
+        ...(await resolveShiftStamps(tx, stationId, slowStart)),
       },
     });
     return { entry: created, statusChanged: true };
@@ -700,15 +837,31 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
         where: { stationId, endTime: null, deletedAt: null, id: { not: current.id } },
         data: { endTime: timestamp },
       });
+      // In-place conversion keeps startTime, so existing stamps stay valid;
+      // repair NULL stamps (e.g. replay-created rows) while we're here.
       entry = await tx.stationStateLog.update({
         where: { id: current.id },
-        data: { state: "DOWN", status: "DOWN", blockId, jobVersionId },
+        data: {
+          state: "DOWN",
+          status: "DOWN",
+          blockId,
+          jobVersionId,
+          ...(current.shiftInstanceId == null ? await resolveShiftStamps(tx, stationId, current.startTime) : {}),
+        },
       });
     } else {
       // Long-lived RUNNING entry — close it at the last cycle and continue as DOWN.
       await closeOpenStateEntries(tx, stationId, downStart);
       entry = await tx.stationStateLog.create({
-        data: { stationId, startTime: downStart, state: "DOWN", status: "DOWN", blockId, jobVersionId },
+        data: {
+          stationId,
+          startTime: downStart,
+          state: "DOWN",
+          status: "DOWN",
+          blockId,
+          jobVersionId,
+          ...(await resolveShiftStamps(tx, stationId, downStart)),
+        },
       });
     }
 
@@ -829,7 +982,9 @@ export async function splitDownEntry(entryId: string, splitAt: Date): Promise<Sp
       data: { endTime: splitAt },
     });
 
-    // Create the second entry: from the split point to the original endTime
+    // Create the second entry: from the split point to the original endTime.
+    // Stamps are re-resolved at splitAt — a legacy entry spanning a shift
+    // boundary gets the correct shift for its second half.
     const second = await tx.stationStateLog.create({
       data: {
         stationId: entry.stationId,
@@ -840,6 +995,7 @@ export async function splitDownEntry(entryId: string, splitAt: Date): Promise<Sp
         blockId: entry.blockId,
         statusReasonId: entry.statusReasonId,
         jobVersionId: entry.jobVersionId,
+        ...(await resolveShiftStamps(tx, entry.stationId, splitAt)),
       },
     });
 

@@ -37,6 +37,35 @@ model Cycle {
   jobVersionId String     @db.Uuid
   jobVersion   JobVersion @relation(fields: [jobVersionId], references: [id])
 
+  // Conformed context, stamped at completion inside the cycle.complete()
+  // transaction. Nullable: a cycle is never dropped because context
+  // resolution failed — stamp NULL and repair via restampWindow.
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id])
+
+  shiftInstanceId String?        @db.Uuid
+  shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id])
+
+  /// Plant calendar day: ShiftInstance.businessDate when resolved, else the
+  /// site-timezone local date of `start`.
+  businessDate DateTime? @db.Date
+
+  /// Parent of jobVersionId — version for history-correct math, parent for grouping.
+  jobId String? @db.Uuid
+  job   Job?    @relation(fields: [jobId], references: [id])
+
+  /// Open StationLogonSession at completion — operator attribution.
+  logonSessionId String?              @db.Uuid
+  logonSession   StationLogonSession? @relation(fields: [logonSessionId], references: [id])
+
+  /// Primary mold (parent + version pair). The toolVersions m2m remains for
+  /// multi-tool cycles; this pair is the reporting dimension.
+  toolId String? @db.Uuid
+  tool   Tool?   @relation(fields: [toolId], references: [id])
+
+  toolVersionId String?      @db.Uuid
+  toolVersion   ToolVersion? @relation("CyclePrimaryToolVersion", fields: [toolVersionId], references: [id])
+
   toolVersions ToolVersion[]
 
   jobTools JobTool[]
@@ -54,4 +83,7 @@ model Cycle {
   @@index([stationId, deletedAt, end])
   @@index([jobVersionId])
   @@index([orderId])
+  @@index([siteId, businessDate])
+  @@index([shiftInstanceId])
+  @@index([jobId, start])
 }

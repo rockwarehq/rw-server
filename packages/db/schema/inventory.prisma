@@ -397,6 +397,14 @@ model ItemDispositionLog {
   updatedAt DateTime  @updatedAt @db.Timestamptz(3)
   deletedAt DateTime? @db.Timestamptz(3)
 
+  /// When the scrap actually happened. createdAt is when it was recorded —
+  /// entries are routinely logged after the fact. Backfill = createdAt;
+  /// readers should coalesce(occurredAt, createdAt) until backfill completes.
+  occurredAt DateTime? @db.Timestamptz(3)
+
+  /// Plant calendar day, resolved the same way as Cycle.businessDate.
+  businessDate DateTime? @db.Date
+
   quantity Int @default(1)
 
   siteId String @db.Uuid
@@ -439,6 +447,8 @@ model ItemDispositionLog {
   productMaterialVersions ProductMaterialVersion[]
 
   @@index([stationId, createdAt])
+  @@index([stationId, occurredAt])
+  @@index([siteId, businessDate])
 }
 
 // ---------------------------------------------------------------------------

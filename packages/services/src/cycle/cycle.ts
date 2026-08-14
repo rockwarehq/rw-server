@@ -1,6 +1,8 @@
 import prisma from "@rw/db";
 import { Prisma } from "@rw/db";
 import { inventory } from "../inventory/index.js";
+import { getLocalCalendarDate } from "../metrics/bucket.js";
+import { getShiftForEntity } from "../metrics/shift.js";
 import { allocateInventory } from "../order/allocation.js";
 import {
   acquireStationLock,
@@ -93,27 +95,34 @@ export async function complete(input: StartCycleInput) {
       currentVersionId: string | null;
       standardCycle: number | null;
       slowDetect: number | null;
+      workcenterId: string | null;
+      timezone: string | null;
       jobToolIds: string[];
       toolVersionIds: string[];
+      toolIds: string[];
       itemsPerCycle: number;
+      logonSessionId: string | null;
     }>
   >`
     WITH
     setup AS (
       SELECT
         s."siteId",
+        s."workcenterId",
+        site."timezone",
         j."siteId" AS "jobSiteId",
         j."currentVersionId",
         jb."standardCycle"::float8 AS "standardCycle",
         sb."slowDetect"::float8 AS "slowDetect"
       FROM "Station" s
+      JOIN "Site" site ON site.id = s."siteId"
       JOIN "Job" j ON j.id = ${jobId}
       LEFT JOIN "JobVersion" jb ON jb.id = j."currentVersionId"
       LEFT JOIN "StationVersion" sb ON sb."id" = s."currentVersionId"
       WHERE s.id = ${stationId}
     ),
     tools AS (
-      SELECT jt.id, t."currentVersionId" AS "toolVersionId"
+      SELECT jt.id, jt."toolId", t."currentVersionId" AS "toolVersionId"
       FROM "JobTool" jt
       JOIN "Tool" t ON t.id = jt."toolId"
       WHERE jt."jobId" = ${jobId}::uuid AND jt."deletedAt" IS NULL AND jt."isActive" = true
@@ -125,14 +134,24 @@ export async function complete(input: StartCycleInput) {
       WHERE jp."jobId" = ${jobId}
         AND jp."deletedAt" IS NULL
         AND jpb."isActive" = true
+    ),
+    logon AS (
+      SELECT id FROM "StationLogonSession"
+      WHERE "stationId" = ${stationId}
+        AND "logonTime" <= ${timestamp}
+        AND ("logoffTime" IS NULL OR "logoffTime" > ${timestamp})
+      ORDER BY "logonTime" DESC
+      LIMIT 1
     )
     SELECT s.*,
            COALESCE(array_agg(DISTINCT t.id) FILTER (WHERE t.id IS NOT NULL), '{}') AS "jobToolIds",
            COALESCE(array_agg(DISTINCT t."toolVersionId") FILTER (WHERE t."toolVersionId" IS NOT NULL), '{}') AS "toolVersionIds",
-           (SELECT total FROM products) AS "itemsPerCycle"
+           COALESCE(array_agg(DISTINCT t."toolId") FILTER (WHERE t."toolId" IS NOT NULL), '{}') AS "toolIds",
+           (SELECT total FROM products) AS "itemsPerCycle",
+           (SELECT id FROM logon) AS "logonSessionId"
     FROM setup s
     LEFT JOIN tools t ON true
-    GROUP BY s."siteId", s."jobSiteId", s."currentVersionId", s."standardCycle", s."slowDetect"
+    GROUP BY s."siteId", s."workcenterId", s."timezone", s."jobSiteId", s."currentVersionId", s."standardCycle", s."slowDetect"
   `;
   const t1 = Date.now();
 
@@ -153,6 +172,35 @@ export async function complete(input: StartCycleInput) {
   const slowFraction = setup.slowDetect;
   const itemsPerCycle = setup.itemsPerCycle ?? 1;
 
+  // ── Conformed context, resolved before the tx (reads only; stamps are
+  //    written inside the strategy tx). Resolution failure never fails the
+  //    cycle — stamp NULL and let restampWindow repair it.
+  let shiftInstanceId: string | null = null;
+  let businessDate: Date | null = null;
+  try {
+    const shift = await getShiftForEntity("STATION", stationId, siteId, timestamp);
+    if (shift) {
+      shiftInstanceId = shift.shiftInstanceId;
+      businessDate = shift.businessDate;
+    } else if (setup.timezone) {
+      businessDate = getLocalCalendarDate(timestamp, setup.timezone);
+    }
+  } catch (err) {
+    console.warn(`[cycle] context resolution failed for station ${stationId}; stamping NULL shift:`, err);
+  }
+  // Primary mold: unambiguous only when the job runs exactly one tool; the
+  // toolVersions m2m still records the full set either way.
+  const primaryToolId = setup.toolIds.length === 1 ? setup.toolIds[0] : null;
+  const context: CycleContext = {
+    workcenterId: setup.workcenterId,
+    shiftInstanceId,
+    businessDate,
+    jobId,
+    logonSessionId: setup.logonSessionId,
+    toolId: primaryToolId,
+    toolVersionId: primaryToolId && setup.toolVersionIds.length === 1 ? setup.toolVersionIds[0] : null,
+  };
+
   let slowThresholdSeconds: number | undefined;
   if (standardCycleSeconds != null && standardCycleSeconds > 0 && slowFraction != null && slowFraction > 0) {
     slowThresholdSeconds = standardCycleSeconds * (1 + slowFraction);
@@ -169,8 +217,8 @@ export async function complete(input: StartCycleInput) {
 
   const result = replayed
     ? keepOpen
-      ? await completeOpenCloseReplay(stationId, siteId, timestamp, jobId, versionConnects, sourceEventId)
-      : await completeImmediateReplay(stationId, siteId, timestamp, jobId, versionConnects, sourceEventId)
+      ? await completeOpenCloseReplay(stationId, siteId, timestamp, jobId, versionConnects, context, sourceEventId)
+      : await completeImmediateReplay(stationId, siteId, timestamp, jobId, versionConnects, context, sourceEventId)
     : keepOpen
       ? await completeOpenClose(
           stationId,
@@ -178,6 +226,7 @@ export async function complete(input: StartCycleInput) {
           timestamp,
           jobId,
           versionConnects,
+          context,
           idealCycleIncrement,
           sourceEventId,
           slowThresholdSeconds,
@@ -188,6 +237,7 @@ export async function complete(input: StartCycleInput) {
           timestamp,
           jobId,
           versionConnects,
+          context,
           idealCycleIncrement,
           sourceEventId,
           slowThresholdSeconds,
@@ -293,6 +343,7 @@ async function completeImmediate(
   timestamp: Date,
   jobId: string,
   versionConnects: VersionConnects,
+  context: CycleContext,
   idealCycleIncrement: number,
   sourceEventId: string | null,
   slowThresholdSeconds?: number,
@@ -323,7 +374,9 @@ async function completeImmediate(
         ORDER BY "end" DESC LIMIT 1
       ),
       new_cycle AS (
-        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", "siteId", "stationId", "jobVersionId", "sourceEventId", attrs, "createdAt", "updatedAt")
+        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", "siteId", "stationId", "jobVersionId", "sourceEventId",
+          "workcenterId", "shiftInstanceId", "businessDate", "jobId", "logonSessionId", "toolId", "toolVersionId",
+          attrs, "createdAt", "updatedAt")
         VALUES (
           gen_random_uuid(),
           COALESCE((SELECT "end" FROM prev), ${timestamp}),
@@ -333,6 +386,13 @@ async function completeImmediate(
           ${stationId},
           ${versionConnects.jobVersionId},
           ${sourceEventId}::uuid,
+          ${context.workcenterId}::uuid,
+          ${context.shiftInstanceId}::uuid,
+          ${context.businessDate}::date,
+          ${context.jobId}::uuid,
+          ${context.logonSessionId}::uuid,
+          ${context.toolId}::uuid,
+          ${context.toolVersionId}::uuid,
           '{}',
           NOW(),
           NOW()
@@ -447,6 +507,7 @@ async function completeOpenClose(
   timestamp: Date,
   jobId: string,
   versionConnects: VersionConnects,
+  context: CycleContext,
   idealCycleIncrement: number,
   sourceEventId: string | null,
   slowThresholdSeconds?: number,
@@ -467,9 +528,17 @@ async function completeOpenClose(
         const itemArrays = await Promise.all(openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId)));
         items = itemArrays.flat();
 
+        // Close-time restamp: metrics attribute a cycle to the bucket of its
+        // end, so the shift context follows the close. Job/tool/operator
+        // stamps stay from open time — they described the run that produced
+        // the cycle.
         await tx.cycle.updateMany({
           where: { stationId, end: null },
-          data: { end: timestamp },
+          data: {
+            end: timestamp,
+            shiftInstanceId: context.shiftInstanceId,
+            businessDate: context.businessDate,
+          },
         });
       } else {
         const hasPrevious = await tx.cycle.findFirst({
@@ -486,6 +555,7 @@ async function completeOpenClose(
               siteId,
               stationId,
               ...versionConnects,
+              ...context,
             },
           });
 
@@ -529,6 +599,7 @@ async function completeOpenClose(
           stationId,
           sourceEventId,
           ...versionConnects,
+          ...context,
         },
       });
 
@@ -570,6 +641,7 @@ async function completeImmediateReplay(
   timestamp: Date,
   jobId: string,
   versionConnects: VersionConnects,
+  context: CycleContext,
   sourceEventId: string | null,
 ): Promise<StrategyResult | null> {
   return prisma.$transaction(async (tx) => {
@@ -589,7 +661,9 @@ async function completeImmediateReplay(
         ORDER BY "end" DESC LIMIT 1
       ),
       new_cycle AS (
-        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", "siteId", "stationId", "jobVersionId", "sourceEventId", attrs, "createdAt", "updatedAt")
+        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", "siteId", "stationId", "jobVersionId", "sourceEventId",
+          "workcenterId", "shiftInstanceId", "businessDate", "jobId", "logonSessionId", "toolId", "toolVersionId",
+          attrs, "createdAt", "updatedAt")
         VALUES (
           gen_random_uuid(),
           COALESCE((SELECT "end" FROM prev), ${timestamp}),
@@ -599,6 +673,13 @@ async function completeImmediateReplay(
           ${stationId},
           ${versionConnects.jobVersionId},
           ${sourceEventId}::uuid,
+          ${context.workcenterId}::uuid,
+          ${context.shiftInstanceId}::uuid,
+          ${context.businessDate}::date,
+          ${context.jobId}::uuid,
+          ${context.logonSessionId}::uuid,
+          ${context.toolId}::uuid,
+          ${context.toolVersionId}::uuid,
           '{}',
           NOW(),
           NOW()
@@ -657,6 +738,7 @@ async function completeOpenCloseReplay(
   timestamp: Date,
   jobId: string,
   versionConnects: VersionConnects,
+  context: CycleContext,
   sourceEventId: string | null,
 ): Promise<StrategyResult | null> {
   return prisma
@@ -675,9 +757,14 @@ async function completeOpenCloseReplay(
         const itemArrays = await Promise.all(openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId)));
         items = itemArrays.flat();
 
+        // Close-time restamp — see completeOpenClose.
         await tx.cycle.updateMany({
           where: { stationId, end: null },
-          data: { end: timestamp },
+          data: {
+            end: timestamp,
+            shiftInstanceId: context.shiftInstanceId,
+            businessDate: context.businessDate,
+          },
         });
       } else {
         const hasPrevious = await tx.cycle.findFirst({
@@ -694,6 +781,7 @@ async function completeOpenCloseReplay(
               siteId,
               stationId,
               ...versionConnects,
+              ...context,
             },
           });
 
@@ -710,6 +798,7 @@ async function completeOpenCloseReplay(
           stationId,
           sourceEventId,
           ...versionConnects,
+          ...context,
         },
       });
 
@@ -762,4 +851,16 @@ type VersionConnects = {
   jobVersionId: string;
   jobTools?: { connect: { id: string }[] };
   toolVersions?: { connect: { id: string }[] };
+};
+
+/** Conformed context stamped onto Cycle rows at write time. All nullable —
+ *  a cycle is never dropped because context resolution failed. */
+type CycleContext = {
+  workcenterId: string | null;
+  shiftInstanceId: string | null;
+  businessDate: Date | null;
+  jobId: string;
+  logonSessionId: string | null;
+  toolId: string | null;
+  toolVersionId: string | null;
 };

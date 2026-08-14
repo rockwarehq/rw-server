@@ -5,6 +5,7 @@ import { ensureBuckets } from "../../../metrics/bucket.js";
 import { jobEntityId } from "../../../metrics/cascade.js";
 import { publishEntityEvent } from "../../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../../entity/registry.js";
+import { getJobItemsPerCycle } from "../../../job/job.js";
 import {
   publishStationCurrentJobMetric,
   publishStationStandardCycleMetric,
@@ -128,6 +129,7 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
       // ── Create new StationJobLog if assigning a job ─────────────
       if (newJobId && job) {
         const standardCycle = job.currentVersion?.standardCycle ?? null;
+        const itemsPerCycle = await getJobItemsPerCycle(tx, newJobId);
 
         await tx.stationJobLog.create({
           data: {
@@ -137,6 +139,7 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
             jobVersionId: job.currentVersionId!,
             startTime: timestamp,
             standardCycle,
+            itemsPerCycle,
           },
         });
       }

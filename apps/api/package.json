@@ -36,6 +36,7 @@
     "@nats-io/kv": "^3.4.0",
     "@nats-io/transport-node": "^3.4.0",
     "@orpc/server": "^1.14.0",
+    "@rockwarehq/metrics": "workspace:*",
     "@rw/auth": "workspace:*",
     "@rw/automations": "workspace:*",
     "@rw/db": "workspace:*",

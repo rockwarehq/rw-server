@@ -1,5 +1,6 @@
 import { Queue, Worker } from "bullmq";
 import { bullmqConfig } from "../config.js";
+import { splitOpenStateEntriesAtShiftBoundary } from "../facility/station/state.js";
 import { publishCurrentShiftForStations } from "../facility/shift/resolve-current.js";
 import { flushAllExpiredShiftUsage } from "../inventory/material-shift-flush.js";
 
@@ -31,7 +32,31 @@ export async function registerShiftChangeWorker(triggerEnsureTick: (delayMs: num
 
   shiftChangeWorker = new Worker(
     SHIFT_CHANGE_QUEUE,
-    async () => {
+    async (job) => {
+      // Split open StationStateLog rows spanning this boundary. This worker
+      // is the right trigger: unlike the 60s ensure tick and the 5-minute
+      // shift-instance sweep (which repeat regardless of boundaries), these
+      // delayed jobs fire exactly once per boundary per scope (deterministic
+      // jobId, scheduled by the ensure tick for the next upcoming boundary),
+      // carrying the exact boundary time — so a job that fires late still
+      // splits at the true boundary, and duplicate fires are no-ops (the
+      // continuation row starts AT the boundary).
+      const { scopeKey, boundary } = (job.data ?? {}) as { scopeKey?: string; boundary?: string };
+      if (scopeKey && boundary) {
+        const boundaryTime = new Date(boundary);
+        const scope = scopeKey.startsWith("wc-")
+          ? { workcenterId: scopeKey.slice("wc-".length) }
+          : { siteId: scopeKey.slice("site-".length) };
+        try {
+          const split = await splitOpenStateEntriesAtShiftBoundary(scope, boundaryTime);
+          if (split > 0) {
+            console.log(`[shift-change] Split ${split} open state entr(ies) at boundary ${boundary} (${scopeKey})`);
+          }
+        } catch (err) {
+          console.error(`[shift-change] splitOpenStateEntriesAtShiftBoundary failed for ${scopeKey}`, err);
+        }
+      }
+
       const published = await publishCurrentShiftForStations();
       console.log(`[shift-change] Published currentShift for ${published} station(s)`);
 

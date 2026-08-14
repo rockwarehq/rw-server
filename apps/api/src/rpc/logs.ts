@@ -397,11 +397,14 @@ export const stationShiftSummary = authRequired.input(stationShiftSummaryInputSc
 });
 
 // ============================================================================
-// Downtime Log search (shift-clamped, paginated)
+// Downtime Log search (stamped attribution, paginated)
 //
-// Each downtime entry is cross-joined with overlapping shift instances so a
-// single entry that spans two shifts produces two rows, each clamped to the
-// shift's time boundaries. Falls back to raw entries when no shifts exist.
+// Rows stamped at write time (shiftInstanceId/businessDate columns) already
+// lie within a single shift — they are attributed directly from the stamps.
+// Legacy rows with NULL stamps fall back to the in-memory shift clamp: each
+// entry is cross-joined with overlapping shift instances so a single entry
+// that spans two shifts produces two rows, each clamped to the shift's time
+// boundaries. Raw entries when no shifts exist.
 // ============================================================================
 
 const downtimeLogSearchInputSchema = z.object({
@@ -465,31 +468,6 @@ export const downtimeLogSearch = authRequired.input(downtimeLogSearchInputSchema
       })()
     : new Date("2100-01-01");
 
-  // Fetch shift instances overlapping the range
-  const shiftInstances = await prisma.shiftInstance.findMany({
-    where: {
-      OR: [
-        { siteId: input.siteId, workCenterId: null },
-        ...(input.workCenterId
-          ? [{ workCenterId: input.workCenterId }]
-          : [...new Set(stationWorkcenterMap.values())]
-              .filter((id): id is string => id != null)
-              .map((wcId) => ({ workCenterId: wcId }))),
-      ],
-      startTime: { lt: rangeEnd },
-      endTime: { gt: rangeStart },
-    },
-    select: {
-      id: true,
-      shiftName: true,
-      businessDate: true,
-      startTime: true,
-      endTime: true,
-      workCenterId: true,
-    },
-    orderBy: { startTime: "asc" },
-  });
-
   // Fetch overlapping DOWN entries (exclude open entries — they're still in progress)
   const downtimeWhere: Record<string, unknown> = {
     state: "DOWN",
@@ -504,6 +482,9 @@ export const downtimeLogSearch = authRequired.input(downtimeLogSearchInputSchema
     stationId: true,
     startTime: true,
     endTime: true,
+    shiftInstanceId: true,
+    shiftInstance: { select: { shiftName: true } },
+    businessDate: true,
     statusReasonId: true,
     statusReason: {
       select: {
@@ -524,6 +505,39 @@ export const downtimeLogSearch = authRequired.input(downtimeLogSearchInputSchema
     orderBy: { startTime: "asc" },
   });
 
+  // Stamped rows (write-time shift context) are attributed directly; only
+  // rows with NULL stamps (legacy, pre-split) need the clamp fallback.
+  const stampedEntries = entries.filter((e) => e.shiftInstanceId != null);
+  const legacyEntries = entries.filter((e) => e.shiftInstanceId == null);
+
+  // Fetch shift instances overlapping the range (clamp fallback only)
+  const shiftInstances =
+    legacyEntries.length === 0
+      ? []
+      : await prisma.shiftInstance.findMany({
+          where: {
+            OR: [
+              { siteId: input.siteId, workCenterId: null },
+              ...(input.workCenterId
+                ? [{ workCenterId: input.workCenterId }]
+                : [...new Set(stationWorkcenterMap.values())]
+                    .filter((id): id is string => id != null)
+                    .map((wcId) => ({ workCenterId: wcId }))),
+            ],
+            startTime: { lt: rangeEnd },
+            endTime: { gt: rangeStart },
+          },
+          select: {
+            id: true,
+            shiftName: true,
+            businessDate: true,
+            startTime: true,
+            endTime: true,
+            workCenterId: true,
+          },
+          orderBy: { startTime: "asc" },
+        });
+
   // Build result rows
   const rows: Array<{
     id: string;
@@ -542,8 +556,30 @@ export const downtimeLogSearch = authRequired.input(downtimeLogSearchInputSchema
     jobName: string | null;
   }> = [];
 
+  // Stamped rows: split at shift boundaries at write time, so the row lies
+  // within one shift — no clamping, attribution comes from the columns.
+  for (const entry of stampedEntries) {
+    if (!entry.endTime) continue;
+    rows.push({
+      id: entry.id,
+      stationId: entry.stationId,
+      stationName: entry.station.name,
+      shiftName: entry.shiftInstance?.shiftName ?? null,
+      businessDate: entry.businessDate,
+      startTime: entry.startTime,
+      endTime: entry.endTime,
+      durationSeconds: Math.round((entry.endTime.getTime() - entry.startTime.getTime()) / 1000),
+      statusReasonId: entry.statusReasonId,
+      statusReasonName: entry.statusReason?.name ?? null,
+      isPlannedDown: entry.statusReason?.isPlannedDown ?? null,
+      categoryName: entry.statusReason?.category?.name ?? null,
+      jobVersionId: entry.jobVersionId ?? null,
+      jobName: entry.jobVersion?.name ?? null,
+    });
+  }
+
   if (shiftInstances.length > 0) {
-    // Shift-clamped mode: cross-join entries with overlapping shifts
+    // Clamp fallback: cross-join legacy entries with overlapping shifts
     const shiftsByWc = new Map<string | null, typeof shiftInstances>();
     for (const si of shiftInstances) {
       const key = si.workCenterId;
@@ -551,7 +587,7 @@ export const downtimeLogSearch = authRequired.input(downtimeLogSearchInputSchema
       shiftsByWc.get(key)?.push(si);
     }
 
-    for (const entry of entries) {
+    for (const entry of legacyEntries) {
       if (!entry.endTime) continue;
       const entryEnd = entry.endTime;
       const wcId = entry.station.workcenterId;
@@ -585,7 +621,7 @@ export const downtimeLogSearch = authRequired.input(downtimeLogSearchInputSchema
     }
   } else {
     // No shifts configured — fall back to raw entries
-    for (const entry of entries) {
+    for (const entry of legacyEntries) {
       const durationSeconds = entry.endTime
         ? Math.round((entry.endTime.getTime() - entry.startTime.getTime()) / 1000)
         : null;
@@ -595,7 +631,7 @@ export const downtimeLogSearch = authRequired.input(downtimeLogSearchInputSchema
         stationId: entry.stationId,
         stationName: entry.station.name,
         shiftName: null,
-        businessDate: null,
+        businessDate: entry.businessDate,
         startTime: entry.startTime,
         endTime: entry.endTime,
         durationSeconds,
@@ -1144,18 +1180,24 @@ export const cycleSearch = authRequired.input(cycleSearchInputSchema).handler(as
           WHEN c."end" IS NULL THEN NULL
           ELSE EXTRACT(EPOCH FROM (c."end" - c.start))::int
         END                AS "actualCycleSeconds",
-        COALESCE(si_wc."shiftName", si_site."shiftName") AS "shiftName",
+        COALESCE(si_stamped."shiftName", si_wc."shiftName", si_site."shiftName") AS "shiftName",
         COALESCE(
+          to_char(c."businessDate", 'YYYY-MM-DD'),
           to_char(si_wc."businessDate", 'YYYY-MM-DD'),
           to_char(si_site."businessDate", 'YYYY-MM-DD')
         )                  AS "businessDate"
       FROM "Cycle" c
       JOIN "Station" s ON s.id = c."stationId"
       JOIN "JobVersion" jb ON jb.id = c."jobVersionId"
+      -- Stamped attribution (write-time context). The LATERAL overlap joins
+      -- below run only for legacy rows with no stamp; drop them once the
+      -- backfill has landed everywhere.
+      LEFT JOIN "ShiftInstance" si_stamped ON si_stamped.id = c."shiftInstanceId"
       LEFT JOIN LATERAL (
         SELECT si."shiftName", si."businessDate"
         FROM "ShiftInstance" si
-        WHERE si."workCenterId" = s."workcenterId"
+        WHERE c."shiftInstanceId" IS NULL
+          AND si."workCenterId" = s."workcenterId"
           AND si."startTime" <= c.start
           AND si."endTime"   >  c.start
         ORDER BY si."startTime" DESC
@@ -1164,7 +1206,8 @@ export const cycleSearch = authRequired.input(cycleSearchInputSchema).handler(as
       LEFT JOIN LATERAL (
         SELECT si."shiftName", si."businessDate"
         FROM "ShiftInstance" si
-        WHERE si."siteId" = c."siteId"
+        WHERE c."shiftInstanceId" IS NULL
+          AND si."siteId" = c."siteId"
           AND si."workCenterId" IS NULL
           AND si."startTime" <= c.start
           AND si."endTime"   >  c.start
@@ -1551,7 +1594,15 @@ export const partLogSearch = authRequired.input(partLogSearchInputSchema).handle
       },
     },
     select: {
-      cycle: { select: { end: true, start: true, stationId: true } },
+      cycle: {
+        select: {
+          end: true,
+          start: true,
+          stationId: true,
+          businessDate: true,
+          shiftInstance: { select: { shiftName: true, businessDate: true } },
+        },
+      },
       productVersion: { select: { name: true, sku: true } },
     },
   });
@@ -1559,11 +1610,19 @@ export const partLogSearch = authRequired.input(partLogSearchInputSchema).handle
   for (const item of items) {
     const stationId = item.cycle.stationId;
     const ts = item.cycle.end ?? item.cycle.start;
-    const shift = findShift(ts, stationId);
-    const businessDate = shift?.businessDate
-      ? shift.businessDate.toISOString().slice(0, 10)
-      : ts.toISOString().slice(0, 10);
-    const shiftName = shift?.shiftName ?? null;
+    // Prefer the cycle's stamped context; overlap lookup only for legacy rows.
+    let businessDate: string | null;
+    let shiftName: string | null;
+    if (item.cycle.shiftInstance) {
+      businessDate = (item.cycle.businessDate ?? item.cycle.shiftInstance.businessDate).toISOString().slice(0, 10);
+      shiftName = item.cycle.shiftInstance.shiftName ?? null;
+    } else {
+      const shift = findShift(ts, stationId);
+      businessDate = shift?.businessDate
+        ? shift.businessDate.toISOString().slice(0, 10)
+        : ts.toISOString().slice(0, 10);
+      shiftName = shift?.shiftName ?? null;
+    }
     const partName = item.productVersion?.name ?? "\u2014";
     const partSku = item.productVersion?.sku ?? null;
     const stationName = stationNameMap.get(stationId) ?? "";

@@ -120,6 +120,8 @@ model StationLogonSession {
   shiftInstanceId String?        @db.Uuid
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
 
+  cycles Cycle[]
+
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
