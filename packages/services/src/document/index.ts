@@ -35,6 +35,8 @@ export interface ListDocumentsInput {
   q?: string;
   limit?: number;
   offset?: number;
+  /** Only documents linked to this record; skips parentId scoping. */
+  linkedTo?: { targetType: DocumentTargetType; targetId: string };
 }
 
 export interface UpdateDocumentInput {
@@ -333,13 +335,18 @@ export async function completeUpload(documentId: string) {
 }
 
 export async function list(input: ListDocumentsInput = {}) {
-  const { siteId, parentId = null, kind, includePending = false, q, limit = 50, offset = 0 } = input;
+  const { siteId, parentId = null, kind, includePending = false, q, limit = 50, offset = 0, linkedTo } = input;
   const where: Prisma.DocumentWhereInput = {
     deletedAt: null,
-    parentId,
+    // Linked-document queries span the whole folder tree.
+    ...(linkedTo ? {} : { parentId }),
     ...(kind ? { kind } : {}),
     ...(includePending ? {} : { status: "READY" }),
   };
+
+  if (linkedTo) {
+    where.links = { some: { targetType: linkedTo.targetType, targetId: linkedTo.targetId } };
+  }
 
   if (siteId !== undefined) {
     where.siteId = siteId;

@@ -33,6 +33,8 @@ const toolUpdateInputSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().optional(),
   cavityCount: z.number().int().positive().nullable().optional(),
+  pmLimit: z.number().int().min(0).nullable().optional(),
+  pmWarn: z.number().int().min(0).nullable().optional(),
   attrs: z.record(z.string(), z.unknown()).optional(),
 });
 

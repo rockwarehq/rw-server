@@ -263,6 +263,7 @@ export const internalNavigation: Array<NavGroup> = [
       { title: 'Background Work', href: '/internal/architecture/workers' },
       { title: 'Livestore', href: '/internal/architecture/livestore' },
       { title: 'Data Model & Metrics', href: '/internal/architecture/data-model' },
+      { title: 'Data Model ERD & Audit', href: '/internal/architecture/data-model/erd' },
     ],
   },
   {

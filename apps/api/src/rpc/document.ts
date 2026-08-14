@@ -55,6 +55,9 @@ const listInputSchema = z.object({
   q: z.string().optional(),
   limit: z.number().min(0).default(50),
   offset: z.number().min(0).default(0),
+  linkedTo: z
+    .object({ targetType: documentTargetTypeSchema, targetId: z.uuid() })
+    .optional(),
 });
 
 const updateInputSchema = z.object({

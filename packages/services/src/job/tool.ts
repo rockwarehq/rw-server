@@ -19,6 +19,8 @@ export interface UpdateToolInput {
   name?: string;
   description?: string;
   cavityCount?: number | null;
+  pmLimit?: number | null;
+  pmWarn?: number | null;
   attrs?: Record<string, unknown>;
 }
 
@@ -185,7 +187,7 @@ export async function getById(id: string) {
  * Update tool (creates new version version)
  */
 export async function update(id: string, input: UpdateToolInput) {
-  const { name, description, cavityCount, attrs } = input;
+  const { name, description, cavityCount, pmLimit, pmWarn, attrs } = input;
 
   // Get current tool with version
   const current = await prisma.tool.findUnique({
@@ -225,6 +227,10 @@ export async function update(id: string, input: UpdateToolInput) {
         name: name ?? currentVersion.name,
         description: description !== undefined ? description : currentVersion.description,
         cavityCount: cavityCount !== undefined ? cavityCount : currentVersion.cavityCount,
+        // Carry PM thresholds forward — omitting them here would silently
+        // wipe them on every unrelated update (new version starts null).
+        pmLimit: pmLimit !== undefined ? pmLimit : currentVersion.pmLimit,
+        pmWarn: pmWarn !== undefined ? pmWarn : currentVersion.pmWarn,
         attrs: attrs !== undefined ? attrs : (currentVersion.attrs as Record<string, unknown>),
       },
     });
@@ -246,7 +252,7 @@ export async function update(id: string, input: UpdateToolInput) {
     entityId: tool.id,
     siteId: tool.siteId,
     workspaceId: current.site.workspaceId,
-    changedFields: Object.entries({ name, description, cavityCount })
+    changedFields: Object.entries({ name, description, cavityCount, pmLimit, pmWarn })
       .filter(([, value]) => value !== undefined)
       .map(([key]) => key),
   });
@@ -460,7 +466,8 @@ export async function removeCavity(cavityId: string) {
     where: { id: cavityId },
     include: {
       tool: { select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } } },
-      _count: { select: { jobProducts: true } },
+      // Only live job products block deletion — soft-deleted items don't.
+      _count: { select: { jobProducts: { where: { deletedAt: null } } } },
     },
   });
 
