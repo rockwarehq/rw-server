@@ -288,6 +288,8 @@ const FACT_GRAINS: Record<FactKey, readonly string[]> = {
   cycle: ["event"],
   downtime: ["event"],
   scrap: ["event"],
+  items: ["event"],
+  materialUsage: ["event"],
   bucket: [MIRRORED_GRANULARITY],
 };
 

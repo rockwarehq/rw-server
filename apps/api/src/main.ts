@@ -8,6 +8,7 @@
 // Producer-side queue inits (no worker registered here):
 //   - station-detection queues   (HTTP handlers call scheduleDetection)
 //   - metric-bucket queues       (services/metrics/bucket.ts calls scheduleNextShiftBuckets)
+//   - station-hour-close queue   (services/metrics/bucket.ts calls scheduleHourClose)
 //
 // Rollups (metric-bucket-ensure, shift-bucket-create, shift-change,
 // combined metrics tick, archive) and station-event-execution live in
@@ -21,12 +22,12 @@ import { createPrismaClient } from "@rw/db";
 createPrismaClient("api");
 
 import { initEventsBridge } from "@rw/runtime/events-bus";
-import { initMetricsBridge } from "@rw/services/rpc/metrics-bus";
 
 import { serverConfig } from "./config.js";
 import { startStaleGatewayCheck, stopStaleGatewayCheck } from "@rw/services/queues/background-workers";
 import { initQueues, registerStateDetectionWorkers, stopQueues } from "@rw/services/queues/station-detection";
 import { initMetricBucketQueues, stopMetricBucketQueues } from "@rw/services/queues/metric-buckets";
+import { initHourCloseQueue, stopHourCloseQueue } from "@rw/services/queues/hour-close";
 import { createServer } from "./server.js";
 import { driver } from "./services/device/index.js";
 import { registerReplayReconcileWorker, stopReplayReconcileWorker } from "@rw/services/queues/replay-reconcile";
@@ -40,7 +41,6 @@ import { infraConfig } from "./config.js";
 import { registerReadinessCheck } from "./readiness.js";
 
 let cleanupBridge: (() => Promise<void>) | null = null;
-let cleanupMetricsBridge: (() => Promise<void>) | null = null;
 let cleanupGraphDefinitionPublisher: (() => Promise<void>) | null = null;
 let cleanupEntityEventPublisher: (() => Promise<void>) | null = null;
 let cleanupCommandBus: (() => Promise<void>) | null = null;
@@ -88,7 +88,6 @@ async function main() {
   // them too (horizontal-scaling safe). The process's own publishes loop
   // back through Redis (~1ms) — fine for SSE latency, no double-delivery.
   cleanupBridge = await initEventsBridge("both");
-  cleanupMetricsBridge = await initMetricsBridge("both");
   cleanupGraphDefinitionPublisher = await startGraphDefinitionPublisher();
   cleanupEntityEventPublisher = await startEntityEventPublisher();
   cleanupCommandBus = await startCommandBus();
@@ -97,6 +96,7 @@ async function main() {
   // initialize Queue instances; the workers consuming them run elsewhere
   // (rollups for metric-bucket / shift-change).
   await initMetricBucketQueues();
+  await initHourCloseQueue();
 
   // station-detection: producer (scheduleDetection) + workers (slow/down)
   // both stay in apps/api.
@@ -116,11 +116,11 @@ async function shutdown() {
     stopStaleGatewayCheck(),
     stopQueues(),
     stopMetricBucketQueues(),
+    stopHourCloseQueue(),
     stopReplayReconcileWorker(),
     cleanupReplay(),
   ]);
   if (cleanupBridge) await cleanupBridge();
-  if (cleanupMetricsBridge) await cleanupMetricsBridge();
   if (cleanupGraphDefinitionPublisher) await cleanupGraphDefinitionPublisher();
   if (cleanupEntityEventPublisher) await cleanupEntityEventPublisher();
   if (cleanupCommandBus) await cleanupCommandBus();

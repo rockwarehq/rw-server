@@ -9,16 +9,8 @@
 // Called from the 60-second background worker after ensure + recalc.
 
 import prisma from "@rw/db";
-import { getSiteTimezone, resolveBusinessDate } from "./bucket.js";
-import { computeDurationsForBucket } from "./compute.js";
+import { writeStationHourBuckets } from "./cascade.js";
 import { MetricsContext } from "./context.js";
-import { rollupBuckets } from "./rollup.js";
-import { getShiftForEntity } from "./shift.js";
-
-interface FrozenBucket {
-  startTime: Date;
-  durationSeconds: number;
-}
 
 /**
  * Archive MetricBucket rows whose time window has fully elapsed.
@@ -62,13 +54,17 @@ export async function archiveOldBuckets(ctx?: MetricsContext): Promise<number> {
  * durationSeconds) has fully elapsed. All comparisons are in UTC —
  * no timezone logic needed.
  *
- * Before archiving, STATION-entity buckets have their duration KPIs
- * recomputed via computeDurationsForBucket() to capture last-second
- * StationStateLog edits, then rollupBuckets() refreshes the WC/SITE
- * rows in MetricBucket so the archived parent snapshots match the
- * frozen station values. JOB hour buckets are not refreshed here.
+ * Before archiving, each distinct STATION (station, hour) family is
+ * frozen with a FULL base-writer recompute (writeStationHourBuckets):
+ * counts from Cycle, durations from StationStateLog, per-job expected*
+ * from each job's own standardCycle and StationJobLog itemsPerCycle
+ * snapshot. The old duration-only freeze existed because expected* were
+ * maintained by a separate job-clipped sync the freeze could not
+ * reproduce; post-Stage-C every row owns its job's values and the base
+ * writer computes all of them, so the restriction's reason is gone and
+ * the archived snapshot is accurate to the second across ALL columns.
  */
-async function archiveSiteBuckets(siteId: string, ctx: MetricsContext): Promise<number> {
+async function archiveSiteBuckets(siteId: string, _ctx: MetricsContext): Promise<number> {
   const now = new Date();
 
   // Archive buckets whose time window has fully elapsed (UTC).
@@ -91,100 +87,64 @@ async function archiveSiteBuckets(siteId: string, ctx: MetricsContext): Promise<
 
   if (oldBuckets.length === 0) return 0;
 
-  // ── Freeze STATION buckets with accurate durations ──────────────
-  // Before archiving, recompute duration KPIs for STATION-entity
-  // buckets using computeDurationsForBucket(). This ensures the
-  // archived snapshot has durations accurate to the second rather
-  // than stale values from the last periodic recalc.
-  const stationBuckets = oldBuckets.filter((row) => row.entityType === "STATION");
-  const frozenByStation = new Map<string, FrozenBucket[]>();
-
-  for (const bucket of stationBuckets) {
+  // ── Freeze STATION hour families with a full recompute ──────────
+  // One base-writer run per distinct (station, hour) — it rewrites the
+  // whole family (per-job rows + residual) in a single statement, so
+  // rows added to the family by the recompute are picked up by the
+  // re-read below and archived together.
+  const frozenHours = new Map<string, { stationId: string; startTime: Date }>();
+  for (const bucket of oldBuckets) {
+    if (bucket.entityType !== "STATION" || bucket.granularity !== "HOUR") continue;
+    frozenHours.set(`${bucket.entityId}|${bucket.startTime.getTime()}`, {
+      stationId: bucket.entityId,
+      startTime: bucket.startTime,
+    });
+  }
+  for (const { stationId, startTime } of frozenHours.values()) {
     try {
-      const standardCycle = bucket.currentStandardCycle != null ? Number(bucket.currentStandardCycle) : null;
-
-      const d = await computeDurationsForBucket(
-        bucket.entityId,
-        bucket.startTime,
-        bucket.durationSeconds,
-        standardCycle,
-        1,
-      );
-
-      // Freeze ONLY the duration fields. The expected* fields on the row
-      // are job-clipped values maintained by syncExpectedCyclesFromJobs
-      // (summed per job with each job's own standardCycle and real
-      // items-per-cycle); recomputing them here would use the station-level
-      // standardCycle and itemsPerCycle=1, undercounting expectedItems for
-      // any multi-item job.
-      await prisma.metricBucket.update({
-        where: { id: bucket.id },
-        data: {
-          runSeconds: d.runSeconds,
-          downSeconds: d.downSeconds,
-          plannedDownSeconds: d.plannedDownSeconds,
-          unplannedDownSeconds: d.unplannedDownSeconds,
-          elapsedPlannedProductionSeconds: d.elapsedPlannedProductionSeconds,
-        },
-      });
-
-      const list = frozenByStation.get(bucket.entityId) ?? [];
-      list.push({ startTime: bucket.startTime, durationSeconds: bucket.durationSeconds });
-      frozenByStation.set(bucket.entityId, list);
+      await writeStationHourBuckets(stationId, siteId, startTime);
     } catch (err) {
       console.error(
-        `[metrics:archive] Failed to freeze durations for STATION bucket ${bucket.id} (entity ${bucket.entityId}):`,
+        `[metrics:archive] Failed to freeze hour ${startTime.toISOString()} for station ${stationId}:`,
         err,
       );
       // Continue with archiving using the existing (potentially stale) values
     }
   }
 
-  // ── Cascade rollups so WC/SITE rows reflect the frozen station values ──
-  // Without this, parent rows in the same archive batch get copied to
-  // MetricBucketLog with pre-freeze values and never reconcile.
-  if (frozenByStation.size > 0) {
-    const timezone = await getSiteTimezone(siteId, ctx);
-
-    for (const [stationId, buckets] of frozenByStation) {
-      try {
-        const earliest = buckets.reduce((acc, b) => (b.startTime < acc.startTime ? b : acc));
-        const shift = await getShiftForEntity("STATION", stationId, siteId, earliest.startTime, ctx);
-        const businessDate = await resolveBusinessDate(earliest.startTime, shift?.shiftInstanceId ?? null, timezone);
-        const businessShift = shift?.shiftName ?? null;
-
-        await rollupBuckets({
-          stationId,
-          siteId,
-          affectedBuckets: buckets,
-          timezone,
-          businessDate,
-          businessShift,
-          ctx,
-        });
-      } catch (err) {
-        console.error(`[metrics:archive] Failed to roll up parents for station ${stationId} pre-archive:`, err);
-        // Continue — STATION row is already frozen; parents stay at last-tick values
-      }
-    }
-  }
-
-  // Re-read the rows by ID so logRows carries the freshly-rolled-up parent KPIs
-  // alongside the frozen STATION values.
+  // Re-read the family rows for the frozen hours (the recompute may have
+  // added rows) plus the remaining old buckets by id.
   const archivedIds = oldBuckets.map((row) => row.id);
   const refreshed = await prisma.metricBucket.findMany({
     where: { id: { in: archivedIds } },
   });
+  const refreshedIds = new Set(refreshed.map((row) => row.id));
+  const familyRows =
+    frozenHours.size > 0
+      ? await prisma.metricBucket.findMany({
+          where: {
+            siteId,
+            entityType: "STATION",
+            granularity: "HOUR",
+            OR: [...frozenHours.values()].map(({ stationId, startTime }) => ({
+              entityId: stationId,
+              startTime,
+            })),
+          },
+        })
+      : [];
+  const rowsToArchive = [...refreshed, ...familyRows.filter((row) => !refreshedIds.has(row.id))];
 
   // Copy raw (additive) fields to MetricBucketLog. Generated columns
   // (goodCycles, goodItems, plannedProductionSeconds, availability,
   // performance, quality, oee) auto-compute from the raw fields —
   // we must NOT include them in the insert data.
-  const logRows = refreshed.map((row) => ({
+  const logRows = rowsToArchive.map((row) => ({
     id: row.id,
     siteId: row.siteId,
     entityType: row.entityType,
     entityId: row.entityId,
+    jobId: row.jobId,
     entityName: row.entityName,
     path: row.path,
     granularity: row.granularity,
@@ -223,10 +183,10 @@ async function archiveSiteBuckets(siteId: string, ctx: MetricsContext): Promise<
   });
 
   // Delete the archived rows from the active table.
-  // Use the exact IDs from the filtered set so we never delete
+  // Use the exact IDs from the archived set so we never delete
   // buckets whose time window hasn't elapsed yet (overnight shifts).
   const deleted = await prisma.metricBucket.deleteMany({
-    where: { id: { in: archivedIds } },
+    where: { id: { in: rowsToArchive.map((row) => row.id) } },
   });
 
   if (count > 0 || deleted.count > 0) {

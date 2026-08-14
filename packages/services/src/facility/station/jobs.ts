@@ -1,7 +1,6 @@
 import prisma from "@rw/db";
 import { recalcAll } from "../../metrics/recalc.js";
 import { ensureBuckets } from "../../metrics/bucket.js";
-import { jobEntityId } from "../../metrics/cascade.js";
 import {
   publishStationCurrentJobMetric,
   publishStationStandardCycleMetric,
@@ -166,14 +165,16 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
   }
 
   if (newJobId && job) {
+    // Scaffold the (STATION, station, jobId, HOUR) row (plus residual)
+    // so the row exists before the first cycle lands.
     ensureBuckets({
       siteId: station.siteId,
-      entityType: "JOB",
-      entityId: jobEntityId(stationId, newJobId),
-      entityName: job.currentVersion?.name ?? "",
+      entityType: "STATION",
+      entityId: stationId,
+      jobId: newJobId,
       timestamp,
     }).catch((err) => {
-      console.error(`[changeJob] Failed to ensure JOB buckets for job ${newJobId}:`, err);
+      console.error(`[changeJob] Failed to ensure job hour buckets for job ${newJobId}:`, err);
     });
 
     publishStationCurrentJobMetric(stationId, job.currentVersion?.name ?? null, timestamp).catch((err) => {

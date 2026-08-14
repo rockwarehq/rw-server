@@ -17,18 +17,27 @@ import type {
 // full-row upserts — no tombstones exist for this series. Change timestamp is
 // `updatedAt` on the live table and `archivedAt` on the log (archive copies
 // the live `updatedAt` verbatim, so it cannot be the log's frontier).
+//
+// DEPRECATION (star-schema Stage B): the selector is narrowed to the one
+// persisted grain — entityType STATION, granularity HOUR. Rows now carry a
+// `jobId` (per-job family: one row per (station, job|null, hour)). Former
+// WORKCENTER / SHIFT / DAY consumers must aggregate the STATION×HOUR series
+// client-side: sum the additive KPI columns across the relevant stations /
+// hours (and job rows within an hour) and recompute the four ratios from the
+// summed ingredients — never sum or average the ratio columns themselves.
 
 export interface MetricBucketScope {
   siteId: string;
-  entityType: "STATION" | "WORKCENTER";
+  entityType: "STATION";
   entityId: string;
-  granularity: "HOUR" | "SHIFT" | "DAY";
+  granularity: "HOUR";
 }
 
 const rowSelect = {
   id: true,
   entityType: true,
   entityId: true,
+  jobId: true,
   entityName: true,
   granularity: true,
   granularityName: true,
@@ -102,8 +111,7 @@ function normalizeRow(row: LiveRow | LogRow, archived: boolean): MetricBucketRow
   };
 }
 
-function scopeWhere(scope: MetricBucketScope): Prisma.MetricBucketWhereInput &
-  Prisma.MetricBucketLogWhereInput {
+function scopeWhere(scope: MetricBucketScope): Prisma.MetricBucketWhereInput & Prisma.MetricBucketLogWhereInput {
   return {
     siteId: scope.siteId,
     entityType: scope.entityType,
@@ -113,8 +121,7 @@ function scopeWhere(scope: MetricBucketScope): Prisma.MetricBucketWhereInput &
 }
 
 /** Point-in-range predicate: `startTime >= from AND (to IS NULL OR startTime < to)`. */
-function rangeWhere(range: ResolvedRange): Prisma.MetricBucketWhereInput &
-  Prisma.MetricBucketLogWhereInput {
+function rangeWhere(range: ResolvedRange): Prisma.MetricBucketWhereInput & Prisma.MetricBucketLogWhereInput {
   const startTime: Prisma.DateTimeFilter = { gte: range.from };
   if (range.to) startTime.lt = range.to;
   return { startTime };
@@ -148,25 +155,13 @@ function keysetAfter(token: PageToken): Prisma.MetricBucketWhereInput & Prisma.M
 }
 
 async function assertScope(scope: MetricBucketScope): Promise<HistorianError | { ok: true }> {
-  if (scope.entityType === "STATION") {
-    const station = await prisma.station.findUnique({
-      where: { id: scope.entityId },
-      select: { siteId: true },
-    });
-    if (!station) return { error: "Station not found", code: "NOT_FOUND" };
-    if (station.siteId !== scope.siteId) {
-      return { error: "Station does not belong to this site", code: "FORBIDDEN" };
-    }
-    return { ok: true };
-  }
-
-  const workcenter = await prisma.workcenter.findUnique({
+  const station = await prisma.station.findUnique({
     where: { id: scope.entityId },
     select: { siteId: true },
   });
-  if (!workcenter) return { error: "Workcenter not found", code: "NOT_FOUND" };
-  if (workcenter.siteId !== scope.siteId) {
-    return { error: "Workcenter does not belong to this site", code: "FORBIDDEN" };
+  if (!station) return { error: "Station not found", code: "NOT_FOUND" };
+  if (station.siteId !== scope.siteId) {
+    return { error: "Station does not belong to this site", code: "FORBIDDEN" };
   }
   return { ok: true };
 }
@@ -174,17 +169,12 @@ async function assertScope(scope: MetricBucketScope): Promise<HistorianError | {
 async function resolveCurrentShift(scope: MetricBucketScope): Promise<ShiftWindow | null | HistorianError> {
   // Null workcenter (unassigned station) matches site-level default shifts,
   // mirroring station-state's lookup.
-  let workCenterId: string | null;
-  if (scope.entityType === "WORKCENTER") {
-    workCenterId = scope.entityId;
-  } else {
-    const station = await prisma.station.findUnique({
-      where: { id: scope.entityId },
-      select: { workcenterId: true },
-    });
-    if (!station) return { error: "Station not found", code: "NOT_FOUND" };
-    workCenterId = station.workcenterId;
-  }
+  const station = await prisma.station.findUnique({
+    where: { id: scope.entityId },
+    select: { workcenterId: true },
+  });
+  if (!station) return { error: "Station not found", code: "NOT_FOUND" };
+  const workCenterId = station.workcenterId;
 
   const now = new Date();
   const shift = await prisma.shiftInstance.findFirst({
@@ -296,9 +286,7 @@ async function fetchChanges(
   const merged = [
     ...live.map((row) => normalizeRow(row as LiveRow, false)),
     ...archived.map((row) => normalizeRow(row as LogRow, true)),
-  ].sort(
-    (a, b) => a.changeTs.getTime() - b.changeTs.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-  );
+  ].sort((a, b) => a.changeTs.getTime() - b.changeTs.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   const hasMore = merged.length > limit;
   const data = hasMore ? merged.slice(0, limit) : merged;

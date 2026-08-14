@@ -141,8 +141,6 @@ export const router = {
     },
   },
   metrics: {
-    stream: metrics.stream,
-    streamValues: metrics.streamValues,
     getBuckets: metrics.getBuckets,
     getShiftValues: metrics.getShiftValues,
   },

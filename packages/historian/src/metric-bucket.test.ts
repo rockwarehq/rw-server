@@ -7,6 +7,10 @@ import { isHistorianError, type ResolvedRange } from "./types.js";
 // Integration tests (station-state.test.ts conventions): require DATABASE_URL
 // and exercise the real two-table union / watermark queries. Each suite
 // builds its own isolated workspace/site/workcenter graph.
+//
+// Star-schema Stage B: the series is narrowed to the persisted base grain —
+// entityType STATION, granularity HOUR — and rows carry a `jobId` (per-job
+// family: one row per (station, job|null, hour)).
 
 function at(iso: string) {
   return new Date(iso);
@@ -20,10 +24,10 @@ describe.skipIf(!process.env.DATABASE_URL)("historian metricBucket series", () =
   let otherSiteId: string;
   let workcenterId: string;
   let stationId: string;
+  let jobId: string;
   let archivedCollisionId: string;
 
-  const scope = () =>
-    ({ siteId, entityType: "WORKCENTER", entityId: workcenterId, granularity: "HOUR" }) as const;
+  const scope = () => ({ siteId, entityType: "STATION", entityId: stationId, granularity: "HOUR" }) as const;
 
   beforeAll(async () => {
     const suffix = randomUUID();
@@ -45,12 +49,13 @@ describe.skipIf(!process.env.DATABASE_URL)("historian metricBucket series", () =
       data: { name: `Station ${suffix}`, siteId, workcenterId },
     });
     stationId = station.id;
+    jobId = randomUUID();
 
     const base = {
       siteId,
-      entityType: "WORKCENTER" as const,
-      entityId: workcenterId,
-      entityName: "WC",
+      entityType: "STATION" as const,
+      entityId: stationId,
+      entityName: "Station",
       granularity: "HOUR" as const,
       granularityName: "Hour",
       durationSeconds: 3600,
@@ -68,14 +73,16 @@ describe.skipIf(!process.env.DATABASE_URL)("historian metricBucket series", () =
 
     archivedCollisionId = randomUUID();
 
-    // Live table: pre-range hour, two in-range hours (one of which also has a
-    // stale live copy of the archived-collision row), a STATION-entity row and
-    // a SHIFT-granularity row that the scope must exclude.
+    // Live table: pre-range hour, two in-range whole-station hours (one of
+    // which also has a stale live copy of the archived-collision row), a
+    // per-job hour row (jobId set), plus a WORKCENTER-entity row and a
+    // SHIFT-granularity row that the narrowed scope must exclude.
     await prisma.metricBucket.createMany({
       data: [
         { ...base, startTime: at("2026-07-13T04:00:00.000Z") }, // pre-range
         { ...base, startTime: at("2026-07-13T07:00:00.000Z"), totalItems: 70 },
         { ...base, startTime: at("2026-07-13T08:00:00.000Z"), totalItems: 80 },
+        { ...base, startTime: at("2026-07-13T09:00:00.000Z"), totalItems: 40, jobId },
         {
           ...base,
           id: archivedCollisionId,
@@ -84,8 +91,8 @@ describe.skipIf(!process.env.DATABASE_URL)("historian metricBucket series", () =
         },
         {
           ...base,
-          entityType: "STATION",
-          entityId: stationId,
+          entityType: "WORKCENTER",
+          entityId: workcenterId,
           startTime: at("2026-07-13T07:00:00.000Z"),
         },
         {
@@ -109,19 +116,14 @@ describe.skipIf(!process.env.DATABASE_URL)("historian metricBucket series", () =
     });
   });
 
-  test("assertScope rejects a workcenter under a different site", async () => {
+  test("assertScope rejects a station under a different site", async () => {
     const result = await metricBucketSeries.assertScope({ ...scope(), siteId: otherSiteId });
     expect(isHistorianError(result)).toBe(true);
     if (isHistorianError(result)) expect(result.code).toBe("FORBIDDEN");
   });
 
   test("assertScope accepts a station scope under its own site", async () => {
-    const result = await metricBucketSeries.assertScope({
-      siteId,
-      entityType: "STATION",
-      entityId: stationId,
-      granularity: "HOUR",
-    });
+    const result = await metricBucketSeries.assertScope(scope());
     expect(isHistorianError(result)).toBe(false);
   });
 
@@ -135,6 +137,7 @@ describe.skipIf(!process.env.DATABASE_URL)("historian metricBucket series", () =
       "2026-07-13T06:00:00.000Z",
       "2026-07-13T07:00:00.000Z",
       "2026-07-13T08:00:00.000Z",
+      "2026-07-13T09:00:00.000Z",
     ]);
 
     const collision = page.rows[0];
@@ -142,6 +145,12 @@ describe.skipIf(!process.env.DATABASE_URL)("historian metricBucket series", () =
     expect(collision.archived).toBe(true);
     expect(collision.totalItems).toBe(60); // archived copy, not the stale live 999
     expect(page.rows[1].archived).toBe(false);
+
+    // jobId travels with each row: null on whole-station rows, set on the
+    // per-job family row.
+    expect(page.rows[0].jobId).toBeNull();
+    expect(page.rows[1].jobId).toBeNull();
+    expect(page.rows[3].jobId).toBe(jobId);
     expect(page.nextPageToken).toBeNull();
   });
 
@@ -160,6 +169,7 @@ describe.skipIf(!process.env.DATABASE_URL)("historian metricBucket series", () =
     if (isHistorianError(second)) return;
     expect(second.rows.map((row) => row.startTime.toISOString())).toEqual([
       "2026-07-13T08:00:00.000Z",
+      "2026-07-13T09:00:00.000Z",
     ]);
     expect(second.nextPageToken).toBeNull();
   });
@@ -177,7 +187,7 @@ describe.skipIf(!process.env.DATABASE_URL)("historian metricBucket series", () =
 
     // A live revision after the frontier is picked up by the next poll.
     const live = await prisma.metricBucket.findFirst({
-      where: { entityId: workcenterId, startTime: at("2026-07-13T08:00:00.000Z") },
+      where: { entityType: "STATION", entityId: stationId, startTime: at("2026-07-13T08:00:00.000Z") },
       select: { id: true },
     });
     await prisma.metricBucket.update({
@@ -202,7 +212,7 @@ describe.skipIf(!process.env.DATABASE_URL)("historian metricBucket series", () =
     expect(first.nextWatermarkMs).toBe(lastDelivered.row.changeTs.getTime());
   });
 
-  test("resolveCurrentShift resolves for both workcenter and station scopes", async () => {
+  test("resolveCurrentShift resolves the station's workcenter shift", async () => {
     const suffix = randomUUID();
     const pattern = await prisma.shiftPattern.create({ data: { name: `Pattern ${suffix}`, siteId } });
     const definition = await prisma.shiftDefinition.create({
@@ -237,22 +247,12 @@ describe.skipIf(!process.env.DATABASE_URL)("historian metricBucket series", () =
       },
     });
 
-    const wcWindow = await metricBucketSeries.resolveCurrentShift(scope());
-    expect(isHistorianError(wcWindow)).toBe(false);
-    if (isHistorianError(wcWindow) || wcWindow === null) throw new Error("expected shift window");
-    expect(wcWindow.shiftInstanceId).toBe(shift.id);
-    expect(wcWindow.range.to).toBeNull();
-
-    const stationWindow = await metricBucketSeries.resolveCurrentShift({
-      siteId,
-      entityType: "STATION",
-      entityId: stationId,
-      granularity: "HOUR",
-    });
+    const stationWindow = await metricBucketSeries.resolveCurrentShift(scope());
     expect(isHistorianError(stationWindow)).toBe(false);
     if (isHistorianError(stationWindow) || stationWindow === null) {
       throw new Error("expected shift window");
     }
     expect(stationWindow.shiftInstanceId).toBe(shift.id);
+    expect(stationWindow.range.to).toBeNull();
   });
 });

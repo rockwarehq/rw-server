@@ -205,7 +205,14 @@ describe("capability manifest metrics section", () => {
       expect(dimension.label).toBeTruthy();
     }
 
-    expect(metrics.facts.map((f) => f.key).sort()).toEqual(["bucket", "cycle", "downtime", "scrap"]);
+    expect(metrics.facts.map((f) => f.key).sort()).toEqual([
+      "bucket",
+      "cycle",
+      "downtime",
+      "items",
+      "materialUsage",
+      "scrap",
+    ]);
     for (const fact of metrics.facts) {
       expect(fact.grains.length).toBeGreaterThan(0);
     }

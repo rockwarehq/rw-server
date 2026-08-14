@@ -1,8 +1,19 @@
 import { z } from "zod";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import prisma from "@rw/db";
+import { Prisma } from "@rw/db";
 import * as shiftCommentService from "@rw/services/facility/shift/shift-comment";
 import { throwServiceError } from "./errors.js";
+import {
+  hourUnionSourceSql,
+  jobDedupSql,
+  kpiSumsSql,
+  latestNonNullSql,
+  ratioSumsSql,
+  syntheticBucketId,
+  JOB_HOUR_PREDICATE,
+  STATION_HOUR_PREDICATE,
+} from "./metric-hour-sql.js";
 
 // ============================================================================
 // Shift Instance List (by site + business date + optional workcenter)
@@ -73,65 +84,150 @@ const metricBucketLogListInputSchema = z.object({
 });
 
 export const metricBucketLogList = authRequired.input(metricBucketLogListInputSchema).handler(async ({ input }) => {
-  // Get stations belonging to this workcenter
-  const stations = await prisma.station.findMany({
-    where: { siteId: input.siteId, workcenterId: input.workCenterId },
-    select: { id: true, name: true },
-  });
+  // Stage B: shift rows are aggregated from the stations' HOUR buckets
+  // (live ∪ archived) — one row per station plus one synthesized workcenter
+  // total row, instead of reading the SHIFT/WORKCENTER tiers.
+  const [stations, shiftInstance, workcenter] = await Promise.all([
+    prisma.station.findMany({
+      where: { siteId: input.siteId, workcenterId: input.workCenterId },
+      select: { id: true, name: true },
+    }),
+    prisma.shiftInstance.findUnique({
+      where: { id: input.shiftInstanceId },
+      select: { shiftName: true, startTime: true, endTime: true },
+    }),
+    prisma.workcenter.findUnique({
+      where: { id: input.workCenterId },
+      select: { name: true },
+    }),
+  ]);
 
   const stationIds = stations.map((s) => s.id);
+  if (stationIds.length === 0) return [];
+  const stationNameById = new Map(stations.map((s) => [s.id, s.name]));
 
-  const where = {
-    siteId: input.siteId,
-    shiftInstanceId: input.shiftInstanceId,
-    granularity: "SHIFT" as const,
-    OR: [
-      { entityType: "WORKCENTER" as const, entityId: input.workCenterId },
-      { entityType: "STATION" as const, entityId: { in: stationIds } },
-    ],
+  const predicate = Prisma.sql`mb."siteId" = ${input.siteId}::uuid
+    AND mb."shiftInstanceId" = ${input.shiftInstanceId}::uuid
+    AND ${STATION_HOUR_PREDICATE}
+    AND mb."entityId" = ANY(${stationIds}::uuid[])`;
+
+  type AggRow = {
+    entityId: string | null; // NULL on the grand-total (workcenter) row
+    minStartTime: Date;
+    sumDurationSeconds: number;
+    businessDate: Date | null;
+    businessShift: string | null;
+    currentJobName: string | null;
+    totalCycles: number;
+    goodCycles: number;
+    badCycles: number;
+    totalItems: number;
+    goodItems: number;
+    badItems: number;
+    runSeconds: number;
+    downSeconds: number;
+    plannedDownSeconds: number;
+    unplannedDownSeconds: number;
+    expectedCycles: number;
+    expectedItems: number;
+    idealCycleSeconds: number;
+    totalCycleSeconds: number;
+    elapsedPlannedProductionSeconds: number;
+    availability: Prisma.Decimal | null;
+    performance: Prisma.Decimal | null;
+    quality: Prisma.Decimal | null;
+    oee: Prisma.Decimal | null;
   };
 
-  const select = {
-    id: true,
-    entityType: true,
-    entityId: true,
-    entityName: true,
-    granularity: true,
-    granularityName: true,
-    startTime: true,
-    durationSeconds: true,
-    shiftInstanceId: true,
-    businessDate: true,
-    businessShift: true,
-    currentJobName: true,
-    totalCycles: true,
-    goodCycles: true,
-    badCycles: true,
-    totalItems: true,
-    goodItems: true,
-    badItems: true,
-    runSeconds: true,
-    downSeconds: true,
-    plannedDownSeconds: true,
-    unplannedDownSeconds: true,
-    expectedCycles: true,
-    expectedItems: true,
-    idealCycleSeconds: true,
-    totalCycleSeconds: true,
-    elapsedPlannedProductionSeconds: true,
-    availability: true,
-    performance: true,
-    quality: true,
-    oee: true,
-  } as const;
+  // GROUPING SETS: per-station groups plus one grand-total row for the
+  // synthesized workcenter aggregate, from a single scan.
+  const rows = await prisma.$queryRaw<AggRow[]>`
+    WITH src AS (${hourUnionSourceSql(predicate)})
+    SELECT
+      s."entityId" AS "entityId",
+      MIN(s."startTime") AS "minStartTime",
+      SUM(s."durationSeconds")::int AS "sumDurationSeconds",
+      MAX(s."businessDate") AS "businessDate",
+      MAX(s."businessShift") AS "businessShift",
+      ${latestNonNullSql(Prisma.sql`s."currentJobName"`, Prisma.sql`s."startTime" DESC, s."updatedAt" DESC`)} AS "currentJobName",
+      ${kpiSumsSql("s")},
+      ${ratioSumsSql("s")}
+    FROM src s
+    GROUP BY GROUPING SETS ((s."entityId"), ())
+    HAVING COUNT(*) > 0
+  `;
 
-  const orderBy = [{ entityType: "asc" as const }, { entityName: "asc" as const }];
+  const shiftStart = shiftInstance?.startTime ?? null;
+  const shiftDurationSeconds = shiftInstance
+    ? Math.round((shiftInstance.endTime.getTime() - shiftInstance.startTime.getTime()) / 1000)
+    : null;
+  const granularityName = shiftInstance?.shiftName ?? "Shift";
 
-  // Try archived data first; fall back to live MetricBucket for current shifts
-  const rows = await prisma.metricBucketLog.findMany({ where, orderBy, select });
-  if (rows.length > 0) return rows;
+  const toRow = (
+    r: AggRow,
+    entity: { entityType: "STATION" | "WORKCENTER"; entityId: string; entityName: string },
+    currentJobName: string | null,
+  ) => ({
+    id: syntheticBucketId(entity.entityType, entity.entityId, null, "SHIFT", shiftStart ?? r.minStartTime),
+    entityType: entity.entityType,
+    entityId: entity.entityId,
+    entityName: entity.entityName,
+    granularity: "SHIFT" as const,
+    granularityName,
+    startTime: shiftStart ?? r.minStartTime,
+    durationSeconds: shiftDurationSeconds ?? r.sumDurationSeconds,
+    shiftInstanceId: input.shiftInstanceId,
+    businessDate: r.businessDate,
+    businessShift: r.businessShift,
+    currentJobName,
+    totalCycles: r.totalCycles,
+    goodCycles: r.goodCycles,
+    badCycles: r.badCycles,
+    totalItems: r.totalItems,
+    goodItems: r.goodItems,
+    badItems: r.badItems,
+    runSeconds: r.runSeconds,
+    downSeconds: r.downSeconds,
+    plannedDownSeconds: r.plannedDownSeconds,
+    unplannedDownSeconds: r.unplannedDownSeconds,
+    expectedCycles: r.expectedCycles,
+    expectedItems: r.expectedItems,
+    idealCycleSeconds: r.idealCycleSeconds,
+    totalCycleSeconds: r.totalCycleSeconds,
+    elapsedPlannedProductionSeconds: r.elapsedPlannedProductionSeconds,
+    availability: r.availability,
+    performance: r.performance,
+    quality: r.quality,
+    oee: r.oee,
+  });
 
-  return prisma.metricBucket.findMany({ where, orderBy, select });
+  const stationRows = rows
+    .filter((r): r is AggRow & { entityId: string } => r.entityId !== null)
+    .map((r) =>
+      toRow(
+        r,
+        { entityType: "STATION", entityId: r.entityId, entityName: stationNameById.get(r.entityId) ?? "" },
+        r.currentJobName,
+      ),
+    )
+    .sort((a, b) => a.entityName.localeCompare(b.entityName));
+
+  const totalRow = rows.find((r) => r.entityId === null);
+  const workcenterRows = totalRow
+    ? [
+        // currentJobName is null on the workcenter row — parity with the old
+        // WORKCENTER rollups, which never carried job context.
+        toRow(
+          totalRow,
+          { entityType: "WORKCENTER", entityId: input.workCenterId, entityName: workcenter?.name ?? "" },
+          null,
+        ),
+      ]
+    : [];
+
+  // Old ordering was entityType asc (enum order: STATION before WORKCENTER),
+  // then entityName asc.
+  return [...stationRows, ...workcenterRows];
 });
 
 // ============================================================================
@@ -198,93 +294,92 @@ const jobMetricsListInputSchema = z.object({
 });
 
 export const jobMetricsList = authRequired.input(jobMetricsListInputSchema).handler(async ({ input }) => {
-  // Get stations in workcenter to build path filter
+  // Get stations in workcenter — job buckets are per-station (entityId holds
+  // the station id, jobId the job id), so scoping is a plain entityId filter.
   const stations = await prisma.station.findMany({
     where: { siteId: input.siteId, workcenterId: input.workCenterId },
     select: { id: true },
   });
 
   const stationIds = stations.map((s) => s.id);
+  if (stationIds.length === 0) return [];
 
-  // Query JOB-entity metric rows for this shift.
-  // Path format: "site.{siteId}...station.{stationId}.job.{jobId}"
-  // Filter to jobs under stations in this workcenter via path contains.
-  const where = {
-    siteId: input.siteId,
-    shiftInstanceId: input.shiftInstanceId,
-    entityType: "JOB" as const,
-    granularity: "SHIFT" as const,
-    OR: stationIds.map((sid) => ({
-      path: { contains: `.station.${sid}.` },
-    })),
+  // Stage B: aggregate job-scope HOUR rows (live ∪ archived) per
+  // (station, job) for the shift instead of reading the JOB SHIFT tier.
+  const predicate = Prisma.sql`mb."siteId" = ${input.siteId}::uuid
+    AND mb."shiftInstanceId" = ${input.shiftInstanceId}::uuid
+    AND ${JOB_HOUR_PREDICATE}
+    AND mb."entityId" = ANY(${stationIds}::uuid[])`;
+
+  type JobAggRow = {
+    stationId: string;
+    jobId: string;
+    jobName: string | null;
+    minStartTime: Date;
+    standardCycle: number | null;
+    totalCycles: number;
+    goodCycles: number;
+    badCycles: number;
+    totalItems: number;
+    goodItems: number;
+    badItems: number;
+    totalCycleSeconds: number;
+    idealCycleSeconds: number;
+    runSeconds: number;
+    downSeconds: number;
+    plannedDownSeconds: number;
+    unplannedDownSeconds: number;
+    expectedItems: number;
+    elapsedPlannedProductionSeconds: number;
+    availability: Prisma.Decimal | null;
+    performance: Prisma.Decimal | null;
+    quality: Prisma.Decimal | null;
+    oee: Prisma.Decimal | null;
   };
 
-  const select = {
-    id: true,
-    entityId: true,
-    entityName: true,
-    path: true,
-    totalCycles: true,
-    goodCycles: true,
-    badCycles: true,
-    totalItems: true,
-    goodItems: true,
-    badItems: true,
-    totalCycleSeconds: true,
-    idealCycleSeconds: true,
-    currentStandardCycle: true,
-    runSeconds: true,
-    downSeconds: true,
-    plannedDownSeconds: true,
-    unplannedDownSeconds: true,
-    expectedItems: true,
-    elapsedPlannedProductionSeconds: true,
-    availability: true,
-    performance: true,
-    quality: true,
-    oee: true,
-  } as const;
+  const rows = await prisma.$queryRaw<JobAggRow[]>`
+    WITH src AS (${jobDedupSql(hourUnionSourceSql(predicate))})
+    SELECT
+      s."entityId" AS "stationId",
+      s."jobId" AS "jobId",
+      COALESCE(jv."name", MAX(s."currentJobName")) AS "jobName",
+      MIN(s."startTime") AS "minStartTime",
+      (${latestNonNullSql(Prisma.sql`s."currentStandardCycle"`, Prisma.sql`s."startTime" DESC, s."updatedAt" DESC`)})::float8 AS "standardCycle",
+      ${kpiSumsSql("s")},
+      ${ratioSumsSql("s")}
+    FROM src s
+    LEFT JOIN "Job" j ON j.id = s."jobId"
+    LEFT JOIN "JobVersion" jv ON jv.id = j."currentVersionId"
+    GROUP BY s."entityId", s."jobId", jv."name"
+    ORDER BY "jobName" ASC, s."entityId" ASC
+  `;
 
-  const orderBy = [{ entityName: "asc" as const }];
-
-  // Try archived data first; fall back to live MetricBucket for current shifts
-  let rows = await prisma.metricBucketLog.findMany({ where, orderBy, select });
-  if (rows.length === 0) {
-    rows = await prisma.metricBucket.findMany({ where, orderBy, select });
-  }
-
-  // Extract stationId from path and compute avg cycle time
-  return rows.map((r) => {
-    const stationMatch = r.path.match(/\.station\.([^.]+)\./);
-    const avgCycleTimeSeconds = r.totalCycles > 0 ? Number(r.totalCycleSeconds) / r.totalCycles : null;
-
-    return {
-      id: r.id,
-      jobId: r.entityId,
-      jobName: r.entityName,
-      stationId: stationMatch?.[1] ?? null,
-      totalCycles: r.totalCycles,
-      goodCycles: r.goodCycles,
-      badCycles: r.badCycles,
-      totalItems: r.totalItems,
-      goodItems: r.goodItems,
-      badItems: r.badItems,
-      totalCycleSeconds: r.totalCycleSeconds,
-      idealCycleSeconds: r.idealCycleSeconds,
-      elapsedPlannedProductionSeconds: r.elapsedPlannedProductionSeconds,
-      standardCycle: r.currentStandardCycle ? Number(r.currentStandardCycle) : null,
-      avgCycleTimeSeconds,
-      runSeconds: r.runSeconds,
-      downSeconds: r.downSeconds,
-      plannedDownSeconds: r.plannedDownSeconds,
-      unplannedDownSeconds: r.unplannedDownSeconds,
-      expectedItems: r.expectedItems,
-      availability: r.availability,
-      performance: r.performance,
-      quality: r.quality,
-      oee: r.oee,
-    };
-  });
+  return rows.map((r) => ({
+    id: syntheticBucketId("JOB", r.stationId, r.jobId, "SHIFT", r.minStartTime),
+    jobId: r.jobId,
+    jobName: r.jobName ?? "",
+    stationId: r.stationId,
+    totalCycles: r.totalCycles,
+    goodCycles: r.goodCycles,
+    badCycles: r.badCycles,
+    totalItems: r.totalItems,
+    goodItems: r.goodItems,
+    badItems: r.badItems,
+    totalCycleSeconds: r.totalCycleSeconds,
+    idealCycleSeconds: r.idealCycleSeconds,
+    elapsedPlannedProductionSeconds: r.elapsedPlannedProductionSeconds,
+    standardCycle: r.standardCycle,
+    avgCycleTimeSeconds: r.totalCycles > 0 ? r.totalCycleSeconds / r.totalCycles : null,
+    runSeconds: r.runSeconds,
+    downSeconds: r.downSeconds,
+    plannedDownSeconds: r.plannedDownSeconds,
+    unplannedDownSeconds: r.unplannedDownSeconds,
+    expectedItems: r.expectedItems,
+    availability: r.availability,
+    performance: r.performance,
+    quality: r.quality,
+    oee: r.oee,
+  }));
 });
 
 // ============================================================================

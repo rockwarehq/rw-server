@@ -30,6 +30,8 @@ model Workcenter {
   shiftComments       ShiftComment[]
   cycles              Cycle[]
   stationStateLogs    StationStateLog[]
+  inventoryItems      InventoryItem[]
+  materialShiftUsage  MaterialShiftUsage[]
 
   @@unique([siteId, parentId, name])
   @@index([siteId])
@@ -112,6 +114,7 @@ model Station {
   logonSessions       StationLogonSession[]
   shiftComments       ShiftComment[]
   materialShiftUsage  MaterialShiftUsage[]
+  inventoryItems      InventoryItem[]
 
   @@unique([siteId, name])
   @@index([siteId])

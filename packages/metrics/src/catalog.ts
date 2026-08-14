@@ -12,7 +12,7 @@
 
 import { evaluateFormula, type FormulaNode } from "./formula.js";
 
-export type MeasureUnit = "count" | "seconds" | "ratio";
+export type MeasureUnit = "count" | "seconds" | "ratio" | "weight";
 export type MeasureKind = "additive" | "ratio";
 
 export interface DimensionDefinition {
@@ -52,9 +52,12 @@ export interface MeasureDefinition {
   formula?: FormulaNode;
   /** Ratio only: see MeasureGuards. */
   guards?: MeasureGuards;
+  /** Queries must group or filter by this dimension — for measures whose
+   *  sums are dimensionally meaningless across it (e.g. material weights). */
+  requiresDimension?: string;
 }
 
-export type FactKey = "cycle" | "downtime" | "scrap" | "bucket";
+export type FactKey = "cycle" | "downtime" | "scrap" | "items" | "materialUsage" | "bucket";
 
 export interface FactDefinition {
   key: FactKey;
@@ -68,6 +71,8 @@ export interface FactDefinition {
   dimensionColumns?: Record<string, string>;
   /** Measure keys (from MEASURES) computable on this fact. */
   measures: string[];
+  /** False when the table has no deletedAt column (default: soft-deleted). */
+  softDelete?: boolean;
 }
 
 // ── Dimensions ───────────────────────────────────────────────────
@@ -108,15 +113,11 @@ export const DIMENSIONS: Record<string, DimensionDefinition> = {
     dimTable: "StatusReason",
     labelColumn: "name",
   },
-  product: {
-    key: "product",
-    label: "Product",
-    factColumn: "productVersionId",
-    dimTable: "ProductVersion",
-    labelColumn: "sku",
-  },
-  // Tool's display name lives on ToolVersion — no single labelColumn.
+  // Product/Tool/Material display names live on their current versions — no
+  // single labelColumn; the report compiler joins parent → currentVersion.
+  product: { key: "product", label: "Product", factColumn: "productId", dimTable: "Product" },
   tool: { key: "tool", label: "Tool", factColumn: "toolId", dimTable: "Tool" },
+  material: { key: "material", label: "Material", factColumn: "materialId", dimTable: "Material" },
 };
 
 // ── Measures ─────────────────────────────────────────────────────
@@ -224,6 +225,19 @@ const ALL_MEASURES: MeasureDefinition[] = [
   // scrap fact
   { key: "scrapQty", label: "Scrap Quantity", unit: "count", kind: "additive", sql: `"quantity"` },
   { key: "scrapEventCount", label: "Scrap Event Count", unit: "count", kind: "additive", agg: "count" },
+  // items fact
+  { key: "itemCount", label: "Item Count", unit: "count", kind: "additive", agg: "count" },
+  // materialUsage fact. quantity is in per-material canonical units — sums
+  // across materials are dimensionally meaningless, hence requiresDimension.
+  {
+    key: "materialQuantity",
+    label: "Material Quantity",
+    unit: "weight",
+    kind: "additive",
+    sql: `"quantity"`,
+    requiresDimension: "material",
+  },
+  { key: "materialItemCount", label: "Material Item Count", unit: "count", kind: "additive", sql: `"itemCount"` },
 ];
 
 export const MEASURES: Record<string, MeasureDefinition> = Object.fromEntries(ALL_MEASURES.map((m) => [m.key, m]));
@@ -255,9 +269,39 @@ export const FACTS: Record<FactKey, FactDefinition> = {
     // occurredAt is when the scrap happened; createdAt is when it was
     // recorded (backfill = createdAt) — see inventory.prisma.
     timeColumn: `coalesce("occurredAt", "createdAt")`,
-    dimensions: ["station", "workcenter", "site", "shift", "businessDate", "reason", "product", "tool"],
-    dimensionColumns: { reason: "dispositionReasonId", tool: "toolVersionId" },
+    dimensions: [
+      "station",
+      "workcenter",
+      "site",
+      "shift",
+      "businessDate",
+      "job",
+      "operator",
+      "reason",
+      "product",
+      "tool",
+    ],
+    dimensionColumns: { reason: "dispositionReasonId" },
     measures: ["scrapQty", "scrapEventCount"],
+  },
+  items: {
+    // Grain: one produced item (child of a Cycle, context copied from it).
+    // Pairs with the scrap fact for good-vs-bad by product/mold/shift.
+    key: "items",
+    table: "InventoryItem",
+    timeColumn: `coalesce("producedAt", "createdAt")`,
+    dimensions: ["station", "workcenter", "site", "shift", "businessDate", "job", "operator", "product", "tool"],
+    measures: ["itemCount"],
+  },
+  materialUsage: {
+    // Grain: one accumulating usage row per (shift, station, job, product,
+    // material) — see MaterialShiftUsage's unique key. No deletedAt column.
+    key: "materialUsage",
+    table: "MaterialShiftUsage",
+    timeColumn: `"createdAt"`,
+    dimensions: ["station", "workcenter", "site", "shift", "businessDate", "job", "product", "material"],
+    measures: ["materialQuantity", "materialItemCount"],
+    softDelete: false,
   },
   bucket: {
     // MetricBucket's entity is polymorphic (entityType + entityId). Report

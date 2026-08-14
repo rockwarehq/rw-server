@@ -309,26 +309,6 @@ function publishStationCurrentJobMetricEvent(
   });
 }
 
-// Re-stamp the job columns on the shift bucket whose window covers NOW.
-// Closed shifts keep the label they ran under; if no current bucket exists
-// (station idle across a shift boundary) there is nothing to stamp — the
-// next shift-create reads Station.currentJobId fresh anyway.
-async function stampCurrentShiftBucketJob(stationId: string, jobName: string | null): Promise<void> {
-  await prisma.$executeRaw`
-    UPDATE "MetricBucket" mb
-    SET "currentJobId" = s."currentJobId", "currentJobName" = ${jobName}, "updatedAt" = NOW()
-    FROM "Station" s
-    WHERE s.id = ${stationId}::uuid
-      AND mb.id = (
-        SELECT id FROM "MetricBucket"
-        WHERE "entityType" = 'STATION' AND "entityId" = ${stationId}::uuid AND granularity = 'SHIFT'
-          AND "startTime" <= NOW()
-          AND NOW() < "startTime" + make_interval(secs => "durationSeconds")
-        ORDER BY "startTime" DESC
-        LIMIT 1
-      )`;
-}
-
 async function publishStationCurrentJobMetric(
   stationId: string,
   jobName: string | null,
@@ -337,11 +317,10 @@ async function publishStationCurrentJobMetric(
   const ctx = await loadStationMetricContext(prisma, stationId);
   if (!ctx) return;
   publishStationCurrentJobMetricEvent(ctx, jobName, observedAt);
-  // Livestore's job label rides the SHIFT bucket mirror: stamp the current
-  // bucket (so rollup ticks re-emit the new value, not the old) and publish
-  // the context envelope directly so livestore updates without waiting for
-  // the next tick.
-  await stampCurrentShiftBucketJob(stationId, jobName);
+  // Livestore's job label rides the derived SHIFT mirror (shift-publisher
+  // over the hour rows). There is no persisted SHIFT row to stamp anymore;
+  // publish the context envelope directly so livestore updates without
+  // waiting for the next tick.
   await publishStationShiftContext(stationId, { currentJobName: jobName });
 }
 
@@ -406,15 +385,10 @@ async function publishStationStandardCycleMetric(
   const ctx = await loadStationMetricContext(prisma, stationId);
   if (!ctx) return;
   publishStationStandardCycleMetricEvent(ctx, standardCycleSeconds, observedAt);
-  // Same mirror-staleness handling as the job label: stamp the current shift
-  // bucket and publish the context envelope immediately (job changes swap the
-  // standard cycle too).
-  await prisma.$executeRaw`
-    UPDATE "MetricBucket"
-    SET "currentStandardCycle" = ${standardCycleSeconds}, "updatedAt" = NOW()
-    WHERE "entityType" = 'STATION' AND "entityId" = ${stationId}::uuid AND granularity = 'SHIFT'
-      AND "startTime" <= NOW()
-      AND NOW() < "startTime" + make_interval(secs => "durationSeconds")`;
+  // Same mirror-staleness handling as the job label: no persisted SHIFT
+  // row to stamp — publish the context envelope immediately (job changes
+  // swap the standard cycle too); the derived SHIFT mirror follows on the
+  // next tick.
   await publishStationShiftContext(stationId, { currentStandardCycle: standardCycleSeconds });
 }
 

@@ -73,7 +73,7 @@ export const ZERO_KPIS: Readonly<BucketKPIs> = Object.freeze({
  * The subset of BucketKPIs derived from state logs (not cycles).
  *
  * Note: idealCycleSeconds and totalCycleSeconds are cycle-based KPIs
- * handled by atomic increment in updateCountBased, not here.
+ * handled by the per-cycle incrementHourCounts increment, not here.
  */
 export type DurationKPIs = Pick<
   BucketKPIs,

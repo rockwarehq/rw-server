@@ -8,6 +8,7 @@ const change = (overrides: Partial<MetricChangeEvent> = {}): MetricChangeEvent =
   siteId: "site-1",
   entityType: "STATION",
   entityId: "stn-25",
+  jobId: null,
   entityName: "STN-25",
   path: "",
   granularity: "SHIFT",

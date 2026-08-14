@@ -261,22 +261,17 @@ async function fixStateEntries(tx: TransactionClient, stationId: string, minTs: 
  * re-archive them once their time windows have elapsed.
  */
 async function unarchiveAffectedBuckets(stationId: string, siteId: string, minTs: Date, maxTs: Date): Promise<void> {
-  // Find all entity IDs that need un-archiving:
-  // the station itself, its workcenter (if any), the site, and the current job
-  const entityIds = [stationId, siteId];
-
-  const station = await prisma.$queryRaw<Array<{ workcenterId: string | null; currentJobId: string | null }>>`
-    SELECT "workcenterId", "currentJobId" FROM "Station" WHERE id = ${stationId}::uuid
-  `;
-  if (station[0]?.workcenterId) entityIds.push(station[0].workcenterId);
-  if (station[0]?.currentJobId) entityIds.push(station[0].currentJobId);
+  // One persisted family: STATION-family hour rows keyed by entityId =
+  // stationId (per-job rows + the residual share it). Workcenter/site tier
+  // rows are no longer written — and un-archiving legacy ones would only
+  // resurrect rows the base-grain backfill deletes.
 
   // Find archived buckets that overlap the replay window.
   // A bucket overlaps if: startTime < maxTs AND startTime + durationSeconds > minTs
   const candidates = await prisma.metricBucketLog.findMany({
     where: {
       siteId,
-      entityId: { in: entityIds },
+      entityId: stationId,
       startTime: { lt: maxTs },
     },
   });
@@ -298,6 +293,7 @@ async function unarchiveAffectedBuckets(stationId: string, siteId: string, minTs
       siteId: row.siteId,
       entityType: row.entityType,
       entityId: row.entityId,
+      jobId: row.jobId,
       entityName: row.entityName,
       path: row.path,
       granularity: row.granularity,

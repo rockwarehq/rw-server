@@ -211,9 +211,9 @@ async function restampDispositionBatch(
  *    ShiftInstance schedule (unconditional overwrite).
  * 2. ItemDispositionLog rows with COALESCE(occurredAt, createdAt) in
  *    [from, to] get the same treatment.
- * 3. recalcAll (full count + duration recompute, with rollup cascade
- *    to SHIFT/DAY/WORKCENTER/SITE and JOB buckets) runs for every
- *    station that had rows restamped.
+ * 3. recalcAll (full base-writer recompute of the STATION-family hour
+ *    rows — per-job + residual) runs for every station that had rows
+ *    restamped. No tier rollups exist; coarser slices derive at read time.
  *
  * Batched keyset updates — safe over PlanetScale pooled connections;
  * no single statement touches more than 10k rows.
@@ -230,6 +230,10 @@ export async function restampWindow(input: RestampWindowInput): Promise<RestampW
     if (rows.length === 0) break;
     cyclesRestamped += rows.length;
     for (const row of rows) affectedStations.add(row.stationId);
+    // Item context is defined as "the cycle's context" — propagate the
+    // repaired shift stamps to the batch's inventory items in one statement
+    // rather than re-resolving per item.
+    await propagateCycleContextToItems(rows.map((r) => r.id));
     cursor = maxId(rows);
     if (rows.length < BATCH_SIZE) break;
   }
@@ -261,6 +265,21 @@ export async function restampWindow(input: RestampWindowInput): Promise<RestampW
   }
 
   return { cyclesRestamped, dispositionsRestamped };
+}
+
+/** Push a repaired cycle batch's shift context down to its inventory items. */
+async function propagateCycleContextToItems(cycleIds: string[]): Promise<void> {
+  if (cycleIds.length === 0) return;
+  await prisma.$executeRaw`
+    UPDATE "InventoryItem" ii SET
+      "shiftInstanceId" = c."shiftInstanceId",
+      "businessDate"    = c."businessDate"
+    FROM "Cycle" c
+    WHERE ii."cycleId" = c.id
+      AND c.id = ANY(${cycleIds}::uuid[])
+      AND (ii."shiftInstanceId" IS DISTINCT FROM c."shiftInstanceId"
+        OR ii."businessDate" IS DISTINCT FROM c."businessDate")
+  `;
 }
 
 // ── Schedule-change wiring helper ────────────────────────────────

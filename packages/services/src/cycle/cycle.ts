@@ -16,7 +16,6 @@ import {
   type StationMetricContext,
 } from "../facility/station/state.js";
 import { enqueueDetection, prepareDetection, type PreparedDetection } from "../facility/station/state-detection.js";
-import { batchedMetricsUpdate } from "../metrics/batcher.js";
 import { incrementHourCounts } from "../metrics/cascade.js";
 import { trackReplayedCycle } from "./replay.js";
 
@@ -170,7 +169,6 @@ export async function complete(input: StartCycleInput) {
   const siteId = setup.siteId;
   const standardCycleSeconds = setup.standardCycle;
   const slowFraction = setup.slowDetect;
-  const itemsPerCycle = setup.itemsPerCycle ?? 1;
 
   // ── Conformed context, resolved before the tx (reads only; stamps are
   //    written inside the strategy tx). Resolution failure never fails the
@@ -252,7 +250,7 @@ export async function complete(input: StartCycleInput) {
     return { data: existing, alreadyRecorded: true as const };
   }
 
-  const { cycle, items, closedEntry, newStatus, statusChanged, stationCtx, detectionPrepared } = result;
+  const { cycle, newStatus, statusChanged, stationCtx, detectionPrepared } = result;
   const t2 = Date.now();
 
   // Material-shift flush is NOT triggered per cycle. The 60s minute tick
@@ -310,17 +308,6 @@ export async function complete(input: StartCycleInput) {
       console.error(`[cycle] publishStationLastCycleMetric failed for station ${stationId}:`, err);
     }
   }
-
-  batchedMetricsUpdate({
-    stationId,
-    siteId,
-    timestamp: cycleEnd,
-    itemsCount: items.length,
-    standardCycleSeconds: standardCycleSeconds ?? null,
-    itemsPerCycle,
-    cycleDurationSeconds,
-    closedEntry: closedEntry ? { startTime: closedEntry.startTime, endTime: closedEntry.endTime } : undefined,
-  });
 
   const t3 = Date.now();
   console.log(
@@ -458,7 +445,12 @@ async function completeImmediate(
       openRow,
     });
 
-    const items = await inventory.createFromCycle(tx, cycle.id, jobId);
+    const items = await inventory.createFromCycle(
+      tx,
+      cycle.id,
+      jobId,
+      itemCtx(siteId, stationId, versionConnects, context, timestamp),
+    );
 
     // Order allocation — was previously fire-and-forget on the global prisma
     // client, now runs serially inside the tx so the whole completion is one
@@ -473,13 +465,15 @@ async function completeImmediate(
     const stationCtx = await loadStationMetricContext(tx, stationId);
     const detectionPrepared = await prepareDetection(tx, stationId, jobId);
 
-    // HOUR-only count increment — fast single UPDATE on one row.
-    // SHIFT/DAY/duration/parent/job rollups are deferred to 5s combined tick.
+    // HOUR-only count increment — fast single statement on one row.
+    // Durations are computed at read time for the open hour (read.ts
+    // overlay) and persisted by transitions / the hour close, never here.
     const totalCycleIncrement = Math.round(Math.max(0, cycleDurationSeconds));
     await incrementHourCounts(
       tx,
       stationId,
       siteId,
+      jobId,
       timestamp,
       1,
       items.length,
@@ -525,7 +519,16 @@ async function completeOpenClose(
       let items: Array<{ id: string; productId: string }> = [];
 
       if (openCycles.length > 0) {
-        const itemArrays = await Promise.all(openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId)));
+        const itemArrays = await Promise.all(
+          openCycles.map((oc) =>
+            inventory.createFromCycle(
+              tx,
+              oc.id,
+              jobId,
+              itemCtx(siteId, stationId, versionConnects, context, timestamp),
+            ),
+          ),
+        );
         items = itemArrays.flat();
 
         // Close-time restamp: metrics attribute a cycle to the bucket of its
@@ -559,7 +562,12 @@ async function completeOpenClose(
             },
           });
 
-          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId);
+          items = await inventory.createFromCycle(
+            tx,
+            zeroCycle.id,
+            jobId,
+            itemCtx(siteId, stationId, versionConnects, context, timestamp),
+          );
         }
       }
 
@@ -613,9 +621,10 @@ async function completeOpenClose(
 
       // Match the pre-refactor open/close call: HOUR increment was driven off
       // the NEW open cycle whose start = end = timestamp, so totalCycleSeconds
-      // contribution per call is 0 on this path. Duration KPIs come from
-      // batchDurationRollup on the 5s combined tick, not this per-cycle bump.
-      await incrementHourCounts(tx, stationId, siteId, timestamp, 1, items.length, idealCycleIncrement, 0);
+      // contribution per call is 0 on this path. Duration KPIs come from the
+      // read-time overlay / transition-driven writeStationHourBuckets runs,
+      // not this per-cycle bump.
+      await incrementHourCounts(tx, stationId, siteId, jobId, timestamp, 1, items.length, idealCycleIncrement, 0);
 
       return {
         cycle: newCycle,
@@ -710,7 +719,12 @@ async function completeImmediateReplay(
       await tx.$executeRaw`INSERT INTO "_CycleToJobTool" ("A", "B") VALUES ${values} ON CONFLICT DO NOTHING`;
     }
 
-    const items = await inventory.createFromCycle(tx, cycle.id, jobId);
+    const items = await inventory.createFromCycle(
+      tx,
+      cycle.id,
+      jobId,
+      itemCtx(siteId, stationId, versionConnects, context, timestamp),
+    );
 
     // Order allocation — replayed cycles allocate too; replay path otherwise
     // skips state transitions, detection, and metrics.
@@ -754,7 +768,16 @@ async function completeOpenCloseReplay(
       let items: Array<{ id: string; productId: string }> = [];
 
       if (openCycles.length > 0) {
-        const itemArrays = await Promise.all(openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId)));
+        const itemArrays = await Promise.all(
+          openCycles.map((oc) =>
+            inventory.createFromCycle(
+              tx,
+              oc.id,
+              jobId,
+              itemCtx(siteId, stationId, versionConnects, context, timestamp),
+            ),
+          ),
+        );
         items = itemArrays.flat();
 
         // Close-time restamp — see completeOpenClose.
@@ -785,7 +808,12 @@ async function completeOpenCloseReplay(
             },
           });
 
-          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId);
+          items = await inventory.createFromCycle(
+            tx,
+            zeroCycle.id,
+            jobId,
+            itemCtx(siteId, stationId, versionConnects, context, timestamp),
+          );
         }
       }
 
@@ -852,6 +880,26 @@ type VersionConnects = {
   jobTools?: { connect: { id: string }[] };
   toolVersions?: { connect: { id: string }[] };
 };
+
+/** Item-fact context for inventory rows: the cycle's context at completion. */
+function itemCtx(
+  siteId: string,
+  stationId: string,
+  versionConnects: VersionConnects,
+  context: CycleContext,
+  producedAt: Date,
+) {
+  return {
+    siteId,
+    stationId,
+    workcenterId: context.workcenterId,
+    shiftInstanceId: context.shiftInstanceId,
+    businessDate: context.businessDate,
+    jobVersionId: versionConnects.jobVersionId,
+    logonSessionId: context.logonSessionId,
+    producedAt,
+  };
+}
 
 /** Conformed context stamped onto Cycle rows at write time. All nullable —
  *  a cycle is never dropped because context resolution failed. */

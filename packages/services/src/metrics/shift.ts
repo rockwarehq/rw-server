@@ -549,8 +549,11 @@ export function resolveClockHourBucket(timestamp: Date, timezone: string): HourB
 
 /**
  * Resolve the workcenterId for an entity (for shift instance lookup).
- * Returns null for SITE and JOB entities, the entityId itself for
- * WORKCENTER, and queries the station's workcenterId for STATION.
+ * Returns null for SITE entities, the entityId itself for WORKCENTER,
+ * and queries the station's workcenterId for STATION and JOB (JOB
+ * buckets are per-station — their entityId IS a station id, so they
+ * follow the station's workcenter shift schedule rather than the
+ * site-level one).
  */
 async function resolveWorkcenterId(
   entityType: EntityType,
@@ -558,7 +561,7 @@ async function resolveWorkcenterId(
   ctx?: MetricsContext,
 ): Promise<string | null> {
   if (entityType === "WORKCENTER") return entityId;
-  if (entityType === "STATION") {
+  if (entityType === "STATION" || entityType === "JOB") {
     // Layer 1: per-pipeline cache
     if (ctx) {
       const cached = ctx.getWorkCenterIdCached(entityType, entityId);

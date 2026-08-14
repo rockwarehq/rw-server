@@ -26,6 +26,7 @@ import { ORPCError } from "@orpc/server";
 import prisma from "@rw/db";
 import { Prisma } from "@rw/db";
 import { getShiftForEntity } from "@rw/services/metrics/shift";
+import { openHourOverlaySql, OVERLAY_COLS } from "@rw/services/metrics/read";
 import { z } from "zod";
 import { authRequired } from "./middleware.js";
 
@@ -33,7 +34,7 @@ import { authRequired } from "./middleware.js";
 // Input Schemas
 // ============================================================================
 
-const factSchema = z.enum(["cycle", "downtime", "scrap", "bucket"]);
+const factSchema = z.enum(["cycle", "downtime", "scrap", "items", "materialUsage", "bucket"]);
 const grainSchema = z.enum(["total", "hour", "shift", "day"]);
 
 const timeRangeSchema = z.union([
@@ -112,24 +113,13 @@ async function resolveTimeRange(siteId: string, range: z.infer<typeof timeRangeS
 /** Facts whose rows carry stamped businessDate / shiftInstanceId columns.
  *  Legacy rows carry NULLs until the backfill lands and group under a NULL
  *  bucket at shift/day grain. */
-const STAMPED_FACTS: ReadonlySet<FactKey> = new Set(["cycle", "scrap", "downtime", "bucket"]);
+const STAMPED_FACTS: ReadonlySet<FactKey> = new Set(["cycle", "scrap", "downtime", "items", "materialUsage", "bucket"]);
 
-/** Tier routing for the bucket fact: serve each grain from the coarsest
- *  stored granularity that satisfies it. Coarser output from finer rows is
- *  always safe because stored measures are additive ingredients — ratios are
- *  computed once per output group, after summing. */
-function bucketGranularity(grain: "total" | "hour" | "shift" | "day"): string {
-  switch (grain) {
-    case "day":
-      return "DAY";
-    case "shift":
-      return "SHIFT";
-    default:
-      // total spans arbitrary from/to boundaries — HOUR rows minimize edge
-      // error; hour reads HOUR rows directly.
-      return "HOUR";
-  }
-}
+// The bucket fact reads ONLY HOUR rows — the base grain. Shift/day grains
+// are GROUP BYs over the stamped shiftInstanceId/businessDate columns
+// (exact: hour rows are shift-aligned and never straddle a shift), and
+// coarser sums over additive ingredients are always safe — ratios are
+// computed once per output group, after summing.
 
 function factColumn(fact: FactDefinition, dimKey: string): string {
   return fact.dimensionColumns?.[dimKey] ?? getDimension(dimKey).factColumn;
@@ -141,7 +131,17 @@ function validateQuery(q: QueryInput): { fact: FactDefinition; measures: Measure
     if (!fact.measures.includes(key)) {
       throw new ORPCError("BAD_REQUEST", { message: `Measure "${key}" is not available on fact "${q.fact}"` });
     }
-    return getMeasure(key);
+    const measure = getMeasure(key);
+    if (
+      measure.requiresDimension &&
+      !q.dimensions.includes(measure.requiresDimension) &&
+      !q.filters.some((f) => f.dimension === measure.requiresDimension)
+    ) {
+      throw new ORPCError("BAD_REQUEST", {
+        message: `Measure "${key}" requires grouping or filtering by "${measure.requiresDimension}" — its sums are meaningless across it`,
+      });
+    }
+    return measure;
   });
   for (const d of q.dimensions) {
     if (!fact.dimensions.includes(d)) {
@@ -245,6 +245,24 @@ function dimensionLabel(dimKey: string, boundColumn: string, alias: string): { j
           LEFT JOIN "EmployeeVersion" ${Prisma.raw(`${alias}v`)} ON ${Prisma.raw(`${alias}v`)}.id = ${a(`"versionId"`)}`,
         label: Prisma.sql`MAX(COALESCE(${a(`"genericName"`)}, ${Prisma.raw(`${alias}v."firstName"`)} || ' ' || ${Prisma.raw(`${alias}v."lastName"`)}))`,
       };
+    case "product":
+      if (boundColumn === "productVersionId") {
+        return {
+          join: Prisma.sql`LEFT JOIN "ProductVersion" ${Prisma.raw(alias)} ON ${a("id")} = ${idRef}`,
+          label: Prisma.sql`MAX(${a(`"sku"`)})`,
+        };
+      }
+      return {
+        join: Prisma.sql`LEFT JOIN "Product" ${Prisma.raw(alias)} ON ${a("id")} = ${idRef}
+          LEFT JOIN "ProductVersion" ${Prisma.raw(`${alias}v`)} ON ${Prisma.raw(`${alias}v`)}.id = ${a(`"currentVersionId"`)}`,
+        label: Prisma.sql`MAX(${Prisma.raw(`${alias}v."sku"`)})`,
+      };
+    case "material":
+      return {
+        join: Prisma.sql`LEFT JOIN "Material" ${Prisma.raw(alias)} ON ${a("id")} = ${idRef}
+          LEFT JOIN "MaterialVersion" ${Prisma.raw(`${alias}v`)} ON ${Prisma.raw(`${alias}v`)}.id = ${a(`"currentVersionId"`)}`,
+        label: Prisma.sql`MAX(COALESCE(${Prisma.raw(`${alias}v."name"`)}, ${Prisma.raw(`${alias}v."materialNumber"`)}))`,
+      };
     default: {
       const dim = getDimension(dimKey);
       if (!dim.dimTable || !dim.labelColumn) {
@@ -270,7 +288,15 @@ async function runQuery(siteId: string, q: QueryInput, range: ResolvedRange): Pr
     innerSelects.push(Prisma.raw(`"${factColumn(fact, dimKey)}" AS "d_${dimKey}"`));
   }
   if (q.grain === "hour") {
-    innerSelects.push(Prisma.raw(`date_trunc('hour', ${fact.timeColumn}) AS "g_bucket"`));
+    // Bucket rows ARE hour buckets (shift-anchored, variable-width — an
+    // 11:45 shift yields 11:45–12:45 rows): group by the row's own
+    // startTime, never date_trunc, which would mislabel anchored buckets.
+    // Raw facts have no bucket identity and keep clock-hour truncation.
+    innerSelects.push(
+      q.fact === "bucket"
+        ? Prisma.raw(`"startTime" AS "g_bucket"`)
+        : Prisma.raw(`date_trunc('hour', ${fact.timeColumn}) AS "g_bucket"`),
+    );
   } else if (q.grain === "day" && !dimensions.includes("businessDate")) {
     innerSelects.push(Prisma.raw(`"businessDate" AS "d_businessDate"`));
   }
@@ -299,12 +325,13 @@ async function runQuery(siteId: string, q: QueryInput, range: ResolvedRange): Pr
     where.push(Prisma.sql`"siteId" = ${siteId}::uuid`);
   }
   if (q.fact === "bucket") {
-    // STATION rows only — workcenter/site rollup rows are derived re-sums of
-    // these; re-summing station rows is always correct and never double
-    // counts. Granularity picks the storage tier for the requested grain.
+    // STATION-family HOUR rows only — the base grain. Workcenter/site/job
+    // slices and rollup tiers are derived re-sums of these; summing station
+    // rows is always correct and never double counts (per-job rows plus the
+    // no-job residual sum to the station total).
     where.push(Prisma.sql`"entityType" = 'STATION'`);
-    where.push(Prisma.sql`"granularity" = ${bucketGranularity(q.grain)}::"BucketGranularity"`);
-  } else {
+    where.push(Prisma.sql`"granularity" = 'HOUR'::"BucketGranularity"`);
+  } else if (fact.softDelete !== false) {
     where.push(Prisma.sql`"deletedAt" IS NULL`);
   }
   // Time window: stamped businessDate wins when the range is a business day.
@@ -325,6 +352,42 @@ async function runQuery(siteId: string, q: QueryInput, range: ResolvedRange): Pr
 
   const projection = Prisma.join(innerSelects, ", ");
   const whereSql = Prisma.join(where, " AND ");
+
+  // ── Open-hour overlay (bucket fact only) ──
+  // Stage D: open STATION HOUR rows' duration/elapsed/expected columns
+  // are stale in the DB between transitions — reads must compute them
+  // live. Applied only when the query's range touches "now" (historical
+  // ranges see only closed rows, so the join would be pure cost). The
+  // measure SQL strings reference plain quoted columns, so the overlay is
+  // spliced in by wrapping the live table in a subquery (aliased back to
+  // "MetricBucket") that projects COALESCE(computed, stored) for the
+  // overlay columns; counts always come from the stored row.
+  const overlayNow = new Date();
+  const useOverlay = q.fact === "bucket" && range.to.getTime() >= overlayNow.getTime() - 2 * 60 * 60 * 1000;
+  const overlayWith = useOverlay
+    ? Prisma.sql`WITH ${openHourOverlaySql(
+        overlayNow,
+        range.businessDate && STAMPED_FACTS.has(q.fact)
+          ? Prisma.sql`AND mb."siteId" = ${siteId}::uuid AND mb."businessDate" = ${range.businessDate}::date`
+          : Prisma.sql`AND mb."siteId" = ${siteId}::uuid AND mb."startTime" >= ${range.from} AND mb."startTime" < ${range.to}`,
+      )}`
+    : Prisma.empty;
+  const liveBucketTable = useOverlay
+    ? Prisma.sql`(
+        SELECT mb.id, mb."siteId", mb."entityType", mb.granularity, mb."entityId", mb."jobId",
+          mb."startTime", mb."durationSeconds", mb."shiftInstanceId", mb."businessDate",
+          mb."totalCycles", mb."badCycles", mb."totalItems", mb."badItems",
+          mb."idealCycleSeconds", mb."totalCycleSeconds",
+          ${Prisma.raw(OVERLAY_COLS.map((c) => `COALESCE(o."${c}", mb."${c}") AS "${c}"`).join(", "))}
+        FROM "MetricBucket" mb
+        LEFT JOIN open_hour_overlay o
+          ON mb."closedAt" IS NULL
+          AND o."entityId" = mb."entityId"
+          AND o."startTime" = mb."startTime"
+          AND o."jobId" IS NOT DISTINCT FROM mb."jobId"
+      ) "MetricBucket"`
+    : Prisma.sql`"MetricBucket"`;
+
   // Bucket rows migrate live → archive at business-day rollover; read both,
   // archive winning id collisions (the historian's convention).
   const inner =
@@ -332,7 +395,7 @@ async function runQuery(siteId: string, q: QueryInput, range: ResolvedRange): Pr
       ? Prisma.sql`
     SELECT ${projection} FROM "MetricBucketLog" WHERE ${whereSql}
     UNION ALL
-    SELECT ${projection} FROM "MetricBucket" WHERE ${whereSql}
+    SELECT ${projection} FROM ${liveBucketTable} WHERE ${whereSql}
       AND NOT EXISTS (SELECT 1 FROM "MetricBucketLog" mbl WHERE mbl.id = "MetricBucket".id)
   `
       : Prisma.sql`
@@ -372,6 +435,7 @@ async function runQuery(siteId: string, q: QueryInput, range: ResolvedRange): Pr
       : Prisma.empty;
 
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    ${overlayWith}
     SELECT ${Prisma.join(outerSelects, ", ")}
     FROM (${inner}) f
     ${labelJoins.length > 0 ? Prisma.join(labelJoins, " ") : Prisma.empty}

@@ -24,7 +24,10 @@ const GRANULARITY_SET = new Set<string>(METRIC_CATALOG_GRANULARITIES);
 const VALUE_TYPE_SET = new Set<string>(METRIC_CATALOG_VALUE_TYPES);
 const DEFAULT_AGGREGATION_SET = new Set<string>(METRIC_CATALOG_DEFAULT_AGGREGATIONS);
 
-const STANDARD_GRANULARITIES = ["HOUR", "SHIFT", "DAY"] as const;
+// HOUR is the only persisted grain (STATION-family hour rows); SHIFT is
+// derived at read/publish time from those rows (read.ts / shift-publisher).
+// DAY/MINUTE tiers no longer exist.
+const STANDARD_GRANULARITIES = ["HOUR", "SHIFT"] as const;
 const ALL_ENTITY_TYPES = ["STATION", "WORKCENTER", "SITE", "JOB"] as const;
 
 export const METRIC_CATALOG_REGISTRY = [

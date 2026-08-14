@@ -116,6 +116,7 @@ model Site {
   savedViews             SavedView[]
   integrations           Integration[]
   integrationTriggers    IntegrationTrigger[]
+  inventoryItems         InventoryItem[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId])

@@ -21,8 +21,8 @@ import { ensureBuckets, ensureBucketsBatch } from "../metrics/bucket.js";
 import { archiveOldBuckets } from "../metrics/archive.js";
 import { materializeShiftInstances } from "../facility/shift/materialize.js";
 import { MetricsContext } from "../metrics/context.js";
-import { jobEntityId } from "../metrics/cascade.js";
 import { scheduleShiftChanges } from "./shift-change.js";
+import { sweepOverdueHourCloses } from "./hour-close.js";
 import { flushAllExpiredShiftUsage } from "../inventory/material-shift-flush.js";
 
 const REDIS_URL = process.env.REDIS_URL;
@@ -232,12 +232,15 @@ export async function runMetricBucketEnsureTick(): Promise<{ checked: number; ar
         `[metric-bucket-ensure] Reconciled missing StationJobLog for station ${station.stationId}, job ${station.jobId}`,
       );
 
+      // Scaffold the (STATION, station, jobId, HOUR) row for the
+      // reconciled job (plus the residual) so the base writer and the
+      // per-cycle increment have rows to land on.
       await ensureBuckets(
         {
           siteId: station.siteId,
-          entityType: "JOB",
-          entityId: jobEntityId(station.stationId, station.jobId),
-          entityName: station.jobName,
+          entityType: "STATION",
+          entityId: station.stationId,
+          jobId: station.jobId,
           timestamp: now,
         },
         ctx,
@@ -265,19 +268,14 @@ export async function runMetricBucketEnsureTick(): Promise<{ checked: number; ar
     await ensureBucketsBatch(stationInputs, ctx);
   }
 
-  const activeEntities = await prisma.$queryRaw<Array<{ entityType: string; entityId: string; siteId: string }>>`
-    SELECT DISTINCT "entityType", "entityId", "siteId" FROM "MetricBucket"
-    WHERE "entityType" != 'STATION'
-  `;
-
-  const ensureInputs = activeEntities.map((entity) => ({
-    siteId: entity.siteId,
-    entityType: entity.entityType as "STATION" | "WORKCENTER" | "SITE" | "JOB",
-    entityId: entity.entityId,
-    timestamp: now,
-  }));
-
-  await ensureBucketsBatch(ensureInputs, ctx);
+  // Fallback hour-close sweep: finalize open STATION HOUR rows whose end
+  // passed >90s ago — covers hour-close BullMQ jobs lost to Redis
+  // flushes or jobId dedup races.
+  try {
+    await sweepOverdueHourCloses();
+  } catch (err) {
+    console.error("[metric-bucket-ensure] Failed to sweep overdue hour closes:", err);
+  }
 
   let archived = 0;
   try {
@@ -298,7 +296,7 @@ export async function runMetricBucketEnsureTick(): Promise<{ checked: number; ar
     console.error("[metric-bucket-ensure] Failed to flush expired shift usage:", err);
   }
 
-  return { checked: activeEntities.length, archived };
+  return { checked: stationInputs.length, archived };
 }
 
 /**

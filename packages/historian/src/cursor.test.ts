@@ -43,6 +43,29 @@ describe("historian cursor", () => {
     if (isHistorianError(decoded)) expect(decoded.code).toBe("BAD_CURSOR");
   });
 
+  test("round-trips the narrowed metricBucket STATION×HOUR scope", () => {
+    // Star-schema Stage B: the metricBucket selector only permits
+    // entityType STATION and granularity HOUR.
+    const mbScope = {
+      siteId: scope.siteId,
+      entityType: "STATION",
+      entityId: "44444444-4444-4444-4444-444444444444",
+      granularity: "HOUR",
+    };
+    const token = encodeCursor("metricBucket", mbScope, range, now);
+    const decoded = decodeCursor(token, "metricBucket", mbScope, now);
+
+    expect(isHistorianError(decoded)).toBe(false);
+    if (isHistorianError(decoded)) return;
+    expect(decoded.watermarkMs).toBe(now);
+
+    // A cursor minted for one station is rejected for another.
+    const otherStation = { ...mbScope, entityId: "55555555-5555-5555-5555-555555555555" };
+    const mismatch = decodeCursor(token, "metricBucket", otherStation, now);
+    expect(isHistorianError(mismatch)).toBe(true);
+    if (isHistorianError(mismatch)) expect(mismatch.code).toBe("BAD_CURSOR");
+  });
+
   test("rejects a cursor presented against a different series type", () => {
     const token = encodeCursor("stationState", scope, range, now);
     const decoded = decodeCursor(token, "metricBucket", scope, now);
