@@ -16,10 +16,12 @@
   ],
   "scripts": {
     "build": "tsc",
+    "test": "vitest run",
     "prepublishOnly": "pnpm build"
   },
   "devDependencies": {
-    "typescript": "~6.0.2"
+    "typescript": "~6.0.2",
+    "vitest": "^4.0.14"
   },
   "repository": {
     "type": "git",

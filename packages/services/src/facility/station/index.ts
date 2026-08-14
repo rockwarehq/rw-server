@@ -51,6 +51,7 @@ export {
   transitionToDown,
   splitDownEntry,
   splitOpenStateEntryForJobChange,
+  splitOpenStateEntriesAtShiftBoundary,
   assignDowntimeReason,
   listStateLogs,
   type ListStateLogsFilter,

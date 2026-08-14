@@ -1,5 +1,7 @@
 import prisma from "@rw/db";
+import { resolveBusinessDate } from "@rw/services/metrics/bucket";
 import { updateDispositionBadItems } from "@rw/services/metrics/recalc";
+import { getShiftForEntity } from "@rw/services/metrics/shift";
 import { deductScrap } from "@rw/services/order/allocation";
 
 export interface CreateDispositionLogInput {
@@ -11,6 +13,8 @@ export interface CreateDispositionLogInput {
   dispositionReasonId?: string;
   cycleId?: string;
   shiftInstanceId?: string;
+  /** When the scrap actually happened; defaults to now. createdAt stays the record time. */
+  occurredAt?: Date;
   /** If not provided, version IDs are auto-resolved from current station/job state */
   productVersionId: string;
   stationVersionId?: string;
@@ -18,6 +22,13 @@ export interface CreateDispositionLogInput {
   toolVersionId?: string;
   toolCavityVersionId?: string;
   productMaterialVersionIds?: string[];
+  // Dimension parents (parent+version pair). Missing ones are resolved from
+  // the version ids; jobId falls back to the cycle's stamp, then jobProduct.
+  productId?: string;
+  jobId?: string;
+  toolId?: string;
+  toolCavityId?: string;
+  jobProductId?: string;
 }
 
 export interface UpdateDispositionLogInput {
@@ -88,6 +99,8 @@ export interface RecordDispositionLogInput {
   dispositionReasonId?: string;
   cycleId?: string;
   shiftInstanceId?: string;
+  /** When the scrap actually happened; defaults to now. */
+  occurredAt?: Date;
 }
 
 async function validateDispositionReasonPair(
@@ -193,10 +206,11 @@ export async function record(input: RecordDispositionLogInput) {
 
   // Resolve jobProduct → jobProductVersionId (if jobId provided)
   let jobProductVersionId: string | undefined;
+  let jobProductId: string | undefined;
   if (jobId) {
     const jobProduct = await prisma.jobProduct.findFirst({
       where: { jobId, productId, deletedAt: null },
-      select: { currentVersionId: true },
+      select: { id: true, currentVersionId: true },
     });
 
     if (!jobProduct) {
@@ -206,18 +220,20 @@ export async function record(input: RecordDispositionLogInput) {
       return { error: "JobProduct has no current version version", code: "NO_CURRENT_VERSION" };
     }
     jobProductVersionId = jobProduct.currentVersionId;
+    jobProductId = jobProduct.id;
   }
 
   // Resolve toolCavity → toolCavityVersionId + toolVersionId (if provided)
   let toolCavityVersionId: string | undefined;
   let toolVersionId: string | undefined;
+  let toolId: string | undefined;
   if (toolCavityId) {
     const toolCavity = await prisma.toolCavity.findUnique({
       where: { id: toolCavityId },
       select: {
         currentVersionId: true,
         deletedAt: true,
-        tool: { select: { currentVersionId: true } },
+        tool: { select: { id: true, currentVersionId: true } },
       },
     });
 
@@ -229,6 +245,7 @@ export async function record(input: RecordDispositionLogInput) {
     }
     toolCavityVersionId = toolCavity.currentVersionId;
     toolVersionId = toolCavity.tool.currentVersionId ?? undefined;
+    toolId = toolCavity.tool.id;
   }
 
   // Resolve product material version IDs
@@ -245,6 +262,12 @@ export async function record(input: RecordDispositionLogInput) {
     toolVersionId,
     toolCavityVersionId,
     productMaterialVersionIds,
+    // Dimension parents — previously dropped on the floor here (the bug).
+    productId,
+    jobId,
+    toolId,
+    toolCavityId,
+    jobProductId,
     ...passthrough,
   });
 
@@ -275,7 +298,7 @@ export async function create(input: CreateDispositionLogInput) {
   // Validate station exists and belongs to site
   const station = await prisma.station.findUnique({
     where: { id: stationId },
-    select: { id: true, siteId: true },
+    select: { id: true, siteId: true, workcenterId: true, site: { select: { timezone: true } } },
   });
 
   if (!station) {
@@ -284,6 +307,24 @@ export async function create(input: CreateDispositionLogInput) {
 
   if (station.siteId !== siteId) {
     return { error: "Station must belong to the specified site", code: "SITE_MISMATCH" };
+  }
+
+  // Conformed context: resolve shift + business date for the event time.
+  // Resolution failure never fails the record — stamp NULL and repair later.
+  const occurredAt = input.occurredAt ?? new Date();
+  let resolvedShiftInstanceId = shiftInstanceId ?? null;
+  let businessDate: Date | null = null;
+  try {
+    if (!resolvedShiftInstanceId) {
+      const shift = await getShiftForEntity("STATION", stationId, siteId, occurredAt);
+      resolvedShiftInstanceId = shift?.shiftInstanceId ?? null;
+      if (shift) businessDate = shift.businessDate;
+    }
+    if (!businessDate) {
+      businessDate = await resolveBusinessDate(occurredAt, resolvedShiftInstanceId, station.site.timezone);
+    }
+  } catch (err) {
+    console.warn(`[disposition-log] context resolution failed for station ${stationId}; stamping NULL shift:`, err);
   }
 
   const dispositionPair = await validateDispositionReasonPair(siteId, itemDispositionId, dispositionReasonId);
@@ -301,21 +342,72 @@ export async function create(input: CreateDispositionLogInput) {
     return { error: "Product version not found", code: "PRODUCT_VERSION_NOT_FOUND" };
   }
 
+  // Dimension parents: explicit input wins; missing ones resolve from the
+  // version snapshots in hand. jobId cascade: input → cycle stamp →
+  // jobProduct. Nullable-safe — never fail the record on resolution.
+  const productId = input.productId ?? productVersion.productId;
+  let toolId = input.toolId ?? null;
+  let toolCavityId = input.toolCavityId ?? null;
+  let jobProductId = input.jobProductId ?? null;
+  let jobId = input.jobId ?? null;
+  let logonSessionId: string | null = null;
+  try {
+    const [toolVersion, toolCavityVersion, jobProductVersion, cycleRow, logon] = await Promise.all([
+      !toolId && toolVersionId
+        ? prisma.toolVersion.findUnique({ where: { id: toolVersionId }, select: { toolId: true } })
+        : null,
+      !toolCavityId && toolCavityVersionId
+        ? prisma.toolCavityVersion.findUnique({ where: { id: toolCavityVersionId }, select: { toolCavityId: true } })
+        : null,
+      (!jobProductId || !jobId) && jobProductVersionId
+        ? prisma.jobProductVersion.findUnique({
+            where: { id: jobProductVersionId },
+            select: { jobProductId: true, jobProduct: { select: { jobId: true } } },
+          })
+        : null,
+      !jobId && cycleId ? prisma.cycle.findUnique({ where: { id: cycleId }, select: { jobId: true } }) : null,
+      prisma.stationLogonSession.findFirst({
+        where: {
+          stationId,
+          logonTime: { lte: occurredAt },
+          OR: [{ logoffTime: null }, { logoffTime: { gt: occurredAt } }],
+        },
+        orderBy: { logonTime: "desc" },
+        select: { id: true },
+      }),
+    ]);
+    toolId ??= toolVersion?.toolId ?? null;
+    toolCavityId ??= toolCavityVersion?.toolCavityId ?? null;
+    jobProductId ??= jobProductVersion?.jobProductId ?? null;
+    jobId ??= cycleRow?.jobId ?? jobProductVersion?.jobProduct.jobId ?? null;
+    logonSessionId = logon?.id ?? null;
+  } catch (err) {
+    console.warn(`[disposition-log] parent resolution failed for station ${stationId}; stamping NULLs:`, err);
+  }
+
   const log = await prisma.itemDispositionLog.create({
     data: {
       siteId,
       stationId,
-      workcenterId: workcenterId ?? null,
+      workcenterId: workcenterId ?? station.workcenterId ?? null,
       quantity: quantity ?? 1,
       itemDispositionId: dispositionPair.data.itemDispositionId,
       dispositionReasonId: dispositionPair.data.dispositionReasonId,
       cycleId: cycleId ?? null,
-      shiftInstanceId: shiftInstanceId ?? null,
+      shiftInstanceId: resolvedShiftInstanceId,
+      occurredAt,
+      businessDate,
       productVersionId,
       stationVersionId: stationVersionId ?? null,
       jobProductVersionId: jobProductVersionId ?? null,
       toolVersionId: toolVersionId ?? null,
       toolCavityVersionId: toolCavityVersionId ?? null,
+      productId,
+      jobId,
+      logonSessionId,
+      toolId,
+      toolCavityId,
+      jobProductId,
       productMaterialVersions:
         productMaterialVersionIds && productMaterialVersionIds.length > 0
           ? { connect: productMaterialVersionIds.map((id) => ({ id })) }
@@ -324,10 +416,13 @@ export async function create(input: CreateDispositionLogInput) {
     include: logInclude,
   });
 
-  // Trigger metric recalculation for badItems
-  updateDispositionBadItems(stationId, siteId, log.createdAt, quantity ?? 1).catch((err) => {
-    console.error(`[disposition-log] Failed to update badItems metrics for station ${stationId}:`, err);
-  });
+  // Trigger metric recalculation for badItems, attributed to the event time
+  // (and to the stamped job when one resolved)
+  updateDispositionBadItems(stationId, siteId, log.occurredAt ?? log.createdAt, quantity ?? 1, log.jobId).catch(
+    (err) => {
+      console.error(`[disposition-log] Failed to update badItems metrics for station ${stationId}:`, err);
+    },
+  );
 
   // Deduct from the highest-priority order for this product
   if (productVersion?.productId) {
@@ -406,6 +501,7 @@ export async function update(id: string, input: UpdateDispositionLogInput) {
       id: true,
       siteId: true,
       stationId: true,
+      jobId: true,
       deletedAt: true,
       quantity: true,
       itemDispositionId: true,
@@ -442,7 +538,7 @@ export async function update(id: string, input: UpdateDispositionLogInput) {
   // If quantity changed, trigger metric recalc with delta
   if (quantity !== undefined && quantity !== current.quantity) {
     const delta = quantity - current.quantity;
-    updateDispositionBadItems(current.stationId, current.siteId, log.createdAt, delta).catch((err) => {
+    updateDispositionBadItems(current.stationId, current.siteId, log.createdAt, delta, current.jobId).catch((err) => {
       console.error(`[disposition-log] Failed to update badItems metrics for station ${current.stationId}:`, err);
     });
   }
@@ -453,7 +549,7 @@ export async function update(id: string, input: UpdateDispositionLogInput) {
 export async function remove(id: string) {
   const log = await prisma.itemDispositionLog.findUnique({
     where: { id },
-    select: { id: true, stationId: true, siteId: true, quantity: true, deletedAt: true, createdAt: true },
+    select: { id: true, stationId: true, siteId: true, jobId: true, quantity: true, deletedAt: true, createdAt: true },
   });
 
   if (!log || log.deletedAt) {
@@ -466,7 +562,7 @@ export async function remove(id: string) {
   });
 
   // Subtract the removed quantity from metrics
-  updateDispositionBadItems(log.stationId, log.siteId, log.createdAt, -log.quantity).catch((err) => {
+  updateDispositionBadItems(log.stationId, log.siteId, log.createdAt, -log.quantity, log.jobId).catch((err) => {
     console.error(`[disposition-log] Failed to update badItems metrics for station ${log.stationId}:`, err);
   });
 

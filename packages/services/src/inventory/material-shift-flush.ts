@@ -37,20 +37,25 @@ export async function flushShiftUsage(shiftInstanceId: string, tx?: TransactionC
 async function flushShiftUsageInTx(tx: TransactionClient, shiftInstanceId: string): Promise<FlushResult> {
   // SELECT FOR UPDATE on the unflushed rows so a concurrent flush call sees
   // either all-flushed or none-flushed. Locks are released at end of tx.
+  // The material's currentVersionId rides along so each ledger entry can
+  // snapshot the version its unit/cost validation was based on — one join
+  // here instead of a select per material group.
   const rows = await tx.$queryRaw<
     Array<{
       id: string;
       siteId: string;
       materialId: string;
+      materialVersionId: string | null;
       quantity: Prisma.Decimal;
       unit: "KG" | "LB" | "G" | "OZ";
     }>
   >`
-    SELECT id, "siteId", "materialId", quantity, unit
-    FROM "MaterialShiftUsage"
-    WHERE "shiftInstanceId" = ${shiftInstanceId}::uuid
-      AND "flushedAt" IS NULL
-    FOR UPDATE
+    SELECT msu.id, msu."siteId", msu."materialId", m."currentVersionId" AS "materialVersionId", msu.quantity, msu.unit
+    FROM "MaterialShiftUsage" msu
+    JOIN "Material" m ON m.id = msu."materialId"
+    WHERE msu."shiftInstanceId" = ${shiftInstanceId}::uuid
+      AND msu."flushedAt" IS NULL
+    FOR UPDATE OF msu
   `;
 
   // Count already-flushed for the report (cheap sanity-check query).
@@ -72,7 +77,14 @@ async function flushShiftUsageInTx(tx: TransactionClient, shiftInstanceId: strin
 
   const groups = new Map<
     GroupKey,
-    { siteId: string; materialId: string; unit: "KG" | "LB" | "G" | "OZ"; total: Prisma.Decimal; rowIds: string[] }
+    {
+      siteId: string;
+      materialId: string;
+      materialVersionId: string | null;
+      unit: "KG" | "LB" | "G" | "OZ";
+      total: Prisma.Decimal;
+      rowIds: string[];
+    }
   >();
   for (const row of rows) {
     const key = groupKey(row.siteId, row.materialId, row.unit);
@@ -84,6 +96,9 @@ async function flushShiftUsageInTx(tx: TransactionClient, shiftInstanceId: strin
       groups.set(key, {
         siteId: row.siteId,
         materialId: row.materialId,
+        // Functionally dependent on materialId (current version at flush
+        // time) — identical across the group's rows.
+        materialVersionId: row.materialVersionId,
         unit: row.unit,
         total: new Prisma.Decimal(row.quantity.toString()),
         rowIds: [row.id],
@@ -91,12 +106,23 @@ async function flushShiftUsageInTx(tx: TransactionClient, shiftInstanceId: strin
     }
   }
 
+  // Plant calendar day for the flushed ledger entries: the shift being
+  // flushed defines it. Nullable-safe — a missing shift row never fails the
+  // flush.
+  const shift = await tx.shiftInstance.findUnique({
+    where: { id: shiftInstanceId },
+    select: { businessDate: true },
+  });
+  const businessDate = shift?.businessDate ?? null;
+
   const now = new Date();
   for (const g of groups.values()) {
     const ledger = await tx.materialLedgerEntry.create({
       data: {
         siteId: g.siteId,
         materialId: g.materialId,
+        materialVersionId: g.materialVersionId,
+        businessDate,
         kind: MaterialLedgerKind.PRODUCTION,
         // Stored negative — debit. Balance = SUM(ledger.quantity).
         quantity: g.total.negated(),

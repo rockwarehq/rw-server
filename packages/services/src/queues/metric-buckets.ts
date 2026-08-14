@@ -46,10 +46,18 @@ export async function registerMetricBucketWorkers() {
     async (job) => {
       const { siteId, entityType, entityId, timestamp } = job.data as {
         siteId: string;
-        entityType: "STATION" | "WORKCENTER" | "SITE" | "JOB";
+        entityType: "STATION";
         entityId: string;
         timestamp: string;
       };
+
+      // Jobs enqueued before the Stage C cutover may carry WORKCENTER/
+      // SITE/JOB payloads — those tiers are no longer persisted. Drop
+      // them (no reschedule) so the queue drains.
+      if ((entityType as string) !== "STATION") {
+        console.log(`[metric-buckets] Dropping legacy non-STATION job for ${entityType} ${entityId}`);
+        return;
+      }
 
       const ts = new Date(timestamp);
       console.log(`[metric-buckets] Creating shift buckets for ${entityType} ${entityId} at ${ts.toISOString()}`);
@@ -88,7 +96,8 @@ export async function stopMetricBucketQueues() {
 
 interface ScheduleInput {
   siteId: string;
-  entityType: "STATION" | "WORKCENTER" | "SITE" | "JOB";
+  /** Only STATION rows are persisted post-Stage-C. */
+  entityType: "STATION";
   entityId: string;
   timestamp: Date;
 }

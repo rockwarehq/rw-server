@@ -31,12 +31,17 @@ const seriesSelectorSchema = z.discriminatedUnion("seriesType", [
     siteId: z.uuid(),
     stationId: z.uuid(),
   }),
+  // DEPRECATION (star-schema Stage B): only the persisted base grain —
+  // STATION × HOUR — is served. Rows carry `jobId` (per-job family).
+  // WORKCENTER / SHIFT / DAY consumers must aggregate the STATION×HOUR
+  // series client-side: sum additive KPI columns and recompute the four
+  // ratios from the summed ingredients (never sum/average ratios).
   z.object({
     seriesType: z.literal("metricBucket"),
     siteId: z.uuid(),
-    entityType: z.enum(["STATION", "WORKCENTER"]),
+    entityType: z.enum(["STATION"]),
     entityId: z.uuid(),
-    granularity: z.enum(["HOUR", "SHIFT", "DAY"]),
+    granularity: z.enum(["HOUR"]),
   }),
 ]);
 

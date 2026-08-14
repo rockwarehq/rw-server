@@ -13,28 +13,44 @@ import {
   type FieldAllowlist,
 } from "@rw/services/lib/query-filter/index";
 import type { QueryFilter, QueryRule } from "@rw/services/lib/query-filter/types";
+import {
+  hourUnionSourceSql,
+  jobDedupSql,
+  kpiSumsSql,
+  latestNonNullSql,
+  queryFilterToSql,
+  ratioSumsSql,
+  syntheticBucketId,
+  JOB_HOUR_PREDICATE,
+  STATION_HOUR_PREDICATE,
+  type SqlFilterField,
+} from "./metric-hour-sql.js";
 
 // ---------------------------------------------------------------------------
 // Field allowlists — only these fields can be queried dynamically.
 // ---------------------------------------------------------------------------
 
-const METRIC_BUCKET_QUERYABLE_FIELDS: FieldAllowlist = {
-  entityName: { column: "entityName", type: "string" },
-  entityType: { column: "entityType", type: "string" },
-  businessShift: { column: "businessShift", type: "string" },
-  currentJobName: { column: "currentJobName", type: "string" },
-  totalCycles: { column: "totalCycles", type: "number" },
-  goodCycles: { column: "goodCycles", type: "number" },
-  badCycles: { column: "badCycles", type: "number" },
-  totalItems: { column: "totalItems", type: "number" },
-  goodItems: { column: "goodItems", type: "number" },
-  badItems: { column: "badItems", type: "number" },
-  runSeconds: { column: "runSeconds", type: "number" },
-  downSeconds: { column: "downSeconds", type: "number" },
-  availability: { column: "availability", type: "number" },
-  performance: { column: "performance", type: "number" },
-  quality: { column: "quality", type: "number" },
-  oee: { column: "oee", type: "number" },
+/**
+ * metricBucketLogSearch computes its rows in SQL, so the allowlist maps each
+ * queryable field to the aggregate output column it filters on.
+ */
+const METRIC_BUCKET_QUERYABLE_FIELDS: Record<string, SqlFilterField> = {
+  entityName: { sql: Prisma.sql`g."entityName"`, type: "string" },
+  entityType: { sql: Prisma.sql`g."entityType"`, type: "string" },
+  businessShift: { sql: Prisma.sql`g."businessShift"`, type: "string" },
+  currentJobName: { sql: Prisma.sql`g."currentJobName"`, type: "string" },
+  totalCycles: { sql: Prisma.sql`g."totalCycles"`, type: "number" },
+  goodCycles: { sql: Prisma.sql`g."goodCycles"`, type: "number" },
+  badCycles: { sql: Prisma.sql`g."badCycles"`, type: "number" },
+  totalItems: { sql: Prisma.sql`g."totalItems"`, type: "number" },
+  goodItems: { sql: Prisma.sql`g."goodItems"`, type: "number" },
+  badItems: { sql: Prisma.sql`g."badItems"`, type: "number" },
+  runSeconds: { sql: Prisma.sql`g."runSeconds"`, type: "number" },
+  downSeconds: { sql: Prisma.sql`g."downSeconds"`, type: "number" },
+  availability: { sql: Prisma.sql`g."availability"`, type: "number" },
+  performance: { sql: Prisma.sql`g."performance"`, type: "number" },
+  quality: { sql: Prisma.sql`g."quality"`, type: "number" },
+  oee: { sql: Prisma.sql`g."oee"`, type: "number" },
 };
 
 const DISPOSITION_LOG_QUERYABLE_FIELDS: FieldAllowlist = {
@@ -99,29 +115,82 @@ const metricBucketLogSearchInputSchema = z.object({
   offset: z.number().min(0).default(0),
 });
 
+/** Aggregate columns every entity-scope subquery of metricBucketLogSearch produces. */
+type MetricSearchRow = {
+  entityType: "STATION" | "WORKCENTER" | "JOB";
+  entityId: string;
+  jobId: string | null;
+  entityName: string | null;
+  path: string | null;
+  granularityName: string | null;
+  startTime: Date;
+  durationSeconds: number | null;
+  shiftInstanceId: string;
+  businessDate: Date | null;
+  businessShift: string | null;
+  currentJobName: string | null;
+  totalCycles: number;
+  expectedCycles: number;
+  badCycles: number;
+  goodCycles: number;
+  totalItems: number;
+  badItems: number;
+  goodItems: number;
+  expectedItems: number;
+  runSeconds: number;
+  downSeconds: number;
+  plannedDownSeconds: number;
+  unplannedDownSeconds: number;
+  availability: Prisma.Decimal | null;
+  performance: Prisma.Decimal | null;
+  quality: Prisma.Decimal | null;
+  oee: Prisma.Decimal | null;
+  totalCount: number;
+};
+
+const METRIC_SEARCH_SORTABLE: Record<string, Prisma.Sql> = {
+  entityName: Prisma.sql`g."entityName"`,
+  startTime: Prisma.sql`g."startTime"`,
+  businessDate: Prisma.sql`g."businessDate"`,
+  businessShift: Prisma.sql`g."businessShift"`,
+  currentJobName: Prisma.sql`g."currentJobName"`,
+  durationSeconds: Prisma.sql`g."durationSeconds"`,
+  totalCycles: Prisma.sql`g."totalCycles"`,
+  goodCycles: Prisma.sql`g."goodCycles"`,
+  badCycles: Prisma.sql`g."badCycles"`,
+  expectedCycles: Prisma.sql`g."expectedCycles"`,
+  totalItems: Prisma.sql`g."totalItems"`,
+  goodItems: Prisma.sql`g."goodItems"`,
+  badItems: Prisma.sql`g."badItems"`,
+  expectedItems: Prisma.sql`g."expectedItems"`,
+  runSeconds: Prisma.sql`g."runSeconds"`,
+  downSeconds: Prisma.sql`g."downSeconds"`,
+  plannedDownSeconds: Prisma.sql`g."plannedDownSeconds"`,
+  unplannedDownSeconds: Prisma.sql`g."unplannedDownSeconds"`,
+  availability: Prisma.sql`g."availability"`,
+  performance: Prisma.sql`g."performance"`,
+  quality: Prisma.sql`g."quality"`,
+  oee: Prisma.sql`g."oee"`,
+};
+
 export const metricBucketLogSearch = userOrDisplayRequired
   .input(metricBucketLogSearchInputSchema)
   .handler(async ({ input }) => {
-    const where: Record<string, unknown> = {
-      siteId: input.siteId,
-      granularity: "SHIFT",
-    };
+    // Stage B: per-shift rows are aggregated on the fly from STATION-family
+    // HOUR buckets — one output row per entity × shift instance. Reads
+    // live ∪ archived (the old code read MetricBucketLog only, so shifts of
+    // the current business day were invisible; the union is strictly more
+    // complete).
 
-    if (input.entityType) {
-      where.entityType = input.entityType;
-    }
+    // ── Entity scoping ──
+    type ScopeKind = "STATION" | "WORKCENTER" | "JOB";
+    const scopes: Array<{ kind: ScopeKind; stationIds?: string[]; workCenterId?: string }> = [];
 
-    if (input.shiftInstanceId) {
-      where.shiftInstanceId = input.shiftInstanceId;
-    }
-
-    // Filter by station directly, or by all stations in a workcenter
     if (input.stationId) {
       if (input.entityType === "JOB") {
-        where.path = { contains: `.station.${input.stationId}.` };
+        scopes.push({ kind: "JOB", stationIds: [input.stationId] });
       } else {
-        where.entityType = "STATION";
-        where.entityId = input.stationId;
+        scopes.push({ kind: "STATION", stationIds: [input.stationId] });
       }
     } else if (input.workCenterId) {
       const stations = await prisma.station.findMany({
@@ -129,115 +198,179 @@ export const metricBucketLogSearch = userOrDisplayRequired
         select: { id: true },
       });
       const stationIds = stations.map((s) => s.id);
-
       if (input.entityType === "STATION") {
-        where.entityId = { in: stationIds };
+        scopes.push({ kind: "STATION", stationIds });
       } else if (input.entityType === "JOB") {
-        // JOB buckets are scoped to stations via the path field
-        where.OR = stationIds.map((sid) => ({
-          path: { contains: `.station.${sid}.` },
-        }));
+        scopes.push({ kind: "JOB", stationIds });
+      } else if (input.entityType === "WORKCENTER") {
+        scopes.push({ kind: "WORKCENTER", stationIds, workCenterId: input.workCenterId });
       } else {
-        where.OR = [
-          { entityType: "WORKCENTER", entityId: input.workCenterId },
-          { entityType: "STATION", entityId: { in: stationIds } },
-        ];
-        delete where.entityType;
+        scopes.push({ kind: "WORKCENTER", stationIds, workCenterId: input.workCenterId });
+        scopes.push({ kind: "STATION", stationIds });
       }
+    } else if (input.entityType) {
+      scopes.push({ kind: input.entityType });
+    } else {
+      // No entityType: station + workcenter families. (The old SHIFT-tier
+      // table also contained SITE and JOB rows in this case; those are
+      // intentionally dropped — the log viewer always scopes by type.)
+      scopes.push({ kind: "STATION" });
+      scopes.push({ kind: "WORKCENTER" });
     }
 
-    // Date range filter on businessDate
-    if (input.startDate || input.endDate) {
-      const dateFilter: Record<string, Date> = {};
-      if (input.startDate) dateFilter.gte = new Date(input.startDate);
-      if (input.endDate) {
-        const end = new Date(input.endDate);
-        end.setDate(end.getDate() + 1);
-        dateFilter.lt = end;
-      }
-      where.businessDate = dateFilter;
+    const active = scopes.filter((s) => s.stationIds === undefined || s.stationIds.length > 0);
+    if (active.length === 0) return { data: [], total: 0 };
+
+    // ── Source predicates (evaluated against alias `mb` in the union) ──
+    const baseParts: Prisma.Sql[] = [
+      Prisma.sql`mb."siteId" = ${input.siteId}::uuid`,
+      // Per-shift rows: hour buckets outside any shift schedule have no shift
+      // to aggregate into (the old table had no SHIFT rows for them either).
+      Prisma.sql`mb."shiftInstanceId" IS NOT NULL`,
+    ];
+    if (input.shiftInstanceId) {
+      baseParts.push(Prisma.sql`mb."shiftInstanceId" = ${input.shiftInstanceId}::uuid`);
+    }
+    if (input.startDate) baseParts.push(Prisma.sql`mb."businessDate" >= ${input.startDate}::date`);
+    if (input.endDate) baseParts.push(Prisma.sql`mb."businessDate" < ${input.endDate}::date + 1`);
+
+    const stationScope = active.find((s) => s.kind === "STATION");
+    const wcScope = active.find((s) => s.kind === "WORKCENTER");
+    const jobScope = active.find((s) => s.kind === "JOB");
+
+    const ctes: Prisma.Sql[] = [];
+    const groupSelects: Prisma.Sql[] = [];
+
+    // Shift context comes from the ShiftInstance itself (startTime/duration of
+    // the shift window, not of the contributing hours) with row-stamp fallbacks.
+    const shiftContextCols = Prisma.sql`
+      COALESCE(si."shiftName", 'Shift') AS "granularityName",
+      COALESCE(si."startTime", MIN(s."startTime")) AS "startTime",
+      COALESCE(EXTRACT(EPOCH FROM (si."endTime" - si."startTime"))::int, SUM(s."durationSeconds")::int) AS "durationSeconds",
+      s."shiftInstanceId" AS "shiftInstanceId",
+      COALESCE(si."businessDate", MAX(s."businessDate")) AS "businessDate",
+      COALESCE(si."shiftName", MAX(s."businessShift")) AS "businessShift"`;
+
+    if (stationScope || wcScope) {
+      const parts = [...baseParts, STATION_HOUR_PREDICATE];
+      const narrowIds = stationScope?.stationIds ?? wcScope?.stationIds;
+      if (narrowIds) parts.push(Prisma.sql`mb."entityId" = ANY(${narrowIds}::uuid[])`);
+      ctes.push(Prisma.sql`ssrc AS (${hourUnionSourceSql(Prisma.join(parts, " AND "))})`);
     }
 
-    // Dynamic query builder filters (validated against allowlist)
-    if (input.query) {
-      const dynamicWhere = toPrismaWhere(input.query, METRIC_BUCKET_QUERYABLE_FIELDS);
-      if (Object.keys(dynamicWhere).length > 0) {
-        where.AND = [...((where.AND as unknown[]) ?? []), dynamicWhere];
-      }
+    if (stationScope) {
+      groupSelects.push(Prisma.sql`
+        SELECT
+          'STATION'::text AS "entityType",
+          s."entityId" AS "entityId",
+          NULL::uuid AS "jobId",
+          COALESCE(MAX(st."name"), MAX(s."entityName")) AS "entityName",
+          MAX(s."path") AS "path",
+          ${shiftContextCols},
+          ${latestNonNullSql(Prisma.sql`s."currentJobName"`, Prisma.sql`s."startTime" DESC, s."updatedAt" DESC`)} AS "currentJobName",
+          ${kpiSumsSql("s")},
+          ${ratioSumsSql("s")}
+        FROM ssrc s
+        LEFT JOIN "Station" st ON st.id = s."entityId"
+        LEFT JOIN "ShiftInstance" si ON si.id = s."shiftInstanceId"
+        GROUP BY s."entityId", s."shiftInstanceId", si.id`);
     }
 
-    const select = {
-      id: true,
-      entityType: true,
-      entityId: true,
-      entityName: true,
-      path: true,
-      granularity: true,
-      granularityName: true,
-      startTime: true,
-      durationSeconds: true,
-      shiftInstanceId: true,
-      businessDate: true,
-      businessShift: true,
-      currentJobName: true,
-      totalCycles: true,
-      goodCycles: true,
-      badCycles: true,
-      totalItems: true,
-      goodItems: true,
-      badItems: true,
-      runSeconds: true,
-      downSeconds: true,
-      plannedDownSeconds: true,
-      unplannedDownSeconds: true,
-      expectedCycles: true,
-      expectedItems: true,
-      availability: true,
-      performance: true,
-      quality: true,
-      oee: true,
-    };
+    if (wcScope) {
+      groupSelects.push(Prisma.sql`
+        SELECT
+          'WORKCENTER'::text AS "entityType",
+          st."workcenterId" AS "entityId",
+          NULL::uuid AS "jobId",
+          MAX(w."name") AS "entityName",
+          regexp_replace(MAX(s."path"), '\\.station\\.[^.]*$', '') AS "path",
+          ${shiftContextCols},
+          NULL::text AS "currentJobName",
+          ${kpiSumsSql("s")},
+          ${ratioSumsSql("s")}
+        FROM ssrc s
+        JOIN "Station" st ON st.id = s."entityId"
+        JOIN "Workcenter" w ON w.id = st."workcenterId"
+        LEFT JOIN "ShiftInstance" si ON si.id = s."shiftInstanceId"
+        ${wcScope.workCenterId ? Prisma.sql`WHERE st."workcenterId" = ${wcScope.workCenterId}::uuid` : Prisma.empty}
+        GROUP BY st."workcenterId", s."shiftInstanceId", si.id`);
+    }
 
-    const SORTABLE_COLUMNS = new Set([
-      "entityName",
-      "startTime",
-      "businessDate",
-      "businessShift",
-      "currentJobName",
-      "durationSeconds",
-      "totalCycles",
-      "goodCycles",
-      "badCycles",
-      "expectedCycles",
-      "totalItems",
-      "goodItems",
-      "badItems",
-      "expectedItems",
-      "runSeconds",
-      "downSeconds",
-      "plannedDownSeconds",
-      "unplannedDownSeconds",
-      "availability",
-      "performance",
-      "quality",
-      "oee",
-    ]);
+    if (jobScope) {
+      const parts = [...baseParts, JOB_HOUR_PREDICATE];
+      if (jobScope.stationIds) parts.push(Prisma.sql`mb."entityId" = ANY(${jobScope.stationIds}::uuid[])`);
+      ctes.push(Prisma.sql`jsrc AS (${jobDedupSql(hourUnionSourceSql(Prisma.join(parts, " AND ")))})`);
+      groupSelects.push(Prisma.sql`
+        SELECT
+          'JOB'::text AS "entityType",
+          s."entityId" AS "entityId",
+          s."jobId" AS "jobId",
+          COALESCE(jv."name", MAX(s."currentJobName")) AS "entityName",
+          MAX(CASE WHEN s."entityType" = 'JOB' THEN s."path" ELSE s."path" || '.job.' || s."jobId"::text END) AS "path",
+          ${shiftContextCols},
+          ${latestNonNullSql(Prisma.sql`s."currentJobName"`, Prisma.sql`s."startTime" DESC, s."updatedAt" DESC`)} AS "currentJobName",
+          ${kpiSumsSql("s")},
+          ${ratioSumsSql("s")}
+        FROM jsrc s
+        LEFT JOIN "Job" j ON j.id = s."jobId"
+        LEFT JOIN "JobVersion" jv ON jv.id = j."currentVersionId"
+        LEFT JOIN "ShiftInstance" si ON si.id = s."shiftInstanceId"
+        GROUP BY s."entityId", s."jobId", s."shiftInstanceId", si.id, jv."name"`);
+    }
 
-    const orderBy =
-      input.sortBy && SORTABLE_COLUMNS.has(input.sortBy)
-        ? [{ [input.sortBy]: input.sortDir }, { entityName: "asc" as const }]
-        : [{ startTime: "desc" as const }, { entityName: "asc" as const }];
+    // ── Dynamic filters, sort, pagination — all over the aggregate columns ──
+    const filterSql = queryFilterToSql(input.query, METRIC_BUCKET_QUERYABLE_FIELDS);
 
-    const [data, total] = await Promise.all([
-      prisma.metricBucketLog.findMany({
-        where,
-        select,
-        orderBy,
-        ...(Number(input.limit) > 0 ? { take: Number(input.limit) } : {}),
-        skip: Number(input.offset),
-      }),
-      prisma.metricBucketLog.count({ where }),
-    ]);
+    const dir = input.sortDir === "asc" ? Prisma.sql`ASC` : Prisma.sql`DESC`;
+    const sortCol = input.sortBy ? METRIC_SEARCH_SORTABLE[input.sortBy] : undefined;
+    const orderSql = sortCol
+      ? Prisma.sql`${sortCol} ${dir}, g."entityName" ASC`
+      : Prisma.sql`g."startTime" DESC, g."entityName" ASC`;
+
+    const limit = Number(input.limit);
+    const limitSql = limit > 0 ? Prisma.sql`LIMIT ${limit}` : Prisma.empty;
+
+    const rows = await prisma.$queryRaw<MetricSearchRow[]>`
+      WITH ${Prisma.join(ctes, ", ")}
+      SELECT g.*, COUNT(*) OVER ()::int AS "totalCount"
+      FROM (${Prisma.join(groupSelects, " UNION ALL ")}) g
+      WHERE TRUE ${filterSql}
+      ORDER BY ${orderSql}
+      ${limitSql} OFFSET ${Number(input.offset)}
+    `;
+
+    const total = rows.length > 0 ? rows[0].totalCount : 0;
+    const data = rows.map((r) => ({
+      id: syntheticBucketId(r.entityType, r.entityId, r.jobId, "SHIFT", r.startTime),
+      entityType: r.entityType,
+      entityId: r.entityId,
+      entityName: r.entityName ?? "",
+      path: r.path ?? "",
+      granularity: "SHIFT" as const,
+      granularityName: r.granularityName ?? "",
+      startTime: r.startTime,
+      durationSeconds: r.durationSeconds ?? 0,
+      shiftInstanceId: r.shiftInstanceId,
+      businessDate: r.businessDate,
+      businessShift: r.businessShift,
+      currentJobName: r.currentJobName,
+      totalCycles: r.totalCycles,
+      goodCycles: r.goodCycles,
+      badCycles: r.badCycles,
+      totalItems: r.totalItems,
+      goodItems: r.goodItems,
+      badItems: r.badItems,
+      runSeconds: r.runSeconds,
+      downSeconds: r.downSeconds,
+      plannedDownSeconds: r.plannedDownSeconds,
+      unplannedDownSeconds: r.unplannedDownSeconds,
+      expectedCycles: r.expectedCycles,
+      expectedItems: r.expectedItems,
+      availability: r.availability,
+      performance: r.performance,
+      quality: r.quality,
+      oee: r.oee,
+    }));
 
     return { data, total };
   });
@@ -264,75 +397,176 @@ const hourlyBucketSearchInputSchema = z.object({
   shiftInstanceId: z.uuid().optional(),
 });
 
+/** Aggregate row shape shared by both hourlyBucketSearch paths. */
+type HourlyAggRow = {
+  entityId?: string;
+  entityName?: string | null;
+  granularityName: string | null;
+  startTime: Date;
+  durationSeconds: number;
+  shiftInstanceId: string | null;
+  businessDate: Date | null;
+  businessShift: string | null;
+  totalCycles: number;
+  badCycles: number;
+  goodCycles: number;
+  totalItems: number;
+  badItems: number;
+  goodItems: number;
+  expectedItems: number;
+  elapsedExpectedItems: number;
+  runSeconds: number;
+  idealCycleSeconds: number;
+  elapsedPlannedProductionSeconds: number;
+  availability: Prisma.Decimal | null;
+  performance: Prisma.Decimal | null;
+  quality: Prisma.Decimal | null;
+  oee: Prisma.Decimal | null;
+};
+
 export const hourlyBucketSearch = userOrDisplayRequired
   .input(hourlyBucketSearchInputSchema)
   .handler(async ({ input }) => {
-    const where: Record<string, unknown> = {
-      siteId: input.siteId,
-      granularity: "HOUR",
-    };
-
+    // Stage B: read station HOUR rows (live ∪ archived) and group per
+    // station-hour, so post-cutover per-job splits collapse back to one row.
+    // Workcenter rows are synthesized from the workcenter's stations.
+    const baseParts: Prisma.Sql[] = [Prisma.sql`mb."siteId" = ${input.siteId}::uuid`, STATION_HOUR_PREDICATE];
     if (input.shiftInstanceId) {
-      where.shiftInstanceId = input.shiftInstanceId;
+      baseParts.push(Prisma.sql`mb."shiftInstanceId" = ${input.shiftInstanceId}::uuid`);
+    }
+    if (input.startDate) baseParts.push(Prisma.sql`mb."businessDate" >= ${input.startDate}::date`);
+    if (input.endDate) baseParts.push(Prisma.sql`mb."businessDate" < ${input.endDate}::date + 1`);
+
+    if (!input.stationId && input.workCenterId) {
+      // ── Workcenter path: aggregate the workcenter's stations per hour ──
+      const [stations, workcenter] = await Promise.all([
+        prisma.station.findMany({
+          where: { siteId: input.siteId, workcenterId: input.workCenterId },
+          select: { id: true },
+        }),
+        prisma.workcenter.findUnique({
+          where: { id: input.workCenterId },
+          select: { name: true },
+        }),
+      ]);
+      const stationIds = stations.map((s) => s.id);
+      if (stationIds.length === 0) return { data: [] };
+      baseParts.push(Prisma.sql`mb."entityId" = ANY(${stationIds}::uuid[])`);
+
+      // Two-level grouping: durationSeconds is the hour window length (each
+      // station's rows sum to it), so the workcenter hour takes the MAX of the
+      // per-station sums instead of summing across stations.
+      const rows = await prisma.$queryRaw<HourlyAggRow[]>`
+        WITH src AS (${hourUnionSourceSql(Prisma.join(baseParts, " AND "))}),
+        per_station AS (
+          SELECT
+            s."entityId",
+            s."startTime",
+            MAX(s."granularityName") AS "granularityName",
+            MAX(s."shiftInstanceId"::text) AS "shiftInstanceId",
+            MAX(s."businessDate") AS "businessDate",
+            MAX(s."businessShift") AS "businessShift",
+            SUM(s."durationSeconds")::int AS "durationSeconds",
+            ${kpiSumsSql("s")}
+          FROM src s
+          GROUP BY s."entityId", s."startTime"
+        )
+        SELECT
+          ps."startTime",
+          MAX(ps."granularityName") AS "granularityName",
+          MAX(ps."shiftInstanceId")::uuid AS "shiftInstanceId",
+          MAX(ps."businessDate") AS "businessDate",
+          MAX(ps."businessShift") AS "businessShift",
+          MAX(ps."durationSeconds")::int AS "durationSeconds",
+          ${kpiSumsSql("ps")},
+          ${ratioSumsSql("ps")}
+        FROM per_station ps
+        GROUP BY ps."startTime"
+        ORDER BY ps."startTime" ASC
+      `;
+
+      const workCenterId = input.workCenterId;
+      return {
+        data: rows.map((r) => ({
+          id: syntheticBucketId("WORKCENTER", workCenterId, null, "HOUR", r.startTime),
+          entityId: workCenterId,
+          entityName: workcenter?.name ?? "",
+          granularityName: r.granularityName ?? "Hour",
+          startTime: r.startTime,
+          durationSeconds: r.durationSeconds,
+          shiftInstanceId: r.shiftInstanceId,
+          businessDate: r.businessDate,
+          businessShift: r.businessShift,
+          expectedItems: r.expectedItems,
+          elapsedExpectedItems: r.elapsedExpectedItems,
+          totalItems: r.totalItems,
+          badItems: r.badItems,
+          goodItems: r.goodItems,
+          availability: r.availability,
+          performance: r.performance,
+          quality: r.quality,
+          oee: r.oee,
+          runSeconds: r.runSeconds,
+          elapsedPlannedProductionSeconds: r.elapsedPlannedProductionSeconds,
+          idealCycleSeconds: r.idealCycleSeconds,
+          totalCycles: r.totalCycles,
+          goodCycles: r.goodCycles,
+          badCycles: r.badCycles,
+        })),
+      };
     }
 
+    // ── Station path: one row per station-hour ──
     if (input.stationId) {
-      where.entityType = "STATION";
-      where.entityId = input.stationId;
-    } else if (input.workCenterId) {
-      where.entityType = "WORKCENTER";
-      where.entityId = input.workCenterId;
-    } else {
-      where.entityType = "STATION";
+      baseParts.push(Prisma.sql`mb."entityId" = ${input.stationId}::uuid`);
     }
 
-    if (input.startDate || input.endDate) {
-      const dateFilter: Record<string, Date> = {};
-      if (input.startDate) dateFilter.gte = new Date(input.startDate);
-      if (input.endDate) {
-        const end = new Date(input.endDate);
-        end.setDate(end.getDate() + 1);
-        dateFilter.lt = end;
-      }
-      where.businessDate = dateFilter;
-    }
+    const rows = await prisma.$queryRaw<HourlyAggRow[]>`
+      WITH src AS (${hourUnionSourceSql(Prisma.join(baseParts, " AND "))})
+      SELECT
+        s."entityId",
+        MAX(s."entityName") AS "entityName",
+        MAX(s."granularityName") AS "granularityName",
+        s."startTime",
+        SUM(s."durationSeconds")::int AS "durationSeconds",
+        MAX(s."shiftInstanceId"::text)::uuid AS "shiftInstanceId",
+        MAX(s."businessDate") AS "businessDate",
+        MAX(s."businessShift") AS "businessShift",
+        ${kpiSumsSql("s")},
+        ${ratioSumsSql("s")}
+      FROM src s
+      GROUP BY s."entityId", s."startTime"
+      ORDER BY s."startTime" ASC, "entityName" ASC
+    `;
 
-    const select = {
-      id: true,
-      entityId: true,
-      entityName: true,
-      granularityName: true,
-      startTime: true,
-      durationSeconds: true,
-      shiftInstanceId: true,
-      businessDate: true,
-      businessShift: true,
-      expectedItems: true,
-      elapsedExpectedItems: true,
-      totalItems: true,
-      badItems: true,
-      goodItems: true,
-      availability: true,
-      performance: true,
-      quality: true,
-      oee: true,
-      // OEE components, so clients can roll up station subsets by summation.
-      runSeconds: true,
-      elapsedPlannedProductionSeconds: true,
-      idealCycleSeconds: true,
-      totalCycles: true,
-      goodCycles: true,
-      badCycles: true,
+    return {
+      data: rows.map((r) => ({
+        id: syntheticBucketId("STATION", r.entityId as string, null, "HOUR", r.startTime),
+        entityId: r.entityId as string,
+        entityName: r.entityName ?? "",
+        granularityName: r.granularityName ?? "Hour",
+        startTime: r.startTime,
+        durationSeconds: r.durationSeconds,
+        shiftInstanceId: r.shiftInstanceId,
+        businessDate: r.businessDate,
+        businessShift: r.businessShift,
+        expectedItems: r.expectedItems,
+        elapsedExpectedItems: r.elapsedExpectedItems,
+        totalItems: r.totalItems,
+        badItems: r.badItems,
+        goodItems: r.goodItems,
+        availability: r.availability,
+        performance: r.performance,
+        quality: r.quality,
+        oee: r.oee,
+        runSeconds: r.runSeconds,
+        elapsedPlannedProductionSeconds: r.elapsedPlannedProductionSeconds,
+        idealCycleSeconds: r.idealCycleSeconds,
+        totalCycles: r.totalCycles,
+        goodCycles: r.goodCycles,
+        badCycles: r.badCycles,
+      })),
     };
-
-    const orderBy = [{ startTime: "asc" as const }, { entityName: "asc" as const }];
-
-    // Try archived data first; fall back to live MetricBucket for current shifts
-    const archived = await prisma.metricBucketLog.findMany({ where, select, orderBy });
-    if (archived.length > 0) return { data: archived };
-
-    const live = await prisma.metricBucket.findMany({ where, select, orderBy });
-    return { data: live };
   });
 
 // ============================================================================
@@ -349,59 +583,104 @@ const stationShiftSummaryInputSchema = z.object({
 });
 
 export const stationShiftSummary = authRequired.input(stationShiftSummaryInputSchema).handler(async ({ input }) => {
-  const where = {
-    siteId: input.siteId,
-    granularity: "SHIFT" as const,
-    entityType: "STATION" as const,
-    entityId: input.stationId,
-    shiftInstanceId: input.shiftInstanceId,
+  // Stage B: the shift summary is aggregated from the station's HOUR rows for
+  // the shift (live ∪ archived) instead of reading the SHIFT-tier bucket.
+  const predicate = Prisma.sql`mb."siteId" = ${input.siteId}::uuid
+    AND ${STATION_HOUR_PREDICATE}
+    AND mb."entityId" = ${input.stationId}::uuid
+    AND mb."shiftInstanceId" = ${input.shiftInstanceId}::uuid`;
+
+  type SummaryRow = {
+    rowCount: number;
+    startTime: Date | null;
+    durationSeconds: number | null;
+    entityName: string | null;
+    businessDate: Date | null;
+    businessShift: string | null;
+    currentJobName: string | null;
+    currentStandardCycle: Prisma.Decimal | null;
+    expectedItems: number | null;
+    totalItems: number | null;
+    goodItems: number | null;
+    badItems: number | null;
+    expectedCycles: number | null;
+    totalCycles: number | null;
+    goodCycles: number | null;
+    badCycles: number | null;
+    runSeconds: number | null;
+    downSeconds: number | null;
+    plannedDownSeconds: number | null;
+    unplannedDownSeconds: number | null;
+    idealCycleSeconds: number | null;
+    elapsedPlannedProductionSeconds: number | null;
+    availability: Prisma.Decimal | null;
+    performance: Prisma.Decimal | null;
+    quality: Prisma.Decimal | null;
+    oee: Prisma.Decimal | null;
   };
 
-  const select = {
-    id: true,
-    entityType: true,
-    entityId: true,
-    entityName: true,
-    startTime: true,
-    durationSeconds: true,
-    businessDate: true,
-    businessShift: true,
-    currentJobName: true,
-    currentStandardCycle: true,
-    expectedItems: true,
-    totalItems: true,
-    goodItems: true,
-    badItems: true,
-    expectedCycles: true,
-    totalCycles: true,
-    goodCycles: true,
-    badCycles: true,
-    runSeconds: true,
-    downSeconds: true,
-    plannedDownSeconds: true,
-    unplannedDownSeconds: true,
-    idealCycleSeconds: true,
-    elapsedPlannedProductionSeconds: true,
-    availability: true,
-    performance: true,
-    quality: true,
-    oee: true,
+  const rows = await prisma.$queryRaw<SummaryRow[]>`
+    WITH src AS (${hourUnionSourceSql(predicate)})
+    SELECT
+      COUNT(*)::int AS "rowCount",
+      MIN(s."startTime") AS "startTime",
+      SUM(s."durationSeconds")::int AS "durationSeconds",
+      MAX(s."entityName") AS "entityName",
+      MAX(s."businessDate") AS "businessDate",
+      MAX(s."businessShift") AS "businessShift",
+      ${latestNonNullSql(Prisma.sql`s."currentJobName"`, Prisma.sql`s."startTime" DESC, s."updatedAt" DESC`)} AS "currentJobName",
+      ${latestNonNullSql(Prisma.sql`s."currentStandardCycle"`, Prisma.sql`s."startTime" DESC, s."updatedAt" DESC`)} AS "currentStandardCycle",
+      ${kpiSumsSql("s")},
+      ${ratioSumsSql("s")}
+    FROM src s
+  `;
+
+  const r = rows[0];
+  if (!r || r.rowCount === 0 || r.startTime === null) return { data: null };
+
+  return {
+    data: {
+      id: syntheticBucketId("STATION", input.stationId, null, "SHIFT", r.startTime),
+      entityType: "STATION" as const,
+      entityId: input.stationId,
+      entityName: r.entityName ?? "",
+      startTime: r.startTime,
+      durationSeconds: r.durationSeconds ?? 0,
+      businessDate: r.businessDate,
+      businessShift: r.businessShift,
+      currentJobName: r.currentJobName,
+      currentStandardCycle: r.currentStandardCycle,
+      expectedItems: r.expectedItems ?? 0,
+      totalItems: r.totalItems ?? 0,
+      goodItems: r.goodItems ?? 0,
+      badItems: r.badItems ?? 0,
+      expectedCycles: r.expectedCycles ?? 0,
+      totalCycles: r.totalCycles ?? 0,
+      goodCycles: r.goodCycles ?? 0,
+      badCycles: r.badCycles ?? 0,
+      runSeconds: r.runSeconds ?? 0,
+      downSeconds: r.downSeconds ?? 0,
+      plannedDownSeconds: r.plannedDownSeconds ?? 0,
+      unplannedDownSeconds: r.unplannedDownSeconds ?? 0,
+      idealCycleSeconds: r.idealCycleSeconds ?? 0,
+      elapsedPlannedProductionSeconds: r.elapsedPlannedProductionSeconds ?? 0,
+      availability: r.availability,
+      performance: r.performance,
+      quality: r.quality,
+      oee: r.oee,
+    },
   };
-
-  // Try archived first; fall back to live MetricBucket for current shifts
-  const archived = await prisma.metricBucketLog.findFirst({ where, select });
-  if (archived) return { data: archived };
-
-  const live = await prisma.metricBucket.findFirst({ where, select });
-  return { data: live ?? null };
 });
 
 // ============================================================================
-// Downtime Log search (shift-clamped, paginated)
+// Downtime Log search (stamped attribution, paginated)
 //
-// Each downtime entry is cross-joined with overlapping shift instances so a
-// single entry that spans two shifts produces two rows, each clamped to the
-// shift's time boundaries. Falls back to raw entries when no shifts exist.
+// Rows stamped at write time (shiftInstanceId/businessDate columns) already
+// lie within a single shift — they are attributed directly from the stamps.
+// Legacy rows with NULL stamps fall back to the in-memory shift clamp: each
+// entry is cross-joined with overlapping shift instances so a single entry
+// that spans two shifts produces two rows, each clamped to the shift's time
+// boundaries. Raw entries when no shifts exist.
 // ============================================================================
 
 const downtimeLogSearchInputSchema = z.object({
@@ -465,31 +744,6 @@ export const downtimeLogSearch = authRequired.input(downtimeLogSearchInputSchema
       })()
     : new Date("2100-01-01");
 
-  // Fetch shift instances overlapping the range
-  const shiftInstances = await prisma.shiftInstance.findMany({
-    where: {
-      OR: [
-        { siteId: input.siteId, workCenterId: null },
-        ...(input.workCenterId
-          ? [{ workCenterId: input.workCenterId }]
-          : [...new Set(stationWorkcenterMap.values())]
-              .filter((id): id is string => id != null)
-              .map((wcId) => ({ workCenterId: wcId }))),
-      ],
-      startTime: { lt: rangeEnd },
-      endTime: { gt: rangeStart },
-    },
-    select: {
-      id: true,
-      shiftName: true,
-      businessDate: true,
-      startTime: true,
-      endTime: true,
-      workCenterId: true,
-    },
-    orderBy: { startTime: "asc" },
-  });
-
   // Fetch overlapping DOWN entries (exclude open entries — they're still in progress)
   const downtimeWhere: Record<string, unknown> = {
     state: "DOWN",
@@ -504,6 +758,9 @@ export const downtimeLogSearch = authRequired.input(downtimeLogSearchInputSchema
     stationId: true,
     startTime: true,
     endTime: true,
+    shiftInstanceId: true,
+    shiftInstance: { select: { shiftName: true } },
+    businessDate: true,
     statusReasonId: true,
     statusReason: {
       select: {
@@ -524,6 +781,39 @@ export const downtimeLogSearch = authRequired.input(downtimeLogSearchInputSchema
     orderBy: { startTime: "asc" },
   });
 
+  // Stamped rows (write-time shift context) are attributed directly; only
+  // rows with NULL stamps (legacy, pre-split) need the clamp fallback.
+  const stampedEntries = entries.filter((e) => e.shiftInstanceId != null);
+  const legacyEntries = entries.filter((e) => e.shiftInstanceId == null);
+
+  // Fetch shift instances overlapping the range (clamp fallback only)
+  const shiftInstances =
+    legacyEntries.length === 0
+      ? []
+      : await prisma.shiftInstance.findMany({
+          where: {
+            OR: [
+              { siteId: input.siteId, workCenterId: null },
+              ...(input.workCenterId
+                ? [{ workCenterId: input.workCenterId }]
+                : [...new Set(stationWorkcenterMap.values())]
+                    .filter((id): id is string => id != null)
+                    .map((wcId) => ({ workCenterId: wcId }))),
+            ],
+            startTime: { lt: rangeEnd },
+            endTime: { gt: rangeStart },
+          },
+          select: {
+            id: true,
+            shiftName: true,
+            businessDate: true,
+            startTime: true,
+            endTime: true,
+            workCenterId: true,
+          },
+          orderBy: { startTime: "asc" },
+        });
+
   // Build result rows
   const rows: Array<{
     id: string;
@@ -542,8 +832,30 @@ export const downtimeLogSearch = authRequired.input(downtimeLogSearchInputSchema
     jobName: string | null;
   }> = [];
 
+  // Stamped rows: split at shift boundaries at write time, so the row lies
+  // within one shift — no clamping, attribution comes from the columns.
+  for (const entry of stampedEntries) {
+    if (!entry.endTime) continue;
+    rows.push({
+      id: entry.id,
+      stationId: entry.stationId,
+      stationName: entry.station.name,
+      shiftName: entry.shiftInstance?.shiftName ?? null,
+      businessDate: entry.businessDate,
+      startTime: entry.startTime,
+      endTime: entry.endTime,
+      durationSeconds: Math.round((entry.endTime.getTime() - entry.startTime.getTime()) / 1000),
+      statusReasonId: entry.statusReasonId,
+      statusReasonName: entry.statusReason?.name ?? null,
+      isPlannedDown: entry.statusReason?.isPlannedDown ?? null,
+      categoryName: entry.statusReason?.category?.name ?? null,
+      jobVersionId: entry.jobVersionId ?? null,
+      jobName: entry.jobVersion?.name ?? null,
+    });
+  }
+
   if (shiftInstances.length > 0) {
-    // Shift-clamped mode: cross-join entries with overlapping shifts
+    // Clamp fallback: cross-join legacy entries with overlapping shifts
     const shiftsByWc = new Map<string | null, typeof shiftInstances>();
     for (const si of shiftInstances) {
       const key = si.workCenterId;
@@ -551,7 +863,7 @@ export const downtimeLogSearch = authRequired.input(downtimeLogSearchInputSchema
       shiftsByWc.get(key)?.push(si);
     }
 
-    for (const entry of entries) {
+    for (const entry of legacyEntries) {
       if (!entry.endTime) continue;
       const entryEnd = entry.endTime;
       const wcId = entry.station.workcenterId;
@@ -585,7 +897,7 @@ export const downtimeLogSearch = authRequired.input(downtimeLogSearchInputSchema
     }
   } else {
     // No shifts configured — fall back to raw entries
-    for (const entry of entries) {
+    for (const entry of legacyEntries) {
       const durationSeconds = entry.endTime
         ? Math.round((entry.endTime.getTime() - entry.startTime.getTime()) / 1000)
         : null;
@@ -595,7 +907,7 @@ export const downtimeLogSearch = authRequired.input(downtimeLogSearchInputSchema
         stationId: entry.stationId,
         stationName: entry.station.name,
         shiftName: null,
-        businessDate: null,
+        businessDate: entry.businessDate,
         startTime: entry.startTime,
         endTime: entry.endTime,
         durationSeconds,
@@ -821,20 +1133,14 @@ const materialUsageSearchInputSchema = z.object({
 });
 
 export const materialUsageSearch = authRequired.input(materialUsageSearchInputSchema).handler(async ({ input }) => {
-  // Resolve station scope — always build workcenter map for shift lookup
+  // Station scope (workcenter filter only — site scoping happens in SQL)
   let stationIds: string[] | undefined;
-
-  const stationQuery = input.workCenterId
-    ? { siteId: input.siteId, workcenterId: input.workCenterId }
-    : { siteId: input.siteId };
-  const allStations = await prisma.station.findMany({
-    where: stationQuery,
-    select: { id: true, workcenterId: true },
-  });
-  const stationWorkcenterMap = new Map(allStations.map((s) => [s.id, s.workcenterId]));
-
   if (input.workCenterId) {
-    stationIds = allStations.map((s) => s.id);
+    const stations = await prisma.station.findMany({
+      where: { siteId: input.siteId, workcenterId: input.workCenterId },
+      select: { id: true },
+    });
+    stationIds = stations.map((s) => s.id);
     if (stationIds.length === 0) return { data: [], total: 0 };
   }
 
@@ -848,141 +1154,66 @@ export const materialUsageSearch = authRequired.input(materialUsageSearchInputSc
       })()
     : new Date("2100-01-01");
 
-  // Fetch InventoryItems with material versions, cycle/job, and product
-  const cycleWhere: Record<string, unknown> = {
-    siteId: input.siteId,
-    deletedAt: null,
-    end: { gte: rangeStart, lt: rangeEnd },
+  // One SQL aggregation grouped by IDs (job/product/material parents), never
+  // by snapshotted name strings — re-versions must not split rows and name
+  // collisions must not merge them. Shift/date attribution comes from the
+  // stamped context columns (item first, cycle fallback); rows predating the
+  // backfill fall back to the UTC calendar date with a NULL shift. Labels
+  // resolve through parent → currentVersion, snapshot as last resort.
+  const jobKey = input.groupByJob ? Prisma.sql`COALESCE(ii."jobId", c."jobId")` : Prisma.sql`NULL::uuid`;
+  const jobLabel = input.groupByJob ? Prisma.sql`MAX(COALESCE(jbv."name", jvs."name"))` : Prisma.sql`NULL`;
+  const partKey = input.groupByPart ? Prisma.sql`COALESCE(ii."productId"::text, pvs."name", '*')` : Prisma.sql`'*'`;
+  const partLabel = input.groupByPart ? Prisma.sql`MAX(COALESCE(pcv."name", pvs."name", '—'))` : Prisma.sql`NULL`;
+  const stationFilter = stationIds ? Prisma.sql`AND c."stationId" = ANY(${stationIds}::uuid[])` : Prisma.empty;
+
+  type UsageAggRow = {
+    businessDate: string | null;
+    shiftName: string | null;
+    jobName: string | null;
+    partName: string | null;
+    materialName: string;
+    weightUnits: string | null;
+    totalWeight: number;
+    itemCount: number;
   };
-  if (stationIds) {
-    cycleWhere.stationId = stationIds.length === 1 ? stationIds[0] : { in: stationIds };
-  }
 
-  const items = await prisma.inventoryItem.findMany({
-    where: {
-      deletedAt: null,
-      cycle: cycleWhere,
-      productMaterialVersions: { some: {} }, // only items that have materials
-    },
-    select: {
-      id: true,
-      cycle: {
-        select: {
-          end: true,
-          start: true,
-          stationId: true,
-          jobVersion: { select: { name: true } },
-        },
-      },
-      productVersion: { select: { name: true } },
-      productMaterialVersions: {
-        select: {
-          weight: true,
-          weightUnits: true,
-          materialVersion: { select: { name: true } },
-        },
-      },
-    },
-  });
+  const aggRows = await prisma.$queryRaw<UsageAggRow[]>`
+    SELECT
+      COALESCE(
+        to_char(COALESCE(ii."businessDate", c."businessDate"), 'YYYY-MM-DD'),
+        to_char((COALESCE(c."end", c.start) AT TIME ZONE 'UTC'), 'YYYY-MM-DD')
+      )                                            AS "businessDate",
+      MAX(si."shiftName")                          AS "shiftName",
+      ${jobLabel}                                  AS "jobName",
+      ${partLabel}                                 AS "partName",
+      MAX(COALESCE(mcv."name", mv."name", '—'))    AS "materialName",
+      pmv."weightUnits"::text                      AS "weightUnits",
+      ROUND(SUM(COALESCE(pmv."weight", 0))::numeric, 2)::float8 AS "totalWeight",
+      COUNT(*)::int                                AS "itemCount"
+    FROM "InventoryItem" ii
+    JOIN "Cycle" c ON c.id = ii."cycleId"
+    JOIN "_InventoryItemToProductMaterialVersion" l ON l."A" = ii.id
+    JOIN "ProductMaterialVersion" pmv ON pmv.id = l."B"
+    JOIN "MaterialVersion" mv ON mv.id = pmv."materialVersionId"
+    LEFT JOIN "Material" mat ON mat.id = mv."materialId"
+    LEFT JOIN "MaterialVersion" mcv ON mcv.id = mat."currentVersionId"
+    LEFT JOIN "ShiftInstance" si ON si.id = COALESCE(ii."shiftInstanceId", c."shiftInstanceId")
+    LEFT JOIN "Job" jb ON jb.id = COALESCE(ii."jobId", c."jobId") AND ${input.groupByJob ?? false}
+    LEFT JOIN "JobVersion" jbv ON jbv.id = jb."currentVersionId"
+    LEFT JOIN "JobVersion" jvs ON jvs.id = c."jobVersionId" AND ${input.groupByJob ?? false}
+    LEFT JOIN "ProductVersion" pvs ON pvs.id = ii."productVersionId" AND ${input.groupByPart ?? false}
+    LEFT JOIN "Product" p ON p.id = ii."productId" AND ${input.groupByPart ?? false}
+    LEFT JOIN "ProductVersion" pcv ON pcv.id = p."currentVersionId"
+    WHERE c."siteId" = ${input.siteId}::uuid
+      AND c."deletedAt" IS NULL
+      AND ii."deletedAt" IS NULL
+      AND c."end" >= ${rangeStart} AND c."end" < ${rangeEnd}
+      ${stationFilter}
+    GROUP BY 1, COALESCE(ii."shiftInstanceId", c."shiftInstanceId"), ${jobKey}, ${partKey},
+      mv."materialId", pmv."weightUnits"
+  `;
 
-  // Fetch shift instances overlapping the range for shift/date attribution
-  const siWhere: Record<string, unknown> = {
-    startTime: { lt: rangeEnd },
-    endTime: { gt: rangeStart },
-  };
-  if (input.workCenterId) {
-    siWhere.OR = [{ siteId: input.siteId, workCenterId: null }, { workCenterId: input.workCenterId }];
-  } else {
-    siWhere.siteId = input.siteId;
-  }
-
-  const shiftInstances = await prisma.shiftInstance.findMany({
-    where: siWhere,
-    select: {
-      shiftName: true,
-      businessDate: true,
-      startTime: true,
-      endTime: true,
-      workCenterId: true,
-    },
-    orderBy: { startTime: "asc" },
-  });
-
-  // Group shifts by workcenter for efficient lookup
-  const shiftsByWc = new Map<string | null, typeof shiftInstances>();
-  for (const si of shiftInstances) {
-    const key = si.workCenterId;
-    if (!shiftsByWc.has(key)) shiftsByWc.set(key, []);
-    shiftsByWc.get(key)?.push(si);
-  }
-
-  // Find the shift covering a given timestamp for a given station
-  function findShift(timestamp: Date, stationId: string) {
-    const wcId = stationWorkcenterMap.get(stationId) ?? null;
-    const shifts = shiftsByWc.get(wcId) ?? shiftsByWc.get(null) ?? [];
-    for (const si of shifts) {
-      if (timestamp >= si.startTime && timestamp < si.endTime) {
-        return si;
-      }
-    }
-    return null;
-  }
-
-  // Build raw material-usage rows and aggregate
-  const aggMap = new Map<
-    string,
-    {
-      businessDate: string | null;
-      shiftName: string | null;
-      jobName: string | null;
-      partName: string | null;
-      materialName: string;
-      weightUnits: string | null;
-      totalWeight: number;
-      itemCount: number;
-    }
-  >();
-
-  for (const item of items) {
-    const cycleTime = item.cycle.end ?? item.cycle.start;
-    const shift = findShift(cycleTime, item.cycle.stationId);
-    const businessDate = shift?.businessDate
-      ? shift.businessDate.toISOString().slice(0, 10)
-      : cycleTime.toISOString().slice(0, 10);
-    const shiftName = shift?.shiftName ?? null;
-    const jobName = input.groupByJob ? item.cycle.jobVersion.name : null;
-    const partName = input.groupByPart ? (item.productVersion.name ?? "—") : null;
-
-    for (const pmb of item.productMaterialVersions) {
-      const materialName = pmb.materialVersion.name ?? "—";
-      const weightUnits = pmb.weightUnits ?? null;
-      const weight = pmb.weight ? Number(pmb.weight) : 0;
-
-      const key = `${businessDate}::${shiftName}::${jobName ?? "*"}::${partName ?? "*"}::${materialName}::${weightUnits}`;
-
-      if (!aggMap.has(key)) {
-        aggMap.set(key, {
-          businessDate,
-          shiftName,
-          jobName,
-          partName,
-          materialName,
-          weightUnits,
-          totalWeight: 0,
-          itemCount: 0,
-        });
-      }
-      const entry = aggMap.get(key);
-      if (!entry) continue;
-      entry.totalWeight += weight;
-      entry.itemCount += 1;
-    }
-  }
-
-  let rows = Array.from(aggMap.values()).map((r) => ({
-    ...r,
-    totalWeight: Math.round(r.totalWeight * 100) / 100,
-  }));
+  let rows: UsageAggRow[] = aggRows;
 
   // Dynamic query builder filters (in-memory)
   if (input.query) {
@@ -1144,18 +1375,24 @@ export const cycleSearch = authRequired.input(cycleSearchInputSchema).handler(as
           WHEN c."end" IS NULL THEN NULL
           ELSE EXTRACT(EPOCH FROM (c."end" - c.start))::int
         END                AS "actualCycleSeconds",
-        COALESCE(si_wc."shiftName", si_site."shiftName") AS "shiftName",
+        COALESCE(si_stamped."shiftName", si_wc."shiftName", si_site."shiftName") AS "shiftName",
         COALESCE(
+          to_char(c."businessDate", 'YYYY-MM-DD'),
           to_char(si_wc."businessDate", 'YYYY-MM-DD'),
           to_char(si_site."businessDate", 'YYYY-MM-DD')
         )                  AS "businessDate"
       FROM "Cycle" c
       JOIN "Station" s ON s.id = c."stationId"
       JOIN "JobVersion" jb ON jb.id = c."jobVersionId"
+      -- Stamped attribution (write-time context). The LATERAL overlap joins
+      -- below run only for legacy rows with no stamp; drop them once the
+      -- backfill has landed everywhere.
+      LEFT JOIN "ShiftInstance" si_stamped ON si_stamped.id = c."shiftInstanceId"
       LEFT JOIN LATERAL (
         SELECT si."shiftName", si."businessDate"
         FROM "ShiftInstance" si
-        WHERE si."workCenterId" = s."workcenterId"
+        WHERE c."shiftInstanceId" IS NULL
+          AND si."workCenterId" = s."workcenterId"
           AND si."startTime" <= c.start
           AND si."endTime"   >  c.start
         ORDER BY si."startTime" DESC
@@ -1164,7 +1401,8 @@ export const cycleSearch = authRequired.input(cycleSearchInputSchema).handler(as
       LEFT JOIN LATERAL (
         SELECT si."shiftName", si."businessDate"
         FROM "ShiftInstance" si
-        WHERE si."siteId" = c."siteId"
+        WHERE c."shiftInstanceId" IS NULL
+          AND si."siteId" = c."siteId"
           AND si."workCenterId" IS NULL
           AND si."startTime" <= c.start
           AND si."endTime"   >  c.start
@@ -1536,8 +1774,11 @@ export const partLogSearch = authRequired.input(partLogSearchInputSchema).handle
   }
 
   const aggMap = new Map<string, Agg>();
-  const keyOf = (businessDate: string | null, shiftName: string | null, stationId: string, partName: string) =>
-    `${businessDate ?? "*"}::${shiftName ?? "*"}::${stationId}::${partName}`;
+  // Group by the product PARENT id, not the snapshotted name: re-versions
+  // must not split rows and two products sharing a name must not merge.
+  // Legacy rows without a stamped productId key on the snapshot name.
+  const keyOf = (businessDate: string | null, shiftName: string | null, stationId: string, productKey: string) =>
+    `${businessDate ?? "*"}::${shiftName ?? "*"}::${stationId}::${productKey}`;
 
   // Pass 1 — Items (production)
   const items = await prisma.inventoryItem.findMany({
@@ -1551,24 +1792,44 @@ export const partLogSearch = authRequired.input(partLogSearchInputSchema).handle
       },
     },
     select: {
-      cycle: { select: { end: true, start: true, stationId: true } },
+      productId: true,
+      cycle: {
+        select: {
+          end: true,
+          start: true,
+          stationId: true,
+          businessDate: true,
+          shiftInstance: { select: { shiftName: true, businessDate: true } },
+        },
+      },
       productVersion: { select: { name: true, sku: true } },
+      product: { select: { currentVersion: { select: { name: true, sku: true } } } },
     },
   });
 
   for (const item of items) {
     const stationId = item.cycle.stationId;
     const ts = item.cycle.end ?? item.cycle.start;
-    const shift = findShift(ts, stationId);
-    const businessDate = shift?.businessDate
-      ? shift.businessDate.toISOString().slice(0, 10)
-      : ts.toISOString().slice(0, 10);
-    const shiftName = shift?.shiftName ?? null;
-    const partName = item.productVersion?.name ?? "\u2014";
-    const partSku = item.productVersion?.sku ?? null;
+    // Prefer the cycle's stamped context; overlap lookup only for legacy rows.
+    let businessDate: string | null;
+    let shiftName: string | null;
+    if (item.cycle.shiftInstance) {
+      businessDate = (item.cycle.businessDate ?? item.cycle.shiftInstance.businessDate).toISOString().slice(0, 10);
+      shiftName = item.cycle.shiftInstance.shiftName ?? null;
+    } else {
+      const shift = findShift(ts, stationId);
+      businessDate = shift?.businessDate
+        ? shift.businessDate.toISOString().slice(0, 10)
+        : ts.toISOString().slice(0, 10);
+      shiftName = shift?.shiftName ?? null;
+    }
+    // Label from the current version (stable across re-versions); snapshot
+    // name only for legacy rows with no stamped parent.
+    const partName = item.product?.currentVersion?.name ?? item.productVersion?.name ?? "\u2014";
+    const partSku = item.product?.currentVersion?.sku ?? item.productVersion?.sku ?? null;
     const stationName = stationNameMap.get(stationId) ?? "";
 
-    const key = keyOf(businessDate, shiftName, stationId, partName);
+    const key = keyOf(businessDate, shiftName, stationId, item.productId ?? partName);
     let entry = aggMap.get(key);
     if (!entry) {
       entry = {
@@ -1594,38 +1855,49 @@ export const partLogSearch = authRequired.input(partLogSearchInputSchema).handle
     where: {
       siteId: input.siteId,
       deletedAt: null,
-      createdAt: { gte: rangeStart, lt: rangeEnd },
+      // Event time (occurredAt) wins; createdAt only for pre-backfill rows.
+      OR: [
+        { occurredAt: { gte: rangeStart, lt: rangeEnd } },
+        { occurredAt: null, createdAt: { gte: rangeStart, lt: rangeEnd } },
+      ],
       stationId: stationIds.length === 1 ? stationIds[0] : { in: stationIds },
     },
     select: {
       stationId: true,
       createdAt: true,
+      occurredAt: true,
+      businessDate: true,
+      productId: true,
       quantity: true,
       productVersion: { select: { name: true, sku: true } },
+      product: { select: { currentVersion: { select: { name: true, sku: true } } } },
       shiftInstance: { select: { shiftName: true, businessDate: true } },
     },
   });
 
   for (const d of dispositions) {
     const stationId = d.stationId;
-    // Prefer the log's own shiftInstance; fall back to overlap lookup if absent.
+    const at = d.occurredAt ?? d.createdAt;
+    // Stamped businessDate wins; shiftInstance join, then overlap lookup.
     let businessDate: string | null;
     let shiftName: string | null;
     if (d.shiftInstance) {
-      businessDate = d.shiftInstance.businessDate.toISOString().slice(0, 10);
+      businessDate = (d.businessDate ?? d.shiftInstance.businessDate).toISOString().slice(0, 10);
       shiftName = d.shiftInstance.shiftName ?? null;
     } else {
-      const shift = findShift(d.createdAt, stationId);
-      businessDate = shift?.businessDate
-        ? shift.businessDate.toISOString().slice(0, 10)
-        : d.createdAt.toISOString().slice(0, 10);
+      const shift = findShift(at, stationId);
+      businessDate = d.businessDate
+        ? d.businessDate.toISOString().slice(0, 10)
+        : shift?.businessDate
+          ? shift.businessDate.toISOString().slice(0, 10)
+          : at.toISOString().slice(0, 10);
       shiftName = shift?.shiftName ?? null;
     }
-    const partName = d.productVersion?.name ?? "\u2014";
-    const partSku = d.productVersion?.sku ?? null;
+    const partName = d.product?.currentVersion?.name ?? d.productVersion?.name ?? "\u2014";
+    const partSku = d.product?.currentVersion?.sku ?? d.productVersion?.sku ?? null;
     const stationName = stationNameMap.get(stationId) ?? "";
 
-    const key = keyOf(businessDate, shiftName, stationId, partName);
+    const key = keyOf(businessDate, shiftName, stationId, d.productId ?? partName);
     let entry = aggMap.get(key);
     if (!entry) {
       entry = {

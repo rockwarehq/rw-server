@@ -19,6 +19,7 @@ import * as disposition from "./disposition.js";
 import * as pointValue from "./point-value.js";
 import * as shiftRecap from "./shift-recap.js";
 import * as logs from "./logs.js";
+import * as reports from "./reports.js";
 import * as historian from "./historian.js";
 import * as employee from "./employee.js";
 import * as employeeRole from "./employee-role.js";
@@ -140,8 +141,6 @@ export const router = {
     },
   },
   metrics: {
-    stream: metrics.stream,
-    streamValues: metrics.streamValues,
     getBuckets: metrics.getBuckets,
     getShiftValues: metrics.getShiftValues,
   },
@@ -415,6 +414,10 @@ export const router = {
     cycleSearch: logs.cycleSearch,
     logonSearch: logs.logonLogSearch,
     partLogSearch: logs.partLogSearch,
+  },
+  reports: {
+    query: reports.query,
+    queryBatch: reports.queryBatch,
   },
   historian: {
     query: historian.query,

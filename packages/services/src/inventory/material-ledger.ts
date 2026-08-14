@@ -1,5 +1,6 @@
 import prisma from "@rw/db";
 import { Prisma, type MaterialLedgerKind, type WeightUnit } from "@rw/db";
+import { getLocalCalendarDate } from "@rw/services/metrics/bucket";
 
 export interface CreateLedgerEntryInput {
   siteId: string;
@@ -43,7 +44,8 @@ export async function create(input: CreateLedgerEntryInput) {
       id: true,
       siteId: true,
       deletedAt: true,
-      currentVersion: { select: { weightUnits: true } },
+      currentVersion: { select: { id: true, weightUnits: true } },
+      site: { select: { timezone: true } },
     },
   });
 
@@ -83,6 +85,18 @@ export async function create(input: CreateLedgerEntryInput) {
     return { error: `${input.kind} quantity must be positive`, code: "INVALID_SIGN" };
   }
 
+  // Conformed context: site-timezone local calendar date of now. Resolution
+  // failure never fails the entry — stamp NULL and repair later.
+  let businessDate: Date | null = null;
+  try {
+    businessDate = getLocalCalendarDate(new Date(), material.site.timezone);
+  } catch (err) {
+    console.warn(
+      `[material-ledger] businessDate resolution failed for material ${input.materialId}; stamping NULL:`,
+      err,
+    );
+  }
+
   const entry = await prisma.materialLedgerEntry.create({
     data: {
       siteId: input.siteId,
@@ -94,6 +108,10 @@ export async function create(input: CreateLedgerEntryInput) {
       reference: input.reference ?? null,
       note: input.note ?? null,
       performedByUserId: input.performedByUserId ?? null,
+      // Snapshot: freezes the version whose canonical unit validated this
+      // entry — the basis otherwise silently changes on re-version.
+      materialVersionId: material.currentVersion?.id ?? null,
+      businessDate,
     },
     include: ledgerInclude,
   });

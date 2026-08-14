@@ -7,12 +7,29 @@ station -> workcenter -> site entity hierarchy, with per-job breakdowns.
 > **Field semantics:** ADR 0006 (`apps/docs` → Internal → ADRs) is the
 > definition of record for every KPI field and the OEE formulas.
 >
-> **Live pipeline note:** the per-cycle hot path now only does an atomic
-> HOUR count increment (`incrementHourCounts` in `cascade.ts`, called
-> from `cycle.ts`); durations, JOB buckets, and all rollups run on the
-> 5s combined tick (`batcher.ts` → `cascade.ts`). The `recalc.ts` entry
-> points described below remain live for state transitions, disposition
-> increments, and job-change / replay recalcs.
+> **Live pipeline note (Stage D — transition-driven writes):** there is
+> no periodic writer. Persisted STATION-family HOUR rows are written by:
+>
+> * the per-cycle atomic count increment (`incrementHourCounts` in
+>   `cascade.ts`, called from `cycle.ts`);
+> * the `recalc.ts` entry points fired by transitions — state changes,
+>   downtime-reason assignment, disposition increments, job-change /
+>   replay recalcs — each of which re-runs the base writer
+>   (`writeStationHourBuckets`) for the affected hours;
+> * the **hour close** (`queues/hour-close.ts`): a deterministic delayed
+>   BullMQ job per station fires at each hour bucket's own end
+>   (`startTime + durationSeconds` — shift-anchored, variable-width,
+>   never clock-hour math), re-runs the base writer with the evaluation
+>   clock pinned to that end, and stamps `closedAt`. A 60s fallback
+>   sweep in the ensure tick closes any open row whose end passed >90s
+>   ago.
+>
+> Between transitions the OPEN hour's duration/elapsed/expected columns
+> in the DB are stale **by design**: reads overlay them live
+> (`read.ts openHourOverlaySql`, sharing the writer's clipping CTEs via
+> `cascade.ts stationHourSliceCtes`), and the shift publisher
+> (`shift-publisher.ts`, the only remaining ~5s interval) computes the
+> open hour in memory at publish time — it publishes but never writes.
 
 ## Architecture Overview
 
@@ -272,17 +289,31 @@ site.abc.workcenter.def.station.ghi.HOUR.1773243000.availability -> 1.0
 
 ### metric-bucket-ensure (every 60s)
 
-In `src/queues/background-workers.ts`. Two jobs:
+In `src/queues/background-workers.ts`:
 
-1. **Safety-net bucket scaffolding:** Finds all distinct entities with
-   existing MetricBucket rows, calls `ensureBuckets()` for each at `now`.
-   Catches missed shift-boundary jobs.
+1. **Safety-net bucket scaffolding:** materializes shift instances,
+   reconciles missing `StationJobLog` rows, and calls `ensureBuckets()`
+   for every station at `now`. Catches missed shift-boundary jobs and
+   re-arms each station's hour-close job.
 
-2. **Stale duration recalc:** Finds stations with open `StationStateLog`
-   entries (no `endTime`, `updatedAt` > 30s ago), calls `updateTimeBased()`
-   for each. This keeps `runSeconds`, `downSeconds`, and all elapsed
-   fields (`elapsedPlannedProductionSeconds`, `elapsedExpectedCycles`,
-   `elapsedExpectedItems`) fresh for live dashboards.
+2. **Fallback hour-close sweep:** `sweepOverdueHourCloses()` finalizes
+   any open STATION HOUR row (`closedAt IS NULL`, partial index) whose
+   end passed more than 90s ago — the safety net for lost hour-close
+   BullMQ jobs.
+
+Live-dashboard freshness does NOT come from this tick: open-hour
+duration KPIs are computed at read/publish time (see the pipeline note
+at the top).
+
+### station-hour-close (deterministic delayed job per station)
+
+In `src/queues/hour-close.ts`. One delayed BullMQ job per station
+(jobId `hour-close-{stationId}`) fires at the current hour bucket's own
+end: base-writer recompute with the clock pinned to that end (counts
+recomputed from `Cycle` — self-heals increment drift), `closedAt`
+stamp, next-hour `ensureBuckets()`, then re-arm for the next hour.
+Armed by every `ensureBuckets()` call for the hour containing its
+timestamp.
 
 ### shift-bucket-create (self-perpetuating delayed job)
 

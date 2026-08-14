@@ -49,6 +49,8 @@ export interface ShiftWindow {
   durationSeconds: number;
   /** ID of the ShiftInstance row this window was resolved from. */
   shiftInstanceId: string;
+  /** Pre-computed business date from the ShiftInstance row. */
+  businessDate: Date;
 }
 
 export interface HourBucket {
@@ -131,8 +133,10 @@ async function queryShiftForEntity(
   //    When overlapping assignments exist, the one with the latest
   //    rotationStartDate wins (most recently effective schedule).
   if (workCenterId) {
-    const wcRows = await prisma.$queryRaw<Array<{ id: string; shiftName: string; startTime: Date; endTime: Date }>>`
-      SELECT si."id", si."shiftName", si."startTime", si."endTime"
+    const wcRows = await prisma.$queryRaw<
+      Array<{ id: string; shiftName: string; startTime: Date; endTime: Date; businessDate: Date }>
+    >`
+      SELECT si."id", si."shiftName", si."startTime", si."endTime", si."businessDate"
       FROM "ShiftInstance" si
       JOIN "ShiftAssignment" sa ON sa."id" = si."assignmentId"
       WHERE si."workCenterId" = ${workCenterId}::uuid
@@ -148,13 +152,16 @@ async function queryShiftForEntity(
         startTime: wcInstance.startTime,
         durationSeconds: (wcInstance.endTime.getTime() - wcInstance.startTime.getTime()) / 1000,
         shiftInstanceId: wcInstance.id,
+        businessDate: wcInstance.businessDate,
       };
     }
   }
 
   // 2. Fall back to site-level ShiftInstance
-  const siteRows = await prisma.$queryRaw<Array<{ id: string; shiftName: string; startTime: Date; endTime: Date }>>`
-    SELECT si."id", si."shiftName", si."startTime", si."endTime"
+  const siteRows = await prisma.$queryRaw<
+    Array<{ id: string; shiftName: string; startTime: Date; endTime: Date; businessDate: Date }>
+  >`
+    SELECT si."id", si."shiftName", si."startTime", si."endTime", si."businessDate"
     FROM "ShiftInstance" si
     JOIN "ShiftAssignment" sa ON sa."id" = si."assignmentId"
     WHERE si."siteId" = ${siteId}::uuid
@@ -172,6 +179,7 @@ async function queryShiftForEntity(
       startTime: siteInstance.startTime,
       durationSeconds: (siteInstance.endTime.getTime() - siteInstance.startTime.getTime()) / 1000,
       shiftInstanceId: siteInstance.id,
+      businessDate: siteInstance.businessDate,
     };
   }
 
@@ -199,10 +207,10 @@ export async function getShiftInstancesForRange(
   // startTime, DISTINCT ON + rotationStartDate DESC keeps only the newest.
   if (workCenterId) {
     const wcInstances = await prisma.$queryRaw<
-      Array<{ id: string; shiftName: string; startTime: Date; endTime: Date }>
+      Array<{ id: string; shiftName: string; startTime: Date; endTime: Date; businessDate: Date }>
     >`
       SELECT DISTINCT ON (si."startTime")
-        si."id", si."shiftName", si."startTime", si."endTime"
+        si."id", si."shiftName", si."startTime", si."endTime", si."businessDate"
       FROM "ShiftInstance" si
       JOIN "ShiftAssignment" sa ON sa."id" = si."assignmentId"
       WHERE si."workCenterId" = ${workCenterId}::uuid
@@ -216,14 +224,17 @@ export async function getShiftInstancesForRange(
         startTime: i.startTime,
         durationSeconds: (i.endTime.getTime() - i.startTime.getTime()) / 1000,
         shiftInstanceId: i.id,
+        businessDate: i.businessDate,
       }));
     }
   }
 
   // Fall back to site-level
-  const instances = await prisma.$queryRaw<Array<{ id: string; shiftName: string; startTime: Date; endTime: Date }>>`
+  const instances = await prisma.$queryRaw<
+    Array<{ id: string; shiftName: string; startTime: Date; endTime: Date; businessDate: Date }>
+  >`
     SELECT DISTINCT ON (si."startTime")
-      si."id", si."shiftName", si."startTime", si."endTime"
+      si."id", si."shiftName", si."startTime", si."endTime", si."businessDate"
     FROM "ShiftInstance" si
     JOIN "ShiftAssignment" sa ON sa."id" = si."assignmentId"
     WHERE si."siteId" = ${siteId}::uuid
@@ -238,6 +249,7 @@ export async function getShiftInstancesForRange(
     startTime: i.startTime,
     durationSeconds: (i.endTime.getTime() - i.startTime.getTime()) / 1000,
     shiftInstanceId: i.id,
+    businessDate: i.businessDate,
   }));
 }
 
@@ -537,8 +549,11 @@ export function resolveClockHourBucket(timestamp: Date, timezone: string): HourB
 
 /**
  * Resolve the workcenterId for an entity (for shift instance lookup).
- * Returns null for SITE and JOB entities, the entityId itself for
- * WORKCENTER, and queries the station's workcenterId for STATION.
+ * Returns null for SITE entities, the entityId itself for WORKCENTER,
+ * and queries the station's workcenterId for STATION and JOB (JOB
+ * buckets are per-station — their entityId IS a station id, so they
+ * follow the station's workcenter shift schedule rather than the
+ * site-level one).
  */
 async function resolveWorkcenterId(
   entityType: EntityType,
@@ -546,7 +561,7 @@ async function resolveWorkcenterId(
   ctx?: MetricsContext,
 ): Promise<string | null> {
   if (entityType === "WORKCENTER") return entityId;
-  if (entityType === "STATION") {
+  if (entityType === "STATION" || entityType === "JOB") {
     // Layer 1: per-pipeline cache
     if (ctx) {
       const cached = ctx.getWorkCenterIdCached(entityType, entityId);

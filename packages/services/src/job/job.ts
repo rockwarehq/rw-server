@@ -2,6 +2,13 @@ import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
+import {
+  acquireStationLock,
+  publishStationCurrentJobMetric,
+  publishStationStandardCycleMetric,
+  splitOpenStateEntryForJobChange,
+} from "../facility/station/state.js";
+import { recalcAll } from "../metrics/recalc.js";
 
 // ============================================================================
 // Types - Job
@@ -62,6 +69,131 @@ export interface UpdateItemInput {
   toolId?: string | null;
   toolCavityId?: string | null;
   quantity?: number;
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/**
+ * Total items produced per cycle for a job: the sum of active JobProduct
+ * quantities via each product's current version (mirrors the products CTE
+ * in cycle.ts). Clamps to a minimum of 1.
+ */
+export async function getJobItemsPerCycle(
+  client: Prisma.TransactionClient | typeof prisma,
+  jobId: string,
+): Promise<number> {
+  const rows = await client.$queryRaw<Array<{ total: number }>>`
+    SELECT COALESCE(SUM(jpb.quantity), 0)::int AS total
+    FROM "JobProduct" jp
+    JOIN "JobProductVersion" jpb ON jpb.id = jp."currentVersionId"
+    WHERE jp."jobId" = ${jobId}
+      AND jp."deletedAt" IS NULL
+      AND jpb."isActive" = true
+  `;
+
+  const total = rows[0]?.total ?? 0;
+  return total > 0 ? total : 1;
+}
+
+interface ReversionBoundaryStation {
+  stationId: string;
+  siteId: string;
+  /** A fresh StationJobLog was opened under the new version. */
+  reopened: boolean;
+  closedLogs: Array<{ id: string; startTime: Date }>;
+}
+
+interface ReversionBoundary {
+  timestamp: Date;
+  jobName: string;
+  standardCycleSeconds: number | null;
+  stations: ReversionBoundaryStation[];
+}
+
+/**
+ * Treat a job re-version like a job-change boundary on every station
+ * currently running the job (mirrors facility/station/actions/jobchange.ts):
+ * close the open StationJobLog, reopen it under the new version with freshly
+ * snapshotted standardCycle/itemsPerCycle, and split the open state entry so
+ * state-log rows stay job-version-homogeneous. Without this, JOB buckets
+ * keep the old version's standardCycle while STATION buckets pick up the
+ * new one, desyncing their KPIs.
+ *
+ * Must run inside the same transaction that swaps currentVersionId so both
+ * switch atomically. Caller-side effects (recalcAll, live metric publishes)
+ * fire after commit from the returned boundary info.
+ */
+async function applyReversionBoundary(
+  tx: Prisma.TransactionClient,
+  jobId: string,
+  version: { id: string; name: string; standardCycle: Prisma.Decimal | null },
+): Promise<ReversionBoundary | null> {
+  // Stations assigned to this job, plus any station with an orphaned open
+  // log for it (defensive: stale currentJobId). Deterministic order so
+  // concurrent updates acquire station locks in the same sequence.
+  const stations = await tx.station.findMany({
+    where: {
+      OR: [{ currentJobId: jobId }, { jobLogs: { some: { jobId, endTime: null } } }],
+    },
+    select: { id: true, siteId: true, currentJobId: true },
+    orderBy: { id: "asc" },
+  });
+
+  if (stations.length === 0) {
+    return null;
+  }
+
+  const timestamp = new Date();
+  const itemsPerCycle = await getJobItemsPerCycle(tx, jobId);
+  const results: ReversionBoundaryStation[] = [];
+
+  for (const station of stations) {
+    // Serialize with cycle completions / state transitions for this station.
+    await acquireStationLock(tx, station.id);
+
+    // Close only this job's open logs — another job's open log on an
+    // orphaned station must not be touched by this job's re-version.
+    const closedLogs = await tx.stationJobLog.findMany({
+      where: { stationId: station.id, jobId, endTime: null },
+      select: { id: true, startTime: true },
+    });
+
+    if (closedLogs.length > 0) {
+      await tx.stationJobLog.updateMany({
+        where: { stationId: station.id, jobId, endTime: null },
+        data: { endTime: timestamp },
+      });
+    }
+
+    const reopened = station.currentJobId === jobId;
+
+    if (reopened) {
+      await tx.stationJobLog.create({
+        data: {
+          stationId: station.id,
+          jobId,
+          jobVersionId: version.id,
+          startTime: timestamp,
+          standardCycle: version.standardCycle,
+          itemsPerCycle,
+        },
+      });
+
+      // Keep state-log entries job-version-homogeneous under the period model.
+      await splitOpenStateEntryForJobChange(tx, station.id, timestamp, version.id);
+    }
+
+    results.push({ stationId: station.id, siteId: station.siteId, reopened, closedLogs });
+  }
+
+  return {
+    timestamp,
+    jobName: version.name,
+    standardCycleSeconds: version.standardCycle != null ? Number(version.standardCycle) : null,
+    stations: results,
+  };
 }
 
 // ============================================================================
@@ -319,7 +451,7 @@ export async function update(id: string, input: UpdateJobInput) {
   const nextVersion = (latestVersion?.version ?? 0) + 1;
 
   // Create new version with merged data
-  const job = await prisma.$transaction(async (tx) => {
+  const { job, boundary } = await prisma.$transaction(async (tx) => {
     const version = await tx.jobVersion.create({
       data: {
         jobId: id,
@@ -332,7 +464,7 @@ export async function update(id: string, input: UpdateJobInput) {
       },
     });
 
-    return tx.job.update({
+    const updated = await tx.job.update({
       where: { id },
       data: { currentVersionId: version.id },
       include: {
@@ -341,6 +473,11 @@ export async function update(id: string, input: UpdateJobInput) {
         _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
       },
     });
+
+    // Re-version is a job-change boundary for stations running this job.
+    const boundary = await applyReversionBoundary(tx, id, version);
+
+    return { job: updated, boundary };
   });
 
   publishEntityEvent({
@@ -353,6 +490,30 @@ export async function update(id: string, input: UpdateJobInput) {
       .filter(([, value]) => value !== undefined)
       .map(([key]) => key),
   });
+
+  // Fire-and-forget side effects after the transaction commits, mirroring
+  // the job-change flow: recompute KPIs for each closed log's range and
+  // refresh the live station metrics that snapshot version data.
+  if (boundary) {
+    const { timestamp, jobName, standardCycleSeconds, stations } = boundary;
+
+    for (const station of stations) {
+      for (const log of station.closedLogs) {
+        recalcAll(station.stationId, station.siteId, log.startTime, timestamp).catch((err) => {
+          console.error(`[job.update] Failed to recalc for closed job log ${log.id}:`, err);
+        });
+      }
+
+      if (station.reopened) {
+        publishStationCurrentJobMetric(station.stationId, jobName, timestamp).catch((err) => {
+          console.error(`[job.update] publishStationCurrentJobMetric failed for station ${station.stationId}:`, err);
+        });
+        publishStationStandardCycleMetric(station.stationId, standardCycleSeconds, timestamp).catch((err) => {
+          console.error(`[job.update] publishStationStandardCycleMetric failed for station ${station.stationId}:`, err);
+        });
+      }
+    }
+  }
 
   return { data: job };
 }

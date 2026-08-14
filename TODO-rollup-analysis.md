@@ -1,5 +1,12 @@
 # TODO — Rollup pipeline analysis (2026-07-10)
 
+> **CLOSED (2026-08 — superseded by the base-grain collapse).** The
+> pipeline analyzed below no longer exists: one persisted grain (STATION
+> HOUR, per-job + residual), read-time derivation for all coarser
+> slices, transition-driven writes + hour close (Stage D), and a
+> publish-only 5s tick. See the star-schema plan/ADR and
+> `packages/services/src/metrics/README.md`.
+
 Untracked scratch file — do not commit. Findings from a full read of the
 metrics rollup pipeline (`packages/services/src/metrics/`: compute.ts,
 cascade.ts, batcher.ts, rollup.ts, recalc.ts, archive.ts, bucket.ts, sync.ts).

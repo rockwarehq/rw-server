@@ -23,8 +23,14 @@ const inventoryOverrides: CodeOverrides = {
 const inventoryListInputSchema = z.object({
   siteId: z.uuid().optional(),
   cycleId: z.uuid().optional(),
+  // History-exact version filters (match one snapshot only)
   productVersionId: z.uuid().optional(),
   jobProductVersionId: z.uuid().optional(),
+  // Dimension-parent filters (stable across re-versions)
+  productId: z.uuid().optional(),
+  jobId: z.uuid().optional(),
+  stationId: z.uuid().optional(),
+  jobProductId: z.uuid().optional(),
   dateFrom: z.coerce.date().optional(),
   dateTo: z.coerce.date().optional(),
   limit: z.number().min(0).default(50),

@@ -2,9 +2,9 @@ import { z } from "zod";
 import prisma from "@rw/db";
 import { recalcAll } from "../../../metrics/recalc.js";
 import { ensureBuckets } from "../../../metrics/bucket.js";
-import { jobEntityId } from "../../../metrics/cascade.js";
 import { publishEntityEvent } from "../../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../../entity/registry.js";
+import { getJobItemsPerCycle } from "../../../job/job.js";
 import {
   publishStationCurrentJobMetric,
   publishStationStandardCycleMetric,
@@ -128,6 +128,7 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
       // ── Create new StationJobLog if assigning a job ─────────────
       if (newJobId && job) {
         const standardCycle = job.currentVersion?.standardCycle ?? null;
+        const itemsPerCycle = await getJobItemsPerCycle(tx, newJobId);
 
         await tx.stationJobLog.create({
           data: {
@@ -137,6 +138,7 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
             jobVersionId: job.currentVersionId!,
             startTime: timestamp,
             standardCycle,
+            itemsPerCycle,
           },
         });
       }
@@ -167,17 +169,17 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
     }
 
     if (newJobId && job) {
-      // Scaffold empty JOB metric buckets so they exist before the first
-      // cycle. Fire-and-forget — bucket creation is best-effort and the
-      // background worker will catch any misses.
+      // Scaffold the (STATION, station, jobId, HOUR) row (plus residual)
+      // so it exists before the first cycle. Fire-and-forget — bucket
+      // creation is best-effort and the background worker catches misses.
       ensureBuckets({
         siteId: station.siteId,
-        entityType: "JOB",
-        entityId: jobEntityId(stationId, newJobId),
-        entityName: job.currentVersion?.name ?? "",
+        entityType: "STATION",
+        entityId: stationId,
+        jobId: newJobId,
         timestamp,
       }).catch((err) => {
-        console.error(`[job.change] Failed to ensure JOB buckets for job ${newJobId}:`, err);
+        console.error(`[job.change] Failed to ensure job hour buckets for job ${newJobId}:`, err);
       });
 
       publishStationCurrentJobMetric(stationId, job.currentVersion?.name ?? null, timestamp).catch((err) => {

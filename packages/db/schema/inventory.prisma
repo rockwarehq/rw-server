@@ -134,10 +134,12 @@ model Product {
   pictures           ProductPicture[]
   orderLineItems     OrderLineItem[]
 
-  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
-  deletedAt  DateTime? @db.Timestamptz(3)
-  archivedAt DateTime? @db.Timestamptz(3)
+  createdAt           DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime             @updatedAt @db.Timestamptz(3)
+  deletedAt           DateTime?            @db.Timestamptz(3)
+  archivedAt          DateTime?            @db.Timestamptz(3)
+  inventoryItems      InventoryItem[]
+  itemDispositionLogs ItemDispositionLog[]
 }
 
 model ProductVersion {
@@ -159,6 +161,7 @@ model ProductVersion {
   inventoryItems          InventoryItem[]
   itemDispositionLogs     ItemDispositionLog[]
   productMaterialVersions ProductMaterialVersion[]
+  materialShiftUsage      MaterialShiftUsage[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
@@ -204,6 +207,8 @@ model MaterialVersion {
 
   currentOfMaterial       Material?                @relation("MaterialCurrent")
   productMaterialVersions ProductMaterialVersion[]
+  materialShiftUsage      MaterialShiftUsage[]
+  ledgerEntries           MaterialLedgerEntry[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
@@ -304,6 +309,50 @@ model InventoryItem {
   cycleId String @db.Uuid
   cycle   Cycle  @relation(fields: [cycleId], references: [id], onDelete: Cascade)
 
+  // Conformed context, copied from the cycle's stamped context at creation.
+  // Nullable: legacy rows are repaired by the batched backfill; an item is
+  // never dropped because context resolution failed.
+  siteId String? @db.Uuid
+  site   Site?   @relation(fields: [siteId], references: [id], onDelete: SetNull)
+
+  stationId String?  @db.Uuid
+  station   Station? @relation(fields: [stationId], references: [id], onDelete: SetNull)
+
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id], onDelete: SetNull)
+
+  shiftInstanceId String?        @db.Uuid
+  shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+
+  businessDate DateTime? @db.Date
+
+  jobId String? @db.Uuid
+  job   Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  jobVersionId String?     @db.Uuid
+  jobVersion   JobVersion? @relation(fields: [jobVersionId], references: [id], onDelete: SetNull)
+
+  logonSessionId String?              @db.Uuid
+  logonSession   StationLogonSession? @relation(fields: [logonSessionId], references: [id], onDelete: SetNull)
+
+  /// When the item was produced (= cycle completion time). createdAt is the
+  /// record time and diverges under replay. Readers coalesce(producedAt, createdAt).
+  producedAt DateTime? @db.Timestamptz(3)
+
+  // Dimension parents (parent+version pair — group by parent, compute with
+  // the version snapshot below)
+  productId String?  @db.Uuid
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  toolId String? @db.Uuid
+  tool   Tool?   @relation(fields: [toolId], references: [id], onDelete: SetNull)
+
+  toolCavityId String?     @db.Uuid
+  toolCavity   ToolCavity? @relation(fields: [toolCavityId], references: [id], onDelete: SetNull)
+
+  jobProductId String?     @db.Uuid
+  jobProduct   JobProduct? @relation(fields: [jobProductId], references: [id], onDelete: SetNull)
+
   // Snapshot: version IDs at point in time
   jobProductVersionId String?            @db.Uuid
   jobProductVersion   JobProductVersion? @relation(fields: [jobProductVersionId], references: [id])
@@ -330,6 +379,10 @@ model InventoryItem {
   @@index([productVersionId])
   @@index([toolVersionId])
   @@index([toolCavityVersionId])
+  @@index([siteId, businessDate])
+  @@index([productId])
+  @@index([stationId, producedAt])
+  @@index([jobId])
 }
 
 /// Product picture stored in S3-compatible storage (Tigris)
@@ -397,6 +450,14 @@ model ItemDispositionLog {
   updatedAt DateTime  @updatedAt @db.Timestamptz(3)
   deletedAt DateTime? @db.Timestamptz(3)
 
+  /// When the scrap actually happened. createdAt is when it was recorded —
+  /// entries are routinely logged after the fact. Backfill = createdAt;
+  /// readers should coalesce(occurredAt, createdAt) until backfill completes.
+  occurredAt DateTime? @db.Timestamptz(3)
+
+  /// Plant calendar day, resolved the same way as Cycle.businessDate.
+  businessDate DateTime? @db.Date
+
   quantity Int @default(1)
 
   siteId String @db.Uuid
@@ -420,6 +481,28 @@ model ItemDispositionLog {
   dispositionReasonId String?                @db.Uuid
   dispositionReason   ItemDispositionReason? @relation(fields: [dispositionReasonId], references: [id])
 
+  /// Job the scrap belongs to: explicit input first, else the cycle's
+  /// stamped jobId, else derived from jobProductVersion.
+  jobId String? @db.Uuid
+  job   Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  /// Open StationLogonSession at occurredAt — operator attribution.
+  logonSessionId String?              @db.Uuid
+  logonSession   StationLogonSession? @relation(fields: [logonSessionId], references: [id], onDelete: SetNull)
+
+  // Dimension parents (parent+version pair with the snapshots below)
+  productId String?  @db.Uuid
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  toolId String? @db.Uuid
+  tool   Tool?   @relation(fields: [toolId], references: [id], onDelete: SetNull)
+
+  toolCavityId String?     @db.Uuid
+  toolCavity   ToolCavity? @relation(fields: [toolCavityId], references: [id], onDelete: SetNull)
+
+  jobProductId String?     @db.Uuid
+  jobProduct   JobProduct? @relation(fields: [jobProductId], references: [id], onDelete: SetNull)
+
   // Snapshot: version IDs at point in time
   stationVersionId String?         @db.Uuid
   stationVersion   StationVersion? @relation(fields: [stationVersionId], references: [id])
@@ -439,6 +522,10 @@ model ItemDispositionLog {
   productMaterialVersions ProductMaterialVersion[]
 
   @@index([stationId, createdAt])
+  @@index([stationId, occurredAt])
+  @@index([siteId, businessDate])
+  @@index([productId])
+  @@index([jobId])
 }
 
 // ---------------------------------------------------------------------------
@@ -482,6 +569,18 @@ model MaterialLedgerEntry {
   note        String?
   description String?
 
+  /// Snapshot of the material's current version at entry creation. Freezes the
+  /// unit/cost validation basis, which otherwise silently changes on
+  /// re-version (the canonical-unit guard reads currentVersion at write time).
+  /// Nullable: legacy rows are left NULL — backfilling with today's version
+  /// would falsify history.
+  materialVersionId String?          @db.Uuid
+  materialVersion   MaterialVersion? @relation(fields: [materialVersionId], references: [id], onDelete: SetNull)
+
+  /// Plant calendar day. PRODUCTION rows: the flushed shift's businessDate.
+  /// Manual rows: site-timezone local calendar date at creation.
+  businessDate DateTime? @db.Date
+
   performedByUserId String? @db.Uuid
   performedByUser   User?   @relation(fields: [performedByUserId], references: [id], onDelete: SetNull)
 
@@ -504,6 +603,12 @@ model MaterialLedgerEntry {
 /// staging row, sets `flushedAt`, and links the ledger row via
 /// `flushedLedgerEntryId`. Flushed staging rows are kept as audit trails —
 /// they record the exact rollup that produced each ledger entry.
+///
+/// Version snapshots (`jobVersionId`, `productVersionId`, `materialVersionId`)
+/// and conformed context (`workcenterId`, `businessDate`) are stamped at ROW
+/// CREATION — first contribution wins. A mid-shift re-version keeps the
+/// shift's opening snapshot; later increments never restamp. The grain and
+/// unique key are unchanged: parents group, snapshots record point-in-time.
 model MaterialShiftUsage {
   id String @id @default(uuid()) @db.Uuid
 
@@ -524,6 +629,28 @@ model MaterialShiftUsage {
 
   materialId String   @db.Uuid
   material   Material @relation(fields: [materialId], references: [id], onDelete: Restrict)
+
+  // Conformed context, copied from the cycle's stamped context at first
+  // contribution. Nullable: legacy rows are repaired by the batched backfill
+  // (scripts/backfill-material-context.sql); a staging row is never dropped
+  // because context resolution failed.
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id], onDelete: SetNull)
+
+  /// Plant calendar day of the shift (ShiftInstance.businessDate).
+  businessDate DateTime? @db.Date
+
+  // Snapshot: version IDs at row creation (first contribution wins).
+  // Legacy rows stay NULL — backfilling with current versions would falsify
+  // history.
+  jobVersionId String?     @db.Uuid
+  jobVersion   JobVersion? @relation(fields: [jobVersionId], references: [id], onDelete: SetNull)
+
+  productVersionId String?         @db.Uuid
+  productVersion   ProductVersion? @relation(fields: [productVersionId], references: [id], onDelete: SetNull)
+
+  materialVersionId String?          @db.Uuid
+  materialVersion   MaterialVersion? @relation(fields: [materialVersionId], references: [id], onDelete: SetNull)
 
   /// Running consumption total during the shift. Stored positive (the amount
   /// CONSUMED). At flush, an immutable ledger entry of `-quantity` is created.
@@ -546,6 +673,7 @@ model MaterialShiftUsage {
   @@unique([shiftInstanceId, stationId, jobId, productId, materialId])
   @@index([materialId, flushedAt])
   @@index([siteId, shiftInstanceId])
+  @@index([siteId, businessDate])
   @@index([stationId])
   @@index([jobId])
   @@index([flushedLedgerEntryId])

@@ -66,7 +66,7 @@ function wrap<T>(val: T | null): Cached<T> {
  * Usage:
  * ```ts
  * const ctx = new MetricsContext();
- * await updateCountBased(stationId, siteId, timestamp, ctx);
+ * await updateTimeBased(stationId, siteId, startTime, endTime, undefined, undefined, ctx);
  * ```
  */
 export class MetricsContext {

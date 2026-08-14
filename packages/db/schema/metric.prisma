@@ -112,6 +112,23 @@ model MetricBucket {
   /// Human-readable name of the current job. Same semantics as currentJobId.
   currentJobName String?
 
+  /// Key column of the STATION-family base grain: the job this hour row
+  /// measures (entityId holds the station id). NULL for the residual row
+  /// (station time/counts not attributable to any job) and for legacy
+  /// non-station rows awaiting the base-grain backfill.
+  /// No FK constraint — buckets are derived data, purely informational
+  /// (mirrors the shiftInstanceId precedent).
+  jobId String? @db.Uuid
+
+  /// When this hour row family was finalized. Stamped by Stage D's
+  /// hour-close pass after the last recompute of an elapsed hour; NULL
+  /// means the row is still open and the 5s base writer keeps
+  /// recomputing it. A hand-authored partial index
+  /// ("MetricBucket_open_station_hour_idx", see migration
+  /// 20260814130000_metric_bucket_closed_at) covers the open rows —
+  /// Prisma cannot express partial indexes.
+  closedAt DateTime? @db.Timestamptz(3)
+
   // ── Computed columns (PostgreSQL generated columns) ────────────
   // Read-only — values are auto-computed by the database.
   // Application code must NOT write to these columns.
@@ -140,7 +157,12 @@ model MetricBucket {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  @@unique([entityType, entityId, granularity, startTime])
+  // The backing SQL index is hand-authored as UNIQUE ... NULLS NOT DISTINCT
+  // (PG >= 15) so non-JOB rows (jobId NULL) still conflict on upsert —
+  // Prisma cannot express NULLS NOT DISTINCT, see migration
+  // 20260814100000_metric_bucket_job_key.
+  @@unique([entityType, entityId, jobId, granularity, startTime], map: "MetricBucket_entity_jobId_granularity_startTime_key")
+  @@index([jobId])
   @@index([siteId, granularity, startTime])
   @@index([siteId, businessDate])
   @@index([siteId, updatedAt])
@@ -203,6 +225,13 @@ model MetricBucketLog {
   /// Human-readable name of the current job.
   currentJobName String?
 
+  /// Key column for JOB-entity buckets: the Job this bucket measures.
+  /// JOB buckets are per-station — entityId holds the station id and jobId
+  /// holds the job id. NULL for STATION/WORKCENTER/SITE entities.
+  /// No FK constraint — buckets are derived data, purely informational
+  /// (mirrors the shiftInstanceId precedent).
+  jobId String? @db.Uuid
+
   // ── Computed columns (PostgreSQL generated columns) ────────────
   // Same formulas as MetricBucket — auto-compute on every write.
   // Application code must NOT write to these columns.
@@ -230,7 +259,12 @@ model MetricBucketLog {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  @@unique([entityType, entityId, granularity, startTime])
+  // The backing SQL index is hand-authored as UNIQUE ... NULLS NOT DISTINCT
+  // (PG >= 15) so non-JOB rows (jobId NULL) still conflict on upsert —
+  // Prisma cannot express NULLS NOT DISTINCT, see migration
+  // 20260814100000_metric_bucket_job_key.
+  @@unique([entityType, entityId, jobId, granularity, startTime], map: "MetricBucketLog_entity_jobId_granularity_startTime_key")
+  @@index([jobId])
   @@index([siteId, granularity, startTime])
   @@index([siteId, businessDate])
   @@index([siteId, archivedAt])

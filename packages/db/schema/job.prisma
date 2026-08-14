@@ -24,11 +24,14 @@ model Tool {
   toolCavities ToolCavity[]
   jobs         JobTool[]
   jobProducts  JobProduct[]
+  cycles       Cycle[]
 
-  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
-  deletedAt  DateTime? @db.Timestamptz(3)
-  archivedAt DateTime? @db.Timestamptz(3)
+  createdAt           DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime             @updatedAt @db.Timestamptz(3)
+  deletedAt           DateTime?            @db.Timestamptz(3)
+  archivedAt          DateTime?            @db.Timestamptz(3)
+  inventoryItems      InventoryItem[]
+  itemDispositionLogs ItemDispositionLog[]
 
   @@index([toolStatusId])
   @@index([toolLocationId])
@@ -50,6 +53,7 @@ model ToolVersion {
   inventoryItems      InventoryItem[]
   itemDispositionLogs ItemDispositionLog[]
   cycles              Cycle[]
+  primaryCycles       Cycle[]              @relation("CyclePrimaryToolVersion")
 
   attrs Json @default("{}")
 
@@ -71,9 +75,11 @@ model ToolCavity {
 
   jobProducts JobProduct[]
 
-  createdAt DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
-  deletedAt DateTime? @db.Timestamptz(3)
+  createdAt           DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime             @updatedAt @db.Timestamptz(3)
+  deletedAt           DateTime?            @db.Timestamptz(3)
+  inventoryItems      InventoryItem[]
+  itemDispositionLogs ItemDispositionLog[]
 
   @@index([toolId])
 }
@@ -115,15 +121,18 @@ model Job {
   stationJobs        StationJob[]
   stationJobLogs     StationJobLog[]
   materialShiftUsage MaterialShiftUsage[]
+  cycles             Cycle[]
 
   // Process type (optional, single)
   processTypeId String?      @db.Uuid
   processType   ProcessType? @relation(fields: [processTypeId], references: [id], onDelete: SetNull)
 
-  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
-  deletedAt  DateTime? @db.Timestamptz(3)
-  archivedAt DateTime? @db.Timestamptz(3)
+  createdAt           DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime             @updatedAt @db.Timestamptz(3)
+  deletedAt           DateTime?            @db.Timestamptz(3)
+  archivedAt          DateTime?            @db.Timestamptz(3)
+  inventoryItems      InventoryItem[]
+  itemDispositionLogs ItemDispositionLog[]
 
   @@index([processTypeId])
 }
@@ -149,7 +158,9 @@ model JobVersion {
   cycles       Cycle[]
   stateLogs    StationStateLog[]
 
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  createdAt          DateTime             @default(now()) @db.Timestamptz(3)
+  inventoryItems     InventoryItem[]
+  materialShiftUsage MaterialShiftUsage[]
 
   @@unique([jobId, version])
   @@index([jobId])
@@ -194,9 +205,11 @@ model JobProduct {
   currentVersion JobProductVersion?  @relation("JobProductCurrent", fields: [currentVersionId], references: [id])
   versions       JobProductVersion[] @relation("JobProductVersions")
 
-  createdAt DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
-  deletedAt DateTime? @db.Timestamptz(3)
+  createdAt           DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime             @updatedAt @db.Timestamptz(3)
+  deletedAt           DateTime?            @db.Timestamptz(3)
+  inventoryItems      InventoryItem[]
+  itemDispositionLogs ItemDispositionLog[]
 
   @@index([jobId])
   @@index([productId])

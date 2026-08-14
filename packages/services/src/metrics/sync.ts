@@ -116,8 +116,15 @@ export interface BucketChange {
   siteId: string;
   /** Entity type the bucket belongs to */
   entityType: "STATION" | "WORKCENTER" | "SITE" | "JOB";
-  /** Entity ID the bucket belongs to */
+  /** Entity ID the bucket belongs to. For JOB buckets this is the station id. */
   entityId: string;
+  /**
+   * Key column for JOB-entity buckets: the Job this bucket measures.
+   * Null for STATION/WORKCENTER/SITE buckets. Part of the bucket key —
+   * subscription/cache keys must include it so concurrent jobs on one
+   * station don't collapse into a single entry.
+   */
+  jobId: string | null;
   /** Human-readable name of the entity */
   entityName: string;
   /** Hierarchical dotted path encoding the entity's full ancestry */

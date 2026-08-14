@@ -11,12 +11,38 @@ type TransactionClient = Prisma.TransactionClient;
 export interface ListInventoryFilter {
   siteId?: string;
   cycleId?: string;
+  /** History-exact filters: match one version snapshot only. Filtering by a
+   *  product's currentVersionId silently drops items made under earlier
+   *  versions — use the parent filters below for entity-level filtering. */
   productVersionId?: string;
   jobProductVersionId?: string;
+  // Dimension-parent filters (stable across re-versions). Legacy rows with
+  // NULL parents match through their version relation as a fallback.
+  productId?: string;
+  jobId?: string;
+  stationId?: string;
+  jobProductId?: string;
   dateFrom?: Date;
   dateTo?: Date;
   limit?: number;
   offset?: number;
+}
+
+/**
+ * Conformed context stamped onto InventoryItem rows — the parent cycle's
+ * context at completion time. All nullable except producedAt: an item is
+ * never dropped because context resolution failed.
+ */
+export interface ItemFactContext {
+  siteId: string | null;
+  stationId: string | null;
+  workcenterId: string | null;
+  shiftInstanceId: string | null;
+  businessDate: Date | null;
+  jobVersionId: string | null;
+  logonSessionId: string | null;
+  /** When the item was produced (= cycle completion time). */
+  producedAt: Date;
 }
 
 /**
@@ -28,14 +54,17 @@ export interface ListInventoryFilter {
  * Accepts a transaction client so the caller can wrap cycle-close + inventory
  * creation in a single atomic operation.
  */
-export async function createFromCycle(tx: TransactionClient, cycleId: string, jobId: string) {
+export async function createFromCycle(tx: TransactionClient, cycleId: string, jobId: string, ctx: ItemFactContext) {
   // Fetch active JobProducts with version refs in a single raw query
   const jobProducts = await (tx as unknown as { $queryRaw: typeof prisma.$queryRaw }).$queryRaw<
     Array<{
       productId: string;
+      jobProductId: string;
       currentVersionId: string;
       quantity: number;
       productVersionId: string;
+      toolId: string | null;
+      toolCavityId: string | null;
       toolVersionId: string | null;
       toolCavityVersionId: string | null;
       materialVersionIds: string[];
@@ -43,9 +72,12 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
   >`
     SELECT
       jp."productId",
+      jp.id AS "jobProductId",
       jp."currentVersionId",
       COALESCE(jpb.quantity, 1)::int AS quantity,
       p."currentVersionId" AS "productVersionId",
+      t.id AS "toolId",
+      tc.id AS "toolCavityId",
       t."currentVersionId" AS "toolVersionId",
       tc."currentVersionId" AS "toolCavityVersionId",
       COALESCE(
@@ -81,8 +113,11 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
   // Build flat list of items to insert
   const itemSpecs: Array<{
     productId: string;
+    jobProductId: string;
     currentVersionId: string;
     productVersionId: string;
+    toolId: string | null;
+    toolCavityId: string | null;
     toolVersionId: string | null;
     toolCavityVersionId: string | null;
     materialVersionIds: string[];
@@ -93,15 +128,24 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
     }
   }
 
-  // Batch INSERT all inventory items in one query
+  // Batch INSERT all inventory items in one query. Parent+version pairs come
+  // from the spec; the conformed context is the cycle's, shared by every item.
   const insertValues = Prisma.join(
     itemSpecs.map(
       (s) =>
-        Prisma.sql`(gen_random_uuid(), ${cycleId}::uuid, ${s.currentVersionId}::uuid, ${s.productVersionId}::uuid, ${s.toolVersionId}::uuid, ${s.toolCavityVersionId}::uuid, NOW(), NOW())`,
+        Prisma.sql`(gen_random_uuid(), ${cycleId}::uuid, ${s.currentVersionId}::uuid, ${s.productVersionId}::uuid, ${s.toolVersionId}::uuid, ${s.toolCavityVersionId}::uuid,
+          ${s.productId}::uuid, ${s.toolId}::uuid, ${s.toolCavityId}::uuid, ${s.jobProductId}::uuid,
+          ${ctx.siteId}::uuid, ${ctx.stationId}::uuid, ${ctx.workcenterId}::uuid, ${ctx.shiftInstanceId}::uuid, ${ctx.businessDate}::date,
+          ${jobId}::uuid, ${ctx.jobVersionId}::uuid, ${ctx.logonSessionId}::uuid, ${ctx.producedAt},
+          NOW(), NOW())`,
     ),
   );
   const itemRows = await txRaw.$queryRaw<Array<{ id: string }>>`
-    INSERT INTO "InventoryItem" (id, "cycleId", "jobProductVersionId", "productVersionId", "toolVersionId", "toolCavityVersionId", "createdAt", "updatedAt")
+    INSERT INTO "InventoryItem" (id, "cycleId", "jobProductVersionId", "productVersionId", "toolVersionId", "toolCavityVersionId",
+      "productId", "toolId", "toolCavityId", "jobProductId",
+      "siteId", "stationId", "workcenterId", "shiftInstanceId", "businessDate",
+      "jobId", "jobVersionId", "logonSessionId", "producedAt",
+      "createdAt", "updatedAt")
     VALUES ${insertValues}
     RETURNING id
   `;
@@ -130,8 +174,14 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
       siteId: string;
       shiftInstanceId: string;
       stationId: string;
+      workcenterId: string | null;
+      businessDate: Date | null;
+      jobVersionId: string | null;
       productId: string;
       materialId: string;
+      // Version snapshots for first-writer stamping on the staging row.
+      productVersionId: string | null;
+      materialVersionId: string | null;
       qty: Prisma.Decimal;
       itemCount: number;
       // Unit declared on the ProductMaterialVersion (how the operator entered weight
@@ -141,29 +191,36 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
       // ledger writes are normalized to this unit.
       materialUnit: WeightUnit | null;
     };
+    // Cycle rows carry the stamped conformed context (site, station,
+    // workcenter, shift, businessDate, jobVersion) — the single source of
+    // truth. No overlap re-derivation here; cycles stamped without a shift
+    // are silently skipped, same as before.
     const want = await txRaw.$queryRaw<UsageRow[]>`
-      WITH cycle_shift AS (
+      WITH cycle_ctx AS (
         SELECT
-          c."siteId"    AS "siteId",
-          c."stationId" AS "stationId",
-          si.id         AS "shiftInstanceId"
+          c."siteId"          AS "siteId",
+          c."stationId"       AS "stationId",
+          c."workcenterId"    AS "workcenterId",
+          c."shiftInstanceId" AS "shiftInstanceId",
+          c."businessDate"    AS "businessDate",
+          c."jobVersionId"    AS "jobVersionId"
         FROM "Cycle" c
-        JOIN "Station" s ON s.id = c."stationId"
-        LEFT JOIN "ShiftInstance" si
-          ON si."siteId" = c."siteId"
-         AND si."startTime" <= COALESCE(c."end", c."start")
-         AND si."endTime"   >  COALESCE(c."end", c."start")
-         AND (si."workCenterId" IS NULL OR si."workCenterId" = s."workcenterId")
         WHERE c.id = ${cycleId}::uuid
-        ORDER BY (si."workCenterId" IS NOT NULL) DESC, si."startTime" DESC
-        LIMIT 1
       )
       SELECT
         cs."siteId"            AS "siteId",
         cs."shiftInstanceId"   AS "shiftInstanceId",
         cs."stationId"         AS "stationId",
+        cs."workcenterId"      AS "workcenterId",
+        cs."businessDate"      AS "businessDate",
+        cs."jobVersionId"      AS "jobVersionId",
         pb."productId"         AS "productId",
         mb."materialId"        AS "materialId",
+        -- All items in this batch share one productVersion per product (resolved
+        -- once from Product.currentVersionId above), so MAX() picks that single
+        -- value without splitting the staging grain.
+        MAX(ii."productVersionId"::text)::uuid AS "productVersionId",
+        m."currentVersionId"   AS "materialVersionId",
         SUM(pmb.weight)        AS "qty",
         COUNT(DISTINCT ii.id)::int AS "itemCount",
         pmb."weightUnits"      AS "pmUnit",
@@ -175,11 +232,11 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
       JOIN "MaterialVersion"         mb  ON mb.id = pmb."materialVersionId"
       JOIN "Material"             m   ON m.id  = mb."materialId"
       LEFT JOIN "MaterialVersion"    mbc ON mbc.id = m."currentVersionId"
-      CROSS JOIN cycle_shift cs
+      CROSS JOIN cycle_ctx cs
       WHERE x."A" = ANY(${itemIds}::uuid[])
         AND pmb.weight IS NOT NULL
         AND cs."shiftInstanceId" IS NOT NULL
-      GROUP BY cs."siteId", cs."shiftInstanceId", cs."stationId", pb."productId", mb."materialId", pmb."weightUnits", mbc."weightUnits"
+      GROUP BY cs."siteId", cs."shiftInstanceId", cs."stationId", cs."workcenterId", cs."businessDate", cs."jobVersionId", pb."productId", mb."materialId", m."currentVersionId", pmb."weightUnits", mbc."weightUnits"
     `;
 
     if (want.length === 0) return itemRows.map((row, i) => ({ id: row.id, productId: itemSpecs[i].productId }));
@@ -228,6 +285,8 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
           );
           continue;
         }
+        // First-writer snapshot: increments never restamp context or version
+        // snapshots — a mid-shift re-version keeps the row's opening snapshot.
         await tx.materialShiftUsage.update({
           where: { id: existing.id },
           data: {
@@ -244,6 +303,13 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
             jobId,
             productId: w.productId,
             materialId: w.materialId,
+            // Conformed context + version snapshots, stamped at row creation
+            // (first contribution wins).
+            workcenterId: w.workcenterId,
+            businessDate: w.businessDate,
+            jobVersionId: w.jobVersionId,
+            productVersionId: w.productVersionId,
+            materialVersionId: w.materialVersionId,
             quantity: qtyDelta,
             unit: canonicalUnit,
             itemCount: w.itemCount,
@@ -264,11 +330,25 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
  * List inventory items with optional filtering
  */
 export async function list(filter: ListInventoryFilter = {}) {
-  const { siteId, cycleId, productVersionId, jobProductVersionId, dateFrom, dateTo, limit = 50, offset = 0 } = filter;
+  const {
+    siteId,
+    cycleId,
+    productVersionId,
+    jobProductVersionId,
+    productId,
+    jobId,
+    stationId,
+    jobProductId,
+    dateFrom,
+    dateTo,
+    limit = 50,
+    offset = 0,
+  } = filter;
 
   const where: Prisma.InventoryItemWhereInput = {
     deletedAt: null,
   };
+  const and: Prisma.InventoryItemWhereInput[] = [];
 
   if (cycleId) {
     where.cycleId = cycleId;
@@ -280,6 +360,24 @@ export async function list(filter: ListInventoryFilter = {}) {
 
   if (jobProductVersionId) {
     where.jobProductVersionId = jobProductVersionId;
+  }
+
+  // Parent filters: stamped column first, version-relation fallback for
+  // legacy rows the backfill hasn't reached.
+  if (productId) {
+    and.push({ OR: [{ productId }, { productId: null, productVersion: { productId } }] });
+  }
+  if (jobId) {
+    and.push({ OR: [{ jobId }, { jobId: null, cycle: { jobVersion: { jobId } } }] });
+  }
+  if (stationId) {
+    and.push({ OR: [{ stationId }, { stationId: null, cycle: { stationId } }] });
+  }
+  if (jobProductId) {
+    and.push({ OR: [{ jobProductId }, { jobProductId: null, jobProductVersion: { jobProductId } }] });
+  }
+  if (and.length > 0) {
+    where.AND = and;
   }
 
   // Filter by site through the cycle -> site relation

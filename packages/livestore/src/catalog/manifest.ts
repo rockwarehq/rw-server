@@ -1,6 +1,9 @@
+import { DIMENSIONS, type FactKey, FACTS, MEASURES } from "@rockwarehq/metrics";
+import { MIRRORED_GRANULARITY } from "@rw/runtime/graph-subjects";
 import { z } from "zod";
 
 import { LIVESTORE_HOOK_EVENT_CATALOG, type LivestoreHookEventSchema } from "./events.js";
+import { formulaToString } from "./metric-formula.js";
 import { GRAPH_TYPE_INPUT_VALUE_TYPES, GRAPH_TYPE_VALUE_TYPES } from "./graph-types.js";
 import type { GraphHookConditionOperator } from "./hook-conditions.js";
 import {
@@ -34,6 +37,32 @@ export interface LivestoreHookOperatorDescriptor {
   supportsMinDelta: boolean;
 }
 
+export interface LivestoreMetricMeasureDescriptor {
+  key: string;
+  label: string;
+  unit: string;
+  kind: "additive" | "ratio";
+  /** Ratio only: additive measure keys read by the formula and its guards. */
+  deps: readonly string[];
+  /** Ratio only: canonical rendering of the catalog formula AST; null for additive measures. */
+  formula: string | null;
+}
+
+export interface LivestoreMetricDimensionDescriptor {
+  key: string;
+  label: string;
+}
+
+export interface LivestoreMetricFactDescriptor {
+  key: string;
+  /** Dimension keys (from `dimensions`) this fact can be grouped by. */
+  dimensions: readonly string[];
+  /** Measure keys (from `measures`) computable on this fact. */
+  measures: readonly string[];
+  /** Time grains served: "event" = raw rows windowed by the fact's time column; bucket facts are pre-aggregated per granularity. */
+  grains: readonly string[];
+}
+
 export interface LivestoreCapabilityManifest {
   manifestVersion: number;
   resolverTypes: LivestoreResolverTypeDescriptor[];
@@ -64,6 +93,12 @@ export interface LivestoreCapabilityManifest {
   valueEnvelope: {
     qualities: readonly string[];
     description: string;
+  };
+  metrics: {
+    description: string;
+    measures: LivestoreMetricMeasureDescriptor[];
+    dimensions: LivestoreMetricDimensionDescriptor[];
+    facts: LivestoreMetricFactDescriptor[];
   };
 }
 
@@ -246,13 +281,25 @@ const HOOK_CONDITION_JSON_SCHEMA: Record<string, unknown> = {
   ],
 };
 
+// Time grains each semantic-catalog fact is served at. Event facts are raw
+// rows windowed by the fact's time column; the bucket fact (MetricBucket) is
+// pre-aggregated — only MIRRORED_GRANULARITY is bridged end-to-end today.
+const FACT_GRAINS: Record<FactKey, readonly string[]> = {
+  cycle: ["event"],
+  downtime: ["event"],
+  scrap: ["event"],
+  items: ["event"],
+  materialUsage: ["event"],
+  bucket: [MIRRORED_GRANULARITY],
+};
+
 let cachedManifest: LivestoreCapabilityManifest | null = null;
 
 export function buildLivestoreCapabilityManifest(): LivestoreCapabilityManifest {
   if (cachedManifest) return cachedManifest;
 
   cachedManifest = {
-    manifestVersion: 1,
+    manifestVersion: 2,
     resolverTypes: LIVESTORE_RESOLVER_TYPES.map((type) => ({
       type,
       ...RESOLVER_DESCRIPTOR_META[type],
@@ -288,6 +335,28 @@ export function buildLivestoreCapabilityManifest(): LivestoreCapabilityManifest 
       qualities: ["good", "stale", "uncertain", "bad"],
       description:
         'Every property value is a ValueEnvelope { value, quality, timestamp, context? }. Quality propagates worst-of-inputs; evaluation errors surface as quality "bad" with the error in context.',
+    },
+    metrics: {
+      description:
+        "Semantic metric catalog (@rockwarehq/metrics): the dimensions, additive/ratio measures, and facts behind the metric resolver and reporting. Ratio formulas are arithmetic over additive measure keys.",
+      measures: Object.values(MEASURES).map((measure) => ({
+        key: measure.key,
+        label: measure.label,
+        unit: measure.unit,
+        kind: measure.kind,
+        deps: measure.deps ?? [],
+        formula: measure.formula ? formulaToString(measure.formula) : null,
+      })),
+      dimensions: Object.values(DIMENSIONS).map((dimension) => ({
+        key: dimension.key,
+        label: dimension.label,
+      })),
+      facts: Object.values(FACTS).map((fact) => ({
+        key: fact.key,
+        dimensions: [...fact.dimensions],
+        measures: [...fact.measures],
+        grains: FACT_GRAINS[fact.key],
+      })),
     },
   };
 

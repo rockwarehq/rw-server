@@ -102,6 +102,7 @@ const HOUSEKEEPING = new Set([
   "siteId",
   "entityType",
   "entityId",
+  "jobId",
   "entityName",
   "path",
   "granularity",
@@ -111,6 +112,7 @@ const HOUSEKEEPING = new Set([
   "shiftInstanceId",
   "businessDate",
   "businessShift",
+  "closedAt",
   "createdAt",
   "updatedAt",
 ]);

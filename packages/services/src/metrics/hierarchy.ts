@@ -131,6 +131,8 @@ export async function getIncrementTargets(
  *   SITE:       "site.{siteId}"
  *   WORKCENTER: "site.{siteId}.workcenter.{parentId}...workcenter.{wcId}"
  *   STATION:    "site.{siteId}[.workcenter.{...}].station.{stationId}"
+ *   JOB:        "{stationPath}.job.{jobId}" — entityId is the station id
+ *               and `jobId` is REQUIRED.
  */
 export async function resolveEntityPath(
   entityType: EntityType,
@@ -138,12 +140,15 @@ export async function resolveEntityPath(
   siteId: string,
   knownPath?: string,
   ctx?: MetricsContext,
+  jobId?: string | null,
 ): Promise<string> {
   if (knownPath) return knownPath;
 
-  // Check cache
+  // Check cache. JOB paths vary per job on the same station, so the
+  // cache key folds the jobId into the entity id.
+  const cacheEntityId = entityType === "JOB" ? `${entityId}:${jobId ?? ""}` : entityId;
   if (ctx) {
-    const cached = ctx.getEntityPathCached(entityType, entityId, siteId);
+    const cached = ctx.getEntityPathCached(entityType, cacheEntityId, siteId);
     if (cached !== undefined) return cached;
   }
 
@@ -167,33 +172,13 @@ export async function resolveEntityPath(
     const chain = wcRows.map((r) => r.id);
     result = `${sitePath}.${chain.map((id) => `workcenter.${id}`).join(".")}`;
   } else if (entityType === "JOB") {
-    // JOB path is scoped to the station it's running on.
-    // entityId is a composite md5(stationId:job:jobId) — look up the
-    // existing bucket's path first, then fall back to station queries.
-    const existingPathRows = await prisma.$queryRaw<Array<{ path: string }>>`
-      SELECT path FROM "MetricBucket"
-      WHERE "entityType" = 'JOB' AND "entityId" = ${entityId}::uuid
-      LIMIT 1
-    `;
-    if (existingPathRows[0]?.path) {
-      result = existingPathRows[0].path;
-    } else {
-      // Fall back: look up station by currentJobId matching
-      const stationRows = await prisma.$queryRaw<Array<{ id: string; jobId: string }>>`
-        SELECT s.id, s."currentJobId" AS "jobId" FROM "Station" s
-        WHERE md5(s.id::text || ':job:' || s."currentJobId"::text)::uuid = ${entityId}::uuid
-          AND s."currentJobId" IS NOT NULL
-        LIMIT 1
-      `;
-      const station: { id: string; jobId: string } | null = stationRows[0] ?? null;
-
-      if (!station) {
-        result = `${sitePath}.job.${entityId}`;
-      } else {
-        const stationPath = await resolveEntityPath("STATION", station.id, siteId, undefined, ctx);
-        result = `${stationPath}.job.${station.jobId}`;
-      }
+    // JOB path is scoped to the station it's running on: the station's
+    // path plus a `.job.{jobId}` suffix. entityId is the station id.
+    if (!jobId) {
+      throw new Error("resolveEntityPath: jobId is required for JOB entities");
     }
+    const stationPath = await resolveEntityPath("STATION", entityId, siteId, undefined, ctx);
+    result = `${stationPath}.job.${jobId}`;
   } else {
     // STATION
     const stRows = await prisma.$queryRaw<Array<{ workcenterId: string | null }>>`
@@ -210,7 +195,7 @@ export async function resolveEntityPath(
     }
   }
 
-  ctx?.setEntityPathCached(entityType, entityId, siteId, result);
+  ctx?.setEntityPathCached(entityType, cacheEntityId, siteId, result);
   return result;
 }
 
@@ -220,6 +205,10 @@ export async function resolveEntityPath(
  * Resolve the human-readable name for an entity.
  *
  * When `knownName` is provided the DB query is skipped.
+ *
+ * For JOB entities, pass the JOB id as `entityId` (unlike bucket rows,
+ * where entityId is the station id) — the name resolves via
+ * Job → currentVersion.
  */
 export async function resolveEntityName(
   entityType: EntityType,
@@ -239,10 +228,7 @@ export async function resolveEntityName(
     SELECT CASE
       WHEN ${entityType} = 'SITE' THEN (SELECT name FROM "Site" WHERE id = ${entityId}::uuid)
       WHEN ${entityType} = 'WORKCENTER' THEN (SELECT name FROM "Workcenter" WHERE id = ${entityId}::uuid)
-      WHEN ${entityType} = 'JOB' THEN COALESCE(
-        (SELECT mb."entityName" FROM "MetricBucket" mb WHERE mb."entityType" = 'JOB' AND mb."entityId" = ${entityId}::uuid LIMIT 1),
-        (SELECT jb.name FROM "Job" j JOIN "JobVersion" jb ON jb.id = j."currentVersionId" WHERE j.id = ${entityId}::uuid)
-      )
+      WHEN ${entityType} = 'JOB' THEN (SELECT jb.name FROM "Job" j JOIN "JobVersion" jb ON jb.id = j."currentVersionId" WHERE j.id = ${entityId}::uuid)
       WHEN ${entityType} = 'STATION' THEN (SELECT name FROM "Station" WHERE id = ${entityId}::uuid)
     END AS name
   `;

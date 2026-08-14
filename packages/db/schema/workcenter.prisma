@@ -28,6 +28,10 @@ model Workcenter {
   displays            Display[]
   itemDispositionLogs ItemDispositionLog[]
   shiftComments       ShiftComment[]
+  cycles              Cycle[]
+  stationStateLogs    StationStateLog[]
+  inventoryItems      InventoryItem[]
+  materialShiftUsage  MaterialShiftUsage[]
 
   @@unique([siteId, parentId, name])
   @@index([siteId])
@@ -110,6 +114,7 @@ model Station {
   logonSessions       StationLogonSession[]
   shiftComments       ShiftComment[]
   materialShiftUsage  MaterialShiftUsage[]
+  inventoryItems      InventoryItem[]
 
   @@unique([siteId, name])
   @@index([siteId])
@@ -137,6 +142,20 @@ model StationStateLog {
   jobVersionId String?     @db.Uuid
   jobVersion   JobVersion? @relation(fields: [jobVersionId], references: [id])
 
+  // Conformed context, stamped when the row is opened. Rows are split at
+  // shift boundaries at write time so every row lies within one shift.
+  // Nullable: a state transition is never failed because context
+  // resolution failed — stamp NULL and repair via the batched backfill.
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id])
+
+  shiftInstanceId String?        @db.Uuid
+  shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id])
+
+  /// ShiftInstance.businessDate of the shift covering startTime; null when
+  /// no shift schedule covered the row (legacy rows repaired by backfill).
+  businessDate DateTime? @db.Date
+
   status         StationStatus?
   statusReasonId String?        @db.Uuid
   statusReason   StatusReason?  @relation(fields: [statusReasonId], references: [id], onDelete: SetNull)
@@ -149,6 +168,8 @@ model StationStateLog {
   @@index([stationId, updatedAt])
   @@index([statusReasonId])
   @@index([jobVersionId])
+  @@index([shiftInstanceId])
+  @@index([stationId, businessDate])
 }
 
 /// Assignment: links a Datasource to a Station
@@ -279,6 +300,10 @@ model StationJobLog {
   endTime           DateTime? @db.Timestamptz(3) // null = currently running
   /// Standard cycle time (seconds) snapshotted from the job version at assignment time.
   standardCycle     Decimal?  @db.Decimal(10, 2)
+  /// Items produced per cycle snapshotted at assignment time (ADR 0007) —
+  /// recomputing a historical window must not value expected* with today's
+  /// quantities. Null on legacy rows; readers fall back to live resolution.
+  itemsPerCycle     Int?
   /// Watermark for incremental bucket accumulation. The background worker
   /// advances this on each tick so only the delta since the last tick is processed.
   lastAccumulatedAt DateTime? @db.Timestamptz(3)

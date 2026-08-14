@@ -6,8 +6,8 @@ export * as shift from "./shift.js";
 export * as hierarchy from "./hierarchy.js";
 export * as sync from "./sync.js";
 export * as compute from "./compute.js";
-export * as rollup from "./rollup.js";
 export * as recalc from "./recalc.js";
+export * as restamp from "./restamp.js";
 export * as archive from "./archive.js";
 
 // ── Per-pipeline cache ───────────────────────────────────────────
@@ -30,20 +30,19 @@ export {
 
 export { archiveOldBuckets } from "./archive.js";
 
-// ── Micro-batching ───────────────────────────────────────────────
-
-export { batchedMetricsUpdate, type MetricsUpdateRequest } from "./batcher.js";
-
 // ── Recomputation / update entry points ──────────────────────────
 
+export { updateTimeBased, recalcAll } from "./recalc.js";
+
+// ── Context restamp repair ───────────────────────────────────────
+
 export {
-  updateCountBased,
-  incrementCountBased,
-  processDirtyBuckets,
-  updateTimeBased,
-  recalcAll,
-  type CycleIncrement,
-} from "./recalc.js";
+  restampWindow,
+  restampAfterScheduleChange,
+  type RestampWindowInput,
+  type RestampWindowResult,
+  type ScheduleChangeRestampInput,
+} from "./restamp.js";
 
 // ── Computation primitives ───────────────────────────────────────
 
@@ -62,9 +61,18 @@ export {
   COUNT_KPI_KEYS,
 } from "./compute.js";
 
-// ── Rollup ───────────────────────────────────────────────────────
+// ── Hour-row read service ────────────────────────────────────────
 
-export { rollupBuckets, type RollupInput } from "./rollup.js";
+export {
+  aggregateJobHours,
+  aggregateStationHours,
+  aggregateStationTotal,
+  openHourOverlaySql,
+  OVERLAY_COLS,
+  type AggregateOptions,
+  type BucketAggregate,
+  type HourRowScope,
+} from "./read.js";
 
 // ── Shift resolution ─────────────────────────────────────────────
 
