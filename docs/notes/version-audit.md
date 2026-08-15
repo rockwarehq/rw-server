@@ -10,7 +10,7 @@ place in `packages/services/src/metrics/compute.ts` (queryAndTallyCycles),
 `cascade.ts` (cycle_stats CTE), and both disposition-attribution paths.
 
 Related but separate: ADR 0006 ("Flagged for review" section,
-`apps/docs/src/app/internal/adrs/0006-metric-bucket-field-definitions/page.mdx`)
+`docs/adrs/0006-metric-bucket-field-definitions.md`)
 lists metrics-pipeline flags (dead batchCountRollup, negative quality clamp,
 syncExpectedCyclesFromJobs zeroing, idealCycleSeconds rounding drift).
 

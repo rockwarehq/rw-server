@@ -4,7 +4,7 @@ Real-time OEE (Overall Equipment Effectiveness) metric bucket system.
 Tracks cycle counts, durations, and computed ratios across a
 station -> workcenter -> site entity hierarchy, with per-job breakdowns.
 
-> **Field semantics:** ADR 0006 (`apps/docs` → Internal → ADRs) is the
+> **Field semantics:** [ADR 0006](../adrs/0006-metric-bucket-field-definitions.md) is the
 > definition of record for every KPI field and the OEE formulas.
 >
 > **Live pipeline note:** the per-cycle hot path now only does an atomic

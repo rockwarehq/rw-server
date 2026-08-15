@@ -56,8 +56,6 @@ export default function Search(nextConfig = {}) {
             let appDir = path.resolve('./src/app')
             this.addContextDependency(appDir)
 
-            // TODO(public-deploy): exclude the internal tree from the index
-            // before deploying publicly, e.g. { ignore: ['internal/**'] }.
             let files = glob.sync('**/*.mdx', { cwd: appDir })
             let data = files.map((file) => {
               let url = '/' + file.replace(/(^|\/)page\.mdx$/, '')

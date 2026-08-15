@@ -242,96 +242,13 @@ export const publicNavigation: Array<NavGroup> = [
   },
 ]
 
-export const internalNavigation: Array<NavGroup> = [
-  {
-    title: 'Internal',
-    links: [{ title: 'Overview', href: '/internal' }],
-  },
-  {
-    title: 'Guides',
-    links: [
-      { title: 'Local Development', href: '/internal/guides/local-development' },
-    ],
-  },
-  {
-    title: 'Architecture',
-    links: [
-      { title: 'System Overview', href: '/internal/architecture' },
-      { title: 'API Server', href: '/internal/architecture/api' },
-      { title: 'Auth & IAM', href: '/internal/architecture/auth' },
-      { title: 'Edge & Data Pipeline', href: '/internal/architecture/edge' },
-      { title: 'Background Work', href: '/internal/architecture/workers' },
-      { title: 'Livestore', href: '/internal/architecture/livestore' },
-      { title: 'Data Model & Metrics', href: '/internal/architecture/data-model' },
-      { title: 'Data Model ERD & Audit', href: '/internal/architecture/data-model/erd' },
-    ],
-  },
-  {
-    title: 'ADRs',
-    links: [
-      { title: 'ADR Log', href: '/internal/adrs' },
-      { title: 'Template', href: '/internal/adrs/template' },
-      {
-        title: '0001 – Record Architecture Decisions',
-        href: '/internal/adrs/0001-record-architecture-decisions',
-      },
-      {
-        title: '0002 – Database Access Boundary',
-        href: '/internal/adrs/0002-database-access-boundary',
-      },
-      {
-        title: '0003 – Service Error Contract',
-        href: '/internal/adrs/0003-service-error-contract',
-      },
-      {
-        title: '0004 – App-Owned Composition Roots',
-        href: '/internal/adrs/0004-app-owned-composition-roots',
-      },
-      {
-        title: '0005 – Station Status: Running, Slow, Down',
-        href: '/internal/adrs/0005-station-status-running-slow-down',
-      },
-      {
-        title: '0006 – Metric Bucket Fields & OEE',
-        href: '/internal/adrs/0006-metric-bucket-field-definitions',
-      },
-      {
-        title: '0007 – MES History Correctness Defaults',
-        href: '/internal/adrs/0007-mes-history-correctness-defaults',
-      },
-      {
-        title: '0008 – Historian Series Queries',
-        href: '/internal/adrs/0008-historian-series-queries',
-      },
-    ],
-  },
-  {
-    title: 'Meta',
-    links: [{ title: 'How to Write Docs', href: '/internal/contributing' }],
-  },
-]
-
-// Union of both trees — for lookups that aren't tied to the current route,
-// e.g. search-result group titles.
-export const allNavigation: Array<NavGroup> = [
-  ...publicNavigation,
-  ...internalNavigation,
-]
-
-export function navigationFor(pathname: string): Array<NavGroup> {
-  return pathname === '/internal' || pathname.startsWith('/internal/')
-    ? internalNavigation
-    : publicNavigation
-}
-
 export function Navigation(props: React.ComponentPropsWithoutRef<'nav'>) {
-  let navigation = navigationFor(usePathname())
+  let navigation = publicNavigation
 
   return (
     <nav {...props}>
       <ul role="list">
         <TopLevelNavItem href="/">Docs</TopLevelNavItem>
-        <TopLevelNavItem href="/internal">Internal</TopLevelNavItem>
         {navigation.map((group, groupIndex) => (
           <NavigationGroup
             key={group.title}

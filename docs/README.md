@@ -1,13 +1,16 @@
-# docs/
+# Internal Dev Docs
 
-Repo-level documentation that doesn't belong to a single package.
+Internal documentation for the rw-server monorepo. The published product
+documentation site is separate — see `apps/docs`.
 
-- `architecture/` — standalone design docs and specs (livestore graph engine
-  spec, graph HTTP API, metrics pipeline). The published documentation site
-  (ADRs, guides, reference) lives separately in `apps/docs`.
-- `notes/` — ephemeral working notes (audits, analyses). Delete a note when
-  the work it tracks is closed.
-- `postman/` — Postman collection + local environment for exercising the
-  livestore graph API by hand.
+## Sections
 
-Package-specific orientation stays in each package's own `README.md`.
+- **[Guides](./guides/local-development.md)** — how-tos for local development, workflows, and tooling.
+- **[Architecture Patterns](./architecture/README.md)** — system structure and recurring patterns across apps and packages, plus standalone design docs (livestore spec, graph API, metrics pipeline).
+- **[ADRs](./adrs/README.md)** — Architecture Decision Records: why things are the way they are.
+- **`notes/`** — ephemeral working notes (audits, analyses). Delete a note when the work it tracks is closed.
+- **`postman/`** — Postman collection + local environment for exercising the livestore graph API by hand.
+
+## Contributing
+
+Internal docs are plain markdown in this directory — see [How to Write Docs](./contributing.md).

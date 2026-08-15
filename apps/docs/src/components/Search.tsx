@@ -21,7 +21,7 @@ import {
 } from 'react'
 import Highlighter from 'react-highlight-words'
 
-import { allNavigation } from '@/components/Navigation'
+import { publicNavigation } from '@/components/Navigation'
 import { type Result } from '@/mdx/search.mjs'
 import { useMobileNavigationStore } from './MobileNavigation'
 
@@ -169,7 +169,7 @@ function SearchResult({
 }) {
   let id = useId()
 
-  let sectionTitle = allNavigation.find((section) =>
+  let sectionTitle = publicNavigation.find((section) =>
     section.links.find((link) => link.href === result.url.split('#')[0]),
   )?.title
   let hierarchy = [sectionTitle, result.pageTitle].filter(

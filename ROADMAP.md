@@ -13,7 +13,7 @@ untracked and superseded by this roadmap and its issues).
 Product-default decisions that unblock Phase 1 (history visibility for soft-deleted
 entities, Cycle/InventoryItem soft-delete story, Station delete semantics, negative
 quality clamp, itemsPerCycle snapshotting) are recorded in
-[ADR 0007](apps/docs/src/app/internal/adrs/0007-mes-history-correctness-defaults/page.mdx).
+[ADR 0007](docs/adrs/0007-mes-history-correctness-defaults.md).
 
 Effort key: **S** ≤ 1 day · **M** = days · **L** = 1–2 weeks.
 
