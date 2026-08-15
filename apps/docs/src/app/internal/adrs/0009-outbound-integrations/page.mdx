@@ -16,7 +16,7 @@ Customers need LiveStore hook events to cause side effects outside our stack —
 executing a stored procedure on a plant SQL Server when a cycle completes, with REST calls and
 webhooks close behind. Three constraints shaped the design:
 
-- `packages/livestore/spec.md` §4.8 declares hooks **terminal event emitters**: a hook decides that
+- `docs/architecture/livestore-spec.md` §4.8 declares hooks **terminal event emitters**: a hook decides that
   something happened and publishes it; it does not execute actions.
 - Credentials (SQL passwords, API keys) must be stored recoverably — they are presented to external
   systems, so the one-way hashing in `@rw/auth` cannot be used.

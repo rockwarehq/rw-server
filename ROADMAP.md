@@ -46,7 +46,7 @@ harness needs a real Postgres.
 | # | Item | Effort |
 | --- | --- | --- |
 | 0.1 | Test infra: vitest + `test` script in `packages/services`, ephemeral Postgres (testcontainers or a `postgres` service in `compose.yml`, which currently only has NATS), `prisma migrate deploy` + seed factories (site/station/job/shift). Follow the vitest patterns in `apps/api/test/`. | M |
-| 0.2 | Implement the documented 107-invariant scenario from `packages/services/src/metrics/README.md` as the first integration test (cycles → HOUR buckets → rollups → archive). Highest-leverage single test; can land in tranches (capture → rollup → archive). | L |
+| 0.2 | Implement the documented 107-invariant scenario from `docs/architecture/metrics.md` as the first integration test (cycles → HOUR buckets → rollups → archive). Highest-leverage single test; can land in tranches (capture → rollup → archive). | L |
 | 0.3 | Focused tests for the paths Phase 1 touches: `cycle.complete()` all three strategies (immediate, open/close, replayed) + validation errors; `downtimeLogSearch` shift clamping; `cycleSearch` SQL CTE. | M |
 
 ## Phase 1 — Correctness of historical/OEE data (~2–3 wk)
@@ -116,7 +116,7 @@ and DB-generated OEE columns.
   (`packages/livestore/src/resolvers/hook-manager.ts:224,240`), which is what makes
   the 2.1 design a small change rather than an event-envelope project.
 - `packages/services` has **no `test` script**; the 107-invariant metrics scenario is
-  documented in `packages/services/src/metrics/README.md` but no runnable test file
+  documented in `docs/architecture/metrics.md` but no runnable test file
   exists in the repo. `compose.yml` provisions only NATS — no local Postgres for tests.
 - The expected\*-zeroing in `syncExpectedCyclesFromJobs` and the JOB-vs-STATION
   re-version desync are the two active correctness bugs with visible KPI impact;

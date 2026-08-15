@@ -56,7 +56,7 @@ loses the "which version was active when" boundary, so prefer close/reopen.
 `idealCycleSeconds`/`expectedCycles`; they should be consistent, and
 StationJobLog should show two rows with the version boundary.
 E2E harness: `apps/api/scripts/` metrics/e2e scripts (see
-`packages/services/src/metrics/README.md` Integration Test section).
+`docs/architecture/metrics.md` Integration Test section).
 
 ## 2. inventory.list RPC only filters by exact version IDs (latent footgun)
 

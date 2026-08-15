@@ -1,6 +1,6 @@
 # @rw/livestore-app
 
-The Reactive Graph Engine (see `spec.md`): live values mirrored into a reactive
+The Reactive Graph Engine (see `docs/architecture/livestore-spec.md`): live values mirrored into a reactive
 graph and fanned out to dashboards over WebSocket. Two input paths feed the same
 engine:
 

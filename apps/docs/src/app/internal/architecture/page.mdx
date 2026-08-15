@@ -57,7 +57,7 @@ Deployment is **per-tenant**: each tenant (e.g. `sim`, `dixie`, `dev`) gets its 
 | `packages/runtime` | Events bus (Redis pub/sub bridge), BullMQ factories, http-host (`/healthz`, `/readyz`, `/metrics`), lifecycle/drain, gateway NATS subjects |
 | `packages/services` | Business logic by domain (facility, cycle, metrics, document, entity, queues, …) — the layer RPC handlers call into |
 | `packages/auth` | Token create/verify, IAM context, RBAC, API tokens, timing-safe secret helpers |
-| `packages/livestore` | The graph engine implementation + event catalog (see its `spec.md`) |
+| `packages/livestore` | The graph engine implementation + event catalog (see `docs/architecture/livestore-spec.md`) |
 | `packages/automations` | Generic rules-engine framework (events → conditions → actions) |
 | `packages/metrics` | OEE calculation functions |
 | `packages/rpc-client`, `packages/api-client` | Published clients (oRPC-typed and OpenAPI-generated) |
