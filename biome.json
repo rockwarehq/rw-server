@@ -37,8 +37,7 @@
       "!apps/docs",
       "!**/dist",
       "!**/generated",
-      "!**/node_modules",
-      "!**/_ported"
+      "!**/node_modules"
     ]
   },
   "overrides": [

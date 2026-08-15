@@ -4,7 +4,6 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./queues/*": "./dist/queues/*.js",
     "./services/metrics/*": "./dist/services/metrics/*.js",
     "./services/cycle/*": "./dist/services/cycle/*.js",
     "./services/inventory/*": "./dist/services/inventory/*.js",
