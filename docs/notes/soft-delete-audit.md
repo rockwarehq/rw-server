@@ -1,13 +1,13 @@
 # TODO — Soft-delete audit findings (2026-07-10)
 
-Untracked scratch file — do not commit. ("TODO" = review these findings and
+Working note. ("TODO" = review these findings and
 make the decisions; several items are questions, not tasks.)
 
 Audit scope: every query on the 24 models with a `deletedAt` column, across
 `packages/services/src`, `apps/api/src/rpc`, and workers. There is NO global
 soft-delete middleware — every query must filter `deletedAt: null` /
-`"deletedAt" IS NULL` explicitly. Companion docs: `TODO-rollup-analysis.md`,
-`TODO-version-audit.md`, ADR 0006 flags.
+`"deletedAt" IS NULL` explicitly. Companion docs: `version-audit.md`
+(same directory), ADR 0006 flags.
 
 **Ground truth that calibrates severity (verified):**
 - Soft-deleted today by real code paths: Order (`order.ts:363`), Job

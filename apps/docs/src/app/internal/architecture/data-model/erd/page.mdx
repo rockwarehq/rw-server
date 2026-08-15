@@ -1249,7 +1249,7 @@ Site children mix three behaviors: **Cascade** (Workcenter, Station, Graph\*, Me
 - `archivedAt DateTime?` — versioned catalog entities (Job, Tool, Product, Material, ProcessType, StatusReason, ToolStatus, ItemDisposition\*, ProductMaterial); several carry **both** `deletedAt` and `archivedAt` with distinct meanings
 - `isDeleted Boolean` — Graph\*, Object\*, Integration\*
 
-No global middleware enforces filtering; every query must remember. See the standing `TODO-soft-delete-audit.md` at the repo root for the per-callsite audit.
+No global middleware enforces filtering; every query must remember. See the standing `docs/notes/soft-delete-audit.md` for the per-callsite audit.
 
 ### 4. Circular current-version 1:1 pattern (×9)
 

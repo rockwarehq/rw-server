@@ -1,6 +1,6 @@
 # TODO — Version-table audit findings (2026-07-10)
 
-Untracked scratch file — do not commit. Findings from an audit for the bug
+Working note. Findings from an audit for the bug
 class: "aggregate over a time window filtered by a *specific* version
 (snapshotted or current) instead of matching all versions of the parent
 entity." Original instance (already fixed): job counts during a shift only
