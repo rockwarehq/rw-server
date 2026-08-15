@@ -32,6 +32,7 @@
   "files": {
     "includes": [
       "apps/**/src/**",
+      "apps/*/scripts/**",
       "packages/**/src/**",
       "scripts/**",
       "!apps/docs",
@@ -47,6 +48,24 @@
         "rules": {
           "style": {
             "noNonNullAssertion": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/api/scripts/seed-import/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "off",
+            "useTemplate": "off"
+          },
+          "suspicious": {
+            "noImplicitAnyLet": "off",
+            "noAssignInExpressions": "off"
+          },
+          "complexity": {
+            "useOptionalChain": "off"
           }
         }
       }
