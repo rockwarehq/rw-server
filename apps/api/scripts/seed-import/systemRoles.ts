@@ -1,6 +1,6 @@
 import prisma from "@rw/db";
 import type { RoleScope } from "@rw/db";
-import { ACTIONS, ALL_PERMISSIONS, RESOURCES } from "@rw/auth/iam/permissions";
+import { ACTIONS, ALL_PERMISSIONS, type RESOURCES } from "@rw/auth/iam/permissions";
 import type { Permission } from "@rw/auth/iam/permissions";
 
 const all = (resource: (typeof RESOURCES)[number]): Permission[] =>
@@ -70,7 +70,8 @@ export const SYSTEM_ROLE_SPECS: readonly SystemRoleSpec[] = [
   },
   {
     name: "Office User",
-    description: "Production office user who can work with schedules, jobs, products, tools, and facility data for the site.",
+    description:
+      "Production office user who can work with schedules, jobs, products, tools, and facility data for the site.",
     scope: "SITE",
     permissions: OFFICE_USER_PERMISSIONS,
   },

@@ -24,7 +24,7 @@ import { driverRegistry } from "../../src/services/device/driver/registry.js";
 import * as datasourceSvc from "../../src/services/device/datasource/index.js";
 import * as gatewaySvc from "@rw/services/device/gateway/index";
 
-const DEFAULT_ROLES =["Operator", "Supervisor", "Lead", "Quality", "Maintenance", "Contractor", "Engineer", "Manager"];
+const DEFAULT_ROLES = ["Operator", "Supervisor", "Lead", "Quality", "Maintenance", "Contractor", "Engineer", "Manager"];
 
 type SystemRoleName = "Company Administrator" | "Factory Administrator" | "Office User" | "Read-only User";
 type SiteKey = "primary" | "secondary";
@@ -60,7 +60,8 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     firstName: "Office",
     lastName: "User",
     persona: "Office User",
-    description: "Production office user who can work with schedules, jobs, products, tools, and facility data for the site.",
+    description:
+      "Production office user who can work with schedules, jobs, products, tools, and facility data for the site.",
     assignments: [{ roleName: "Office User", scope: "SITE", site: "primary" }],
   },
   {
@@ -84,7 +85,8 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     firstName: "No",
     lastName: "Role",
     persona: "Member without Role",
-    description: "Active workspace member with no role assignment — verifies permission denial for half-onboarded users.",
+    description:
+      "Active workspace member with no role assignment — verifies permission denial for half-onboarded users.",
     assignments: [],
   },
   {
@@ -101,7 +103,8 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     firstName: "Disabled",
     lastName: "User",
     persona: "Disabled Office User",
-    description: "Office user with DISABLED status — verifies login rejection and session revocation for disabled accounts.",
+    description:
+      "Office user with DISABLED status — verifies login rejection and session revocation for disabled accounts.",
     status: "DISABLED",
     assignments: [{ roleName: "Office User", scope: "SITE", site: "primary" }],
   },
@@ -118,7 +121,8 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     firstName: "Mixed",
     lastName: "Roles",
     persona: "Multi-site User",
-    description: "Office User on the primary site and Read-only User on the secondary site — tests per-site role differentiation.",
+    description:
+      "Office User on the primary site and Read-only User on the secondary site — tests per-site role differentiation.",
     assignments: [
       { roleName: "Office User", scope: "SITE", site: "primary" },
       { roleName: "Read-only User", scope: "SITE", site: "secondary" },
@@ -383,7 +387,6 @@ async function main() {
   execSync("pnpm --filter @rw/db exec prisma migrate deploy", { stdio: "inherit" });
   console.log();
 
-
   const site = await bootstrap();
 
   setDataFile("sqlLegacyData.seed.txt");
@@ -439,9 +442,7 @@ async function main() {
   console.log("── Fix Cavity Names ────────────────────────────────────");
   console.log();
 
-  const unnamedCavities = await prisma.$queryRaw<
-    Array<{ versionId: string; toolId: string }>
-  >`
+  const unnamedCavities = await prisma.$queryRaw<Array<{ versionId: string; toolId: string }>>`
     SELECT tcb.id AS "versionId", tc."toolId"
     FROM "ToolCavityVersion" tcb
     JOIN "ToolCavity" tc ON tc."currentVersionId" = tcb.id
@@ -508,9 +509,7 @@ async function main() {
   console.log("── Tool Cavity → Job Assignment ────────────────────────");
   console.log();
 
-  const allJobTools = await prisma.$queryRaw<
-    Array<{ jobId: string; toolId: string }>
-  >`
+  const allJobTools = await prisma.$queryRaw<Array<{ jobId: string; toolId: string }>>`
     SELECT jt."jobId", jt."toolId"
     FROM "JobTool" jt
     WHERE jt."deletedAt" IS NULL

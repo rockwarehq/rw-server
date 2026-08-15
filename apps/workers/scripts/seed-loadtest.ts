@@ -377,13 +377,7 @@ async function ensureJob(
   return jobId;
 }
 
-async function ensureStation(
-  siteId: string,
-  workcenterId: string,
-  processTypeId: string,
-  i: number,
-  jobId: string,
-) {
+async function ensureStation(siteId: string, workcenterId: string, processTypeId: string, i: number, jobId: string) {
   const name = stationName(i);
   const existing = await prisma.station.findFirst({
     where: { siteId, name: { equals: name, mode: "insensitive" } },
@@ -680,7 +674,9 @@ async function main() {
 
   if (specChanged) {
     const bumped = await bumpSpecVersion(gateway.id);
-    console.log(`\ngateway spec bumped to v${bumped.specVersion} — sim drivers go live within ~5s of the next /edge/sync`);
+    console.log(
+      `\ngateway spec bumped to v${bumped.specVersion} — sim drivers go live within ~5s of the next /edge/sync`,
+    );
   } else {
     console.log("\nno datasource changes — gateway spec version untouched");
   }

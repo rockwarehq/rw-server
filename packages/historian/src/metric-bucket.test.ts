@@ -22,8 +22,7 @@ describe.skipIf(!process.env.DATABASE_URL)("historian metricBucket series", () =
   let stationId: string;
   let archivedCollisionId: string;
 
-  const scope = () =>
-    ({ siteId, entityType: "WORKCENTER", entityId: workcenterId, granularity: "HOUR" }) as const;
+  const scope = () => ({ siteId, entityType: "WORKCENTER", entityId: workcenterId, granularity: "HOUR" }) as const;
 
   beforeAll(async () => {
     const suffix = randomUUID();
@@ -131,11 +130,7 @@ describe.skipIf(!process.env.DATABASE_URL)("historian metricBucket series", () =
     if (isHistorianError(page)) return;
 
     const times = page.rows.map((row) => row.startTime.toISOString());
-    expect(times).toEqual([
-      "2026-07-13T06:00:00.000Z",
-      "2026-07-13T07:00:00.000Z",
-      "2026-07-13T08:00:00.000Z",
-    ]);
+    expect(times).toEqual(["2026-07-13T06:00:00.000Z", "2026-07-13T07:00:00.000Z", "2026-07-13T08:00:00.000Z"]);
 
     const collision = page.rows[0];
     expect(collision.id).toBe(archivedCollisionId);
@@ -158,9 +153,7 @@ describe.skipIf(!process.env.DATABASE_URL)("historian metricBucket series", () =
     });
     expect(isHistorianError(second)).toBe(false);
     if (isHistorianError(second)) return;
-    expect(second.rows.map((row) => row.startTime.toISOString())).toEqual([
-      "2026-07-13T08:00:00.000Z",
-    ]);
+    expect(second.rows.map((row) => row.startTime.toISOString())).toEqual(["2026-07-13T08:00:00.000Z"]);
     expect(second.nextPageToken).toBeNull();
   });
 

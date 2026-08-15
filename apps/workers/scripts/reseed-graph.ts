@@ -35,15 +35,24 @@ function check(label: string, result: Result): Record<string, unknown> {
 }
 
 async function reset(): Promise<void> {
-  const liveHooks = await prisma.graphHook.findMany({ where: { siteId: scope.siteId, isDeleted: false }, select: { id: true } });
+  const liveHooks = await prisma.graphHook.findMany({
+    where: { siteId: scope.siteId, isDeleted: false },
+    select: { id: true },
+  });
   for (const h of liveHooks) check(`removeHook ${h.id}`, (await hooks.remove(h.id, scope)) as Result);
-  const liveNodes = await prisma.graphNode.findMany({ where: { siteId: scope.siteId, isDeleted: false }, select: { id: true } });
+  const liveNodes = await prisma.graphNode.findMany({
+    where: { siteId: scope.siteId, isDeleted: false },
+    select: { id: true },
+  });
   for (const n of liveNodes) check(`removeNode ${n.id}`, (await nodes.remove(n.id, scope)) as Result);
   console.log(`reset: removed ${liveHooks.length} hooks, ${liveNodes.length} nodes`);
 }
 
 async function seedNode(name: string, typeRef: string, typeContext: Record<string, unknown>): Promise<void> {
-  const node = check(name, (await nodes.create({ name, typeRef, typeContext, materializeTypeFields: true }, scope)) as Result) as {
+  const node = check(
+    name,
+    (await nodes.create({ name, typeRef, typeContext, materializeTypeFields: true }, scope)) as Result,
+  ) as {
     id: string;
     properties?: unknown[];
   };

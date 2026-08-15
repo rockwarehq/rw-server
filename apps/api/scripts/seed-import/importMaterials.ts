@@ -26,11 +26,7 @@ interface SqlServerRow {
 // Importer
 // ---------------------------------------------------------------------------
 
-export async function importMaterials(
-  prisma: PrismaClient,
-  idMap: IdMap,
-  siteId: string,
-): Promise<void> {
+export async function importMaterials(prisma: PrismaClient, idMap: IdMap, siteId: string): Promise<void> {
   const log = logger("Material");
 
   const rows = await readData<SqlServerRow>("Material");
@@ -59,9 +55,7 @@ export async function importMaterials(
         where: {
           siteId,
           currentVersion:
-            shortCode === null
-              ? { shortCode: null }
-              : { shortCode: { equals: shortCode, mode: "insensitive" } },
+            shortCode === null ? { shortCode: null } : { shortCode: { equals: shortCode, mode: "insensitive" } },
         },
         include: { currentVersion: true },
       });
@@ -74,9 +68,8 @@ export async function importMaterials(
           version?.materialNumber !== materialNumber ||
           version?.description !== description ||
           version?.weightUnits !== weightUnits ||
-          (version?.unitCost !== null && version?.unitCost !== undefined
-            ? Number(version.unitCost)
-            : null) !== unitCost;
+          (version?.unitCost !== null && version?.unitCost !== undefined ? Number(version.unitCost) : null) !==
+            unitCost;
 
         if (changed && version) {
           await prisma.materialVersion.update({

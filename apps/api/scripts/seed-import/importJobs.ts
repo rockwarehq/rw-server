@@ -1,13 +1,5 @@
 import type { PrismaClient } from "@rw/db";
-import {
-  type IdMap,
-  readData,
-  batchUpsert,
-  logger,
-  nullable,
-  parseNumber,
-  isDevSeed,
-} from "./utils.js";
+import { type IdMap, readData, batchUpsert, logger, nullable, parseNumber, isDevSeed } from "./utils.js";
 
 // ---------------------------------------------------------------------------
 // SQL Server source shape
@@ -27,11 +19,7 @@ const NON_PRODUCTION_JOBS = new Set(["MAINT", "OPEN", "SCHED DOWN", "TOOLING"]);
 // Importer
 // ---------------------------------------------------------------------------
 
-export async function importJobs(
-  prisma: PrismaClient,
-  idMap: IdMap,
-  siteId: string,
-): Promise<void> {
+export async function importJobs(prisma: PrismaClient, idMap: IdMap, siteId: string): Promise<void> {
   const log = logger("Job");
 
   const rows = await readData<SqlServerRow>("Job");

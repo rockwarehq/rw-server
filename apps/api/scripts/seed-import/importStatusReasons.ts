@@ -1,10 +1,5 @@
 import type { PrismaClient } from "@rw/db";
-import {
-  type IdMap,
-  readData,
-  batchUpsert,
-  logger,
-} from "./utils.js";
+import { type IdMap, readData, batchUpsert, logger } from "./utils.js";
 
 // ---------------------------------------------------------------------------
 // SQL Server source shape
@@ -21,11 +16,7 @@ interface SqlServerRow {
 // Importer
 // ---------------------------------------------------------------------------
 
-export async function importStatusReasons(
-  prisma: PrismaClient,
-  idMap: IdMap,
-  siteId: string,
-): Promise<void> {
+export async function importStatusReasons(prisma: PrismaClient, idMap: IdMap, siteId: string): Promise<void> {
   const log = logger("StatusReason");
 
   const rows = await readData<SqlServerRow>("StatusReason");
@@ -52,9 +43,7 @@ export async function importStatusReasons(
       }
 
       // Resolve processType for the m2m link (DTGroupID = process type name)
-      const processTypeId = row.DTGroupID
-        ? idMap.get("processType", row.DTGroupID) ?? null
-        : null;
+      const processTypeId = row.DTGroupID ? (idMap.get("processType", row.DTGroupID) ?? null) : null;
 
       const isPlannedDown = row.isPlannedDown === "1";
 
@@ -70,9 +59,7 @@ export async function importStatusReasons(
             data: {
               isPlannedDown,
               categoryId,
-              processTypes: processTypeId
-                ? { set: [{ id: processTypeId }] }
-                : undefined,
+              processTypes: processTypeId ? { set: [{ id: processTypeId }] } : undefined,
             },
           })
         : await prisma.statusReason.create({
@@ -81,9 +68,7 @@ export async function importStatusReasons(
               isPlannedDown,
               categoryId,
               siteId,
-              processTypes: processTypeId
-                ? { connect: [{ id: processTypeId }] }
-                : undefined,
+              processTypes: processTypeId ? { connect: [{ id: processTypeId }] } : undefined,
             },
           });
 

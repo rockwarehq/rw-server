@@ -67,9 +67,7 @@ async function loadDataFile(): Promise<Record<string, Record<string, string>[]>>
 /**
  * Parse the full file content into named sections of row objects.
  */
-export function parseFixedWidthSections(
-  text: string,
-): Record<string, Record<string, string>[]> {
+export function parseFixedWidthSections(text: string): Record<string, Record<string, string>[]> {
   const result: Record<string, Record<string, string>[]> = {};
   const lines = text.split(/\r?\n/);
 
@@ -148,11 +146,7 @@ function parseFixedWidthTable(lines: string[]): Record<string, string>[] {
     //   "(N row(s) affected)"        — emitted after every result set
     //   "Completion time: <ISO ts>"  — emitted at the end of script execution
     const trimmed = line.trim();
-    if (
-      !trimmed ||
-      /^\(\d+ rows? affected\)/.test(trimmed) ||
-      /^Completion time:/i.test(trimmed)
-    ) {
+    if (!trimmed || /^\(\d+ rows? affected\)/.test(trimmed) || /^Completion time:/i.test(trimmed)) {
       continue;
     }
 
@@ -171,9 +165,7 @@ function parseFixedWidthTable(lines: string[]): Record<string, string>[] {
  * Read a named section from the data file. Returns typed rows.
  * Returns an empty array if the section doesn't exist (allows skipping).
  */
-export async function readData<T>(
-  section: string,
-): Promise<T[]> {
+export async function readData<T>(section: string): Promise<T[]> {
   const data = await loadDataFile();
   const rows = data[section];
   if (!rows || rows.length === 0) return [];
@@ -213,10 +205,7 @@ export class IdMap {
   require(table: string, oldId: string): string {
     const newId = this.get(table, oldId);
     if (!newId) {
-      throw new Error(
-        `IdMap: no mapping found for ${table}[${oldId}]. ` +
-          `Was the parent table imported first?`,
-      );
+      throw new Error(`IdMap: no mapping found for ${table}[${oldId}]. ` + `Was the parent table imported first?`);
     }
     return newId;
   }

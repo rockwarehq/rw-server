@@ -179,7 +179,10 @@ async function main(): Promise<void> {
       enabled: true,
       event: "job.changed",
       eventVersion: "1",
-      conditions: { combinator: "and", rules: [{ field: "event.payload.stationId", operator: "=", value: spec.value }] },
+      conditions: {
+        combinator: "and",
+        rules: [{ field: "event.payload.stationId", operator: "=", value: spec.value }],
+      },
       actions: spec.actions,
     });
 
@@ -202,7 +205,10 @@ async function main(): Promise<void> {
         {
           type: "sendAlert",
           version: "1",
-          inputs: { text: "FYI: shift lead notified of change at {{event.payload.stationId}}", recipientUserIds: [USR_LEAD.id] },
+          inputs: {
+            text: "FYI: shift lead notified of change at {{event.payload.stationId}}",
+            recipientUserIds: [USR_LEAD.id],
+          },
         },
       ],
     });
@@ -217,7 +223,11 @@ async function main(): Promise<void> {
     check("our automation matched", r1.matched.includes(AUTO_MAIN_ID), r1.matched);
     check("both actions ran (2 ALERT lines)", ourAlerts.length === 2, ourAlerts);
     check("supervisor alert ran first (resolved email)", ourAlerts[0]?.includes(USR_SUP.email) === true, ourAlerts[0]);
-    check("shift-lead alert ran second (resolved email)", ourAlerts[1]?.includes(USR_LEAD.email) === true, ourAlerts[1]);
+    check(
+      "shift-lead alert ran second (resolved email)",
+      ourAlerts[1]?.includes(USR_LEAD.email) === true,
+      ourAlerts[1],
+    );
     check(
       "no raw user ids leaked into the alert text",
       ourAlerts.every((a) => !a.includes(USR_SUP.id) && !a.includes(USR_LEAD.id)),
@@ -232,7 +242,11 @@ async function main(): Promise<void> {
     });
     check("AutomationRun row written for the fire", run1 !== null);
     check("run status = SUCCESS", run1?.status === "SUCCESS", run1?.status);
-    check("run recorded our automation as matched", run1?.matches.some((m) => m.automationId === AUTO_MAIN_ID) === true, run1?.matches);
+    check(
+      "run recorded our automation as matched",
+      run1?.matches.some((m) => m.automationId === AUTO_MAIN_ID) === true,
+      run1?.matches,
+    );
     check(
       "two SUCCESS AutomationActionRun rows",
       run1?.actionRuns.filter((a) => a.status === "SUCCESS").length === 2,
@@ -247,7 +261,9 @@ async function main(): Promise<void> {
 
     // -------------------------------------------------------------------------
     console.log("\n4. Invalid payload — wrong type (stationId is a number) — throws");
-    const e4 = await assertThrows(() => fw.fire("job.changed", { stationId: 123 } as unknown as Record<string, unknown>));
+    const e4 = await assertThrows(() =>
+      fw.fire("job.changed", { stationId: 123 } as unknown as Record<string, unknown>),
+    );
     check("threw on invalid payload", e4 !== null);
     check("error mentions stationId", e4 !== null && /stationId/i.test(e4.message), e4?.message);
 
@@ -263,7 +279,13 @@ async function main(): Promise<void> {
       id: AUTO_AUTHOR_ID,
       label: AUTHOR_LABEL,
       value: "s_9",
-      actions: [{ type: "sendAlert", version: "1", inputs: { text: "hit {{event.payload.stationId}}", recipientUserIds: [USR_OPS.id] } }],
+      actions: [
+        {
+          type: "sendAlert",
+          version: "1",
+          inputs: { text: "hit {{event.payload.stationId}}", recipientUserIds: [USR_OPS.id] },
+        },
+      ],
     });
     check("upsert returned the automation", created.label === AUTHOR_LABEL);
     const beforeReload = await fw.fire("job.changed", { stationId: "s_9" });
@@ -280,7 +302,11 @@ async function main(): Promise<void> {
     fw.engine.reload();
     const afterDisable = await fw.fire("job.changed", { stationId: "s_9" });
     firedEventIds.add(afterDisable.eventId);
-    check("disabled automation no longer matches", !afterDisable.matched.includes(AUTO_AUTHOR_ID), afterDisable.matched);
+    check(
+      "disabled automation no longer matches",
+      !afterDisable.matched.includes(AUTO_AUTHOR_ID),
+      afterDisable.matched,
+    );
 
     // -------------------------------------------------------------------------
     console.log("\n8. Persistence — a fresh DB store loads the automations from Postgres");
@@ -306,7 +332,11 @@ async function main(): Promise<void> {
       include: { actionRuns: true },
     });
     check("audit recorded a FAILED run", failedRun !== null, failedRun?.status);
-    check("FAILED run carries the error message", !!failedRun?.error && /sendSms/.test(failedRun.error), failedRun?.error);
+    check(
+      "FAILED run carries the error message",
+      !!failedRun?.error && /sendSms/.test(failedRun.error),
+      failedRun?.error,
+    );
 
     // -------------------------------------------------------------------------
     console.log("\n9b. Unknown action version — fire() throws when the version pin has no handler");
@@ -319,7 +349,11 @@ async function main(): Promise<void> {
     fw.engine.reload();
     const e9b = await assertThrows(() => fw.fire("job.changed", { stationId: "s_99" }));
     check("fire() threw on bad version", e9b !== null);
-    check("error names the missing version 'sendAlert@999'", e9b !== null && /sendAlert@999/.test(e9b.message), e9b?.message);
+    check(
+      "error names the missing version 'sendAlert@999'",
+      e9b !== null && /sendAlert@999/.test(e9b.message),
+      e9b?.message,
+    );
 
     // -------------------------------------------------------------------------
     console.log("\n10. Construction validation — missing builder for a declared event type throws");
@@ -361,14 +395,34 @@ async function main(): Promise<void> {
     // -------------------------------------------------------------------------
     console.log("\n11. Ref pickers — each DB-backed source returns the seeded rows");
     const users = await fw.listRefOptions("users");
-    check("users picker includes the supervisor", users.some((o) => o.id === USR_SUP.id && o.label === USR_SUP.email), users);
-    check("users picker includes the ops pager", users.some((o) => o.id === USR_OPS.id && o.label === USR_OPS.email), users);
+    check(
+      "users picker includes the supervisor",
+      users.some((o) => o.id === USR_SUP.id && o.label === USR_SUP.email),
+      users,
+    );
+    check(
+      "users picker includes the ops pager",
+      users.some((o) => o.id === USR_OPS.id && o.label === USR_OPS.email),
+      users,
+    );
     const stations = await fw.listRefOptions("stations");
-    check("stations picker includes the seeded station", stations.some((o) => o.label === "E2E Station"), stations);
+    check(
+      "stations picker includes the seeded station",
+      stations.some((o) => o.label === "E2E Station"),
+      stations,
+    );
     const jobs = await fw.listRefOptions("jobs");
-    check("jobs picker includes the seeded job", jobs.some((o) => o.label === "E2E Job"), jobs);
+    check(
+      "jobs picker includes the seeded job",
+      jobs.some((o) => o.label === "E2E Job"),
+      jobs,
+    );
     const workCenters = await fw.listRefOptions("workCenters");
-    check("workCenters picker includes the seeded work center", workCenters.some((o) => o.label === "E2E Workcenter"), workCenters);
+    check(
+      "workCenters picker includes the seeded work center",
+      workCenters.some((o) => o.label === "E2E Workcenter"),
+      workCenters,
+    );
     const eRef = await assertThrows(() => fw.listRefOptions("nonsense"));
     check("unknown source throws", eRef !== null && /unknown ref source/i.test(eRef.message), eRef?.message);
 

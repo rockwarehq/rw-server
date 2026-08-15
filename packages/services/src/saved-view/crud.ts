@@ -151,8 +151,7 @@ export async function update(id: string, input: UpdateSavedViewInput, workspaceI
   // PRIVATE views are entirely owner-only. On WORKSPACE views any member may
   // publish config ("Set default for everyone"); identity changes stay with
   // the creator.
-  const changesIdentity =
-    input.name !== undefined || input.description !== undefined || input.visibility !== undefined;
+  const changesIdentity = input.name !== undefined || input.description !== undefined || input.visibility !== undefined;
   if (current.visibility === "PRIVATE" && !isOwner) {
     return { error: "Only the creator can modify this view", code: "FORBIDDEN" };
   }

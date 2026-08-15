@@ -102,8 +102,7 @@ function normalizeRow(row: LiveRow | LogRow, archived: boolean): MetricBucketRow
   };
 }
 
-function scopeWhere(scope: MetricBucketScope): Prisma.MetricBucketWhereInput &
-  Prisma.MetricBucketLogWhereInput {
+function scopeWhere(scope: MetricBucketScope): Prisma.MetricBucketWhereInput & Prisma.MetricBucketLogWhereInput {
   return {
     siteId: scope.siteId,
     entityType: scope.entityType,
@@ -113,8 +112,7 @@ function scopeWhere(scope: MetricBucketScope): Prisma.MetricBucketWhereInput &
 }
 
 /** Point-in-range predicate: `startTime >= from AND (to IS NULL OR startTime < to)`. */
-function rangeWhere(range: ResolvedRange): Prisma.MetricBucketWhereInput &
-  Prisma.MetricBucketLogWhereInput {
+function rangeWhere(range: ResolvedRange): Prisma.MetricBucketWhereInput & Prisma.MetricBucketLogWhereInput {
   const startTime: Prisma.DateTimeFilter = { gte: range.from };
   if (range.to) startTime.lt = range.to;
   return { startTime };
@@ -296,9 +294,7 @@ async function fetchChanges(
   const merged = [
     ...live.map((row) => normalizeRow(row as LiveRow, false)),
     ...archived.map((row) => normalizeRow(row as LogRow, true)),
-  ].sort(
-    (a, b) => a.changeTs.getTime() - b.changeTs.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-  );
+  ].sort((a, b) => a.changeTs.getTime() - b.changeTs.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   const hasMore = merged.length > limit;
   const data = hasMore ? merged.slice(0, limit) : merged;

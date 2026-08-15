@@ -1,12 +1,6 @@
 import type { PrismaClient } from "@rw/db";
 import { hashPassword, comparePassword } from "@rw/auth/password";
-import {
-  type IdMap,
-  readData,
-  batchUpsert,
-  logger,
-  nullable,
-} from "./utils.js";
+import { type IdMap, readData, batchUpsert, logger, nullable } from "./utils.js";
 
 interface SqlServerRow {
   NameID: string;
@@ -25,11 +19,7 @@ function splitName(nameId: string): { firstName: string; lastName: string } {
   };
 }
 
-export async function importEmployees(
-  prisma: PrismaClient,
-  idMap: IdMap,
-  siteId: string,
-): Promise<void> {
+export async function importEmployees(prisma: PrismaClient, idMap: IdMap, siteId: string): Promise<void> {
   const log = logger("Employee");
 
   const rows = await readData<SqlServerRow>("Employee");
@@ -53,9 +43,7 @@ export async function importEmployees(
 
   const operatorRoleId = idMap.get("employeeRole", "Operator") ?? null;
   if (!operatorRoleId) {
-    log.warn(
-      "No 'Operator' role found — employees with an unknown role will get no site access",
-    );
+    log.warn("No 'Operator' role found — employees with an unknown role will get no site access");
   }
 
   let siteAccessSkipped = 0;
@@ -72,8 +60,7 @@ export async function importEmployees(
       const employeeNumber = nullable(row.EmployeeID.trim());
       const plainPin = nullable(row.PIN.trim());
       const roleName = row.Role.trim();
-      const roleId =
-        idMap.get("employeeRole", roleName) ?? operatorRoleId ?? null;
+      const roleId = idMap.get("employeeRole", roleName) ?? operatorRoleId ?? null;
 
       // Idempotency match: same workspace + same current-version profile tuple.
       // employeeNumber is the strongest discriminator when present.
@@ -99,9 +86,7 @@ export async function importEmployees(
         let nextPinHash: string | null = currentVersion.pinHash;
         let pinChanged = false;
         if (plainPin) {
-          const matches = currentVersion.pinHash
-            ? await comparePassword(plainPin, currentVersion.pinHash)
-            : false;
+          const matches = currentVersion.pinHash ? await comparePassword(plainPin, currentVersion.pinHash) : false;
           if (!matches) {
             nextPinHash = await hashPassword(plainPin);
             pinChanged = true;
@@ -114,8 +99,7 @@ export async function importEmployees(
             orderBy: { version: "desc" },
             select: { version: true },
           });
-          const nextVersionNum =
-            (maxVersion?.version ?? currentVersion.version) + 1;
+          const nextVersionNum = (maxVersion?.version ?? currentVersion.version) + 1;
           const newVersion = await prisma.employeeVersion.create({
             data: {
               employeeId: existing.id,
@@ -174,8 +158,6 @@ export async function importEmployees(
 
   log.summary(result);
   if (siteAccessSkipped > 0) {
-    log.warn(
-      `${siteAccessSkipped} employee(s) created without site access (role unresolved, no Operator fallback)`,
-    );
+    log.warn(`${siteAccessSkipped} employee(s) created without site access (role unresolved, no Operator fallback)`);
   }
 }
