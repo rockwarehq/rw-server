@@ -13,10 +13,10 @@ name: Publish Docker Images
 # qemu-user hits an illegal instruction during `pnpm install` (SIGILL). Same
 # pattern as rw-ui's docker-publish.yml.
 
+# Trigger: manual only (workflow_dispatch) — run from the Actions tab when a
+# new image should be published.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
