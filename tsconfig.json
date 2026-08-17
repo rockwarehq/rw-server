@@ -9,6 +9,7 @@
     { "path": "./packages/automations" },
     { "path": "./packages/integrations" },
     { "path": "./packages/livestore" },
+    { "path": "./packages/metrics" },
     { "path": "./apps/workers" },
     { "path": "./apps/livestore" }
   ]

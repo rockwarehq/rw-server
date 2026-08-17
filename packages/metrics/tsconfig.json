@@ -1,16 +1,17 @@
 {
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    // Published package: pin ES2023 emit, no sourcemaps, no ambient node
+    // types so dist output stays identical to the pre-base-config artifact.
     "target": "ES2023",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "declaration": true,
-    "declarationMap": true,
+    "lib": ["ES2023"],
+    // Not yet clean under the base's checked index access (same opt-out as
+    // auth/historian/livestore/services).
+    "noUncheckedIndexedAccess": false,
+    "sourceMap": false,
+    "types": [],
     "outDir": "dist",
-    "rootDir": "src",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "composite": true
+    "rootDir": "src"
   },
   "include": ["src"]
 }

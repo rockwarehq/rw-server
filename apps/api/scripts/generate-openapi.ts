@@ -1,5 +1,5 @@
 // Boots the Fastify server far enough to register all routes + the swagger
-// plugin, then serializes the OpenAPI spec to <repo-root>/openapi.json. This
+// plugin, then serializes the OpenAPI spec to apps/api/openapi.json. This
 // is the input consumed by @rockwarehq/api-client's openapi-ts generation.
 //
 // createServer() only registers plugins/routes; queue/Redis/DB initialization
@@ -13,8 +13,7 @@ import { createServer } from "../src/server.js";
 import { serverConfig } from "../src/config.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, "../../..");
-const outPath = resolve(repoRoot, "openapi.json");
+const outPath = resolve(here, "../openapi.json");
 
 async function generateOpenAPI() {
   const { server } = createServer({ ...serverConfig, swagger: true, installShutdownHandlers: false });

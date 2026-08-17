@@ -1,20 +1,11 @@
 import type { PrismaClient } from "@rw/db";
-import {
-  type IdMap,
-  readData,
-  batchUpsert,
-  logger,
-} from "./utils.js";
+import { type IdMap, readData, batchUpsert, logger } from "./utils.js";
 
 interface SqlServerRow {
   name: string;
 }
 
-export async function importEmployeeRoles(
-  prisma: PrismaClient,
-  idMap: IdMap,
-  siteId: string,
-): Promise<void> {
+export async function importEmployeeRoles(prisma: PrismaClient, idMap: IdMap, siteId: string): Promise<void> {
   const log = logger("EmployeeRole");
 
   const rows = await readData<SqlServerRow>("EmployeeRole");

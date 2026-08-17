@@ -10,7 +10,7 @@ import { parseGraphHookEventContext } from "../catalog/hook-conditions.js";
 import { errorResult, type GraphScope } from "./types.js";
 
 // Binds a LiveStore hook event to an integration action: hooks stay terminal
-// (spec.md §4.8), this layer decides what an emitted event should do. Lives here
+// (docs/architecture/livestore-spec.md §4.8), this layer decides what an emitted event should do. Lives here
 // rather than in services because it needs both hook definitions and the
 // integration registry, and services cannot import livestore.
 

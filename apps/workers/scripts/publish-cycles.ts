@@ -15,11 +15,7 @@ import { randomUUID } from "node:crypto";
 import { jetstream, jetstreamManager } from "@nats-io/jetstream";
 import { connect } from "@nats-io/transport-node";
 import prisma, { createPrismaClient } from "@rw/db";
-import {
-  deriveLivestoreEventSubject,
-  livestoreEventType,
-  type LivestoreHookEvent,
-} from "@rw/livestore/catalog/events";
+import { deriveLivestoreEventSubject, livestoreEventType, type LivestoreHookEvent } from "@rw/livestore/catalog/events";
 import { ensureLivestoreEventStream } from "@rw/livestore/catalog/event-stream";
 
 createPrismaClient("api");
@@ -121,7 +117,10 @@ async function main(): Promise<void> {
     console.log(`[publish-cycles] tick: ${targets.length} cycles (total ${count})`);
   };
 
-  const handle = setInterval(() => void tick().catch((err) => console.error("[publish-cycles] tick error", err)), INTERVAL_MS);
+  const handle = setInterval(
+    () => void tick().catch((err) => console.error("[publish-cycles] tick error", err)),
+    INTERVAL_MS,
+  );
 
   const shutdown = async () => {
     clearInterval(handle);

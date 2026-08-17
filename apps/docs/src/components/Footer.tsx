@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
 import { Button } from '@/components/Button'
-import { navigationFor } from '@/components/Navigation'
+import { publicNavigation } from '@/components/Navigation'
 
 function PageLink({
   label,
@@ -39,7 +39,7 @@ function PageLink({
 
 function PageNavigation() {
   let pathname = usePathname()
-  let allPages = navigationFor(pathname).flatMap((group) => group.links)
+  let allPages = publicNavigation.flatMap((group) => group.links)
   let currentPageIndex = allPages.findIndex((page) => page.href === pathname)
 
   if (currentPageIndex === -1) {

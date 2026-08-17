@@ -14,7 +14,7 @@ actions that can be run against it. Modelled on Activepieces' piece/connection s
 The binding layer is deliberately outside this package. A livestore hook binds action inputs to
 graph property ids; nothing here knows what a graph property is. That is what lets a second
 consumer reuse the same integration without inheriting hook concepts — and it keeps hooks
-terminal event emitters, per `packages/livestore/spec.md` §4.8.
+terminal event emitters, per `docs/architecture/livestore-spec.md` §4.8.
 
 ## Config vs secret
 

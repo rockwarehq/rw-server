@@ -1,11 +1,5 @@
 import type { PrismaClient } from "@rw/db";
-import {
-  type IdMap,
-  readData,
-  batchUpsert,
-  logger,
-  parseNumber,
-} from "./utils.js";
+import { type IdMap, readData, batchUpsert, logger, parseNumber } from "./utils.js";
 
 // ---------------------------------------------------------------------------
 // SQL Server source shape
@@ -22,11 +16,7 @@ interface SqlServerRow {
 // Importer
 // ---------------------------------------------------------------------------
 
-export async function importTools(
-  prisma: PrismaClient,
-  idMap: IdMap,
-  siteId: string,
-): Promise<void> {
+export async function importTools(prisma: PrismaClient, idMap: IdMap, siteId: string): Promise<void> {
   const log = logger("Tool");
 
   const rows = await readData<SqlServerRow>("Tool");
@@ -56,9 +46,7 @@ export async function importTools(
       if (existing) {
         // Check if data changed
         const version = existing.currentVersion;
-        const changed =
-          version?.pmLimit !== pmLimit ||
-          version?.pmWarn !== pmWarn;
+        const changed = version?.pmLimit !== pmLimit || version?.pmWarn !== pmWarn;
 
         if (changed && version) {
           await prisma.toolVersion.update({

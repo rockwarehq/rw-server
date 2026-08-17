@@ -8,18 +8,16 @@ two deployables per tenant:
   Today it boots ALL background workers in-process (matching the old
   `SINGLE_PROCESS=1` mode); workers move out to `apps/workers` one at a time
   during cutover.
-- **`apps/workers`** — single binary, three startup modes selected by
-  `--worker <name>`:
-  - `rollups` — metric-bucket-ensure, metrics combined-tick, archive,
-    shift-bucket-create, shift-change.
-  - `processor` — MQTT ingest (ported from `rw-processor`, still being
-    integrated — see `apps/workers/src/workers/processor/index.ts`).
-  - `processor-consumer` — station-event-execution (was
-    `rw-server/src/cycle-worker.ts`).
-
-The two worker modes that read from BullMQ (`rollups`, `processor-consumer`)
-import their worker registrations from `@rw/api/...` — no source duplication,
-just different startup composition.
+- **`apps/workers`** — single binary, four startup modes selected by
+  `--worker <name>` (see `apps/workers/src/main.ts`):
+  - `rollups` — the metric-rollup pipeline: metric-bucket-ensure, metrics
+    combined-tick, archive, shift-bucket-create, shift-change.
+  - `imm-events` — consumes IMM livestore hook events and records production
+    cycles into Postgres.
+  - `gateway-health` — mirrors `health.gateway.*` NATS reports into
+    prom-client gauges at `/metrics`.
+  - `integration-events` — dispatches livestore hook events to
+    IntegrationTriggers (SQL/REST/webhook).
 
 Shared:
 
@@ -120,11 +118,9 @@ flyctl secrets set -a <tenant>-workers \
   PROCESSOR_SHARED_SECRET='...' \
   MQTT_PASSWORD='...'
 
-# 3. Pin machine count per workers process group (fly.toml has no count field).
-#    Set once; subsequent deploys preserve it.
-flyctl scale count -a <tenant>-workers rollups=1 processor=1 processor_consumer=1 --yes
-
-# 4. Deploy api first (so workers/processor can reach api on boot)
+# 3. Deploy api first (so workers can reach api on boot). Worker machine
+#    counts are pinned to 1 per process group automatically by fly-deploy
+#    (pinWorkerScale in scripts/fly-deploy.ts) — no manual scale step.
 pnpm fly:deploy --app api      <tenant>
 pnpm fly:deploy --app workers  <tenant>
 ```
@@ -167,34 +163,28 @@ make sure cross-machine events still reach every client.
 
 ### Deploying Workers
 
-`apps/workers` is one binary, three process groups (one per `--worker`
+`apps/workers` is one binary, four process groups (one per `--worker`
 flag). Each group is a separate machine — fly's `[processes]` section in
 `workers/fly/base.toml` defines the commands.
 
 | Group | Command | Role |
 |---|---|---|
 | `rollups` | `--worker rollups` | metric-bucket-ensure, combined tick, archive, shift-bucket-create, shift-change |
-| `processor` | `--worker processor` | MQTT ingest (subscribes to tenant's broker) |
-| `processor_consumer` | `--worker processor-consumer` | station-event-execution BullMQ consumer |
+| `imm-events` | `--worker imm-events` | records production cycles from IMM livestore hook events |
+| `gateway-health` | `--worker gateway-health` | mirrors gateway health NATS reports into prom-client gauges |
+| `integration-events` | `--worker integration-events` | dispatches livestore hook events to IntegrationTriggers |
 
 - **Internal-only**: no public HTTP, no domain. Only `<tenant>-workers.internal:9465`
   for healthz (and 9468 for cache-refresh once enabled).
 - **Per-mode DB URL**: rollups uses `DATABASE_URL_ROLLUPS` (direct, no
   pgbouncer) because the CTE-heavy rollup tick doesn't play with
   transaction-mode pgbouncer. Other modes use `DATABASE_URL` (pooled).
-- **Machine count**: set explicitly via `flyctl scale count` (no toml field).
+- **Machine count**: pinned to 1 per group automatically on deploy
+  (`pinWorkerScale` in `scripts/fly-deploy.ts`; fly.toml has no count field).
+  Never scale a group above 1 — the rollups combined tick is a singleton,
+  and extra imm/integration/gateway machines just duplicate consumption.
   See "Recovering a stopped machine" if a process group drops to a stopped
   machine.
-
-Per-group scaling examples:
-
-```sh
-# More processor_consumer machines for higher cycle throughput
-flyctl scale count -a <tenant>-workers processor_consumer=2 --yes
-
-# Rollups stays at 1 — there's no benefit to multiple rollups machines
-# (the combined tick is a singleton). Don't scale this up.
-```
 
 ### Recovering a stopped machine
 
@@ -216,21 +206,19 @@ flyctl scale count -a <tenant>-workers <group>=1 --yes
 
 ### Postgres `max_connections` budget when scaling
 
-Per-tenant peak connections at 1 machine of each group, default pool sizes:
+Per-tenant peak connections at 1 machine of each group, default pool sizes
+(`DEFAULT_POOL` in `packages/db/src/client.ts`; gateway-health opens no DB
+connections):
 
 ```
-api(5) + rollups(10) + processor(5) + processor-consumer(10) = 30
+api(5) + rollups(10) + imm-events(15) + integration-events(5) = 35
 ```
 
-10 of those are direct (rollups bypassing pgbouncer); the other 20 go
+10 of those are direct (rollups bypassing pgbouncer); the rest go
 through pgbouncer's server pool. With PSDB dev (`max_connections=25`),
 that doesn't fit — dev uses `DB_POOL_SIZE='5'` in `workers/fly/tenants/dev.toml`
-to halve everything (~20 total, leaves room for the migration's 1 direct
+to shrink every pool (leaves room for the migration's 1 direct
 connection). Prod tenants on larger DBs can use defaults.
-
-When you scale `processor_consumer=2` in prod, that adds 10 more pgbouncer
-client connections — usually fine because pgbouncer's server pool stays
-bounded by its own config.
 
 ### Fly cross-app traffic is IPv6
 
@@ -265,7 +253,9 @@ flyctl logs -a <tenant>-api      | grep "/rpc/station/triggerEvent"
 
 - Phase 0 (skeleton + shared packages): done.
 - Phase 1 (lift rw-server into `apps/api` with `@rw/db` / `@rw/runtime` rewiring): done.
-- Phase 2 (apps/workers binary + all three modes — rollups + processor + processor-consumer): done.
+- Phase 2 (apps/workers binary + worker modes): done. The original
+  `processor` / `processor-consumer` modes have since been retired; current
+  modes are `rollups` / `imm-events` / `gateway-health` / `integration-events`.
 - fly.io configs (base + dev/sim/dixie tenants) + multi-target Dockerfile + workspace fly-deploy.ts: done.
 - GitHub Actions deploy workflow + biome lint config: done.
 - Dev deploy live on `rw-dev-api` + `dev-processor` — pipeline verified end-to-end:

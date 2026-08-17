@@ -7,10 +7,10 @@
     "build": "tsc -b",
     "start": "node dist/main.js",
     "dev": "tsx watch src/main.ts",
-    "fixture:create": "tsx src/scripts/create-fixture.ts",
-    "fixture:publish": "tsx src/scripts/publish-tag.ts",
-    "playground:simulate": "tsx src/scripts/simulate-metrics.ts",
-    "simulate:tags": "tsx src/scripts/simulate-tags.ts"
+    "fixture:create": "tsx scripts/create-fixture.ts",
+    "fixture:publish": "tsx scripts/publish-tag.ts",
+    "playground:simulate": "tsx scripts/simulate-metrics.ts",
+    "simulate:tags": "tsx scripts/simulate-tags.ts"
   },
   "dependencies": {
     "@nats-io/transport-node": "^3.4.0",

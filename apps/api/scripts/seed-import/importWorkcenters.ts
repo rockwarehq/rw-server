@@ -1,11 +1,5 @@
 import type { PrismaClient } from "@rw/db";
-import {
-  type IdMap,
-  readData,
-  batchUpsert,
-  logger,
-  nullable,
-} from "./utils.js";
+import { type IdMap, readData, batchUpsert, logger, nullable } from "./utils.js";
 
 // ---------------------------------------------------------------------------
 // SQL Server source shape
@@ -23,11 +17,7 @@ interface SqlServerRow {
 // Importer
 // ---------------------------------------------------------------------------
 
-export async function importWorkcenters(
-  prisma: PrismaClient,
-  idMap: IdMap,
-  siteId: string,
-): Promise<void> {
+export async function importWorkcenters(prisma: PrismaClient, idMap: IdMap, siteId: string): Promise<void> {
   const log = logger("Workcenter");
 
   const rows = await readData<SqlServerRow>("Workcenter");
@@ -50,9 +40,7 @@ export async function importWorkcenters(
       if (processGroup) {
         processTypeId = idMap.get("processType", processGroup) ?? null;
         if (!processTypeId) {
-          log.warn(
-            `Process group "${processGroup}" not found in IdMap for workcenter "${row.name}" — setting to null`,
-          );
+          log.warn(`Process group "${processGroup}" not found in IdMap for workcenter "${row.name}" — setting to null`);
         }
       }
 

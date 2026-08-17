@@ -1,10 +1,5 @@
 import type { PrismaClient } from "@rw/db";
-import {
-  type IdMap,
-  readData,
-  batchUpsert,
-  logger,
-} from "./utils.js";
+import { type IdMap, readData, batchUpsert, logger } from "./utils.js";
 
 // ---------------------------------------------------------------------------
 // SQL Server source shape
@@ -19,11 +14,7 @@ interface SqlServerRow {
 // Importer
 // ---------------------------------------------------------------------------
 
-export async function importToolCavities(
-  prisma: PrismaClient,
-  idMap: IdMap,
-  siteId: string,
-): Promise<void> {
+export async function importToolCavities(prisma: PrismaClient, idMap: IdMap, siteId: string): Promise<void> {
   const log = logger("ToolCavity");
   void siteId;
 

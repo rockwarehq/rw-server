@@ -112,11 +112,7 @@ describe.skipIf(!process.env.DATABASE_URL)("savedView service", () => {
 
   test("PRIVATE views reject all mutations from non-owners", async () => {
     const priv = await createView("PRIVATE");
-    const result = await views.update(
-      priv.id,
-      { actorId: memberId, config: SHIFT_VIEW_CONFIG },
-      workspaceId,
-    );
+    const result = await views.update(priv.id, { actorId: memberId, config: SHIFT_VIEW_CONFIG }, workspaceId);
     expect(result.error).toBeDefined();
     if (result.error !== undefined) expect(result.code).toBe("FORBIDDEN");
   });
@@ -137,10 +133,7 @@ describe.skipIf(!process.env.DATABASE_URL)("savedView service", () => {
   test("wrong workspace is rejected on every verb", async () => {
     const shared = await createView("WORKSPACE");
 
-    const listResult = await views.list(
-      { siteId, page: "shift-view", scopeId, userId: ownerId },
-      foreignWorkspaceId,
-    );
+    const listResult = await views.list({ siteId, page: "shift-view", scopeId, userId: ownerId }, foreignWorkspaceId);
     expect(listResult.error).toBeDefined();
 
     const updateResult = await views.update(shared.id, { actorId: ownerId, name: "X" }, foreignWorkspaceId);

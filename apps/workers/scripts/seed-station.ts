@@ -87,7 +87,14 @@ async function main(): Promise<void> {
 
   console.log(
     JSON.stringify(
-      { nodeId, stationId: STATION_ID, tagSubject: `tags.${DEVICE_ID}.${TAG_PATH}`, deviceId: DEVICE_ID, tagPath: TAG_PATH, hookId: hook.id },
+      {
+        nodeId,
+        stationId: STATION_ID,
+        tagSubject: `tags.${DEVICE_ID}.${TAG_PATH}`,
+        deviceId: DEVICE_ID,
+        tagPath: TAG_PATH,
+        hookId: hook.id,
+      },
       null,
       2,
     ),
