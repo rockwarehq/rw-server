@@ -124,7 +124,19 @@ export async function incrementHourCounts(
     WHERE mb."entityType" = 'STATION'::"BucketEntityType"
       AND mb."entityId" = ${stationId}::uuid
       AND mb.granularity = 'HOUR'::"BucketGranularity"
-      AND mb."startTime" <= ${timestamp}::timestamptz
+      -- Buckets for an entity never overlap, so the only possible container of
+      -- the timestamp is the newest bucket starting at-or-before it — resolved
+      -- with one reverse index probe instead of an unbounded startTime range
+      -- scan (which walks the entity's whole history and grows forever).
+      -- The containment predicate stays as the guard for the no-bucket case.
+      AND mb."startTime" = (
+        SELECT "startTime" FROM "MetricBucket"
+        WHERE "entityType" = 'STATION'::"BucketEntityType"
+          AND "entityId" = ${stationId}::uuid
+          AND granularity = 'HOUR'::"BucketGranularity"
+          AND "startTime" <= ${timestamp}::timestamptz
+        ORDER BY "startTime" DESC LIMIT 1
+      )
       AND mb."startTime" + mb."durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
     RETURNING mb."entityType", mb."entityId"::text, mb."entityName", mb.path, mb.granularity::text, mb."granularityName",
               mb."siteId"::text, mb."startTime", mb."durationSeconds", mb."shiftInstanceId"::text, mb."businessDate", mb."businessShift",
@@ -162,16 +174,20 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
   // down. Passing the bounds as parameters lets the planner use
   // Cycle_stationId_end_idx and read only the hour's rows.
   const bucket = await prisma.$queryRaw<Array<{ hour_start: Date; hour_end: Date; duration_seconds: number }>>`
-    SELECT "startTime" AS hour_start,
-           "startTime" + "durationSeconds" * INTERVAL '1 second' AS hour_end,
-           "durationSeconds" AS duration_seconds
-    FROM "MetricBucket"
-    WHERE "entityType" = 'STATION'::"BucketEntityType"
-      AND "entityId" = ${stationId}::uuid
-      AND granularity = 'HOUR'::"BucketGranularity"
-      AND "startTime" <= ${timestamp}::timestamptz
-      AND "startTime" + "durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
-    LIMIT 1
+    SELECT hour_start, hour_end, duration_seconds FROM (
+      -- Newest bucket starting at-or-before the timestamp (one reverse index
+      -- probe; buckets never overlap so it is the only containment candidate).
+      SELECT "startTime" AS hour_start,
+             "startTime" + "durationSeconds" * INTERVAL '1 second' AS hour_end,
+             "durationSeconds" AS duration_seconds
+      FROM "MetricBucket"
+      WHERE "entityType" = 'STATION'::"BucketEntityType"
+        AND "entityId" = ${stationId}::uuid
+        AND granularity = 'HOUR'::"BucketGranularity"
+        AND "startTime" <= ${timestamp}::timestamptz
+      ORDER BY "startTime" DESC LIMIT 1
+    ) b
+    WHERE b.hour_end > ${timestamp}::timestamptz
   `;
   if (bucket.length === 0) return;
   const { hour_start: hourStart, hour_end: hourEnd, duration_seconds: durationSeconds } = bucket[0];
@@ -470,14 +486,19 @@ export async function syncExpectedCyclesFromJobs(stationId: string, siteId: stri
     -- Resolve the STATION HOUR bucket; JOB HOUR aligns with STATION HOUR
     -- (see cascadeJobRollup), so we match JOB HOUR by this startTime.
     target_bucket AS (
-      SELECT "startTime" AS hour_start
-      FROM "MetricBucket"
-      WHERE "entityType" = 'STATION'::"BucketEntityType"
-        AND "entityId" = ${stationId}::uuid
-        AND granularity = 'HOUR'::"BucketGranularity"
-        AND "startTime" <= ${timestamp}::timestamptz
-        AND "startTime" + "durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
-      LIMIT 1
+      -- Newest bucket starting at-or-before the timestamp (one reverse index
+      -- probe; buckets never overlap), containment-checked in the outer WHERE.
+      SELECT hour_start FROM (
+        SELECT "startTime" AS hour_start,
+               "startTime" + "durationSeconds" * INTERVAL '1 second' AS hour_end
+        FROM "MetricBucket"
+        WHERE "entityType" = 'STATION'::"BucketEntityType"
+          AND "entityId" = ${stationId}::uuid
+          AND granularity = 'HOUR'::"BucketGranularity"
+          AND "startTime" <= ${timestamp}::timestamptz
+        ORDER BY "startTime" DESC LIMIT 1
+      ) b
+      WHERE b.hour_end > ${timestamp}::timestamptz
     ),
     params AS (
       SELECT ${stationId}::uuid AS station_id, tb.hour_start
@@ -517,8 +538,9 @@ export async function syncExpectedCyclesFromJobs(stationId: string, siteId: stri
     WHERE mb."entityType" = 'STATION'
       AND mb."entityId" = p.station_id
       AND mb.granularity = 'HOUR'
-      AND mb."startTime" <= ${timestamp}::timestamptz
-      AND mb."startTime" + mb."durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
+      -- target_bucket already resolved the containing bucket's startTime;
+      -- match it exactly instead of re-running the containment range scan.
+      AND mb."startTime" = p.hour_start
   `;
 }
 
@@ -574,11 +596,17 @@ export async function batchCountRollup(timestamp: Date): Promise<Array<{ station
              mb."startTime" AS hour_start,
              mb."startTime" + mb."durationSeconds" * INTERVAL '1 second' AS hour_end
       FROM open_stations os
-      JOIN "MetricBucket" mb ON mb."entityType" = 'STATION'::"BucketEntityType"
-        AND mb."entityId" = os.station_id
-        AND mb.granularity = 'HOUR'::"BucketGranularity"
-        AND mb."startTime" <= ${timestamp}::timestamptz
-        AND mb."startTime" + mb."durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
+      -- Per station: newest bucket starting at-or-before the timestamp (one
+      -- reverse index probe; buckets never overlap), containment in the ON.
+      JOIN LATERAL (
+        SELECT "startTime", "durationSeconds"
+        FROM "MetricBucket"
+        WHERE "entityType" = 'STATION'::"BucketEntityType"
+          AND "entityId" = os.station_id
+          AND granularity = 'HOUR'::"BucketGranularity"
+          AND "startTime" <= ${timestamp}::timestamptz
+        ORDER BY "startTime" DESC LIMIT 1
+      ) mb ON mb."startTime" + mb."durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
     ),
     cycle_counts AS (
       SELECT c."stationId" AS station_id,
@@ -634,7 +662,16 @@ export async function batchCountRollup(timestamp: Date): Promise<Array<{ station
             WHERE mb."entityType" = 'STATION'::"BucketEntityType"
               AND mb."entityId" = ${c.station_id}::uuid
               AND mb.granularity = 'HOUR'::"BucketGranularity"
-              AND mb."startTime" <= ${timestamp}::timestamptz
+              -- Newest-starting candidate via one reverse probe (buckets never
+              -- overlap); containment below guards the no-bucket case.
+              AND mb."startTime" = (
+                SELECT "startTime" FROM "MetricBucket"
+                WHERE "entityType" = 'STATION'::"BucketEntityType"
+                  AND "entityId" = ${c.station_id}::uuid
+                  AND granularity = 'HOUR'::"BucketGranularity"
+                  AND "startTime" <= ${timestamp}::timestamptz
+                ORDER BY "startTime" DESC LIMIT 1
+              )
               AND mb."startTime" + mb."durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
             RETURNING mb.*
           )
@@ -700,10 +737,16 @@ export async function batchDurationRollup(timestamp: Date): Promise<Array<{ stat
       END AS items_per_cycle
     FROM "StationStateLog" ssl
     JOIN "Station" s ON s.id = ssl."stationId"
-    LEFT JOIN "MetricBucket" mb ON mb."entityType" = 'STATION' AND mb."entityId" = ssl."stationId"
-      AND mb.granularity = 'HOUR'
-      AND mb."startTime" <= ${timestamp}::timestamptz
-      AND mb."startTime" + mb."durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
+    -- Per station: newest bucket starting at-or-before the timestamp (one
+    -- reverse index probe; buckets never overlap), containment in the ON.
+    LEFT JOIN LATERAL (
+      SELECT "startTime", "durationSeconds", "totalCycles", "totalItems", "idealCycleSeconds"
+      FROM "MetricBucket"
+      WHERE "entityType" = 'STATION' AND "entityId" = ssl."stationId"
+        AND granularity = 'HOUR'
+        AND "startTime" <= ${timestamp}::timestamptz
+      ORDER BY "startTime" DESC LIMIT 1
+    ) mb ON mb."startTime" + mb."durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
     WHERE ssl."endTime" IS NULL AND ssl."deletedAt" IS NULL
     ORDER BY ssl."stationId"
   `;
@@ -725,15 +768,19 @@ export async function batchDurationRollup(timestamp: Date): Promise<Array<{ stat
           -- exists (e.g. start at :30 past, partial at shift boundaries),
           -- so use containment rather than date_trunc('hour', ...).
           target_bucket AS (
-            SELECT "startTime", "durationSeconds",
-                   "startTime" + "durationSeconds" * INTERVAL '1 second' AS end_time
-            FROM "MetricBucket"
-            WHERE "entityType" = 'STATION'::"BucketEntityType"
-              AND "entityId" = ${s.station_id}::uuid
-              AND granularity = 'HOUR'::"BucketGranularity"
-              AND "startTime" <= ${timestamp}::timestamptz
-              AND "startTime" + "durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
-            LIMIT 1
+            -- Newest bucket starting at-or-before the timestamp (one reverse
+            -- index probe; buckets never overlap), containment-checked below.
+            SELECT "startTime", "durationSeconds", end_time FROM (
+              SELECT "startTime", "durationSeconds",
+                     "startTime" + "durationSeconds" * INTERVAL '1 second' AS end_time
+              FROM "MetricBucket"
+              WHERE "entityType" = 'STATION'::"BucketEntityType"
+                AND "entityId" = ${s.station_id}::uuid
+                AND granularity = 'HOUR'::"BucketGranularity"
+                AND "startTime" <= ${timestamp}::timestamptz
+              ORDER BY "startTime" DESC LIMIT 1
+            ) b
+            WHERE b.end_time > ${timestamp}::timestamptz
           ),
           params AS (
             SELECT
@@ -1014,6 +1061,297 @@ export async function cascadeStationShiftDay(stationId: string, siteId: string, 
   emitRows(rows);
 }
 
+// ── Set-based variants of the per-station tick phases ─────────────────────
+//
+// The 5s tick used to call syncExpectedCyclesFromJobs and
+// cascadeStationShiftDay once per station (2 x 1000 statements per tick at
+// load-test scale). Per-statement overhead (round trip, driver, executor
+// startup) dominated the tick regardless of query speed. These variants do
+// the identical work for ALL stations in one statement each, mirroring how
+// cascadeParentRollup already works. The per-station functions above are
+// kept for targeted/backfill use.
+
+/** Set-based syncExpectedCyclesFromJobs for many stations in one statement. */
+export async function syncExpectedCyclesFromJobsBatch(stationIds: string[], timestamp: Date): Promise<void> {
+  if (stationIds.length === 0) return;
+  await prisma.$executeRaw`
+    WITH
+    stations AS (
+      SELECT s.id AS station_id, s."siteId" AS site_id, s."currentJobId" AS current_job_id
+      FROM "Station" s
+      WHERE s.id = ANY(string_to_array(${stationIds.join(",")}, ',')::uuid[])
+    ),
+    -- Per station: newest STATION HOUR bucket starting at-or-before the tick
+    -- (one reverse index probe; buckets never overlap), containment in ON.
+    target_bucket AS (
+      SELECT st.station_id, st.site_id, st.current_job_id, b."startTime" AS hour_start
+      FROM stations st
+      JOIN LATERAL (
+        SELECT "startTime", "durationSeconds"
+        FROM "MetricBucket"
+        WHERE "entityType" = 'STATION'::"BucketEntityType"
+          AND "entityId" = st.station_id
+          AND granularity = 'HOUR'::"BucketGranularity"
+          AND "startTime" <= ${timestamp}::timestamptz
+        ORDER BY "startTime" DESC LIMIT 1
+      ) b ON b."startTime" + b."durationSeconds" * INTERVAL '1 second' > ${timestamp}::timestamptz
+    ),
+    -- LEFT JOINs so a station whose hour has no JOB buckets still yields a
+    -- zero row (the per-station version wrote zeros in that case too).
+    job_sums AS (
+      SELECT
+        tb.station_id, tb.site_id, tb.current_job_id, tb.hour_start,
+        COALESCE(SUM(jb."expectedCycles"), 0)::int AS expected_cycles,
+        COALESCE(SUM(jb."expectedItems"), 0)::int AS expected_items,
+        COALESCE(SUM(jb."elapsedExpectedCycles"), 0)::int AS elapsed_expected_cycles,
+        COALESCE(SUM(jb."elapsedExpectedItems"), 0)::int AS elapsed_expected_items
+      FROM target_bucket tb
+      LEFT JOIN "StationJobLog" sjl ON sjl."stationId" = tb.station_id
+        AND sjl."startTime" < tb.hour_start + INTERVAL '1 hour'
+        AND (sjl."endTime" > tb.hour_start OR sjl."endTime" IS NULL)
+      LEFT JOIN "MetricBucket" jb ON jb."entityType" = 'JOB'::"BucketEntityType"
+        AND jb.granularity = 'HOUR'::"BucketGranularity"
+        AND jb."startTime" = tb.hour_start
+        AND jb."siteId" = tb.site_id
+        AND jb."currentJobId" = sjl."jobId"
+        AND jb."entityId" = md5(tb.station_id::text || ':job:' || sjl."jobId"::text)::uuid
+      GROUP BY tb.station_id, tb.site_id, tb.current_job_id, tb.hour_start
+    )
+    UPDATE "MetricBucket" mb
+    SET "expectedCycles" = js.expected_cycles,
+        "expectedItems" = js.expected_items,
+        "elapsedExpectedCycles" = js.elapsed_expected_cycles,
+        "elapsedExpectedItems" = js.elapsed_expected_items,
+        "currentStandardCycle" = COALESCE(jb2."currentStandardCycle", mb."currentStandardCycle"),
+        "updatedAt" = NOW()
+    FROM job_sums js
+    LEFT JOIN "MetricBucket" jb2 ON jb2."entityType" = 'JOB'::"BucketEntityType"
+      AND jb2.granularity = 'HOUR'::"BucketGranularity"
+      AND jb2."startTime" = js.hour_start
+      AND jb2."siteId" = js.site_id
+      AND jb2."entityId" = md5(js.station_id::text || ':job:' || js.current_job_id::text)::uuid
+    WHERE mb."entityType" = 'STATION'::"BucketEntityType"
+      AND mb."entityId" = js.station_id
+      AND mb.granularity = 'HOUR'::"BucketGranularity"
+      AND mb."startTime" = js.hour_start
+  `;
+}
+
+/** Set-based cascadeStationShiftDay for many stations in one statement. */
+export async function cascadeStationShiftDayBatch(stationIds: string[], timestamp: Date): Promise<void> {
+  if (stationIds.length === 0) return;
+  const rows = await prisma.$queryRaw<BucketRow[]>`
+    WITH
+    params AS (SELECT ${timestamp}::timestamptz AS bucket_ts),
+    stations AS (
+      SELECT s.id AS station_id, s."siteId" AS site_id, s."workcenterId" AS wc_id,
+             COALESCE(site.timezone, 'UTC') AS tz
+      FROM "Station" s
+      JOIN "Site" site ON site.id = s."siteId"
+      WHERE s.id = ANY(string_to_array(${stationIds.join(",")}, ',')::uuid[])
+    ),
+    -- Per station: the shift instance covering the tick (workcenter-level
+    -- shift wins over site-level, matching the per-station version).
+    shift_info AS (
+      SELECT st.station_id, sh.shift_start, sh.shift_end
+      FROM stations st
+      JOIN LATERAL (
+        SELECT si."startTime" AS shift_start, si."endTime" AS shift_end
+        FROM "ShiftInstance" si
+        LEFT JOIN "ShiftAssignment" sa ON sa.id = si."assignmentId"
+        WHERE si."startTime" <= (SELECT bucket_ts FROM params)
+          AND si."endTime" > (SELECT bucket_ts FROM params)
+          AND si."siteId" = st.site_id
+          AND (
+            si."workCenterId" = st.wc_id
+            OR (si."workCenterId" IS NULL AND NOT EXISTS (
+              SELECT 1 FROM "ShiftInstance" si2
+              WHERE si2."startTime" <= (SELECT bucket_ts FROM params)
+                AND si2."endTime" > (SELECT bucket_ts FROM params)
+                AND si2."siteId" = st.site_id
+                AND si2."workCenterId" = st.wc_id
+            ))
+          )
+        ORDER BY sa."rotationStartDate" DESC NULLS LAST LIMIT 1
+      ) sh ON true
+    ),
+    shift_sums AS (
+      SELECT sfi.station_id, sfi.shift_start,
+        SUM(mb."totalCycles")::int AS "totalCycles", SUM(mb."totalItems")::int AS "totalItems",
+        SUM(mb."badCycles")::int AS "badCycles", SUM(mb."badItems")::int AS "badItems",
+        SUM(mb."idealCycleSeconds")::int AS "idealCycleSeconds", SUM(mb."totalCycleSeconds")::int AS "totalCycleSeconds",
+        SUM(mb."runSeconds")::int AS "runSeconds", SUM(mb."downSeconds")::int AS "downSeconds",
+        SUM(mb."plannedDownSeconds")::int AS "plannedDownSeconds", SUM(mb."unplannedDownSeconds")::int AS "unplannedDownSeconds",
+        SUM(mb."expectedCycles")::int AS "expectedCycles", SUM(mb."expectedItems")::int AS "expectedItems",
+        SUM(mb."elapsedExpectedCycles")::int AS "elapsedExpectedCycles", SUM(mb."elapsedExpectedItems")::int AS "elapsedExpectedItems",
+        SUM(mb."elapsedPlannedProductionSeconds")::int AS "elapsedPlannedProductionSeconds",
+        SUM(mb."durationSeconds")::int AS "durationSeconds"
+      FROM shift_info sfi
+      JOIN "MetricBucket" mb ON mb."entityType" = 'STATION'::"BucketEntityType"
+        AND mb."entityId" = sfi.station_id
+        AND mb.granularity = 'HOUR'::"BucketGranularity"
+        AND mb."startTime" >= sfi.shift_start AND mb."startTime" < sfi.shift_end
+      GROUP BY sfi.station_id, sfi.shift_start
+    ),
+    shift_csc AS (
+      SELECT sfi.station_id, c.csc
+      FROM shift_info sfi
+      LEFT JOIN LATERAL (
+        SELECT mb2."currentStandardCycle" AS csc
+        FROM "MetricBucket" mb2
+        WHERE mb2."entityType" = 'STATION'::"BucketEntityType"
+          AND mb2."entityId" = sfi.station_id
+          AND mb2.granularity = 'HOUR'::"BucketGranularity"
+          AND mb2."startTime" >= sfi.shift_start AND mb2."startTime" < sfi.shift_end
+          AND mb2."currentStandardCycle" IS NOT NULL
+        ORDER BY mb2."startTime" DESC LIMIT 1
+      ) c ON true
+    ),
+    upd_shift AS (
+      UPDATE "MetricBucket" mb
+      SET "totalCycles" = ss."totalCycles", "totalItems" = ss."totalItems",
+          "badCycles" = ss."badCycles", "badItems" = ss."badItems",
+          "idealCycleSeconds" = ss."idealCycleSeconds", "totalCycleSeconds" = ss."totalCycleSeconds",
+          "runSeconds" = ss."runSeconds", "downSeconds" = ss."downSeconds",
+          "plannedDownSeconds" = ss."plannedDownSeconds", "unplannedDownSeconds" = ss."unplannedDownSeconds",
+          "expectedCycles" = ss."expectedCycles", "expectedItems" = ss."expectedItems",
+          "elapsedExpectedCycles" = ss."elapsedExpectedCycles", "elapsedExpectedItems" = ss."elapsedExpectedItems",
+          "elapsedPlannedProductionSeconds" = ss."elapsedPlannedProductionSeconds",
+          "currentStandardCycle" = sc.csc,
+          "durationSeconds" = ss."durationSeconds", "updatedAt" = NOW()
+      FROM shift_sums ss
+      JOIN shift_csc sc ON sc.station_id = ss.station_id
+      WHERE mb."entityType" = 'STATION'::"BucketEntityType"
+        AND mb."entityId" = ss.station_id
+        AND mb.granularity = 'SHIFT'::"BucketGranularity"
+        AND mb."startTime" = ss.shift_start
+        AND (
+          mb."totalCycles"                     IS DISTINCT FROM ss."totalCycles" OR
+          mb."totalItems"                      IS DISTINCT FROM ss."totalItems" OR
+          mb."badCycles"                       IS DISTINCT FROM ss."badCycles" OR
+          mb."badItems"                        IS DISTINCT FROM ss."badItems" OR
+          mb."idealCycleSeconds"               IS DISTINCT FROM ss."idealCycleSeconds" OR
+          mb."totalCycleSeconds"               IS DISTINCT FROM ss."totalCycleSeconds" OR
+          mb."runSeconds"                      IS DISTINCT FROM ss."runSeconds" OR
+          mb."downSeconds"                     IS DISTINCT FROM ss."downSeconds" OR
+          mb."plannedDownSeconds"              IS DISTINCT FROM ss."plannedDownSeconds" OR
+          mb."unplannedDownSeconds"            IS DISTINCT FROM ss."unplannedDownSeconds" OR
+          mb."expectedCycles"                  IS DISTINCT FROM ss."expectedCycles" OR
+          mb."expectedItems"                   IS DISTINCT FROM ss."expectedItems" OR
+          mb."elapsedExpectedCycles"           IS DISTINCT FROM ss."elapsedExpectedCycles" OR
+          mb."elapsedExpectedItems"            IS DISTINCT FROM ss."elapsedExpectedItems" OR
+          mb."elapsedPlannedProductionSeconds" IS DISTINCT FROM ss."elapsedPlannedProductionSeconds" OR
+          mb."currentStandardCycle"            IS DISTINCT FROM sc.csc OR
+          mb."durationSeconds"                 IS DISTINCT FROM ss."durationSeconds"
+        )
+      RETURNING mb.*
+    ),
+    day_windows AS (
+      SELECT st.station_id,
+        date_trunc('day', p.bucket_ts AT TIME ZONE st.tz) AT TIME ZONE st.tz AS day_start,
+        (date_trunc('day', p.bucket_ts AT TIME ZONE st.tz) + INTERVAL '1 day') AT TIME ZONE st.tz AS day_end
+      FROM stations st, params p
+    ),
+    day_sums AS (
+      SELECT dw.station_id, dw.day_start,
+        SUM(mb."totalCycles")::int AS "totalCycles", SUM(mb."totalItems")::int AS "totalItems",
+        SUM(mb."badCycles")::int AS "badCycles", SUM(mb."badItems")::int AS "badItems",
+        SUM(mb."idealCycleSeconds")::int AS "idealCycleSeconds", SUM(mb."totalCycleSeconds")::int AS "totalCycleSeconds",
+        SUM(mb."runSeconds")::int AS "runSeconds", SUM(mb."downSeconds")::int AS "downSeconds",
+        SUM(mb."plannedDownSeconds")::int AS "plannedDownSeconds", SUM(mb."unplannedDownSeconds")::int AS "unplannedDownSeconds",
+        SUM(mb."expectedCycles")::int AS "expectedCycles", SUM(mb."expectedItems")::int AS "expectedItems",
+        SUM(mb."elapsedExpectedCycles")::int AS "elapsedExpectedCycles", SUM(mb."elapsedExpectedItems")::int AS "elapsedExpectedItems",
+        SUM(mb."elapsedPlannedProductionSeconds")::int AS "elapsedPlannedProductionSeconds",
+        SUM(mb."durationSeconds")::int AS "durationSeconds"
+      FROM day_windows dw
+      JOIN "MetricBucket" mb ON mb."entityType" = 'STATION'::"BucketEntityType"
+        AND mb."entityId" = dw.station_id
+        AND mb.granularity = 'HOUR'::"BucketGranularity"
+        AND mb."startTime" >= dw.day_start AND mb."startTime" < dw.day_end
+      GROUP BY dw.station_id, dw.day_start
+    ),
+    day_csc AS (
+      SELECT dw.station_id, c.csc
+      FROM day_windows dw
+      LEFT JOIN LATERAL (
+        SELECT mb2."currentStandardCycle" AS csc
+        FROM "MetricBucket" mb2
+        WHERE mb2."entityType" = 'STATION'::"BucketEntityType"
+          AND mb2."entityId" = dw.station_id
+          AND mb2.granularity = 'HOUR'::"BucketGranularity"
+          AND mb2."startTime" >= dw.day_start AND mb2."startTime" < dw.day_end
+          AND mb2."currentStandardCycle" IS NOT NULL
+        ORDER BY mb2."startTime" DESC LIMIT 1
+      ) c ON true
+    ),
+    upd_day AS (
+      UPDATE "MetricBucket" mb
+      SET "totalCycles" = ds."totalCycles", "totalItems" = ds."totalItems",
+          "badCycles" = ds."badCycles", "badItems" = ds."badItems",
+          "idealCycleSeconds" = ds."idealCycleSeconds", "totalCycleSeconds" = ds."totalCycleSeconds",
+          "runSeconds" = ds."runSeconds", "downSeconds" = ds."downSeconds",
+          "plannedDownSeconds" = ds."plannedDownSeconds", "unplannedDownSeconds" = ds."unplannedDownSeconds",
+          "expectedCycles" = ds."expectedCycles", "expectedItems" = ds."expectedItems",
+          "elapsedExpectedCycles" = ds."elapsedExpectedCycles", "elapsedExpectedItems" = ds."elapsedExpectedItems",
+          "elapsedPlannedProductionSeconds" = ds."elapsedPlannedProductionSeconds",
+          "currentStandardCycle" = dc.csc,
+          "durationSeconds" = ds."durationSeconds", "updatedAt" = NOW()
+      FROM day_sums ds
+      JOIN day_csc dc ON dc.station_id = ds.station_id
+      WHERE mb."entityType" = 'STATION'::"BucketEntityType"
+        AND mb."entityId" = ds.station_id
+        AND mb.granularity = 'DAY'::"BucketGranularity"
+        AND mb."startTime" = ds.day_start
+        AND (
+          mb."totalCycles"                     IS DISTINCT FROM ds."totalCycles" OR
+          mb."totalItems"                      IS DISTINCT FROM ds."totalItems" OR
+          mb."badCycles"                       IS DISTINCT FROM ds."badCycles" OR
+          mb."badItems"                        IS DISTINCT FROM ds."badItems" OR
+          mb."idealCycleSeconds"               IS DISTINCT FROM ds."idealCycleSeconds" OR
+          mb."totalCycleSeconds"               IS DISTINCT FROM ds."totalCycleSeconds" OR
+          mb."runSeconds"                      IS DISTINCT FROM ds."runSeconds" OR
+          mb."downSeconds"                     IS DISTINCT FROM ds."downSeconds" OR
+          mb."plannedDownSeconds"              IS DISTINCT FROM ds."plannedDownSeconds" OR
+          mb."unplannedDownSeconds"            IS DISTINCT FROM ds."unplannedDownSeconds" OR
+          mb."expectedCycles"                  IS DISTINCT FROM ds."expectedCycles" OR
+          mb."expectedItems"                   IS DISTINCT FROM ds."expectedItems" OR
+          mb."elapsedExpectedCycles"           IS DISTINCT FROM ds."elapsedExpectedCycles" OR
+          mb."elapsedExpectedItems"            IS DISTINCT FROM ds."elapsedExpectedItems" OR
+          mb."elapsedPlannedProductionSeconds" IS DISTINCT FROM ds."elapsedPlannedProductionSeconds" OR
+          mb."currentStandardCycle"            IS DISTINCT FROM dc.csc OR
+          mb."durationSeconds"                 IS DISTINCT FROM ds."durationSeconds"
+        )
+      RETURNING mb.*
+    )
+    SELECT "entityType", "entityId"::text, "entityName", path, granularity::text, "granularityName",
+           "siteId"::text, "startTime", "durationSeconds", "shiftInstanceId"::text, "businessDate", "businessShift",
+           "totalCycles", "goodCycles", "badCycles", "totalItems", "goodItems", "badItems",
+           "expectedCycles", "expectedItems", "runSeconds", "downSeconds",
+           "plannedDownSeconds", "unplannedDownSeconds", "plannedProductionSeconds",
+           "idealCycleSeconds", "totalCycleSeconds",
+           "elapsedExpectedCycles", "elapsedExpectedItems", "elapsedPlannedProductionSeconds",
+           "currentStandardCycle"::float8 AS "currentStandardCycle",
+           availability::float8 AS availability, performance::float8 AS performance,
+           quality::float8 AS quality, oee::float8 AS oee,
+           "currentJobId"::text, "currentJobName"
+    FROM upd_shift
+    UNION ALL
+    SELECT "entityType", "entityId"::text, "entityName", path, granularity::text, "granularityName",
+           "siteId"::text, "startTime", "durationSeconds", "shiftInstanceId"::text, "businessDate", "businessShift",
+           "totalCycles", "goodCycles", "badCycles", "totalItems", "goodItems", "badItems",
+           "expectedCycles", "expectedItems", "runSeconds", "downSeconds",
+           "plannedDownSeconds", "unplannedDownSeconds", "plannedProductionSeconds",
+           "idealCycleSeconds", "totalCycleSeconds",
+           "elapsedExpectedCycles", "elapsedExpectedItems", "elapsedPlannedProductionSeconds",
+           "currentStandardCycle"::float8 AS "currentStandardCycle",
+           availability::float8 AS availability, performance::float8 AS performance,
+           quality::float8 AS quality, oee::float8 AS oee,
+           "currentJobId"::text, "currentJobName"
+    FROM upd_day
+  `;
+  emitRows(rows);
+}
+
 // ── Parent rollup (WORKCENTER + SITE) ──────────────────────────
 
 /**
@@ -1031,33 +1369,57 @@ export async function cascadeStationShiftDay(stationId: string, siteId: string, 
  * Called from a 5s tick in the worker process.
  */
 export async function cascadeParentRollup(siteId: string, timestamp: Date): Promise<void> {
-  const rows = await prisma.$queryRaw<BucketRow[]>`
-    WITH RECURSIVE
-    params AS (
-      SELECT
-        ${siteId}::uuid AS site_id,
-        date_trunc('hour', ${timestamp}::timestamptz) AS hour_start,
-        (SELECT COALESCE(timezone, 'UTC') FROM "Site" WHERE id = ${siteId}::uuid) AS tz
-    ),
-    all_stations AS (
-      SELECT id AS station_id, "workcenterId" AS wc_id
-      FROM "Station"
-      WHERE "siteId" = (SELECT site_id FROM params)
-        AND "deletedAt" IS NULL
-    ),
-    station_ancestors AS (
-      SELECT s.station_id, s.wc_id AS ancestor_wc_id
-      FROM all_stations s WHERE s.wc_id IS NOT NULL
-      UNION ALL
-      SELECT sa.station_id, w."parentId"
-      FROM station_ancestors sa
-      JOIN "Workcenter" w ON w.id = sa.ancestor_wc_id
-      WHERE w."parentId" IS NOT NULL
-    ),
-    parent_sums AS (
-      -- WORKCENTER: sum descendant station buckets
-      SELECT 'WORKCENTER'::"BucketEntityType" AS et, sa.ancestor_wc_id AS eid,
-             mb.granularity, mb."startTime",
+  // Step 1: flatten the workcenter hierarchy WITHOUT a recursive CTE.
+  //
+  // The old single-statement version used WITH RECURSIVE inside the big
+  // aggregating + data-modifying statement. PostgreSQL 18.4 repeatedly
+  // segfaulted executing that combined plan at shift-close data volumes
+  // (see load-test findings). The hierarchy tables are tiny and change
+  // rarely, so walk them here and feed flat (station, ancestor) pairs to
+  // two plain non-recursive statements below. Same sums, same guards,
+  // same emitted rows.
+  const stations = await prisma.$queryRaw<Array<{ station_id: string; wc_id: string | null }>>`
+    SELECT id::text AS station_id, "workcenterId"::text AS wc_id
+    FROM "Station"
+    WHERE "siteId" = ${siteId}::uuid AND "deletedAt" IS NULL
+  `;
+  if (stations.length === 0) return;
+
+  const workcenters = await prisma.$queryRaw<Array<{ id: string; parent_id: string | null }>>`
+    SELECT id::text, "parentId"::text AS parent_id
+    FROM "Workcenter"
+    WHERE "siteId" = ${siteId}::uuid
+  `;
+  const parentOf = new Map(workcenters.map((w) => [w.id, w.parent_id]));
+
+  const pairStations: string[] = [];
+  const pairAncestors: string[] = [];
+  for (const s of stations) {
+    let wc = s.wc_id;
+    const seen = new Set<string>(); // guards against accidental parent cycles
+    while (wc && !seen.has(wc)) {
+      seen.add(wc);
+      pairStations.push(s.station_id);
+      pairAncestors.push(wc);
+      wc = parentOf.get(wc) ?? null;
+    }
+  }
+
+  const rows: BucketRow[] = [];
+
+  // Step 2: WORKCENTER buckets — sum descendant-station buckets per ancestor.
+  if (pairStations.length > 0) {
+    const wcRows = await prisma.$queryRaw<BucketRow[]>`
+      WITH
+      pairs AS (
+        SELECT station_id, ancestor_wc_id
+        FROM unnest(
+          string_to_array(${pairStations.join(",")}, ',')::uuid[],
+          string_to_array(${pairAncestors.join(",")}, ',')::uuid[]
+        ) AS t(station_id, ancestor_wc_id)
+      ),
+      parent_sums AS (
+        SELECT sa.ancestor_wc_id AS eid, mb.granularity, mb."startTime",
              SUM(mb."totalCycles")::int AS "totalCycles",
              SUM(mb."badCycles")::int AS "badCycles",
              SUM(mb."totalItems")::int AS "totalItems",
@@ -1073,99 +1435,166 @@ export async function cascadeParentRollup(siteId: string, timestamp: Date): Prom
              SUM(mb."elapsedExpectedCycles")::int AS "elapsedExpectedCycles",
              SUM(mb."elapsedExpectedItems")::int AS "elapsedExpectedItems",
              SUM(mb."elapsedPlannedProductionSeconds")::int AS "elapsedPlannedProductionSeconds"
-      FROM station_ancestors sa
-      JOIN "MetricBucket" mb ON mb."entityId" = sa.station_id
-        AND mb."entityType" = 'STATION'::"BucketEntityType"
-        AND mb."startTime" >= (SELECT hour_start FROM params) - INTERVAL '24 hours'
-      GROUP BY sa.ancestor_wc_id, mb.granularity, mb."startTime"
+        FROM pairs sa
+        JOIN "MetricBucket" mb ON mb."entityId" = sa.station_id
+          AND mb."entityType" = 'STATION'::"BucketEntityType"
+          AND mb."startTime" >= date_trunc('hour', ${timestamp}::timestamptz) - INTERVAL '24 hours'
+        GROUP BY sa.ancestor_wc_id, mb.granularity, mb."startTime"
+      ),
+      upd AS (
+        UPDATE "MetricBucket" mb SET
+          "totalCycles" = ps."totalCycles",
+          "badCycles" = ps."badCycles",
+          "totalItems" = ps."totalItems",
+          "badItems" = ps."badItems",
+          "idealCycleSeconds" = ps."idealCycleSeconds",
+          "totalCycleSeconds" = ps."totalCycleSeconds",
+          "runSeconds" = ps."runSeconds",
+          "downSeconds" = ps."downSeconds",
+          "plannedDownSeconds" = ps."plannedDownSeconds",
+          "unplannedDownSeconds" = ps."unplannedDownSeconds",
+          "expectedCycles" = ps."expectedCycles",
+          "expectedItems" = ps."expectedItems",
+          "elapsedExpectedCycles" = ps."elapsedExpectedCycles",
+          "elapsedExpectedItems" = ps."elapsedExpectedItems",
+          "elapsedPlannedProductionSeconds" = ps."elapsedPlannedProductionSeconds",
+          "currentStandardCycle" = NULL,
+          "currentJobId" = NULL,
+          "currentJobName" = NULL,
+          "updatedAt" = NOW()
+        FROM parent_sums ps
+        WHERE mb."entityType" = 'WORKCENTER'::"BucketEntityType"
+          AND mb."entityId" = ps.eid
+          AND mb.granularity = ps.granularity
+          AND mb."startTime" = ps."startTime"
+          AND (
+            mb."totalCycles" IS DISTINCT FROM ps."totalCycles" OR
+            mb."badCycles" IS DISTINCT FROM ps."badCycles" OR
+            mb."totalItems" IS DISTINCT FROM ps."totalItems" OR
+            mb."badItems" IS DISTINCT FROM ps."badItems" OR
+            mb."idealCycleSeconds" IS DISTINCT FROM ps."idealCycleSeconds" OR
+            mb."totalCycleSeconds" IS DISTINCT FROM ps."totalCycleSeconds" OR
+            mb."runSeconds" IS DISTINCT FROM ps."runSeconds" OR
+            mb."downSeconds" IS DISTINCT FROM ps."downSeconds" OR
+            mb."plannedDownSeconds" IS DISTINCT FROM ps."plannedDownSeconds" OR
+            mb."unplannedDownSeconds" IS DISTINCT FROM ps."unplannedDownSeconds" OR
+            mb."expectedCycles" IS DISTINCT FROM ps."expectedCycles" OR
+            mb."expectedItems" IS DISTINCT FROM ps."expectedItems" OR
+            mb."elapsedExpectedCycles" IS DISTINCT FROM ps."elapsedExpectedCycles" OR
+            mb."elapsedExpectedItems" IS DISTINCT FROM ps."elapsedExpectedItems" OR
+            mb."elapsedPlannedProductionSeconds" IS DISTINCT FROM ps."elapsedPlannedProductionSeconds" OR
+            mb."currentStandardCycle" IS NOT NULL OR
+            mb."currentJobId" IS NOT NULL OR
+            mb."currentJobName" IS NOT NULL
+          )
+        RETURNING mb.*
+      )
+      SELECT "entityType", "entityId"::text, "entityName", path, granularity::text, "granularityName",
+             "siteId"::text, "startTime", "durationSeconds", "shiftInstanceId"::text, "businessDate", "businessShift",
+             "totalCycles", "goodCycles", "badCycles", "totalItems", "goodItems", "badItems",
+             "expectedCycles", "expectedItems", "runSeconds", "downSeconds",
+             "plannedDownSeconds", "unplannedDownSeconds", "plannedProductionSeconds",
+             "idealCycleSeconds", "totalCycleSeconds",
+             "elapsedExpectedCycles", "elapsedExpectedItems", "elapsedPlannedProductionSeconds",
+             "currentStandardCycle"::float8 AS "currentStandardCycle",
+             availability::float8 AS availability, performance::float8 AS performance,
+             quality::float8 AS quality, oee::float8 AS oee,
+             "currentJobId"::text, "currentJobName"
+      FROM upd
+    `;
+    rows.push(...wcRows);
+  }
 
-      UNION ALL
-
-      -- SITE: sum ALL station buckets (including those without workcenter)
-      SELECT 'SITE'::"BucketEntityType" AS et, (SELECT site_id FROM params) AS eid,
-             mb.granularity, mb."startTime",
-             SUM(mb."totalCycles")::int,
-             SUM(mb."badCycles")::int,
-             SUM(mb."totalItems")::int,
-             SUM(mb."badItems")::int,
-             SUM(mb."idealCycleSeconds")::int,
-             SUM(mb."totalCycleSeconds")::int,
-             SUM(mb."runSeconds")::int,
-             SUM(mb."downSeconds")::int,
-             SUM(mb."plannedDownSeconds")::int,
-             SUM(mb."unplannedDownSeconds")::int,
-             SUM(mb."expectedCycles")::int,
-             SUM(mb."expectedItems")::int,
-             SUM(mb."elapsedExpectedCycles")::int,
-             SUM(mb."elapsedExpectedItems")::int,
-             SUM(mb."elapsedPlannedProductionSeconds")::int
-      FROM all_stations s
-      JOIN "MetricBucket" mb ON mb."entityId" = s.station_id
+  // Step 3: SITE buckets — sum ALL station buckets (never needed the
+  // ancestor walk; stations without a workcenter are included).
+  const siteRows = await prisma.$queryRaw<BucketRow[]>`
+    WITH
+    parent_sums AS (
+      SELECT mb.granularity, mb."startTime",
+             SUM(mb."totalCycles")::int AS "totalCycles",
+             SUM(mb."badCycles")::int AS "badCycles",
+             SUM(mb."totalItems")::int AS "totalItems",
+             SUM(mb."badItems")::int AS "badItems",
+             SUM(mb."idealCycleSeconds")::int AS "idealCycleSeconds",
+             SUM(mb."totalCycleSeconds")::int AS "totalCycleSeconds",
+             SUM(mb."runSeconds")::int AS "runSeconds",
+             SUM(mb."downSeconds")::int AS "downSeconds",
+             SUM(mb."plannedDownSeconds")::int AS "plannedDownSeconds",
+             SUM(mb."unplannedDownSeconds")::int AS "unplannedDownSeconds",
+             SUM(mb."expectedCycles")::int AS "expectedCycles",
+             SUM(mb."expectedItems")::int AS "expectedItems",
+             SUM(mb."elapsedExpectedCycles")::int AS "elapsedExpectedCycles",
+             SUM(mb."elapsedExpectedItems")::int AS "elapsedExpectedItems",
+             SUM(mb."elapsedPlannedProductionSeconds")::int AS "elapsedPlannedProductionSeconds"
+      FROM "Station" s
+      JOIN "MetricBucket" mb ON mb."entityId" = s.id
         AND mb."entityType" = 'STATION'::"BucketEntityType"
-        AND mb."startTime" >= (SELECT hour_start FROM params) - INTERVAL '24 hours'
+        AND mb."startTime" >= date_trunc('hour', ${timestamp}::timestamptz) - INTERVAL '24 hours'
+      WHERE s."siteId" = ${siteId}::uuid AND s."deletedAt" IS NULL
       GROUP BY mb.granularity, mb."startTime"
     ),
-    upd_parents AS (
+    upd AS (
       UPDATE "MetricBucket" mb SET
-        "totalCycles" = ps."totalCycles",
-        "badCycles" = ps."badCycles",
-        "totalItems" = ps."totalItems",
-        "badItems" = ps."badItems",
-        "idealCycleSeconds" = ps."idealCycleSeconds",
-        "totalCycleSeconds" = ps."totalCycleSeconds",
-        "runSeconds" = ps."runSeconds",
-        "downSeconds" = ps."downSeconds",
-        "plannedDownSeconds" = ps."plannedDownSeconds",
-        "unplannedDownSeconds" = ps."unplannedDownSeconds",
-        "expectedCycles" = ps."expectedCycles",
-        "expectedItems" = ps."expectedItems",
-        "elapsedExpectedCycles" = ps."elapsedExpectedCycles",
-        "elapsedExpectedItems" = ps."elapsedExpectedItems",
-        "elapsedPlannedProductionSeconds" = ps."elapsedPlannedProductionSeconds",
+          "totalCycles" = ps."totalCycles",
+          "badCycles" = ps."badCycles",
+          "totalItems" = ps."totalItems",
+          "badItems" = ps."badItems",
+          "idealCycleSeconds" = ps."idealCycleSeconds",
+          "totalCycleSeconds" = ps."totalCycleSeconds",
+          "runSeconds" = ps."runSeconds",
+          "downSeconds" = ps."downSeconds",
+          "plannedDownSeconds" = ps."plannedDownSeconds",
+          "unplannedDownSeconds" = ps."unplannedDownSeconds",
+          "expectedCycles" = ps."expectedCycles",
+          "expectedItems" = ps."expectedItems",
+          "elapsedExpectedCycles" = ps."elapsedExpectedCycles",
+          "elapsedExpectedItems" = ps."elapsedExpectedItems",
+          "elapsedPlannedProductionSeconds" = ps."elapsedPlannedProductionSeconds",
         "currentStandardCycle" = NULL,
         "currentJobId" = NULL,
         "currentJobName" = NULL,
         "updatedAt" = NOW()
       FROM parent_sums ps
-      WHERE mb."entityType" = ps.et
-        AND mb."entityId" = ps.eid
+      WHERE mb."entityType" = 'SITE'::"BucketEntityType"
+        AND mb."entityId" = ${siteId}::uuid
         AND mb.granularity = ps.granularity
         AND mb."startTime" = ps."startTime"
         AND (
-          mb."totalCycles"                     IS DISTINCT FROM ps."totalCycles" OR
-          mb."badCycles"                       IS DISTINCT FROM ps."badCycles" OR
-          mb."totalItems"                      IS DISTINCT FROM ps."totalItems" OR
-          mb."badItems"                        IS DISTINCT FROM ps."badItems" OR
-          mb."idealCycleSeconds"               IS DISTINCT FROM ps."idealCycleSeconds" OR
-          mb."totalCycleSeconds"               IS DISTINCT FROM ps."totalCycleSeconds" OR
-          mb."runSeconds"                      IS DISTINCT FROM ps."runSeconds" OR
-          mb."downSeconds"                     IS DISTINCT FROM ps."downSeconds" OR
-          mb."plannedDownSeconds"              IS DISTINCT FROM ps."plannedDownSeconds" OR
-          mb."unplannedDownSeconds"            IS DISTINCT FROM ps."unplannedDownSeconds" OR
-          mb."expectedCycles"                  IS DISTINCT FROM ps."expectedCycles" OR
-          mb."expectedItems"                   IS DISTINCT FROM ps."expectedItems" OR
-          mb."elapsedExpectedCycles"           IS DISTINCT FROM ps."elapsedExpectedCycles" OR
-          mb."elapsedExpectedItems"            IS DISTINCT FROM ps."elapsedExpectedItems" OR
-          mb."elapsedPlannedProductionSeconds" IS DISTINCT FROM ps."elapsedPlannedProductionSeconds" OR
-          mb."currentStandardCycle"            IS NOT NULL OR
-          mb."currentJobId"                    IS NOT NULL OR
-          mb."currentJobName"                  IS NOT NULL
+            mb."totalCycles" IS DISTINCT FROM ps."totalCycles" OR
+            mb."badCycles" IS DISTINCT FROM ps."badCycles" OR
+            mb."totalItems" IS DISTINCT FROM ps."totalItems" OR
+            mb."badItems" IS DISTINCT FROM ps."badItems" OR
+            mb."idealCycleSeconds" IS DISTINCT FROM ps."idealCycleSeconds" OR
+            mb."totalCycleSeconds" IS DISTINCT FROM ps."totalCycleSeconds" OR
+            mb."runSeconds" IS DISTINCT FROM ps."runSeconds" OR
+            mb."downSeconds" IS DISTINCT FROM ps."downSeconds" OR
+            mb."plannedDownSeconds" IS DISTINCT FROM ps."plannedDownSeconds" OR
+            mb."unplannedDownSeconds" IS DISTINCT FROM ps."unplannedDownSeconds" OR
+            mb."expectedCycles" IS DISTINCT FROM ps."expectedCycles" OR
+            mb."expectedItems" IS DISTINCT FROM ps."expectedItems" OR
+            mb."elapsedExpectedCycles" IS DISTINCT FROM ps."elapsedExpectedCycles" OR
+            mb."elapsedExpectedItems" IS DISTINCT FROM ps."elapsedExpectedItems" OR
+            mb."elapsedPlannedProductionSeconds" IS DISTINCT FROM ps."elapsedPlannedProductionSeconds" OR
+          mb."currentStandardCycle" IS NOT NULL OR
+          mb."currentJobId" IS NOT NULL OR
+          mb."currentJobName" IS NOT NULL
         )
       RETURNING mb.*
     )
-    SELECT "entityType", "entityId"::text, "entityName", path, granularity::text, "granularityName",
-           "siteId"::text, "startTime", "durationSeconds", "shiftInstanceId"::text, "businessDate", "businessShift",
-           "totalCycles", "goodCycles", "badCycles", "totalItems", "goodItems", "badItems",
-           "expectedCycles", "expectedItems", "runSeconds", "downSeconds",
-           "plannedDownSeconds", "unplannedDownSeconds", "plannedProductionSeconds",
-           "idealCycleSeconds", "totalCycleSeconds",
-           "elapsedExpectedCycles", "elapsedExpectedItems", "elapsedPlannedProductionSeconds",
-           "currentStandardCycle"::float8 AS "currentStandardCycle",
-           availability::float8 AS availability, performance::float8 AS performance,
-           quality::float8 AS quality, oee::float8 AS oee,
-           "currentJobId"::text, "currentJobName"
-    FROM upd_parents
+      SELECT "entityType", "entityId"::text, "entityName", path, granularity::text, "granularityName",
+             "siteId"::text, "startTime", "durationSeconds", "shiftInstanceId"::text, "businessDate", "businessShift",
+             "totalCycles", "goodCycles", "badCycles", "totalItems", "goodItems", "badItems",
+             "expectedCycles", "expectedItems", "runSeconds", "downSeconds",
+             "plannedDownSeconds", "unplannedDownSeconds", "plannedProductionSeconds",
+             "idealCycleSeconds", "totalCycleSeconds",
+             "elapsedExpectedCycles", "elapsedExpectedItems", "elapsedPlannedProductionSeconds",
+             "currentStandardCycle"::float8 AS "currentStandardCycle",
+             availability::float8 AS availability, performance::float8 AS performance,
+             quality::float8 AS quality, oee::float8 AS oee,
+             "currentJobId"::text, "currentJobName"
+      FROM upd
   `;
+  rows.push(...siteRows);
 
   emitRows(rows);
 }
