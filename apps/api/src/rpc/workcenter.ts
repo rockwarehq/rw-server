@@ -49,9 +49,7 @@ const listInputSchema = z.object({
  * Create a new workcenter
  */
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "facility:write", site: { kind: "site", siteId: input.siteId } }),
-  );
+  grant(await authorize(context.iam, { permission: "facility:write", site: { kind: "site", siteId: input.siteId } }));
 
   const result = await workcenter.create(input);
   if (result.error !== undefined) throwServiceError(result);
@@ -62,9 +60,7 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
  * List workcenters
  */
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorizeList(context.iam, { permission: "facility:read", requestedSiteId: input.siteId }),
-  );
+  const scope = grant(await authorizeList(context.iam, { permission: "facility:read", requestedSiteId: input.siteId }));
   return workcenter.list({ ...input, ...scopeFilter(scope) });
 });
 

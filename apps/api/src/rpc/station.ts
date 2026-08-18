@@ -178,9 +178,7 @@ const triggerEventInputSchema = z
  * Create a new station
  */
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "facility:write", site: { kind: "site", siteId: input.siteId } }),
-  );
+  grant(await authorize(context.iam, { permission: "facility:write", site: { kind: "site", siteId: input.siteId } }));
 
   const result = await station.create(input);
   if (result.error !== undefined) throwServiceError(result, CREATE_OVERRIDES);
@@ -193,9 +191,7 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
 export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
   // Displays are pinned to their own site by the policy; a workcenterId from
   // another site simply intersects to an empty result.
-  const scope = grant(
-    await authorizeList(context.iam, { permission: "facility:read", requestedSiteId: input.siteId }),
-  );
+  const scope = grant(await authorizeList(context.iam, { permission: "facility:read", requestedSiteId: input.siteId }));
   return station.list({ ...input, ...scopeFilter(scope) });
 });
 

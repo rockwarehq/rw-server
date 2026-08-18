@@ -43,9 +43,7 @@ const listInputSchema = z.object({
  * Create a new site
  */
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "facility:write", site: { kind: "workspace" } }),
-  );
+  const scope = grant(await authorize(context.iam, { permission: "facility:write", site: { kind: "workspace" } }));
 
   const result = await site.create({ ...input, workspaceId: scope.workspaceId });
   return unwrap(result);
