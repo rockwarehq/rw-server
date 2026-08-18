@@ -353,6 +353,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "GET",
     url: "/",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["datasources"],
       querystring: listDatasourcesQuerySchema,
@@ -381,6 +382,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "GET",
     url: "/:id",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["datasources"],
       params: idParamsSchema,
@@ -459,6 +461,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/assign",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["datasources"],
       params: idParamsSchema,
@@ -490,6 +493,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:datasourceId/groups",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["datasources"],
       params: datasourceIdParamsSchema,
@@ -519,6 +523,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "GET",
     url: "/:datasourceId/groups",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["datasources"],
       params: datasourceIdParamsSchema,
@@ -547,6 +552,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:datasourceId/points",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["datasources"],
       params: datasourceIdParamsSchema,
@@ -576,6 +582,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "GET",
     url: "/:datasourceId/points",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["datasources"],
       params: datasourceIdParamsSchema,
@@ -603,6 +610,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:datasourceId/points/bulk",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["datasources"],
       params: datasourceIdParamsSchema,

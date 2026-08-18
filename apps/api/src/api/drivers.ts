@@ -55,6 +55,7 @@ export default async function drivers(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "GET",
     url: "/",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["drivers"],
       querystring: listQuerySchema,
@@ -72,6 +73,7 @@ export default async function drivers(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "GET",
     url: "/:id",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["drivers"],
       params: idParamsSchema,
@@ -94,6 +96,7 @@ export default async function drivers(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "GET",
     url: "/:id/schemas",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["drivers"],
       params: idParamsSchema,

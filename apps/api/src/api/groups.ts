@@ -80,6 +80,7 @@ export default async function groups(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "GET",
     url: "/:id",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["groups"],
       params: idParamsSchema,
@@ -102,6 +103,7 @@ export default async function groups(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "PUT",
     url: "/:id",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["groups"],
       params: idParamsSchema,
@@ -131,6 +133,7 @@ export default async function groups(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "DELETE",
     url: "/:id",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["groups"],
       params: idParamsSchema,

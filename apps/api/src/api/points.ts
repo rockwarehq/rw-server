@@ -83,6 +83,7 @@ export default async function points(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "GET",
     url: "/:id",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["points"],
       params: idParamsSchema,
@@ -105,6 +106,7 @@ export default async function points(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "PUT",
     url: "/:id",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["points"],
       params: idParamsSchema,
@@ -133,6 +135,7 @@ export default async function points(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "DELETE",
     url: "/:id",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["points"],
       params: idParamsSchema,
