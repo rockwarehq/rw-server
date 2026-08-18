@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { ORPCError } from "@orpc/server";
-import { Principal } from "../auth/index.js";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
+import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 import { shift } from "@rw/services/facility/index";
 import { type CodeOverrides, throwServiceError, unwrap } from "./errors.js";
 
@@ -29,9 +29,7 @@ const currentInputSchema = z.object({
 });
 
 export const current = userOrDisplayRequired.input(currentInputSchema).handler(async ({ input, context }) => {
-  if (context.iam.principal === Principal.DISPLAY && input.siteId !== context.iam.siteId) {
-    throw new ORPCError("FORBIDDEN", { message: "Display can only access shift data for its site" });
-  }
+  grant(await authorize(context.iam, { permission: "schedule:read", site: { kind: "site", siteId: input.siteId } }));
 
   const result = await shift.current.getCurrentShift(input.siteId, input.workCenterId);
   return unwrap(result);
@@ -136,35 +134,46 @@ const assignmentListInputSchema = z.object({
 // ShiftPattern Procedures
 // ============================================================================
 
-export const patternCreate = authRequired.input(patternCreateInputSchema).handler(async ({ input }) => {
+export const patternCreate = authRequired.input(patternCreateInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:write", site: { kind: "site", siteId: input.siteId } }));
+
   const result = await shift.pattern.create(input);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
-export const patternList = authRequired.input(patternListInputSchema).handler(async ({ input }) => {
-  return shift.pattern.list(input);
+export const patternList = authRequired.input(patternListInputSchema).handler(async ({ input, context }) => {
+  const scope = grant(await authorizeList(context.iam, { permission: "schedule:read", requestedSiteId: input.siteId }));
+  return shift.pattern.list({ ...input, ...scopeFilter(scope) });
 });
 
-export const patternGet = authRequired.input(idInputSchema).handler(async ({ input }) => {
+export const patternGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:read", site: { kind: "shiftPattern", id: input.id } }));
+
   const result = await shift.pattern.getById(input.id);
   return unwrap(result, { notFoundMessage: "Shift pattern not found" });
 });
 
-export const patternUpdate = authRequired.input(patternUpdateInputSchema).handler(async ({ input }) => {
+export const patternUpdate = authRequired.input(patternUpdateInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:write", site: { kind: "shiftPattern", id: input.id } }));
+
   const { id, ...updateData } = input;
   const result = await shift.pattern.update(id, updateData);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
-export const patternDelete = authRequired.input(idInputSchema).handler(async ({ input }) => {
+export const patternDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:admin", site: { kind: "shiftPattern", id: input.id } }));
+
   const result = await shift.pattern.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
 
-export const patternDuplicate = authRequired.input(duplicateInputSchema).handler(async ({ input }) => {
+export const patternDuplicate = authRequired.input(duplicateInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:write", site: { kind: "shiftPattern", id: input.id } }));
+
   const result = await shift.pattern.duplicate(input.id, input.name);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
@@ -174,29 +183,47 @@ export const patternDuplicate = authRequired.input(duplicateInputSchema).handler
 // ShiftDefinition Procedures
 // ============================================================================
 
-export const definitionCreate = authRequired.input(definitionCreateInputSchema).handler(async ({ input }) => {
+export const definitionCreate = authRequired.input(definitionCreateInputSchema).handler(async ({ input, context }) => {
+  grant(
+    await authorize(context.iam, { permission: "schedule:write", site: { kind: "shiftPattern", id: input.patternId } }),
+  );
+
   const result = await shift.definition.create(input);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
-export const definitionList = authRequired.input(definitionListInputSchema).handler(async ({ input }) => {
+export const definitionList = authRequired.input(definitionListInputSchema).handler(async ({ input, context }) => {
+  grant(
+    await authorize(context.iam, { permission: "schedule:read", site: { kind: "shiftPattern", id: input.patternId } }),
+  );
+
   return shift.definition.list(input);
 });
 
-export const definitionGet = authRequired.input(idInputSchema).handler(async ({ input }) => {
+export const definitionGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:read", site: { kind: "shiftDefinition", id: input.id } }));
+
   const result = await shift.definition.getById(input.id);
   return unwrap(result, { notFoundMessage: "Shift definition not found" });
 });
 
-export const definitionUpdate = authRequired.input(definitionUpdateInputSchema).handler(async ({ input }) => {
+export const definitionUpdate = authRequired.input(definitionUpdateInputSchema).handler(async ({ input, context }) => {
+  grant(
+    await authorize(context.iam, { permission: "schedule:write", site: { kind: "shiftDefinition", id: input.id } }),
+  );
+
   const { id, ...updateData } = input;
   const result = await shift.definition.update(id, updateData);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
-export const definitionDelete = authRequired.input(idInputSchema).handler(async ({ input }) => {
+export const definitionDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  grant(
+    await authorize(context.iam, { permission: "schedule:admin", site: { kind: "shiftDefinition", id: input.id } }),
+  );
+
   const result = await shift.definition.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
@@ -206,29 +233,42 @@ export const definitionDelete = authRequired.input(idInputSchema).handler(async 
 // ShiftAssignment Procedures
 // ============================================================================
 
-export const assignmentCreate = authRequired.input(assignmentCreateInputSchema).handler(async ({ input }) => {
+export const assignmentCreate = authRequired.input(assignmentCreateInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:write", site: { kind: "site", siteId: input.siteId } }));
+
   const result = await shift.assignment.create(input);
   if (result.error !== undefined) throwServiceError(result, ASSIGNMENT_CREATE_OVERRIDES);
   return result.data;
 });
 
-export const assignmentList = authRequired.input(assignmentListInputSchema).handler(async ({ input }) => {
-  return shift.assignment.list(input);
+export const assignmentList = authRequired.input(assignmentListInputSchema).handler(async ({ input, context }) => {
+  const scope = grant(await authorizeList(context.iam, { permission: "schedule:read", requestedSiteId: input.siteId }));
+  return shift.assignment.list({ ...input, ...scopeFilter(scope) });
 });
 
-export const assignmentGet = authRequired.input(idInputSchema).handler(async ({ input }) => {
+export const assignmentGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:read", site: { kind: "shiftAssignment", id: input.id } }));
+
   const result = await shift.assignment.getById(input.id);
   return unwrap(result, { notFoundMessage: "Shift assignment not found" });
 });
 
-export const assignmentUpdate = authRequired.input(assignmentUpdateInputSchema).handler(async ({ input }) => {
+export const assignmentUpdate = authRequired.input(assignmentUpdateInputSchema).handler(async ({ input, context }) => {
+  grant(
+    await authorize(context.iam, { permission: "schedule:write", site: { kind: "shiftAssignment", id: input.id } }),
+  );
+
   const { id, ...updateData } = input;
   const result = await shift.assignment.update(id, updateData);
   if (result.error !== undefined) throwServiceError(result, ASSIGNMENT_OVERRIDES);
   return result.data;
 });
 
-export const assignmentDelete = authRequired.input(idInputSchema).handler(async ({ input }) => {
+export const assignmentDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  grant(
+    await authorize(context.iam, { permission: "schedule:admin", site: { kind: "shiftAssignment", id: input.id } }),
+  );
+
   const result = await shift.assignment.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
