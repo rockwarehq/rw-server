@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { ORPCError } from "@orpc/server";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
+import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 import { material, inventory, product, materialLedger } from "@rw/services/inventory/index";
 import { storageConfig } from "../config.js";
 import { type CodeOverrides, throwServiceError, unwrap } from "./errors.js";
@@ -85,26 +86,16 @@ const materialListInputSchema = z.object({
  * List inventory items with optional filters
  */
 export const inventoryList = authRequired.input(inventoryListInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  const scope = grant(await authorizeList(context.iam, { permission: "product:read", requestedSiteId: input.siteId }));
 
-  return inventory.list(input);
+  return inventory.list({ ...input, ...scopeFilter(scope) });
 });
 
 /**
  * Get inventory item by ID
  */
 export const inventoryGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  grant(await authorize(context.iam, { permission: "product:read", site: { kind: "inventoryItem", id: input.id } }));
 
   return unwrap(await inventory.getById(input.id), { notFoundMessage: "Inventory item not found" });
 });
@@ -113,12 +104,7 @@ export const inventoryGet = authRequired.input(idInputSchema).handler(async ({ i
  * Get all inventory items from a specific cycle
  */
 export const inventoryGetByCycle = authRequired.input(cycleIdInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  grant(await authorize(context.iam, { permission: "product:read", site: { kind: "cycle", id: input.cycleId } }));
 
   return unwrap(await inventory.getByCycle(input.cycleId));
 });
@@ -131,12 +117,7 @@ export const inventoryGetByCycle = authRequired.input(cycleIdInputSchema).handle
  * Create a new material
  */
 export const materialCreate = authRequired.input(materialCreateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  grant(await authorize(context.iam, { permission: "product:write", site: { kind: "site", siteId: input.siteId } }));
 
   return unwrap(await material.create(input));
 });
@@ -145,26 +126,16 @@ export const materialCreate = authRequired.input(materialCreateInputSchema).hand
  * List materials with optional filters
  */
 export const materialList = authRequired.input(materialListInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  const scope = grant(await authorizeList(context.iam, { permission: "product:read", requestedSiteId: input.siteId }));
 
-  return material.list(input);
+  return material.list({ ...input, ...scopeFilter(scope) });
 });
 
 /**
  * Get material by ID
  */
 export const materialGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  grant(await authorize(context.iam, { permission: "product:read", site: { kind: "material", id: input.id } }));
 
   return unwrap(await material.getById(input.id), {
     notFoundMessage: "Material not found",
@@ -176,12 +147,7 @@ export const materialGet = authRequired.input(idInputSchema).handler(async ({ in
  * Update material (creates new version version)
  */
 export const materialUpdate = authRequired.input(materialUpdateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  grant(await authorize(context.iam, { permission: "product:write", site: { kind: "material", id: input.id } }));
 
   const { id, ...updateData } = input;
   return unwrap(await material.update(id, updateData), { overrides: inventoryOverrides });
@@ -191,12 +157,7 @@ export const materialUpdate = authRequired.input(materialUpdateInputSchema).hand
  * Delete material (soft delete)
  */
 export const materialRemove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  grant(await authorize(context.iam, { permission: "product:admin", site: { kind: "material", id: input.id } }));
 
   const result = await material.remove(input.id);
   if (result.error) throwServiceError(result, inventoryOverrides);
@@ -312,10 +273,7 @@ const productSetPrimaryPictureInputSchema = z.object({
  * Create a new product
  */
 export const productCreate = authRequired.input(productCreateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  grant(await authorize(context.iam, { permission: "product:write", site: { kind: "site", siteId: input.siteId } }));
 
   return unwrap(await product.create(input));
 });
@@ -324,22 +282,16 @@ export const productCreate = authRequired.input(productCreateInputSchema).handle
  * List products with optional filters
  */
 export const productList = authRequired.input(productListInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  const scope = grant(await authorizeList(context.iam, { permission: "product:read", requestedSiteId: input.siteId }));
 
-  return product.list(input);
+  return product.list({ ...input, ...scopeFilter(scope) });
 });
 
 /**
  * Get product by ID with materials, pictures, and primary picture URL
  */
 export const productGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  grant(await authorize(context.iam, { permission: "product:read", site: { kind: "product", id: input.id } }));
 
   return unwrap(await product.getById(input.id), { notFoundMessage: "Product not found" });
 });
@@ -348,10 +300,7 @@ export const productGet = authRequired.input(idInputSchema).handler(async ({ inp
  * Update product (creates new version version)
  */
 export const productUpdate = authRequired.input(productUpdateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  grant(await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.id } }));
 
   const { id, ...updateData } = input;
   return unwrap(await product.update(id, updateData), { overrides: inventoryOverrides });
@@ -361,10 +310,7 @@ export const productUpdate = authRequired.input(productUpdateInputSchema).handle
  * Delete product (soft delete)
  */
 export const productRemove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  grant(await authorize(context.iam, { permission: "product:admin", site: { kind: "product", id: input.id } }));
 
   const result = await product.remove(input.id);
   if (result.error) throwServiceError(result);
@@ -379,10 +325,7 @@ export const productRemove = authRequired.input(idInputSchema).handler(async ({ 
  * Archive a product
  */
 export const productArchive = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  grant(await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.id } }));
 
   return unwrap(await product.archive(input.id));
 });
@@ -391,10 +334,7 @@ export const productArchive = authRequired.input(idInputSchema).handler(async ({
  * Unarchive a product
  */
 export const productUnarchive = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  grant(await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.id } }));
 
   return unwrap(await product.unarchive(input.id));
 });
@@ -403,10 +343,7 @@ export const productUnarchive = authRequired.input(idInputSchema).handler(async 
  * Duplicate a product with a new SKU
  */
 export const productDuplicate = authRequired.input(productDuplicateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  grant(await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.id } }));
 
   return unwrap(await product.duplicate(input), { overrides: inventoryOverrides });
 });
@@ -421,10 +358,9 @@ export const productDuplicate = authRequired.input(productDuplicateInputSchema).
 export const productAddMaterial = authRequired
   .input(productAddMaterialInputSchema)
   .handler(async ({ input, context }) => {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-    }
+    grant(
+      await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.productId } }),
+    );
 
     return unwrap(await product.addMaterial(input), { overrides: inventoryOverrides });
   });
@@ -435,10 +371,9 @@ export const productAddMaterial = authRequired
 export const productUpdateMaterial = authRequired
   .input(productUpdateMaterialInputSchema)
   .handler(async ({ input, context }) => {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-    }
+    grant(
+      await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.productId } }),
+    );
 
     return unwrap(await product.updateMaterial(input), { overrides: inventoryOverrides });
   });
@@ -449,10 +384,9 @@ export const productUpdateMaterial = authRequired
 export const productRemoveMaterial = authRequired
   .input(productRemoveMaterialInputSchema)
   .handler(async ({ input, context }) => {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-    }
+    grant(
+      await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.productId } }),
+    );
 
     const result = await product.removeMaterial(
       input.productId,
@@ -467,10 +401,7 @@ export const productRemoveMaterial = authRequired
  * List materials for a product
  */
 export const productListMaterials = authRequired.input(productIdInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  grant(await authorize(context.iam, { permission: "product:read", site: { kind: "product", id: input.productId } }));
 
   return unwrap(await product.listMaterials(input.productId));
 });
@@ -485,10 +416,9 @@ export const productListMaterials = authRequired.input(productIdInputSchema).han
 export const productAddPicture = authRequired
   .input(productAddPictureInputSchema)
   .handler(async ({ input, context }) => {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-    }
+    grant(
+      await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.productId } }),
+    );
 
     return unwrap(await product.addPicture(input));
   });
@@ -499,10 +429,9 @@ export const productAddPicture = authRequired
 export const productRemovePicture = authRequired
   .input(productRemovePictureInputSchema)
   .handler(async ({ input, context }) => {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-    }
+    grant(
+      await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.productId } }),
+    );
 
     const result = await product.removePicture(input.productId, input.pictureId);
     if (result.error) throwServiceError(result);
@@ -515,10 +444,9 @@ export const productRemovePicture = authRequired
 export const productSetPrimaryPicture = authRequired
   .input(productSetPrimaryPictureInputSchema)
   .handler(async ({ input, context }) => {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-    }
+    grant(
+      await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.productId } }),
+    );
 
     const result = await product.setPrimaryPicture(input.productId, input.pictureId);
     if (result.error) throwServiceError(result);
@@ -529,10 +457,7 @@ export const productSetPrimaryPicture = authRequired
  * List pictures for a product with presigned download URLs
  */
 export const productListPictures = authRequired.input(productIdInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  grant(await authorize(context.iam, { permission: "product:read", site: { kind: "product", id: input.productId } }));
 
   return unwrap(await product.listPictures(input.productId));
 });
@@ -581,10 +506,12 @@ const updateAltGroupLabelInputSchema = z.object({
 export const productCreateAltGroup = authRequired
   .input(productMaterialIdInputSchema)
   .handler(async ({ input, context }) => {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-    }
+    grant(
+      await authorize(context.iam, {
+        permission: "product:write",
+        site: { kind: "productMaterial", id: input.productMaterialId },
+      }),
+    );
 
     return unwrap(await product.createAltGroup(input.productMaterialId));
   });
@@ -597,10 +524,12 @@ export const productCreateAltGroup = authRequired
 export const productAddMaterialToAltGroup = authRequired
   .input(addMaterialToAltGroupInputSchema)
   .handler(async ({ input, context }) => {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-    }
+    grant(
+      await authorize(context.iam, {
+        permission: "product:write",
+        site: { kind: "productAltGroup", id: input.altGroupId },
+      }),
+    );
 
     return unwrap(await product.addMaterialToAltGroup(input.altGroupId, input.materialId), {
       overrides: inventoryOverrides,
@@ -613,10 +542,12 @@ export const productAddMaterialToAltGroup = authRequired
 export const productUpdateAltGroupLabel = authRequired
   .input(updateAltGroupLabelInputSchema)
   .handler(async ({ input, context }) => {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-    }
+    grant(
+      await authorize(context.iam, {
+        permission: "product:write",
+        site: { kind: "productAltGroup", id: input.altGroupId },
+      }),
+    );
 
     return unwrap(await product.updateAltGroupLabel(input.altGroupId, input.label));
   });
@@ -633,10 +564,12 @@ export const productUpdateAltGroupLabel = authRequired
 export const productSetAltGroupActive = userOrDisplayRequired
   .input(setAltGroupActiveInputSchema)
   .handler(async ({ input, context }) => {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-    }
+    grant(
+      await authorize(context.iam, {
+        permission: "product:write",
+        site: { kind: "productAltGroup", id: input.altGroupId },
+      }),
+    );
 
     return unwrap(await product.setAltGroupActive(input.altGroupId, input.productMaterialId));
   });
@@ -651,10 +584,12 @@ export const productSetAltGroupActive = userOrDisplayRequired
 export const productRemoveFromAltGroup = authRequired
   .input(removeFromAltGroupInputSchema)
   .handler(async ({ input, context }) => {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-    }
+    grant(
+      await authorize(context.iam, {
+        permission: "product:write",
+        site: { kind: "productMaterial", id: input.productMaterialId },
+      }),
+    );
 
     return unwrap(await product.removeFromAltGroup(input.productMaterialId, input.replaceActiveWithProductMaterialId));
   });
@@ -664,10 +599,12 @@ export const productRemoveFromAltGroup = authRequired
  * is removed.
  */
 export const productDeleteAltGroup = authRequired.input(altGroupIdInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  grant(
+    await authorize(context.iam, {
+      permission: "product:write",
+      site: { kind: "productAltGroup", id: input.altGroupId },
+    }),
+  );
 
   return unwrap(await product.deleteAltGroup(input.altGroupId));
 });
@@ -732,10 +669,7 @@ const materialLedgerUsageInputSchema = z.object({
 export const materialLedgerCreate = authRequired
   .input(materialLedgerCreateInputSchema)
   .handler(async ({ input, context }) => {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-    }
+    grant(await authorize(context.iam, { permission: "product:write", site: { kind: "site", siteId: input.siteId } }));
 
     const result = await materialLedger.create({
       siteId: input.siteId,
@@ -757,20 +691,16 @@ export const materialLedgerCreate = authRequired
 export const materialLedgerList = authRequired
   .input(materialLedgerListInputSchema)
   .handler(async ({ input, context }) => {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-    }
+    const scope = grant(
+      await authorizeList(context.iam, { permission: "product:read", requestedSiteId: input.siteId }),
+    );
 
-    return materialLedger.list(input);
+    return materialLedger.list({ ...input, ...scopeFilter(scope) });
   });
 
 export const materialLedgerUsage = authRequired
   .input(materialLedgerUsageInputSchema)
   .handler(async ({ input, context }) => {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-    }
+    grant(await authorize(context.iam, { permission: "product:read", site: { kind: "site", siteId: input.siteId } }));
     return materialLedger.usage(input);
   });
