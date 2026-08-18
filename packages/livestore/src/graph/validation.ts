@@ -124,6 +124,13 @@ async function assertKnownEntityInSite(entityType: string, entityId: string, sco
     });
     return job ? null : errorResult("ENTITY_SITE_MISMATCH", "Metric entity is outside this graph site");
   }
+  if (type === "POINT") {
+    // Point has no siteId; scope through its datasource
+    const point = await prisma.point.findFirst({
+      where: { id: entityId, datasource: { siteId: scope.siteId, site: { workspaceId: scope.workspaceId } } },
+    });
+    return point ? null : errorResult("ENTITY_SITE_MISMATCH", "Metric entity is outside this graph site");
+  }
   return errorResult("INVALID_RESOLVER", "resolver entityType must be Site, Workcenter, Station, or Job");
 }
 
@@ -190,6 +197,9 @@ export async function validateResolverConfig(args: {
   }
 
   if (resolverType === "metric") {
+    // Points have no metric buckets; only the entity resolver may target them
+    if ((resolver.entityType as string).toUpperCase() === "POINT")
+      return errorResult("INVALID_RESOLVER", "resolver entityType must be Site, Workcenter, Station, or Job");
     const entityError = await assertKnownEntityInSite(
       resolver.entityType as string,
       resolver.entityId as string,

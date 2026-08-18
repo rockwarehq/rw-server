@@ -7,6 +7,8 @@ const pointProperties = {
   id: { type: "string", format: "uuid" },
   name: { type: "string" },
   description: { type: "string", nullable: true },
+  sourceType: { type: "string", enum: ["DRIVER", "STATIC"] },
+  staticValue: {},
   address: { type: "string" },
   dataType: { type: "string" },
   scaleFactor: { type: "number" },
@@ -39,6 +41,7 @@ const updatePointBodySchema = {
   properties: {
     name: { type: "string" },
     description: { type: "string" },
+    staticValue: {},
     address: { type: "string" },
     dataType: { type: "string" },
     scaleFactor: { type: "number" },

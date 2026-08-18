@@ -14,12 +14,17 @@ export async function buildSpec(gatewayId: string) {
     include: {
       pointGroups: {
         include: {
-          points: true,
+          points: {
+            where: {
+              sourceType: "DRIVER", // Static points are never polled
+            },
+          },
         },
       },
       points: {
         where: {
           groupId: null, // Only ungrouped points
+          sourceType: "DRIVER", // Static points are never polled
         },
       },
     },

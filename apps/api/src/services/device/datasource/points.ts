@@ -1,12 +1,16 @@
-import prisma from "@rw/db";
+import prisma, { type Prisma } from "@rw/db";
 import { validatePointConfig } from "../../validation.js";
 import { bumpSpecVersion } from "@rw/services/device/gateway/index";
+import { publishEntityEvent } from "@rw/services/entity/index";
+import { SYSTEM_ENTITY_KEYS } from "@rw/services/entity/registry";
 
 export interface CreatePointInput {
   name: string;
   description?: string;
-  address: string;
-  dataType: string;
+  sourceType?: "DRIVER" | "STATIC";
+  staticValue?: unknown;
+  address?: string;
+  dataType?: string;
   scaleFactor?: number;
   offset?: number;
   config?: Record<string, unknown>;
@@ -16,12 +20,32 @@ export interface CreatePointInput {
 export interface UpdatePointInput {
   name?: string;
   description?: string;
+  staticValue?: unknown;
   address?: string;
   dataType?: string;
   scaleFactor?: number;
   offset?: number;
   config?: Record<string, unknown>;
   groupId?: string | null;
+}
+
+// Static point changes reach livestore's entity resolver via entity.changes; siteless datasources have no graph scope, so skip.
+function publishPointEntityEvent(args: {
+  action: "created" | "updated" | "deleted";
+  pointId: string;
+  siteId: string | null;
+  workspaceId: string | undefined;
+  changedFields?: string[];
+}): void {
+  if (!args.siteId || !args.workspaceId) return;
+  publishEntityEvent({
+    action: args.action,
+    entityKey: SYSTEM_ENTITY_KEYS.Point,
+    entityId: args.pointId,
+    siteId: args.siteId,
+    workspaceId: args.workspaceId,
+    changedFields: args.changedFields,
+  });
 }
 
 export interface ListPointsFilter {
@@ -34,14 +58,26 @@ export interface ListPointsFilter {
  * Create a point for a datasource
  */
 export async function create(datasourceId: string, input: CreatePointInput) {
-  const { name, description, address, dataType, scaleFactor, offset, config, groupId: rawGroupId } = input;
+  const { name, description, sourceType, staticValue, address, dataType, scaleFactor, offset, config } = input;
+  const rawGroupId = input.groupId;
+  const isStatic = sourceType === "STATIC";
 
   // Convert empty string to null
   const groupId = rawGroupId === "" ? null : rawGroupId;
 
-  const datasource = await prisma.datasource.findUnique({ where: { id: datasourceId } });
+  const datasource = await prisma.datasource.findUnique({
+    where: { id: datasourceId },
+    include: { site: { select: { workspaceId: true } } },
+  });
   if (!datasource) {
     return { error: "Datasource not found", code: "DATASOURCE_NOT_FOUND" };
+  }
+
+  if (isStatic && staticValue === undefined) {
+    return { error: "Static point requires staticValue", code: "VALIDATION_FAILED" };
+  }
+  if (!isStatic && (address === undefined || dataType === undefined)) {
+    return { error: "Driver point requires address and dataType", code: "VALIDATION_FAILED" };
   }
 
   // Verify group exists and belongs to same datasource if provided
@@ -55,8 +91,8 @@ export async function create(datasourceId: string, input: CreatePointInput) {
     }
   }
 
-  // Validate config against driver's pointSchema (if config provided)
-  if (config && Object.keys(config).length > 0) {
+  // Validate config against driver's pointSchema (if config provided); static points aren't driver-bound
+  if (!isStatic && config && Object.keys(config).length > 0) {
     const requiredConfig = { address, dataType, ...config };
     const validation = validatePointConfig(datasource.driver, requiredConfig, datasource.driverVersion);
     if (!validation.valid) {
@@ -72,8 +108,10 @@ export async function create(datasourceId: string, input: CreatePointInput) {
     data: {
       name,
       description,
-      address,
-      dataType,
+      sourceType: isStatic ? "STATIC" : "DRIVER",
+      staticValue: isStatic ? (staticValue as Prisma.InputJsonValue) : undefined,
+      address: address ?? "",
+      dataType: dataType ?? "",
       scaleFactor: scaleFactor ?? 1.0,
       offset: offset ?? 0.0,
       config: config || {},
@@ -82,8 +120,15 @@ export async function create(datasourceId: string, input: CreatePointInput) {
     },
   });
 
-  // Update gateway spec
-  if (datasource.gatewayId) {
+  // Static points never reach gateways, so no spec bump
+  if (isStatic) {
+    publishPointEntityEvent({
+      action: "created",
+      pointId: point.id,
+      siteId: datasource.siteId,
+      workspaceId: datasource.site?.workspaceId,
+    });
+  } else if (datasource.gatewayId) {
     await bumpSpecVersion(datasource.gatewayId);
   }
 
@@ -137,7 +182,8 @@ export async function getById(id: string) {
  * Update point
  */
 export async function update(id: string, input: UpdatePointInput) {
-  const { name, description, address, dataType, scaleFactor, offset, config, groupId: rawGroupId } = input;
+  const { name, description, staticValue, address, dataType, scaleFactor, offset, config } = input;
+  const rawGroupId = input.groupId;
 
   // Convert empty string to null
   const groupId = rawGroupId === "" ? null : rawGroupId;
@@ -146,7 +192,14 @@ export async function update(id: string, input: UpdatePointInput) {
     where: { id },
     include: {
       datasource: {
-        select: { id: true, driver: true, driverVersion: true, gatewayId: true },
+        select: {
+          id: true,
+          driver: true,
+          driverVersion: true,
+          gatewayId: true,
+          siteId: true,
+          site: { select: { workspaceId: true } },
+        },
       },
     },
   });
@@ -166,8 +219,10 @@ export async function update(id: string, input: UpdatePointInput) {
     }
   }
 
-  // Validate config against driver's pointSchema (if config provided)
-  if (config && Object.keys(config).length > 0) {
+  const isStatic = existing.sourceType === "STATIC";
+
+  // Validate config against driver's pointSchema (if config provided); static points aren't driver-bound
+  if (!isStatic && config && Object.keys(config).length > 0) {
     const requiredConfig = { address, dataType, ...config };
     const validation = validatePointConfig(
       existing.datasource.driver,
@@ -186,6 +241,7 @@ export async function update(id: string, input: UpdatePointInput) {
   const updateData: Record<string, unknown> = {};
   if (name !== undefined) updateData.name = name;
   if (description !== undefined) updateData.description = description;
+  if (isStatic && staticValue !== undefined) updateData.staticValue = staticValue;
   if (address !== undefined) updateData.address = address;
   if (dataType !== undefined) updateData.dataType = dataType;
   if (scaleFactor !== undefined) updateData.scaleFactor = scaleFactor;
@@ -195,11 +251,28 @@ export async function update(id: string, input: UpdatePointInput) {
 
   const point = await prisma.point.update({
     where: { id },
-    data: updateData,
+    data: updateData as Prisma.PointUpdateInput,
   });
 
-  // Update gateway spec
-  if (existing.datasource.gatewayId) {
+  if (isStatic) {
+    // Emit only fields that really changed so livestore skips no-op refreshes
+    const changedFields = [
+      name !== undefined && name !== existing.name ? "name" : null,
+      description !== undefined && description !== existing.description ? "description" : null,
+      staticValue !== undefined && JSON.stringify(staticValue) !== JSON.stringify(existing.staticValue)
+        ? "staticValue"
+        : null,
+    ].filter((f): f is string => f !== null);
+    if (changedFields.length > 0) {
+      publishPointEntityEvent({
+        action: "updated",
+        pointId: point.id,
+        siteId: existing.datasource.siteId,
+        workspaceId: existing.datasource.site?.workspaceId,
+        changedFields,
+      });
+    }
+  } else if (existing.datasource.gatewayId) {
     await bumpSpecVersion(existing.datasource.gatewayId);
   }
 
@@ -214,7 +287,7 @@ export async function remove(id: string) {
     where: { id },
     include: {
       datasource: {
-        select: { gatewayId: true },
+        select: { gatewayId: true, siteId: true, site: { select: { workspaceId: true } } },
       },
     },
   });
@@ -225,8 +298,14 @@ export async function remove(id: string) {
 
   await prisma.point.delete({ where: { id } });
 
-  // Update gateway spec
-  if (existing.datasource.gatewayId) {
+  if (existing.sourceType === "STATIC") {
+    publishPointEntityEvent({
+      action: "deleted",
+      pointId: id,
+      siteId: existing.datasource.siteId,
+      workspaceId: existing.datasource.site?.workspaceId,
+    });
+  } else if (existing.datasource.gatewayId) {
     await bumpSpecVersion(existing.datasource.gatewayId);
   }
 
@@ -248,9 +327,21 @@ export async function bulkCreate(datasourceId: string, pointsInput: CreatePointI
     groupId: p.groupId === "" ? null : p.groupId,
   }));
 
-  // Validate all point configs before creating any
+  // Validate all point configs before creating any; bulk import is driver-only
   for (let i = 0; i < pointsData.length; i++) {
     const p = pointsData[i];
+    if (p.sourceType === "STATIC") {
+      return {
+        error: `Static points cannot be bulk created (point at index ${i}, "${p.name}")`,
+        code: "VALIDATION_FAILED",
+      };
+    }
+    if (p.address === undefined || p.dataType === undefined) {
+      return {
+        error: `Driver point requires address and dataType (point at index ${i}, "${p.name}")`,
+        code: "VALIDATION_FAILED",
+      };
+    }
     if (p.config && Object.keys(p.config).length > 0) {
       const validation = validatePointConfig(datasource.driver, p.config, datasource.driverVersion);
       if (!validation.valid) {
@@ -270,8 +361,8 @@ export async function bulkCreate(datasourceId: string, pointsInput: CreatePointI
         data: {
           name: p.name,
           description: p.description,
-          address: p.address,
-          dataType: p.dataType,
+          address: p.address ?? "",
+          dataType: p.dataType ?? "",
           scaleFactor: p.scaleFactor ?? 1.0,
           offset: p.offset ?? 0.0,
           config: p.config || {},

@@ -83,6 +83,8 @@ const pointProperties = {
   id: { type: "string", format: "uuid" },
   name: { type: "string" },
   description: { type: "string", nullable: true },
+  sourceType: { type: "string", enum: ["DRIVER", "STATIC"] },
+  staticValue: {},
   address: { type: "string" },
   dataType: { type: "string" },
   scaleFactor: { type: "number" },
@@ -172,6 +174,8 @@ const createPointBodySchema = {
   properties: {
     name: { type: "string" },
     description: { type: "string" },
+    sourceType: { type: "string", enum: ["DRIVER", "STATIC"] },
+    staticValue: {},
     address: { type: "string" },
     dataType: { type: "string" },
     scaleFactor: { type: "number" },
@@ -179,7 +183,8 @@ const createPointBodySchema = {
     config: { type: "object", additionalProperties: true },
     groupId: { type: "string" },
   },
-  required: ["name", "address", "dataType"],
+  // address/dataType required for DRIVER, staticValue for STATIC — enforced in the service
+  required: ["name"],
 } as const satisfies JSONSchema;
 
 const listPointsQuerySchema = {

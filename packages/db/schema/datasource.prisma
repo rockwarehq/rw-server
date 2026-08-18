@@ -48,11 +48,18 @@ model Datasource {
   @@index([siteId])
 }
 
+enum PointSourceType {
+  DRIVER
+  STATIC
+}
+
 model Point {
   id          String  @id @default(uuid()) @db.Uuid
   name        String
   description String?
 
+  sourceType  PointSourceType @default(DRIVER)
+  staticValue Json? // Manually-entered value for STATIC points; delivered via entity.changes, never polled
   address     String
   dataType    String
   scaleFactor Float  @default(1.0) // Multiplier to convert raw to engineering units
