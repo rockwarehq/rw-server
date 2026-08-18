@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { authRequired } from "./middleware.js";
+import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 import * as orderService from "@rw/services/order/order";
 import { type CodeOverrides, throwServiceError, unwrap } from "./errors.js";
 
@@ -88,37 +90,50 @@ const nextNumberInputSchema = z.object({
 // Procedures
 // ============================================================================
 
-export const create = authRequired.input(createInputSchema).handler(async ({ input }) => {
+export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "job:write", site: { kind: "site", siteId: input.siteId } }));
+
   // DUPLICATE_PRODUCT here means duplicate products within the create payload
   // and historically fell through to BAD_REQUEST (unlike addLineItem, where the
   // same code is a CONFLICT with existing state).
   return unwrap(await orderService.create(input), { overrides: { DUPLICATE_PRODUCT: "BAD_REQUEST" } });
 });
 
-export const list = authRequired.input(listInputSchema).handler(async ({ input }) => {
-  return orderService.list(input);
+export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
+  const scope = grant(await authorizeList(context.iam, { permission: "job:read", requestedSiteId: input.siteId }));
+  return orderService.list({ ...input, ...scopeFilter(scope) });
 });
 
-export const get = authRequired.input(idInputSchema).handler(async ({ input }) => {
+export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "job:read", site: { kind: "order", id: input.id } }));
+
   return unwrap(await orderService.get(input.id));
 });
 
-export const update = authRequired.input(updateInputSchema).handler(async ({ input }) => {
+export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "job:write", site: { kind: "order", id: input.id } }));
+
   const { id, ...updateData } = input;
   return unwrap(await orderService.update(id, updateData));
 });
 
-export const remove = authRequired.input(idInputSchema).handler(async ({ input }) => {
+export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "job:admin", site: { kind: "order", id: input.id } }));
+
   const result = await orderService.remove(input.id);
   if (result.error) throwServiceError(result);
   return { success: true };
 });
 
-export const transitionStatus = authRequired.input(transitionStatusInputSchema).handler(async ({ input }) => {
+export const transitionStatus = authRequired.input(transitionStatusInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "job:write", site: { kind: "order", id: input.id } }));
+
   return unwrap(await orderService.transitionStatus(input.id, input.status));
 });
 
-export const addLineItem = authRequired.input(addLineItemInputSchema).handler(async ({ input }) => {
+export const addLineItem = authRequired.input(addLineItemInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "job:write", site: { kind: "order", id: input.orderId } }));
+
   const result = await orderService.addLineItem(input.orderId, {
     productId: input.productId,
     targetQuantity: input.targetQuantity,
@@ -126,22 +141,30 @@ export const addLineItem = authRequired.input(addLineItemInputSchema).handler(as
   return unwrap(result, { overrides: lineItemOverrides });
 });
 
-export const updateLineItem = authRequired.input(updateLineItemInputSchema).handler(async ({ input }) => {
+export const updateLineItem = authRequired.input(updateLineItemInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "job:write", site: { kind: "orderLineItem", id: input.id } }));
+
   const { id, ...updateData } = input;
   return unwrap(await orderService.updateLineItem(id, updateData), { overrides: lineItemOverrides });
 });
 
-export const removeLineItem = authRequired.input(removeLineItemInputSchema).handler(async ({ input }) => {
+export const removeLineItem = authRequired.input(removeLineItemInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "job:write", site: { kind: "orderLineItem", id: input.id } }));
+
   const result = await orderService.removeLineItem(input.id);
   if (result.error) throwServiceError(result, lineItemOverrides);
   return { success: true };
 });
 
-export const reorder = authRequired.input(reorderInputSchema).handler(async ({ input }) => {
+export const reorder = authRequired.input(reorderInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "job:write", site: { kind: "site", siteId: input.siteId } }));
+
   const result = await orderService.reorder(input.siteId, input.orderedIds);
   return result;
 });
 
-export const nextNumber = authRequired.input(nextNumberInputSchema).handler(async ({ input }) => {
+export const nextNumber = authRequired.input(nextNumberInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "job:read", site: { kind: "site", siteId: input.siteId } }));
+
   return orderService.getNextOrderNumber(input.siteId);
 });
