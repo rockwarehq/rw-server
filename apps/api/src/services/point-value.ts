@@ -96,6 +96,54 @@ export async function validatePointWorkspaceAccess(
   return { success: true };
 }
 
+/**
+ * Multi-site variant for site-scoped users: every point's datasource must
+ * sit in one of the caller's accessible sites. An empty allowlist matches
+ * nothing (fail-closed).
+ */
+export async function validatePointSitesAccess(
+  pointIds: string[],
+  siteIds: string[],
+): Promise<ValidatePointSiteAccessResult> {
+  const requestedPointIds = uniquePointIds(pointIds);
+
+  if (requestedPointIds.length === 0) {
+    return { success: true };
+  }
+
+  const allowed = new Set(siteIds);
+  const points = await prisma.point.findMany({
+    where: { id: { in: requestedPointIds } },
+    select: { id: true, datasource: { select: { siteId: true } } },
+  });
+
+  const foundPointIds = new Set(points.map((point) => point.id));
+  const forbiddenPointIds = points
+    .filter((point) => point.datasource.siteId === null || !allowed.has(point.datasource.siteId))
+    .map((point) => point.id);
+
+  if (forbiddenPointIds.length > 0) {
+    return {
+      success: false,
+      code: "SITE_MISMATCH",
+      error: "One or more points do not belong to an accessible site",
+      pointIds: forbiddenPointIds,
+    };
+  }
+
+  const missingPointIds = requestedPointIds.filter((pointId) => !foundPointIds.has(pointId));
+  if (missingPointIds.length > 0) {
+    return {
+      success: false,
+      code: "POINTS_NOT_FOUND",
+      error: "One or more points were not found",
+      pointIds: missingPointIds,
+    };
+  }
+
+  return { success: true };
+}
+
 export async function validatePointSiteAccess(
   pointIds: string[],
   siteId: string,
