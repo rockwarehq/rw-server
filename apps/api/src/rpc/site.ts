@@ -3,7 +3,8 @@ import { ORPCError } from "@orpc/server";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import { site } from "@rw/services/facility/index";
 import { Principal } from "../auth/index.js";
-import { getAccessibleSites, hasPermission } from "@rw/auth/iam/index";
+import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 import { throwServiceError, unwrap } from "./errors.js";
 
 // ============================================================================
@@ -42,18 +43,11 @@ const listInputSchema = z.object({
  * Create a new site
  */
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  const scope = grant(
+    await authorize(context.iam, { permission: "facility:write", site: { kind: "workspace" } }),
+  );
 
-  if (!(await hasPermission(context.iam.id, "facility:write", { workspaceId }))) {
-    throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:write" });
-  }
-
-  const result = await site.create({ ...input, workspaceId });
+  const result = await site.create({ ...input, workspaceId: scope.workspaceId });
   return unwrap(result);
 });
 
@@ -61,43 +55,23 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
  * List sites in workspace
  */
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
-
-  const access = await getAccessibleSites(context.iam.id, "facility:read", workspaceId);
-  return site.list({ ...input, workspaceId, siteIds: access.all ? undefined : access.siteIds });
+  const scope = grant(await authorizeList(context.iam, { permission: "facility:read" }));
+  return site.list({ ...input, ...scopeFilter(scope) });
 });
 
 /**
  * Get site by ID
  */
 export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  const scope = grant(
+    await authorize(context.iam, { permission: "facility:read", site: { kind: "site", siteId: input.id } }),
+  );
 
-  if (context.iam.principal === Principal.DISPLAY && input.id !== context.iam.siteId) {
-    throw new ORPCError("FORBIDDEN", {
-      message: "Display can only access its own site",
-    });
-  }
-
-  const result = await site.getById(input.id, workspaceId);
+  const result = await site.getById(input.id, scope.workspaceId);
   if (!result) {
     throw new ORPCError("NOT_FOUND", { message: "Site not found" });
   }
   if (result.error !== undefined) throwServiceError(result);
-  if (
-    context.iam.principal === Principal.USER &&
-    !(await hasPermission(context.iam.id, "facility:read", { workspaceId, siteId: input.id }))
-  ) {
-    throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:read" });
-  }
   return result.data;
 });
 
@@ -111,58 +85,40 @@ const treeInputSchema = z.object({
  * If siteId is omitted, returns all sites in workspace
  */
 export const tree = userOrDisplayRequired.input(treeInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
-
   if (context.iam.principal === Principal.DISPLAY) {
-    const siteId = context.iam.siteId;
-    if (!siteId) {
-      throw new ORPCError("BAD_REQUEST", {
-        message: "Display site context required",
-      });
+    const ownSiteId = context.iam.siteId;
+    if (!ownSiteId) {
+      throw new ORPCError("BAD_REQUEST", { message: "Display site context required" });
     }
 
-    if (input.siteId && input.siteId !== siteId) {
-      throw new ORPCError("FORBIDDEN", {
-        message: "Display can only access its site tree",
-      });
-    }
+    const scope = grant(
+      await authorize(context.iam, {
+        permission: "facility:read",
+        site: { kind: "site", siteId: input.siteId ?? ownSiteId },
+      }),
+    );
 
-    const result = await site.getSiteTree(siteId, workspaceId);
+    const result = await site.getSiteTree(scope.siteId, scope.workspaceId);
     if (result.error !== undefined) throwServiceError(result);
 
-    if (input.siteId) {
-      return result.data;
-    }
-
-    return [result.data];
-  }
-
-  if (context.iam.principal !== Principal.USER) {
-    throw new ORPCError("UNAUTHORIZED", { message: "Authentication required" });
-  }
-  const userId = context.iam.id;
-  if (!userId) {
-    throw new ORPCError("UNAUTHORIZED", { message: "Authentication required" });
+    // Explicit siteId returns a single tree; the bare call keeps the
+    // list-of-trees shape used by the workspace-wide user variant.
+    return input.siteId ? result.data : [result.data];
   }
 
   // If siteId provided, return single site tree
   if (input.siteId) {
-    const result = await site.getSiteTree(input.siteId, workspaceId);
+    const scope = grant(
+      await authorize(context.iam, { permission: "facility:read", site: { kind: "site", siteId: input.siteId } }),
+    );
+    const result = await site.getSiteTree(input.siteId, scope.workspaceId);
     if (result.error !== undefined) throwServiceError(result);
-    if (!(await hasPermission(userId, "facility:read", { workspaceId, siteId: input.siteId }))) {
-      throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:read" });
-    }
     return result.data;
   }
 
   // No siteId, return full workspace tree
-  const access = await getAccessibleSites(userId, "facility:read", workspaceId);
-  return site.getTree(workspaceId, access.all ? undefined : access.siteIds);
+  const scope = grant(await authorizeList(context.iam, { permission: "facility:read" }));
+  return site.getTree(scope.workspaceId, scope.siteIds);
 });
 
 /**
@@ -170,13 +126,11 @@ export const tree = userOrDisplayRequired.input(treeInputSchema).handler(async (
  */
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
-  const workspaceId = context.iam.workspaceId;
+  const scope = grant(
+    await authorize(context.iam, { permission: "facility:write", site: { kind: "site", siteId: id } }),
+  );
 
-  if (!workspaceId || !(await hasPermission(context.iam.id, "facility:write", { workspaceId, siteId: id }))) {
-    throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:write" });
-  }
-
-  const result = await site.update(id, updateData, workspaceId);
+  const result = await site.update(id, updateData, scope.workspaceId);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -185,13 +139,11 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
  * Delete site
  */
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const scope = grant(
+    await authorize(context.iam, { permission: "facility:admin", site: { kind: "site", siteId: input.id } }),
+  );
 
-  if (!workspaceId || !(await hasPermission(context.iam.id, "facility:admin", { workspaceId, siteId: input.id }))) {
-    throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:admin" });
-  }
-
-  const result = await site.remove(input.id, workspaceId);
+  const result = await site.remove(input.id, scope.workspaceId);
   // HAS_WORKCENTERS / HAS_GATEWAYS / HAS_DATASOURCES map to CONFLICT via the shared table
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
@@ -206,13 +158,11 @@ const siteIdInputSchema = z.object({
  * Returns all gateways with their assigned datasources (all statuses)
  */
 export const deviceTree = authRequired.input(siteIdInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const scope = grant(
+    await authorize(context.iam, { permission: "facility:read", site: { kind: "site", siteId: input.siteId } }),
+  );
 
-  if (!workspaceId || !(await hasPermission(context.iam.id, "facility:read", { workspaceId, siteId: input.siteId }))) {
-    throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:read" });
-  }
-
-  const result = await site.getDeviceTree(input.siteId, workspaceId);
+  const result = await site.getDeviceTree(input.siteId, scope.workspaceId);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
