@@ -95,6 +95,7 @@ const deny = (code: PolicyDenial["code"], message: string, permission?: Permissi
 });
 
 interface AuthenticatedContext {
+  ok: true;
   workspaceId: string;
   iam: IAMContext;
 }
@@ -117,7 +118,7 @@ function requireAuthenticated(iam: IAMContext | undefined): AuthenticatedContext
   if (!workspaceId) {
     return deny("NO_WORKSPACE", "Workspace context required");
   }
-  return { workspaceId, iam };
+  return { ok: true, workspaceId, iam };
 }
 
 /** Device principals (DISPLAY/APP) are authorized by their site binding. */
@@ -138,7 +139,7 @@ export function createPolicy(deps: PolicyDeps) {
     check: { permission: Permission; site: SiteRef },
   ): Promise<PolicyResult> {
     const auth = requireAuthenticated(iam);
-    if ("ok" in auth) return auth;
+    if (!auth.ok) return auth;
     const { workspaceId } = auth;
     const principal = auth.iam.principal;
 
@@ -183,7 +184,7 @@ export function createPolicy(deps: PolicyDeps) {
     check: { permission: Permission; requestedSiteId?: string },
   ): Promise<ListPolicyResult> {
     const auth = requireAuthenticated(iam);
-    if ("ok" in auth) return auth;
+    if (!auth.ok) return auth;
     const { workspaceId } = auth;
 
     if (auth.iam.principal !== Principal.USER) {
