@@ -67,11 +67,15 @@ export const create = apiTokenAdminRequired.input(createInputSchema).handler(asy
 });
 
 export const list = apiTokenAdminRequired.handler(async ({ context }) => {
+  grant(await authorize(context.iam, { permission: "settings:admin", site: { kind: "workspace" } }));
+
   const workspaceId = requireWorkspaceId(context.iam);
   return listApiTokens(workspaceId);
 });
 
 export const revoke = apiTokenAdminRequired.input(revokeInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "settings:admin", site: { kind: "workspace" } }));
+
   const workspaceId = requireWorkspaceId(context.iam);
 
   const result = await revokeApiToken(input.id, workspaceId);
