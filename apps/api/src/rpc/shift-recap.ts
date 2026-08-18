@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
+import { authorize } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 import prisma from "@rw/db";
 import * as shiftCommentService from "@rw/services/facility/shift/shift-comment";
 import { throwServiceError } from "./errors.js";
@@ -23,18 +25,22 @@ const shiftInstanceSelect = {
   workCenterId: true,
 } as const;
 
-export const shiftInstanceList = authRequired.input(shiftInstanceListInputSchema).handler(async ({ input }) => {
-  const rows = await prisma.shiftInstance.findMany({
-    where: {
-      siteId: input.siteId,
-      workCenterId: input.workCenterId,
-      businessDate: new Date(input.businessDate),
-    },
-    orderBy: { startTime: "asc" },
-    select: shiftInstanceSelect,
+export const shiftInstanceList = authRequired
+  .input(shiftInstanceListInputSchema)
+  .handler(async ({ input, context }) => {
+    grant(await authorize(context.iam, { permission: "schedule:read", site: { kind: "site", siteId: input.siteId } }));
+
+    const rows = await prisma.shiftInstance.findMany({
+      where: {
+        siteId: input.siteId,
+        workCenterId: input.workCenterId,
+        businessDate: new Date(input.businessDate),
+      },
+      orderBy: { startTime: "asc" },
+      select: shiftInstanceSelect,
+    });
+    return rows;
   });
-  return rows;
-});
 
 // ============================================================================
 // Current Shift Instance (shift containing the current UTC time)
@@ -47,7 +53,9 @@ const currentShiftInstanceInputSchema = z.object({
 
 export const currentShiftInstance = userOrDisplayRequired
   .input(currentShiftInstanceInputSchema)
-  .handler(async ({ input }) => {
+  .handler(async ({ input, context }) => {
+    grant(await authorize(context.iam, { permission: "schedule:read", site: { kind: "site", siteId: input.siteId } }));
+
     const now = new Date();
     const row = await prisma.shiftInstance.findFirst({
       where: {
@@ -72,67 +80,71 @@ const metricBucketLogListInputSchema = z.object({
   workCenterId: z.uuid(),
 });
 
-export const metricBucketLogList = authRequired.input(metricBucketLogListInputSchema).handler(async ({ input }) => {
-  // Get stations belonging to this workcenter
-  const stations = await prisma.station.findMany({
-    where: { siteId: input.siteId, workcenterId: input.workCenterId },
-    select: { id: true, name: true },
+export const metricBucketLogList = authRequired
+  .input(metricBucketLogListInputSchema)
+  .handler(async ({ input, context }) => {
+    grant(await authorize(context.iam, { permission: "job:read", site: { kind: "site", siteId: input.siteId } }));
+
+    // Get stations belonging to this workcenter
+    const stations = await prisma.station.findMany({
+      where: { siteId: input.siteId, workcenterId: input.workCenterId },
+      select: { id: true, name: true },
+    });
+
+    const stationIds = stations.map((s) => s.id);
+
+    const where = {
+      siteId: input.siteId,
+      shiftInstanceId: input.shiftInstanceId,
+      granularity: "SHIFT" as const,
+      OR: [
+        { entityType: "WORKCENTER" as const, entityId: input.workCenterId },
+        { entityType: "STATION" as const, entityId: { in: stationIds } },
+      ],
+    };
+
+    const select = {
+      id: true,
+      entityType: true,
+      entityId: true,
+      entityName: true,
+      granularity: true,
+      granularityName: true,
+      startTime: true,
+      durationSeconds: true,
+      shiftInstanceId: true,
+      businessDate: true,
+      businessShift: true,
+      currentJobName: true,
+      totalCycles: true,
+      goodCycles: true,
+      badCycles: true,
+      totalItems: true,
+      goodItems: true,
+      badItems: true,
+      runSeconds: true,
+      downSeconds: true,
+      plannedDownSeconds: true,
+      unplannedDownSeconds: true,
+      expectedCycles: true,
+      expectedItems: true,
+      idealCycleSeconds: true,
+      totalCycleSeconds: true,
+      elapsedPlannedProductionSeconds: true,
+      availability: true,
+      performance: true,
+      quality: true,
+      oee: true,
+    } as const;
+
+    const orderBy = [{ entityType: "asc" as const }, { entityName: "asc" as const }];
+
+    // Try archived data first; fall back to live MetricBucket for current shifts
+    const rows = await prisma.metricBucketLog.findMany({ where, orderBy, select });
+    if (rows.length > 0) return rows;
+
+    return prisma.metricBucket.findMany({ where, orderBy, select });
   });
-
-  const stationIds = stations.map((s) => s.id);
-
-  const where = {
-    siteId: input.siteId,
-    shiftInstanceId: input.shiftInstanceId,
-    granularity: "SHIFT" as const,
-    OR: [
-      { entityType: "WORKCENTER" as const, entityId: input.workCenterId },
-      { entityType: "STATION" as const, entityId: { in: stationIds } },
-    ],
-  };
-
-  const select = {
-    id: true,
-    entityType: true,
-    entityId: true,
-    entityName: true,
-    granularity: true,
-    granularityName: true,
-    startTime: true,
-    durationSeconds: true,
-    shiftInstanceId: true,
-    businessDate: true,
-    businessShift: true,
-    currentJobName: true,
-    totalCycles: true,
-    goodCycles: true,
-    badCycles: true,
-    totalItems: true,
-    goodItems: true,
-    badItems: true,
-    runSeconds: true,
-    downSeconds: true,
-    plannedDownSeconds: true,
-    unplannedDownSeconds: true,
-    expectedCycles: true,
-    expectedItems: true,
-    idealCycleSeconds: true,
-    totalCycleSeconds: true,
-    elapsedPlannedProductionSeconds: true,
-    availability: true,
-    performance: true,
-    quality: true,
-    oee: true,
-  } as const;
-
-  const orderBy = [{ entityType: "asc" as const }, { entityName: "asc" as const }];
-
-  // Try archived data first; fall back to live MetricBucket for current shifts
-  const rows = await prisma.metricBucketLog.findMany({ where, orderBy, select });
-  if (rows.length > 0) return rows;
-
-  return prisma.metricBucket.findMany({ where, orderBy, select });
-});
 
 // ============================================================================
 // Station Job Log query (jobs that ran on stations during a shift)
@@ -144,48 +156,52 @@ const stationJobLogListInputSchema = z.object({
   workCenterId: z.uuid(),
 });
 
-export const stationJobLogList = authRequired.input(stationJobLogListInputSchema).handler(async ({ input }) => {
-  // Look up the shift instance for its time boundaries
-  const shiftInstance = await prisma.shiftInstance.findUniqueOrThrow({
-    where: { id: input.shiftInstanceId },
-    select: { startTime: true, endTime: true },
+export const stationJobLogList = authRequired
+  .input(stationJobLogListInputSchema)
+  .handler(async ({ input, context }) => {
+    grant(await authorize(context.iam, { permission: "job:read", site: { kind: "site", siteId: input.siteId } }));
+
+    // Look up the shift instance for its time boundaries
+    const shiftInstance = await prisma.shiftInstance.findFirstOrThrow({
+      where: { id: input.shiftInstanceId, siteId: input.siteId },
+      select: { startTime: true, endTime: true },
+    });
+
+    // Get stations belonging to this workcenter
+    const stations = await prisma.station.findMany({
+      where: { siteId: input.siteId, workcenterId: input.workCenterId },
+      select: { id: true },
+    });
+
+    const stationIds = stations.map((s) => s.id);
+
+    // Query StationJobLog for any jobs overlapping the shift window
+    const rows = await prisma.stationJobLog.findMany({
+      where: {
+        stationId: { in: stationIds },
+        startTime: { lt: shiftInstance.endTime },
+        OR: [{ endTime: { gt: shiftInstance.startTime } }, { endTime: null }],
+      },
+      orderBy: [{ stationId: "asc" }, { startTime: "asc" }],
+      select: {
+        id: true,
+        stationId: true,
+        startTime: true,
+        endTime: true,
+        standardCycle: true,
+        job: { select: { currentVersion: { select: { name: true } } } },
+      },
+    });
+
+    return rows.map((r) => ({
+      id: r.id,
+      stationId: r.stationId,
+      startTime: r.startTime < shiftInstance.startTime ? shiftInstance.startTime : r.startTime,
+      endTime: r.endTime == null || r.endTime > shiftInstance.endTime ? shiftInstance.endTime : r.endTime,
+      standardCycle: r.standardCycle ? Number(r.standardCycle) : null,
+      jobName: r.job.currentVersion?.name ?? null,
+    }));
   });
-
-  // Get stations belonging to this workcenter
-  const stations = await prisma.station.findMany({
-    where: { siteId: input.siteId, workcenterId: input.workCenterId },
-    select: { id: true },
-  });
-
-  const stationIds = stations.map((s) => s.id);
-
-  // Query StationJobLog for any jobs overlapping the shift window
-  const rows = await prisma.stationJobLog.findMany({
-    where: {
-      stationId: { in: stationIds },
-      startTime: { lt: shiftInstance.endTime },
-      OR: [{ endTime: { gt: shiftInstance.startTime } }, { endTime: null }],
-    },
-    orderBy: [{ stationId: "asc" }, { startTime: "asc" }],
-    select: {
-      id: true,
-      stationId: true,
-      startTime: true,
-      endTime: true,
-      standardCycle: true,
-      job: { select: { currentVersion: { select: { name: true } } } },
-    },
-  });
-
-  return rows.map((r) => ({
-    id: r.id,
-    stationId: r.stationId,
-    startTime: r.startTime < shiftInstance.startTime ? shiftInstance.startTime : r.startTime,
-    endTime: r.endTime == null || r.endTime > shiftInstance.endTime ? shiftInstance.endTime : r.endTime,
-    standardCycle: r.standardCycle ? Number(r.standardCycle) : null,
-    jobName: r.job.currentVersion?.name ?? null,
-  }));
-});
 
 // ============================================================================
 // Job metrics query (JOB-entity MetricBucketLog for a shift)
@@ -197,7 +213,9 @@ const jobMetricsListInputSchema = z.object({
   workCenterId: z.uuid(),
 });
 
-export const jobMetricsList = authRequired.input(jobMetricsListInputSchema).handler(async ({ input }) => {
+export const jobMetricsList = authRequired.input(jobMetricsListInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "job:read", site: { kind: "site", siteId: input.siteId } }));
+
   // Get stations in workcenter to build path filter
   const stations = await prisma.station.findMany({
     where: { siteId: input.siteId, workcenterId: input.workCenterId },
@@ -298,60 +316,69 @@ const downtimeLogListInputSchema = z.object({
   workCenterId: z.uuid().optional(),
 });
 
-export const downtimeLogList = userOrDisplayRequired.input(downtimeLogListInputSchema).handler(async ({ input }) => {
-  const shiftInstance = await prisma.shiftInstance.findUniqueOrThrow({
-    where: { id: input.shiftInstanceId },
-    select: { startTime: true, endTime: true },
-  });
+export const downtimeLogList = userOrDisplayRequired
+  .input(downtimeLogListInputSchema)
+  .handler(async ({ input, context }) => {
+    grant(await authorize(context.iam, { permission: "status:read", site: { kind: "site", siteId: input.siteId } }));
 
-  // Resolve station IDs — single station or all in workcenter
-  let stationFilter: string | { in: string[] };
-  if (input.stationId) {
-    stationFilter = input.stationId;
-  } else if (input.workCenterId) {
-    const stations = await prisma.station.findMany({
-      where: { siteId: input.siteId, workcenterId: input.workCenterId },
-      select: { id: true },
+    const shiftInstance = await prisma.shiftInstance.findFirstOrThrow({
+      where: { id: input.shiftInstanceId, siteId: input.siteId },
+      select: { startTime: true, endTime: true },
     });
-    stationFilter = { in: stations.map((s) => s.id) };
-  } else {
-    return [];
-  }
 
-  const rows = await prisma.stationStateLog.findMany({
-    where: {
-      stationId: stationFilter,
-      state: "DOWN",
-      deletedAt: null,
-      startTime: { lt: shiftInstance.endTime },
-      OR: [{ endTime: { gt: shiftInstance.startTime } }, { endTime: null }],
-    },
-    orderBy: { startTime: "asc" },
-    select: {
-      id: true,
-      stationId: true,
-      startTime: true,
-      endTime: true,
-      statusReasonId: true,
-      statusReason: { select: { id: true, name: true } },
-    },
-  });
+    // Resolve station IDs — single station or all in workcenter
+    let stationFilter: string | { in: string[] };
+    if (input.stationId) {
+      const station = await prisma.station.findFirst({
+        where: { id: input.stationId, siteId: input.siteId },
+        select: { id: true },
+      });
+      if (!station) return [];
+      stationFilter = station.id;
+    } else if (input.workCenterId) {
+      const stations = await prisma.station.findMany({
+        where: { siteId: input.siteId, workcenterId: input.workCenterId },
+        select: { id: true },
+      });
+      stationFilter = { in: stations.map((s) => s.id) };
+    } else {
+      return [];
+    }
 
-  return rows.map((r) => {
-    const clamped = r.startTime < shiftInstance.startTime || r.endTime == null || r.endTime > shiftInstance.endTime;
-    return {
-      id: r.id,
-      stationId: r.stationId,
-      startTime: r.startTime < shiftInstance.startTime ? shiftInstance.startTime : r.startTime,
-      endTime: r.endTime == null || r.endTime > shiftInstance.endTime ? shiftInstance.endTime : r.endTime,
-      // Include raw times when they differ from the shift-clamped values
-      rawStartTime: clamped ? r.startTime : null,
-      rawEndTime: clamped ? (r.endTime ?? null) : null,
-      statusReasonId: r.statusReasonId,
-      statusReasonName: r.statusReason?.name ?? null,
-    };
+    const rows = await prisma.stationStateLog.findMany({
+      where: {
+        stationId: stationFilter,
+        state: "DOWN",
+        deletedAt: null,
+        startTime: { lt: shiftInstance.endTime },
+        OR: [{ endTime: { gt: shiftInstance.startTime } }, { endTime: null }],
+      },
+      orderBy: { startTime: "asc" },
+      select: {
+        id: true,
+        stationId: true,
+        startTime: true,
+        endTime: true,
+        statusReasonId: true,
+        statusReason: { select: { id: true, name: true } },
+      },
+    });
+
+    return rows.map((r) => {
+      const clamped = r.startTime < shiftInstance.startTime || r.endTime == null || r.endTime > shiftInstance.endTime;
+      return {
+        id: r.id,
+        stationId: r.stationId,
+        startTime: r.startTime < shiftInstance.startTime ? shiftInstance.startTime : r.startTime,
+        endTime: r.endTime == null || r.endTime > shiftInstance.endTime ? shiftInstance.endTime : r.endTime,
+        // Include raw times when they differ from the shift-clamped values
+        rawStartTime: clamped ? r.startTime : null,
+        rawEndTime: clamped ? (r.endTime ?? null) : null,
+        statusReasonId: r.statusReasonId,
+        statusReasonName: r.statusReason?.name ?? null,
+      };
+    });
   });
-});
 
 // ============================================================================
 // Scrap / Disposition totals by reason (per station, for a shift)
@@ -365,7 +392,9 @@ const scrapByReasonListInputSchema = z.object({
 
 export const scrapByReasonList = userOrDisplayRequired
   .input(scrapByReasonListInputSchema)
-  .handler(async ({ input }) => {
+  .handler(async ({ input, context }) => {
+    grant(await authorize(context.iam, { permission: "job:read", site: { kind: "site", siteId: input.siteId } }));
+
     const stations = await prisma.station.findMany({
       where: { siteId: input.siteId, workcenterId: input.workCenterId },
       select: { id: true },
@@ -413,7 +442,9 @@ const commentListInputSchema = z.object({
   workCenterId: z.uuid(),
 });
 
-export const commentList = userOrDisplayRequired.input(commentListInputSchema).handler(async ({ input }) => {
+export const commentList = userOrDisplayRequired.input(commentListInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:read", site: { kind: "site", siteId: input.siteId } }));
+
   const result = await shiftCommentService.list({
     shiftInstanceId: input.shiftInstanceId,
     workcenterId: input.workCenterId,
@@ -430,6 +461,8 @@ const commentCreateInputSchema = z.object({
 });
 
 export const commentCreate = authRequired.input(commentCreateInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:write", site: { kind: "site", siteId: input.siteId } }));
+
   const result = await shiftCommentService.create({
     siteId: input.siteId,
     shiftInstanceId: input.shiftInstanceId,
@@ -448,6 +481,8 @@ const commentUpdateInputSchema = z.object({
 });
 
 export const commentUpdate = authRequired.input(commentUpdateInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:write", site: { kind: "shiftComment", id: input.id } }));
+
   const result = await shiftCommentService.update(input.id, {
     text: input.text,
     actorId: context.iam.id,
@@ -461,6 +496,8 @@ const commentDeleteInputSchema = z.object({
 });
 
 export const commentDelete = authRequired.input(commentDeleteInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:write", site: { kind: "shiftComment", id: input.id } }));
+
   const result = await shiftCommentService.remove(input.id, { actorId: context.iam.id });
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
