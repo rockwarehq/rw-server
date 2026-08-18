@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { authRequired } from "./middleware.js";
+import { authorize } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 import { crud } from "../services/employee/index.js";
 import { throwServiceError, unwrap } from "./errors.js";
 
@@ -45,20 +47,28 @@ const idInputSchema = z.object({
 // Procedures
 // ============================================================================
 
-export const create = authRequired.input(createInputSchema).handler(async ({ input }) => {
+export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "employee:write", site: { kind: "site", siteId: input.siteId } }));
+
   const result = await crud.create(input);
   return result.data;
 });
 
-export const list = authRequired.input(listInputSchema).handler(async ({ input }) => {
+export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "employee:read", site: { kind: "site", siteId: input.siteId } }));
+
   return crud.list(input);
 });
 
-export const get = authRequired.input(idInputSchema).handler(async ({ input }) => {
+export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "employee:read", site: { kind: "anySite" } }));
+
   return unwrap(await crud.getById(input.id), { notFoundMessage: "Employee not found" });
 });
 
-export const update = authRequired.input(updateInputSchema).handler(async ({ input }) => {
+export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "employee:write", site: { kind: "anySite" } }));
+
   const { id, ...updateData } = input;
   const result = await crud.update(id, updateData);
   // Historical mapping: a role from another workspace surfaced as NOT_FOUND
@@ -67,7 +77,9 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
   return result.data;
 });
 
-export const remove = authRequired.input(idInputSchema).handler(async ({ input }) => {
+export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "employee:admin", site: { kind: "anySite" } }));
+
   const result = await crud.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
