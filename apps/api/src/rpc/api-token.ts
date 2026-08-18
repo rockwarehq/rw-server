@@ -4,6 +4,8 @@ import { countActiveApiTokens, createApiToken, listApiTokens, revokeApiToken } f
 import { logEvent } from "@rw/services/audit/index";
 
 import { permissionRequired } from "./middleware.js";
+import { authorize } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 
 // Workspace integration credentials are settings-level configuration, so token
 // management rides the existing settings:admin permission rather than a new
@@ -30,6 +32,9 @@ function requireWorkspaceId(iam: { workspaceId?: string }): string {
 
 export const create = apiTokenAdminRequired.input(createInputSchema).handler(async ({ input, context }) => {
   const workspaceId = requireWorkspaceId(context.iam);
+  // The middleware checks settings:admin at the caller's own site; the token
+  // grants access to input.siteId, so require settings:admin THERE as well.
+  grant(await authorize(context.iam, { permission: "settings:admin", site: { kind: "site", siteId: input.siteId } }));
 
   const activeCount = await countActiveApiTokens(workspaceId);
   if (activeCount >= MAX_ACTIVE_TOKENS_PER_WORKSPACE) {
