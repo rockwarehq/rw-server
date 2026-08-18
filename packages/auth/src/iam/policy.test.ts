@@ -235,6 +235,61 @@ describe("authorizeList", () => {
   });
 });
 
+describe("with a per-request permission snapshot", () => {
+  const snapshotUser = (assignments: Array<{ siteId: string | null; permissions: string[] }>) =>
+    user({ permissionSnapshot: { systemRole: null, assignments } });
+
+  it("authorize evaluates the snapshot without calling deps.hasPermission", async () => {
+    const { policy, deps } = buildPolicy();
+    const iam = snapshotUser([{ siteId: SITE_A, permissions: ["facility:write"] }]);
+
+    const allowed = await policy.authorize(iam, {
+      permission: "facility:write",
+      site: { kind: "site", siteId: SITE_A },
+    });
+    expect(allowed).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
+
+    const denied = await policy.authorize(iam, {
+      permission: "facility:write",
+      site: { kind: "site", siteId: SITE_B },
+    });
+    expect(denied).toMatchObject({ ok: false, code: "FORBIDDEN", permission: "facility:write" });
+
+    expect(deps.hasPermission).not.toHaveBeenCalled();
+  });
+
+  it("authorize still resolves resource refs before evaluating the snapshot", async () => {
+    const { policy, deps } = buildPolicy({ resolveSiteRef: vi.fn(async () => null) });
+    const result = await policy.authorize(snapshotUser([{ siteId: null, permissions: ["facility:read"] }]), {
+      permission: "facility:read",
+      site: { kind: "station", stationId: STATION },
+    });
+    expect(result).toMatchObject({ ok: false, code: "NOT_FOUND" });
+    expect(deps.hasPermission).not.toHaveBeenCalled();
+  });
+
+  it("authorizeList evaluates the snapshot without calling deps.getAccessibleSites", async () => {
+    const { policy, deps } = buildPolicy();
+    const iam = snapshotUser([{ siteId: SITE_A, permissions: ["facility:read"] }]);
+
+    const scope = await policy.authorizeList(iam, { permission: "facility:read" });
+    expect(scope).toEqual({ ok: true, workspaceId: WORKSPACE, siteIds: [SITE_A] });
+
+    const denied = await policy.authorizeList(iam, { permission: "facility:read", requestedSiteId: SITE_B });
+    expect(denied).toMatchObject({ ok: false, code: "FORBIDDEN" });
+
+    expect(deps.getAccessibleSites).not.toHaveBeenCalled();
+  });
+
+  it("workspace-level snapshot assignments grant all sites", async () => {
+    const { policy, deps } = buildPolicy();
+    const iam = snapshotUser([{ siteId: null, permissions: ["facility:read"] }]);
+    const scope = await policy.authorizeList(iam, { permission: "facility:read" });
+    expect(scope).toEqual({ ok: true, workspaceId: WORKSPACE });
+    expect(deps.getAccessibleSites).not.toHaveBeenCalled();
+  });
+});
+
 describe("scopeFilter", () => {
   it("strips the discriminant and keeps filter fields", () => {
     expect(scopeFilter({ ok: true, workspaceId: WORKSPACE, siteIds: [SITE_A] })).toEqual({

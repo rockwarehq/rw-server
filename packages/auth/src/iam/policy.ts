@@ -1,8 +1,11 @@
 import { type IAMContext, Principal } from "../context.js";
 import {
+  type AccessibleSites,
   getAccessibleSites as defaultGetAccessibleSites,
   hasPermission as defaultHasPermission,
   type Permission,
+  snapshotAccessibleSites,
+  snapshotHasPermission,
 } from "./permissions.js";
 import { resolveSiteRef as defaultResolveSiteRef, type ResolvableSiteRef } from "./policy-resolvers.js";
 
@@ -134,6 +137,31 @@ function deviceSiteGrant(iam: IAMContext, workspaceId: string, siteId: string): 
 }
 
 export function createPolicy(deps: PolicyDeps) {
+  // Prefer the per-request snapshot the auth plugin resolved (query-free);
+  // fall back to a fresh DB load for callers without one.
+  function userHasPermission(
+    iam: IAMContext,
+    permission: Permission,
+    workspaceId: string,
+    siteId?: string,
+  ): Promise<boolean> | boolean {
+    if (iam.permissionSnapshot) {
+      return snapshotHasPermission(iam.permissionSnapshot, permission, siteId);
+    }
+    return deps.hasPermission(iam.id as string, permission, { workspaceId, ...(siteId ? { siteId } : {}) });
+  }
+
+  function userAccessibleSites(
+    iam: IAMContext,
+    permission: Permission,
+    workspaceId: string,
+  ): Promise<AccessibleSites> | AccessibleSites {
+    if (iam.permissionSnapshot) {
+      return snapshotAccessibleSites(iam.permissionSnapshot, permission);
+    }
+    return deps.getAccessibleSites(iam.id as string, permission, workspaceId);
+  }
+
   async function authorize(
     iam: IAMContext | undefined,
     check: { permission: Permission; site: SiteRef },
@@ -147,7 +175,7 @@ export function createPolicy(deps: PolicyDeps) {
       if (principal !== Principal.USER) {
         return deny("FORBIDDEN", "Workspace-level actions require a user account");
       }
-      const ok = await deps.hasPermission(auth.iam.id as string, check.permission, { workspaceId });
+      const ok = await userHasPermission(auth.iam, check.permission, workspaceId);
       if (!ok) {
         return deny("FORBIDDEN", `Missing permission: ${check.permission}`, check.permission);
       }
@@ -172,7 +200,7 @@ export function createPolicy(deps: PolicyDeps) {
       return deviceSiteGrant(auth.iam, workspaceId, siteId);
     }
 
-    const ok = await deps.hasPermission(auth.iam.id as string, check.permission, { workspaceId, siteId });
+    const ok = await userHasPermission(auth.iam, check.permission, workspaceId, siteId);
     if (!ok) {
       return deny("FORBIDDEN", `Missing permission: ${check.permission}`, check.permission);
     }
@@ -203,7 +231,7 @@ export function createPolicy(deps: PolicyDeps) {
       return { ok: true, workspaceId, siteId: ownSiteId };
     }
 
-    const access = await deps.getAccessibleSites(auth.iam.id as string, check.permission, workspaceId);
+    const access = await userAccessibleSites(auth.iam, check.permission, workspaceId);
     if (check.requestedSiteId) {
       if (!access.all && !access.siteIds.includes(check.requestedSiteId)) {
         return deny("FORBIDDEN", `Missing permission: ${check.permission}`, check.permission);
