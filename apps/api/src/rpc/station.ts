@@ -259,14 +259,14 @@ export const remove = authRequired.input(idInputSchema).handler(async ({ input, 
  * Create station event
  */
 export const createEvent = authRequired.input(createEventInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  const scope = grant(
+    await authorize(context.iam, {
+      permission: "facility:write",
+      site: { kind: "station", stationId: input.stationId },
+    }),
+  );
 
-  const result = await station.createEvent(input as station.CreateStationEventInput, workspaceId);
+  const result = await station.createEvent(input as station.CreateStationEventInput, scope.workspaceId);
   if ("error" in result && result.error !== undefined) throwServiceError(result, EVENT_ACTION_OVERRIDES);
   return result.data;
 });
@@ -275,14 +275,14 @@ export const createEvent = authRequired.input(createEventInputSchema).handler(as
  * Update station event
  */
 export const updateEvent = authRequired.input(updateEventInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  const scope = grant(
+    await authorize(context.iam, {
+      permission: "facility:write",
+      site: { kind: "station", stationId: input.stationId },
+    }),
+  );
 
-  const result = await station.updateEvent(input as station.UpdateStationEventInput, workspaceId);
+  const result = await station.updateEvent(input as station.UpdateStationEventInput, scope.workspaceId);
   if ("error" in result && result.error !== undefined) throwServiceError(result, EVENT_ACTION_OVERRIDES);
   return result.data;
 });
@@ -291,14 +291,14 @@ export const updateEvent = authRequired.input(updateEventInputSchema).handler(as
  * List station events
  */
 export const listEvents = authRequired.input(listEventsInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  const scope = grant(
+    await authorize(context.iam, {
+      permission: "facility:read",
+      site: { kind: "station", stationId: input.stationId },
+    }),
+  );
 
-  const result = await station.listEvents(input.stationId, workspaceId);
+  const result = await station.listEvents(input.stationId, scope.workspaceId);
   if ("error" in result && result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -309,14 +309,14 @@ export const listEvents = authRequired.input(listEventsInputSchema).handler(asyn
 export const listEventExecutions = authRequired
   .input(listEventExecutionsInputSchema)
   .handler(async ({ input, context }) => {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", {
-        message: "Workspace context required",
-      });
-    }
+    const scope = grant(
+      await authorize(context.iam, {
+        permission: "facility:read",
+        site: { kind: "station", stationId: input.stationId },
+      }),
+    );
 
-    const result = await station.listEventExecutions(input.stationId, workspaceId, {
+    const result = await station.listEventExecutions(input.stationId, scope.workspaceId, {
       limit: input.limit,
     });
     if ("error" in result && result.error !== undefined) throwServiceError(result);
@@ -365,14 +365,14 @@ export const getTagSnapshotsForProcessor = processorRequired
  * Toggle station event
  */
 export const toggleEvent = authRequired.input(toggleEventInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  const scope = grant(
+    await authorize(context.iam, {
+      permission: "facility:write",
+      site: { kind: "station", stationId: input.stationId },
+    }),
+  );
 
-  const result = await station.toggleEvent(input.stationId, input.eventId, input.enabled, workspaceId);
+  const result = await station.toggleEvent(input.stationId, input.eventId, input.enabled, scope.workspaceId);
   if ("error" in result && result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -395,14 +395,14 @@ export const triggerEvent = processorRequired.input(triggerEventInputSchema).han
  * Delete station event
  */
 export const deleteEvent = authRequired.input(stationEventIdInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  const scope = grant(
+    await authorize(context.iam, {
+      permission: "facility:write",
+      site: { kind: "station", stationId: input.stationId },
+    }),
+  );
 
-  const result = await station.removeEvent(input.stationId, input.eventId, workspaceId);
+  const result = await station.removeEvent(input.stationId, input.eventId, scope.workspaceId);
   if ("error" in result && result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
@@ -430,9 +430,14 @@ const stationIdInputSchema = z.object({
  * Validates all belong to the same site
  */
 export const addDatasource = authRequired.input(addDatasourceInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const scope = grant(
+    await authorize(context.iam, {
+      permission: "facility:write",
+      site: { kind: "station", stationId: input.stationId },
+    }),
+  );
 
-  const result = await station.addDatasource(input.stationId, input.datasourceIds, workspaceId);
+  const result = await station.addDatasource(input.stationId, input.datasourceIds, scope.workspaceId);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -441,9 +446,14 @@ export const addDatasource = authRequired.input(addDatasourceInputSchema).handle
  * Remove a datasource from a station
  */
 export const removeDatasource = authRequired.input(removeDatasourceInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const scope = grant(
+    await authorize(context.iam, {
+      permission: "facility:write",
+      site: { kind: "station", stationId: input.stationId },
+    }),
+  );
 
-  const result = await station.removeDatasource(input.stationId, input.datasourceId, workspaceId);
+  const result = await station.removeDatasource(input.stationId, input.datasourceId, scope.workspaceId);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
@@ -452,9 +462,14 @@ export const removeDatasource = authRequired.input(removeDatasourceInputSchema).
  * List all datasources linked to a station
  */
 export const listDatasources = authRequired.input(stationIdInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const scope = grant(
+    await authorize(context.iam, {
+      permission: "facility:read",
+      site: { kind: "station", stationId: input.stationId },
+    }),
+  );
 
-  const result = await station.listDatasources(input.stationId, workspaceId);
+  const result = await station.listDatasources(input.stationId, scope.workspaceId);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -501,7 +516,14 @@ const listStateLogsInputSchema = z.object({
 export const splitDowntime = userOrDisplayRequired
   .input(splitDowntimeInputSchema)
   .output(splitDowntimeOutputSchema)
-  .handler(async ({ input }) => {
+  .handler(async ({ input, context }) => {
+    grant(
+      await authorize(context.iam, {
+        permission: "status:write",
+        site: { kind: "stationStateLog", entryId: input.entryId },
+      }),
+    );
+
     const result = await station.splitDownEntry(input.entryId, input.splitAt);
     if ("error" in result) throwServiceError(result);
     return result;
@@ -512,7 +534,14 @@ export const splitDowntime = userOrDisplayRequired
  */
 export const assignDowntimeReason = userOrDisplayRequired
   .input(assignDowntimeReasonInputSchema)
-  .handler(async ({ input }) => {
+  .handler(async ({ input, context }) => {
+    grant(
+      await authorize(context.iam, {
+        permission: "status:write",
+        site: { kind: "stationStateLog", entryId: input.entryId },
+      }),
+    );
+
     const result = await station.assignDowntimeReason(input.entryId, input.statusReasonId, {
       applyToBlock: input.applyToBlock,
     });
@@ -523,7 +552,14 @@ export const assignDowntimeReason = userOrDisplayRequired
 /**
  * Change the current job assigned to a station
  */
-export const changeJob = userOrDisplayRequired.input(changeJobInputSchema).handler(async ({ input }) => {
+export const changeJob = userOrDisplayRequired.input(changeJobInputSchema).handler(async ({ input, context }) => {
+  grant(
+    await authorize(context.iam, {
+      permission: "job:write",
+      site: { kind: "station", stationId: input.stationId },
+    }),
+  );
+
   const result = await station.changeJob(input.stationId, input.jobId);
   if ("error" in result) throwServiceError(result);
 
@@ -555,6 +591,13 @@ export const changeJob = userOrDisplayRequired.input(changeJobInputSchema).handl
 /**
  * List state logs for a station
  */
-export const listStateLogs = authRequired.input(listStateLogsInputSchema).handler(async ({ input }) => {
+export const listStateLogs = authRequired.input(listStateLogsInputSchema).handler(async ({ input, context }) => {
+  grant(
+    await authorize(context.iam, {
+      permission: "facility:read",
+      site: { kind: "station", stationId: input.stationId },
+    }),
+  );
+
   return station.listStateLogs(input);
 });
