@@ -1,13 +1,13 @@
-import { ORPCError } from "@orpc/server";
 import { z } from "zod";
-import { hasPermission, type Permission } from "@rw/auth/iam/index";
+import type { Permission } from "@rw/auth/iam/index";
 import { buildIntegrationCatalog, createDefaultIntegrationRegistry, executeAction } from "@rw/integrations";
 import { integrationRuns, integrations } from "@rw/services/integration/index";
 import * as graph from "@rw/livestore/graph/index";
-import type { GraphScope } from "@rw/livestore/graph/types";
 
 import { unwrap as unwrapService } from "./errors.js";
 import { authRequired } from "./middleware.js";
+import { authorize } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 
 // Integrations hold credentials and a trigger decides when those credentials get
 // used, so both sit behind settings:admin (the ApiToken precedent) rather than
@@ -20,23 +20,8 @@ const catalog = buildIntegrationCatalog(registry);
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const idInputSchema = z.object({ id: z.uuid() });
 
-type AuthContext = {
-  iam: { principal?: string; id?: string; workspaceId?: string | null; siteId?: string | null };
-};
-
 function unwrap<T>(result: { data: T } | { error: string; code: string } | null): T {
   return unwrapService(result);
-}
-
-async function assertSite(context: AuthContext, siteId: string): Promise<GraphScope> {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  const userId = context.iam.id;
-  if (!userId) throw new ORPCError("UNAUTHORIZED", { message: "Authentication required" });
-
-  const ok = await hasPermission(userId, INTEGRATION_PERMISSION, { workspaceId, siteId });
-  if (!ok) throw new ORPCError("FORBIDDEN", { message: `Missing permission: ${INTEGRATION_PERMISSION}` });
-  return { workspaceId, siteId };
 }
 
 // ============================================================================
@@ -74,29 +59,39 @@ const scopedIdInputSchema = idInputSchema.extend({ siteId: z.uuid() });
 
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...rest } = input;
-  const scope = await assertSite(context, siteId);
+  const scope = grant(
+    await authorize(context.iam, { permission: INTEGRATION_PERMISSION, site: { kind: "site", siteId } }),
+  );
   return unwrap(await integrations.create(rest, scope));
 });
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...filter } = input;
-  const scope = await assertSite(context, siteId);
+  const scope = grant(
+    await authorize(context.iam, { permission: INTEGRATION_PERMISSION, site: { kind: "site", siteId } }),
+  );
   return integrations.list(filter, scope);
 });
 
 export const get = authRequired.input(scopedIdInputSchema).handler(async ({ input, context }) => {
-  const scope = await assertSite(context, input.siteId);
+  const scope = grant(
+    await authorize(context.iam, { permission: INTEGRATION_PERMISSION, site: { kind: "site", siteId: input.siteId } }),
+  );
   return unwrap(await integrations.getById(input.id, scope));
 });
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { id, siteId, ...updates } = input;
-  const scope = await assertSite(context, siteId);
+  const scope = grant(
+    await authorize(context.iam, { permission: INTEGRATION_PERMISSION, site: { kind: "site", siteId } }),
+  );
   return unwrap(await integrations.update(id, updates, scope));
 });
 
 export const remove = authRequired.input(scopedIdInputSchema).handler(async ({ input, context }) => {
-  const scope = await assertSite(context, input.siteId);
+  const scope = grant(
+    await authorize(context.iam, { permission: INTEGRATION_PERMISSION, site: { kind: "site", siteId: input.siteId } }),
+  );
   return unwrap(await integrations.remove(input.id, scope));
 });
 
@@ -118,7 +113,9 @@ const runListInputSchema = z.object({
 
 export const runList = authRequired.input(runListInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...filter } = input;
-  const scope = await assertSite(context, siteId);
+  const scope = grant(
+    await authorize(context.iam, { permission: INTEGRATION_PERMISSION, site: { kind: "site", siteId } }),
+  );
   return integrationRuns.list(filter, scope);
 });
 
@@ -133,7 +130,9 @@ const executeInputSchema = z.object({
 // Manual run — doubles as "test connection". The action outcome rides the run
 // row (SUCCEEDED/FAILED); only scope/config problems become transport errors.
 export const execute = authRequired.input(executeInputSchema).handler(async ({ input, context }) => {
-  const scope = await assertSite(context, input.siteId);
+  const scope = grant(
+    await authorize(context.iam, { permission: INTEGRATION_PERMISSION, site: { kind: "site", siteId: input.siteId } }),
+  );
   unwrap(await integrations.getById(input.id, scope));
   const record = unwrap(await integrations.loadForExecution(input.id));
 
@@ -206,28 +205,38 @@ const triggerListInputSchema = z.object({
 
 export const triggerCreate = authRequired.input(triggerCreateInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...rest } = input;
-  const scope = await assertSite(context, siteId);
+  const scope = grant(
+    await authorize(context.iam, { permission: INTEGRATION_PERMISSION, site: { kind: "site", siteId } }),
+  );
   return unwrap(await graph.triggers.create(rest, scope));
 });
 
 export const triggerList = authRequired.input(triggerListInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...filter } = input;
-  const scope = await assertSite(context, siteId);
+  const scope = grant(
+    await authorize(context.iam, { permission: INTEGRATION_PERMISSION, site: { kind: "site", siteId } }),
+  );
   return graph.triggers.list(filter, scope);
 });
 
 export const triggerGet = authRequired.input(scopedIdInputSchema).handler(async ({ input, context }) => {
-  const scope = await assertSite(context, input.siteId);
+  const scope = grant(
+    await authorize(context.iam, { permission: INTEGRATION_PERMISSION, site: { kind: "site", siteId: input.siteId } }),
+  );
   return unwrap(await graph.triggers.getById(input.id, scope));
 });
 
 export const triggerUpdate = authRequired.input(triggerUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, siteId, ...updates } = input;
-  const scope = await assertSite(context, siteId);
+  const scope = grant(
+    await authorize(context.iam, { permission: INTEGRATION_PERMISSION, site: { kind: "site", siteId } }),
+  );
   return unwrap(await graph.triggers.update(id, updates, scope));
 });
 
 export const triggerDelete = authRequired.input(scopedIdInputSchema).handler(async ({ input, context }) => {
-  const scope = await assertSite(context, input.siteId);
+  const scope = grant(
+    await authorize(context.iam, { permission: INTEGRATION_PERMISSION, site: { kind: "site", siteId: input.siteId } }),
+  );
   return unwrap(await graph.triggers.remove(input.id, scope));
 });
