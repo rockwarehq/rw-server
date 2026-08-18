@@ -306,6 +306,9 @@ describe("authorize overload return types", () => {
     ).resolves.toEqualTypeOf<SiteGrant | PolicyDenial>();
     expectTypeOf(
       policy.authorize(user(), { permission: "user:read", site: { kind: "station", id: STATION } }),
+    ).resolves.toEqualTypeOf<SiteGrant | PolicyDenial>();
+    expectTypeOf(
+      policy.authorize(user(), { permission: "user:read", site: { kind: "gateway", id: STATION } }),
     ).resolves.toEqualTypeOf<SiteGrant | WorkspaceGrant | PolicyDenial>();
   });
 });

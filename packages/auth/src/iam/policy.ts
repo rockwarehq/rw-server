@@ -7,7 +7,12 @@ import {
   snapshotAccessibleSites,
   snapshotHasPermission,
 } from "./permissions.js";
-import { resolveSiteRef as defaultResolveSiteRef, type ResolvableSiteRef } from "./policy-resolvers.js";
+import {
+  type NullableSiteKind,
+  resolveSiteRef as defaultResolveSiteRef,
+  type ResolvableKind,
+  type ResolvableSiteRef,
+} from "./policy-resolvers.js";
 
 // ── Centralized authorization decisions ──────────────────────────────────
 // One call per protected operation: the caller declares the required
@@ -102,8 +107,12 @@ export interface AuthorizeFn {
   ): Promise<SiteGrant | PolicyDenial>;
   (
     iam: IAMContext | undefined,
-    check: { permission: Permission; site: ResolvableSiteRef },
+    check: { permission: Permission; site: { kind: NullableSiteKind; id: string } },
   ): Promise<SiteGrant | WorkspaceGrant | PolicyDenial>;
+  (
+    iam: IAMContext | undefined,
+    check: { permission: Permission; site: { kind: Exclude<ResolvableKind, NullableSiteKind>; id: string } },
+  ): Promise<SiteGrant | PolicyDenial>;
   (iam: IAMContext | undefined, check: { permission: Permission; site: SiteRef }): Promise<PolicyResult>;
 }
 

@@ -127,6 +127,24 @@ export const RESOLVERS = {
 
 export type ResolvableKind = keyof typeof RESOLVERS;
 
+/**
+ * Kinds whose rows can legitimately carry siteId null (or a null-site
+ * parent): authorize() may return a WorkspaceGrant for these. All other
+ * resolvable kinds always prove a concrete siteId.
+ */
+export const NULLABLE_SITE_KINDS = [
+  "gateway",
+  "datasource",
+  "display",
+  "document",
+  "objectSchema",
+  "objectInstance",
+  "point",
+  "pointGroup",
+] as const satisfies readonly ResolvableKind[];
+
+export type NullableSiteKind = (typeof NULLABLE_SITE_KINDS)[number];
+
 export type ResolvableSiteRef = { kind: ResolvableKind; id: string };
 
 export async function resolveSiteRef(ref: ResolvableSiteRef): Promise<SiteRow> {
