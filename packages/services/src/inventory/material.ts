@@ -32,6 +32,7 @@ export interface UpdateMaterialInput {
 
 export interface ListMaterialsFilter {
   siteId?: string;
+  siteIds?: string[];
   /** Free-text search across materialNumber, name, shortCode, description (case-insensitive contains, OR) */
   q?: string;
   name?: string;
@@ -111,7 +112,7 @@ export async function create(input: CreateMaterialInput) {
  * List materials with optional filtering
  */
 export async function list(filter: ListMaterialsFilter = {}) {
-  const { siteId, q, name, materialNumber, shortCode, limit = 50, offset = 0 } = filter;
+  const { siteId, siteIds, q, name, materialNumber, shortCode, limit = 50, offset = 0 } = filter;
 
   const where: Prisma.MaterialWhereInput = {
     deletedAt: null,
@@ -119,6 +120,8 @@ export async function list(filter: ListMaterialsFilter = {}) {
 
   if (siteId) {
     where.siteId = siteId;
+  } else if (siteIds) {
+    where.siteId = { in: siteIds };
   }
 
   // Free-text search OR'd across the columns shown in the UI.

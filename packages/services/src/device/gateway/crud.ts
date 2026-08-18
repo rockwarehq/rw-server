@@ -31,6 +31,7 @@ export interface UpdateGatewayInput {
 
 export interface ListGatewaysFilter {
   siteId?: string;
+  siteIds?: string[];
   workspaceId?: string;
 }
 
@@ -96,6 +97,8 @@ export async function list(filter?: ListGatewaysFilter) {
 
   if (filter?.siteId) {
     where.siteId = filter.siteId;
+  } else if (filter?.siteIds) {
+    where.siteId = { in: filter.siteIds };
   }
 
   // Filter by workspace - gateways at Sites belonging to this workspace

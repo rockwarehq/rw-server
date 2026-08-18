@@ -18,6 +18,7 @@ export interface UpdateDisplayInput {
 
 export interface ListDisplaysFilter {
   siteId?: string;
+  siteIds?: string[];
   status?: "UNCLAIMED" | "CLAIMED";
   limit?: number;
   offset?: number;
@@ -190,7 +191,7 @@ export async function list(filter: ListDisplaysFilter = {}) {
 }
 
 export async function listForWorkspace(workspaceId: string, filter: ListDisplaysFilter = {}) {
-  const { siteId, status, limit = 50, offset = 0 } = filter;
+  const { siteId, siteIds, status, limit = 50, offset = 0 } = filter;
 
   const where: Record<string, unknown> = {};
 
@@ -202,6 +203,8 @@ export async function listForWorkspace(workspaceId: string, filter: ListDisplays
 
   if (siteId) {
     where.siteId = siteId;
+  } else if (siteIds) {
+    where.siteId = { in: siteIds };
   }
 
   if (status) {

@@ -24,6 +24,7 @@ export interface UpdateDatasourceInput {
 export interface ListDatasourcesFilter {
   gatewayId?: string;
   siteId?: string;
+  siteIds?: string[];
   workspaceId?: string;
   driver?: string;
   type?: string;
@@ -119,7 +120,19 @@ export async function create(input: CreateDatasourceInput) {
  * List datasources with optional filtering and pagination
  */
 export async function list(filter: ListDatasourcesFilter = {}) {
-  const { gatewayId, siteId, workspaceId, driver, type, name, status, unassigned, limit = 50, offset = 0 } = filter;
+  const {
+    gatewayId,
+    siteId,
+    siteIds,
+    workspaceId,
+    driver,
+    type,
+    name,
+    status,
+    unassigned,
+    limit = 50,
+    offset = 0,
+  } = filter;
 
   const where: Record<string, unknown> = {};
 
@@ -131,6 +144,8 @@ export async function list(filter: ListDatasourcesFilter = {}) {
 
   if (siteId) {
     where.siteId = siteId;
+  } else if (siteIds) {
+    where.siteId = { in: siteIds };
   }
 
   // Filter by workspace (via site relationship)

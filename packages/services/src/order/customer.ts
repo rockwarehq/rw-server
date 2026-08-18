@@ -17,6 +17,7 @@ export interface UpdateCustomerInput {
 
 export interface ListCustomersFilter {
   siteId?: string;
+  siteIds?: string[];
   search?: string;
   limit?: number;
   offset?: number;
@@ -63,12 +64,14 @@ export async function create(input: CreateCustomerInput) {
 }
 
 export async function list(filter: ListCustomersFilter = {}) {
-  const { siteId, search, limit = 200, offset = 0 } = filter;
+  const { siteId, siteIds, search, limit = 200, offset = 0 } = filter;
 
   const where: Record<string, unknown> = { deletedAt: null };
 
   if (siteId) {
     where.siteId = siteId;
+  } else if (siteIds) {
+    where.siteId = { in: siteIds };
   }
 
   if (search) {

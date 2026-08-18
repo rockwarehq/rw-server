@@ -10,6 +10,7 @@ type TransactionClient = Prisma.TransactionClient;
 
 export interface ListInventoryFilter {
   siteId?: string;
+  siteIds?: string[];
   cycleId?: string;
   productVersionId?: string;
   jobProductVersionId?: string;
@@ -264,7 +265,17 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
  * List inventory items with optional filtering
  */
 export async function list(filter: ListInventoryFilter = {}) {
-  const { siteId, cycleId, productVersionId, jobProductVersionId, dateFrom, dateTo, limit = 50, offset = 0 } = filter;
+  const {
+    siteId,
+    siteIds,
+    cycleId,
+    productVersionId,
+    jobProductVersionId,
+    dateFrom,
+    dateTo,
+    limit = 50,
+    offset = 0,
+  } = filter;
 
   const where: Prisma.InventoryItemWhereInput = {
     deletedAt: null,
@@ -286,6 +297,10 @@ export async function list(filter: ListInventoryFilter = {}) {
   if (siteId) {
     where.cycle = {
       siteId,
+    };
+  } else if (siteIds) {
+    where.cycle = {
+      siteId: { in: siteIds },
     };
   }
 

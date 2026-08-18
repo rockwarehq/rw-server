@@ -34,6 +34,7 @@ export interface UpdateProductInput {
 
 export interface ListProductsFilter {
   siteId?: string;
+  siteIds?: string[];
   /** Free-text search across sku and name (case-insensitive contains, OR) */
   q?: string;
   sku?: string;
@@ -151,7 +152,17 @@ export async function create(input: CreateProductInput) {
  * List products with optional filtering
  */
 export async function list(filter: ListProductsFilter = {}) {
-  const { siteId, q, sku, name, includeArchived = false, archivedOnly = false, limit = 50, offset = 0 } = filter;
+  const {
+    siteId,
+    siteIds,
+    q,
+    sku,
+    name,
+    includeArchived = false,
+    archivedOnly = false,
+    limit = 50,
+    offset = 0,
+  } = filter;
 
   const where: Prisma.ProductWhereInput = {
     deletedAt: null,
@@ -166,6 +177,8 @@ export async function list(filter: ListProductsFilter = {}) {
 
   if (siteId) {
     where.siteId = siteId;
+  } else if (siteIds) {
+    where.siteId = { in: siteIds };
   }
 
   // Free-text search OR'd across the columns shown in the UI.

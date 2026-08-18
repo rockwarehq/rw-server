@@ -26,6 +26,7 @@ export interface UpdateToolInput {
 
 export interface ListToolsFilter {
   siteId?: string;
+  siteIds?: string[];
   name?: string;
   limit?: number;
   offset?: number;
@@ -112,7 +113,7 @@ export async function create(input: CreateToolInput) {
  * List tools with optional filtering
  */
 export async function list(filter: ListToolsFilter = {}) {
-  const { siteId, name, limit = 50, offset = 0 } = filter;
+  const { siteId, siteIds, name, limit = 50, offset = 0 } = filter;
 
   const where: Prisma.ToolWhereInput = {
     deletedAt: null,
@@ -120,6 +121,8 @@ export async function list(filter: ListToolsFilter = {}) {
 
   if (siteId) {
     where.siteId = siteId;
+  } else if (siteIds) {
+    where.siteId = { in: siteIds };
   }
 
   // Filter by current version fields

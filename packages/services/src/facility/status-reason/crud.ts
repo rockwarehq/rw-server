@@ -17,6 +17,7 @@ export interface UpdateStatusReasonInput {
 
 export interface ListStatusReasonsFilter {
   siteId?: string;
+  siteIds?: string[];
   categoryId?: string;
   name?: string;
   limit?: number;
@@ -93,12 +94,14 @@ export async function create(input: CreateStatusReasonInput) {
  * List status reasons with optional filtering
  */
 export async function list(filter: ListStatusReasonsFilter = {}) {
-  const { siteId, categoryId, name, limit = 50, offset = 0 } = filter;
+  const { siteId, siteIds, categoryId, name, limit = 50, offset = 0 } = filter;
 
   const where: Record<string, unknown> = { archivedAt: null };
 
   if (siteId) {
     where.siteId = siteId;
+  } else if (siteIds) {
+    where.siteId = { in: siteIds };
   }
 
   if (categoryId) {
