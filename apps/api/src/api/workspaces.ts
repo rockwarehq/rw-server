@@ -4,6 +4,8 @@ import { workspace } from "../services/account/index.js";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
 import { requirePermission } from "../plugins/require-permission.js";
 import { hasPermission } from "@rw/auth/iam/index";
+import { authorize } from "@rw/auth/iam/policy";
+import { replyPolicyDenial } from "./authz.js";
 
 const workspaceSchema = {
   type: "object",
@@ -249,13 +251,15 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
 
-      // If the caller already has a workspace context, require settings:admin
-      // in it — spinning up another workspace is an org-level privilege.
-      if (workspaceId) {
-        const ok = await hasPermission(userId, "settings:admin", { workspaceId });
-        if (!ok) {
-          return reply.status(403).send({ error: "forbidden", required: "settings:admin" });
-        }
+      // Spinning up another workspace is an org-level privilege: require
+      // settings:admin in the caller's workspace. A token without workspace
+      // context cannot prove it, so it is denied (fail-closed).
+      if (!workspaceId) {
+        return reply.status(401).send({ error: "No workspace context" });
+      }
+      const ok = await hasPermission(userId, "settings:admin", { workspaceId });
+      if (!ok) {
+        return reply.status(403).send({ error: "forbidden", required: "settings:admin" });
       }
 
       if (request.body.slug && (await workspace.slugExists(request.body.slug))) {
@@ -380,6 +384,8 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       if (!isMember) {
         return reply.status(403).send({ error: "Not a member of this workspace" });
       }
+      const auth = await authorize(request.iam, { permission: "user:read", site: { kind: "anySite" } });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       return workspace.listMembers(request.params.id);
     },

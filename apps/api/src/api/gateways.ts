@@ -2,6 +2,8 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { gateway } from "../services/device/index.js";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
+import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { replyPolicyDenial } from "./authz.js";
 
 const siteSummarySchema = {
   type: "object",
@@ -228,10 +230,12 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = (request.iam as { workspaceId?: string } | undefined)?.workspaceId;
-      if (!workspaceId) {
-        return reply.status(401).send({ error: "No workspace context" });
-      }
+      const auth = await authorize(request.iam, {
+        permission: "facility:write",
+        site: { kind: "site", siteId: request.body.siteId },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      const workspaceId = auth.workspaceId;
 
       try {
         const result = await gateway.create({ ...request.body, workspaceId });
@@ -261,13 +265,13 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = (request.iam as { workspaceId?: string } | undefined)?.workspaceId;
-      if (!workspaceId) {
-        return reply.status(401).send({ error: "No workspace context" });
-      }
+      const scope = await authorizeList(request.iam, {
+        permission: "facility:read",
+        requestedSiteId: request.query.siteId,
+      });
+      if (!scope.ok) return replyPolicyDenial(reply, scope);
 
-      const { siteId } = request.query;
-      return gateway.list({ siteId, workspaceId });
+      return gateway.list({ siteId: request.query.siteId, ...scopeFilter(scope) });
     },
   });
 
@@ -287,12 +291,13 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = (request.iam as { workspaceId?: string } | undefined)?.workspaceId;
-      if (!workspaceId) {
-        return reply.status(401).send({ error: "No workspace context" });
-      }
+      const auth = await authorize(request.iam, {
+        permission: "facility:read",
+        site: { kind: "gateway", id: request.params.id },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
 
-      const result = await gateway.getById(request.params.id, workspaceId);
+      const result = await gateway.getById(request.params.id, auth.workspaceId);
       if (!result) {
         return reply.status(404).send({ error: "Gateway not found" });
       }
@@ -319,6 +324,12 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
+      const auth = await authorize(request.iam, {
+        permission: "facility:read",
+        site: { kind: "gateway", id: request.params.id },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
+
       const result = await gateway.getGatewaySpec(request.params.id);
       if (!result) {
         return reply.status(404).send({ error: "Gateway not found" });
@@ -346,10 +357,20 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = (request.iam as { workspaceId?: string } | undefined)?.workspaceId;
-      if (!workspaceId) {
-        return reply.status(401).send({ error: "No workspace context" });
+      const auth = await authorize(request.iam, {
+        permission: "facility:write",
+        site: { kind: "gateway", id: request.params.id },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      if (request.body.siteId) {
+        // Moving a gateway requires facility:write at the TARGET site too.
+        const target = await authorize(request.iam, {
+          permission: "facility:write",
+          site: { kind: "site", siteId: request.body.siteId },
+        });
+        if (!target.ok) return replyPolicyDenial(reply, target);
       }
+      const workspaceId = auth.workspaceId;
 
       const result = await gateway.update(request.params.id, { ...request.body, workspaceId });
       if ("error" in result) {
@@ -376,12 +397,13 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = (request.iam as { workspaceId?: string } | undefined)?.workspaceId;
-      if (!workspaceId) {
-        return reply.status(401).send({ error: "No workspace context" });
-      }
+      const auth = await authorize(request.iam, {
+        permission: "facility:admin",
+        site: { kind: "gateway", id: request.params.id },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
 
-      const result = await gateway.remove(request.params.id, workspaceId);
+      const result = await gateway.remove(request.params.id, auth.workspaceId);
       if ("error" in result) {
         // remove only returns GATEWAY_NOT_FOUND (404) or WORKSPACE_MISMATCH (401)
         const status = result.code === "WORKSPACE_MISMATCH" ? 401 : 404;
@@ -408,9 +430,11 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      if (!(await gateway.exists(request.params.id))) {
-        return reply.status(404).send({ error: "Gateway not found" });
-      }
+      const auth = await authorize(request.iam, {
+        permission: "facility:admin",
+        site: { kind: "gateway", id: request.params.id },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
       const result = await gateway.tokens.create({
         gatewayId: request.params.id,
         name: request.body?.name,
@@ -436,6 +460,12 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
+      const auth = await authorize(request.iam, {
+        permission: "facility:admin",
+        site: { kind: "gateway", id: request.params.id },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
+
       const result = await gateway.tokens.revoke(request.params.id, request.params.tokenId);
       if (!result) {
         return reply.status(404).send({ error: "Token not found" });
@@ -464,9 +494,11 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      if (!(await gateway.exists(request.params.id))) {
-        return reply.status(404).send({ error: "Gateway not found" });
-      }
+      const auth = await authorize(request.iam, {
+        permission: "facility:write",
+        site: { kind: "gateway", id: request.params.id },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
       const cmd = await gateway.commands.queue({
         gatewayId: request.params.id,
         command: request.body.command,
@@ -494,9 +526,11 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      if (!(await gateway.exists(request.params.id))) {
-        return reply.status(404).send({ error: "Gateway not found" });
-      }
+      const auth = await authorize(request.iam, {
+        permission: "facility:read",
+        site: { kind: "gateway", id: request.params.id },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
       return gateway.commands.list(request.params.id, request.query);
     },
   });
@@ -517,6 +551,12 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
+      const auth = await authorize(request.iam, {
+        permission: "facility:read",
+        site: { kind: "gateway", id: request.params.id },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
+
       const cmd = await gateway.commands.getById(request.params.id, request.params.commandId);
       if (!cmd) {
         return reply.status(404).send({ error: "Command not found" });
@@ -542,6 +582,12 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
+      const auth = await authorize(request.iam, {
+        permission: "facility:write",
+        site: { kind: "gateway", id: request.params.id },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
+
       const result = await gateway.commands.cancel(request.params.id, request.params.commandId);
       if (result.error === "not_found") {
         return reply.status(404).send({ error: "Command not found" });

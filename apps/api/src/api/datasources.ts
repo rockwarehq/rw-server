@@ -2,6 +2,8 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { datasource } from "../services/device/index.js";
 import { errorWithDetailsSchema, idParamsSchema, gatewaySummarySchema } from "./schemas.js";
+import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { replyPolicyDenial } from "./authz.js";
 
 const siteSummarySchema = {
   type: "object",
@@ -335,13 +337,13 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     preHandler: fastify.verifyAccessToken,
     handler: async (request, reply) => {
       const body = request.body;
-      const workspaceId = (request.iam as { workspaceId?: string } | undefined)?.workspaceId;
+      const auth = await authorize(request.iam, {
+        permission: "facility:write",
+        site: { kind: "site", siteId: request.body.siteId },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
 
-      if (!workspaceId) {
-        return reply.status(400).send({ error: "Workspace context required" });
-      }
-
-      const result = await datasource.create({ ...body, workspaceId });
+      const result = await datasource.create({ ...body, workspaceId: auth.workspaceId });
       if ("error" in result) {
         return reply.status(getStatusForCode(result.code ?? "UNKNOWN")).send({ error: result.error });
       }
@@ -361,10 +363,13 @@ export default async function datasources(fastify: FastifyTypedInstance) {
         200: paginatedDatasourceListSchema,
       },
     },
-    handler: async (request) => {
+    handler: async (request, reply) => {
       const { gatewayId, siteId, driver, type, status, name, unassigned, limit = 50, offset = 0 } = request.query;
+      const scope = await authorizeList(request.iam, { permission: "facility:read", requestedSiteId: siteId });
+      if (!scope.ok) return replyPolicyDenial(reply, scope);
 
       return datasource.list({
+        ...scopeFilter(scope),
         gatewayId,
         siteId,
         driver,
@@ -393,6 +398,9 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { id } = request.params;
+      const auth = await authorize(request.iam, { permission: "facility:read", site: { kind: "datasource", id } });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
+
       const result = await datasource.getById(id);
       if (!result) {
         return reply.status(404).send({ error: "Datasource not found" });
@@ -420,9 +428,10 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const { id } = request.params;
       const body = request.body;
-      const workspaceId = (request.iam as { workspaceId?: string } | undefined)?.workspaceId;
+      const auth = await authorize(request.iam, { permission: "facility:write", site: { kind: "datasource", id } });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
 
-      const result = await datasource.update(id, body, workspaceId);
+      const result = await datasource.update(id, body, auth.workspaceId);
       if ("error" in result) {
         return reply.status(getStatusForCode(result.code ?? "UNKNOWN")).send({ error: result.error });
       }
@@ -447,9 +456,10 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     preHandler: fastify.verifyAccessToken,
     handler: async (request, reply) => {
       const { id } = request.params;
-      const workspaceId = (request.iam as { workspaceId?: string } | undefined)?.workspaceId;
+      const auth = await authorize(request.iam, { permission: "facility:admin", site: { kind: "datasource", id } });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
 
-      const result = await datasource.remove(id, workspaceId);
+      const result = await datasource.remove(id, auth.workspaceId);
       if ("error" in result) {
         return reply.status(getStatusForCode(result.code ?? "UNKNOWN")).send({ error: result.error });
       }
@@ -476,6 +486,16 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const { id } = request.params;
       const { gatewayId } = request.body;
+      const auth = await authorize(request.iam, { permission: "facility:write", site: { kind: "datasource", id } });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      if (gatewayId) {
+        // Attaching to a gateway requires facility:write for the gateway's site too.
+        const target = await authorize(request.iam, {
+          permission: "facility:write",
+          site: { kind: "gateway", id: gatewayId },
+        });
+        if (!target.ok) return replyPolicyDenial(reply, target);
+      }
 
       const result = await datasource.assign(id, gatewayId);
       if ("error" in result) {
@@ -509,6 +529,12 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const { datasourceId } = request.params;
       const body = request.body;
 
+      const auth = await authorize(request.iam, {
+        permission: "facility:write",
+        site: { kind: "datasource", id: datasourceId },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
+
       const result = await datasource.groups.create(datasourceId, body);
       if ("error" in result) {
         return reply
@@ -536,6 +562,12 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { datasourceId } = request.params;
+      const auth = await authorize(request.iam, {
+        permission: "facility:read",
+        site: { kind: "datasource", id: datasourceId },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
+
       const result = await datasource.groups.list(datasourceId);
       if ("error" in result) {
         return reply.status(getStatusForCode(result.code ?? "UNKNOWN")).send({ error: result.error });
@@ -568,6 +600,12 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const { datasourceId } = request.params;
       const body = request.body;
 
+      const auth = await authorize(request.iam, {
+        permission: "facility:write",
+        site: { kind: "datasource", id: datasourceId },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
+
       const result = await datasource.points.create(datasourceId, body);
       if ("error" in result) {
         return reply
@@ -598,6 +636,12 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const { datasourceId } = request.params;
       const { groupId, ungrouped } = request.query;
 
+      const auth = await authorize(request.iam, {
+        permission: "facility:read",
+        site: { kind: "datasource", id: datasourceId },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
+
       const result = await datasource.points.list(datasourceId, { groupId, ungrouped });
       if ("error" in result) {
         return reply.status(getStatusForCode(result.code ?? "UNKNOWN")).send({ error: result.error });
@@ -625,6 +669,12 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const { datasourceId } = request.params;
       const { points } = request.body;
+
+      const auth = await authorize(request.iam, {
+        permission: "facility:write",
+        site: { kind: "datasource", id: datasourceId },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await datasource.points.bulkCreate(datasourceId, points);
       if ("error" in result) {
