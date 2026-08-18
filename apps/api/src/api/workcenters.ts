@@ -243,7 +243,7 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
         permission: "facility:read",
-        site: { kind: "workcenter", workcenterId: request.params.id },
+        site: { kind: "workcenter", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
@@ -277,7 +277,7 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
         permission: "facility:write",
-        site: { kind: "workcenter", workcenterId: request.params.id },
+        site: { kind: "workcenter", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
@@ -312,7 +312,7 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
         permission: "facility:write",
-        site: { kind: "workcenter", workcenterId: request.params.id },
+        site: { kind: "workcenter", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
@@ -346,7 +346,7 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
         permission: "facility:admin",
-        site: { kind: "workcenter", workcenterId: request.params.id },
+        site: { kind: "workcenter", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 

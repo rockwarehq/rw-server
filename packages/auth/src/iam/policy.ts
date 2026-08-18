@@ -23,6 +23,7 @@ import { resolveSiteRef as defaultResolveSiteRef, type ResolvableSiteRef } from 
 /** Where the site scope for a check comes from. */
 export type SiteRef =
   | { kind: "workspace" } // workspace-level action (e.g. site.create)
+  | { kind: "anySite" } // grant if permission held workspace-wide or at >=1 site
   | { kind: "site"; siteId: string } // literal id from input/params
   | ResolvableSiteRef; // derived from a resource id via a narrow lookup
 
@@ -68,6 +69,17 @@ export function scopeFilter(scope: ListScope): { workspaceId: string; siteId?: s
   return filter;
 }
 
+/**
+ * Prisma-shaped site predicate for handler-level direct-Prisma reads
+ * (ADR-0002 amendment). Merge into `AND` — a plain spread can be clobbered
+ * by later `where.siteId` assignments. `{in: []}` stays fail-closed.
+ */
+export function scopeWhere(scope: ListScope): { siteId?: string | { in: string[] } } {
+  if (scope.siteId) return { siteId: scope.siteId };
+  if (scope.siteIds) return { siteId: { in: scope.siteIds } };
+  return {};
+}
+
 export interface PolicyDeps {
   hasPermission: typeof defaultHasPermission;
   getAccessibleSites: typeof defaultGetAccessibleSites;
@@ -76,17 +88,22 @@ export interface PolicyDeps {
 
 /**
  * Overloaded so grants carry the scope precision the ref implies:
- * a site-bound ref always proves a siteId, a workspace ref never does.
+ * a literal site ref always proves a siteId; workspace/anySite refs never
+ * do; resolvable refs may yield a workspace grant (null-site rows).
  */
 export interface AuthorizeFn {
   (
     iam: IAMContext | undefined,
-    check: { permission: Permission; site: { kind: "workspace" } },
+    check: { permission: Permission; site: { kind: "workspace" } | { kind: "anySite" } },
   ): Promise<WorkspaceGrant | PolicyDenial>;
   (
     iam: IAMContext | undefined,
-    check: { permission: Permission; site: Exclude<SiteRef, { kind: "workspace" }> },
+    check: { permission: Permission; site: { kind: "site"; siteId: string } },
   ): Promise<SiteGrant | PolicyDenial>;
+  (
+    iam: IAMContext | undefined,
+    check: { permission: Permission; site: ResolvableSiteRef },
+  ): Promise<SiteGrant | WorkspaceGrant | PolicyDenial>;
   (iam: IAMContext | undefined, check: { permission: Permission; site: SiteRef }): Promise<PolicyResult>;
 }
 
@@ -162,6 +179,28 @@ export function createPolicy(deps: PolicyDeps) {
     return deps.getAccessibleSites(iam.id as string, permission, workspaceId);
   }
 
+  /** Permission held workspace-wide or at >=1 site (query-free w/ snapshot). */
+  async function userHasAnySitePermission(iam: IAMContext, permission: Permission, workspaceId: string) {
+    const access = await userAccessibleSites(iam, permission, workspaceId);
+    return access.all || access.siteIds.length > 0;
+  }
+
+  async function anySiteGrant(
+    iam: IAMContext,
+    permission: Permission,
+    workspaceId: string,
+  ): Promise<WorkspaceGrant | PolicyDenial> {
+    // Devices are site-bound; anySite grants workspace-breadth access
+    // (events streams, null-site resources) which only user roles express.
+    if (iam.principal !== Principal.USER) {
+      return deny("FORBIDDEN", "This action requires a user account");
+    }
+    if (!(await userHasAnySitePermission(iam, permission, workspaceId))) {
+      return deny("FORBIDDEN", `Missing permission: ${permission}`, permission);
+    }
+    return { ok: true, workspaceId };
+  }
+
   async function authorize(
     iam: IAMContext | undefined,
     check: { permission: Permission; site: SiteRef },
@@ -182,9 +221,14 @@ export function createPolicy(deps: PolicyDeps) {
       return { ok: true, workspaceId };
     }
 
+    if (check.site.kind === "anySite") {
+      return anySiteGrant(auth.iam, check.permission, workspaceId);
+    }
+
     // Resolve the target site. Literal ids need no query; resource refs are
-    // a single indexed read of the denormalized siteId column, and run
-    // BEFORE any permission query so nonexistent ids short-circuit.
+    // a narrow read of the denormalized siteId column (or one required-
+    // parent hop), and run BEFORE any permission query so nonexistent ids
+    // short-circuit.
     let siteId: string;
     if (check.site.kind === "site") {
       siteId = check.site.siteId;
@@ -192,6 +236,11 @@ export function createPolicy(deps: PolicyDeps) {
       const resolved = await deps.resolveSiteRef(check.site);
       if (!resolved) {
         return deny("NOT_FOUND", NOT_FOUND_MESSAGES[check.site.kind]);
+      }
+      if (resolved.siteId === null) {
+        // Row exists but is not attached to a site (unassigned device,
+        // workspace-level document, global schema): anySite rule.
+        return anySiteGrant(auth.iam, check.permission, workspaceId);
       }
       siteId = resolved.siteId;
     }
@@ -251,6 +300,51 @@ const NOT_FOUND_MESSAGES: Record<ResolvableSiteRef["kind"], string> = {
   station: "Station not found",
   workcenter: "Workcenter not found",
   stationStateLog: "State log entry not found",
+  order: "Order not found",
+  orderLineItem: "Order line item not found",
+  customer: "Customer not found",
+  processType: "Process type not found",
+  statusReason: "Status reason not found",
+  statusCategory: "Status category not found",
+  disposition: "Disposition not found",
+  dispositionReason: "Disposition reason not found",
+  dispositionLog: "Disposition log not found",
+  tool: "Tool not found",
+  toolCavity: "Tool cavity not found",
+  job: "Job not found",
+  jobProduct: "Job item not found",
+  product: "Product not found",
+  productMaterial: "Product material not found",
+  productAltGroup: "Alternative group not found",
+  productPicture: "Product picture not found",
+  material: "Material not found",
+  inventoryItem: "Inventory item not found",
+  dashboard: "Dashboard not found",
+  savedView: "Saved view not found",
+  shiftPattern: "Shift pattern not found",
+  shiftDefinition: "Shift definition not found",
+  shiftAssignment: "Shift assignment not found",
+  shiftComment: "Shift comment not found",
+  employeeRole: "Employee role not found",
+  cycle: "Cycle not found",
+  graphNode: "Graph node not found",
+  graphNodeType: "Graph node type not found",
+  graphTypeField: "Graph type field not found",
+  graphTypeInput: "Graph type input not found",
+  graphTypeFacet: "Graph type facet not found",
+  graphProperty: "Graph property not found",
+  graphHook: "Graph hook not found",
+  integration: "Integration not found",
+  integrationTrigger: "Integration trigger not found",
+  siteAndonRule: "Andon rule not found",
+  gateway: "Gateway not found",
+  datasource: "Datasource not found",
+  display: "Display not found",
+  document: "Document not found",
+  objectSchema: "Schema not found",
+  objectInstance: "Instance not found",
+  point: "Point not found",
+  pointGroup: "Point group not found",
 };
 
 const defaultPolicy = createPolicy({
