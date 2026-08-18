@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
+import { authorize, authorizeList } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 import { dashboard } from "@rw/services/dashboard/index";
 import { throwServiceError } from "./errors.js";
-import { Principal } from "../auth/index.js";
 
 // ============================================================================
 // Input Schemas
@@ -46,10 +47,9 @@ const listInputSchema = z.object({
  * Create a new dashboard
  */
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "dashboard:write", site: { kind: "site", siteId: input.siteId } }),
+  );
 
   const result = await dashboard.create(input, workspaceId);
   if (result.error !== undefined) throwServiceError(result);
@@ -60,41 +60,26 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
  * List dashboards
  */
 export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  const scope = grant(
+    await authorizeList(context.iam, { permission: "dashboard:read", requestedSiteId: input.siteId }),
+  );
 
-  if (context.iam.principal === Principal.DISPLAY) {
-    if (input.siteId && input.siteId !== context.iam.siteId) {
-      throw new ORPCError("FORBIDDEN", { message: "Display can only access dashboards in its site" });
-    }
-
-    return dashboard.list({ ...input, siteId: context.iam.siteId }, workspaceId);
-  }
-
-  return dashboard.list(input, workspaceId);
+  return dashboard.list({ ...input, siteId: scope.siteId ?? input.siteId, siteIds: scope.siteIds }, scope.workspaceId);
 });
 
 /**
  * Get dashboard by ID
  */
 export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "dashboard:read", site: { kind: "dashboard", id: input.id } }),
+  );
 
   const result = await dashboard.getById(input.id, workspaceId);
   if (!result) {
     throw new ORPCError("NOT_FOUND", { message: "Dashboard not found" });
   }
   if (result.error !== undefined) throwServiceError(result);
-
-  if (context.iam.principal === Principal.DISPLAY && result.data.siteId !== context.iam.siteId) {
-    throw new ORPCError("FORBIDDEN", { message: "Display can only access dashboards in its site" });
-  }
-
   return result.data;
 });
 
@@ -102,10 +87,9 @@ export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ i
  * Update dashboard
  */
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "dashboard:write", site: { kind: "dashboard", id: input.id } }),
+  );
 
   const { id, ...updateData } = input;
   const result = await dashboard.update(id, updateData, workspaceId);
@@ -117,10 +101,9 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
  * Delete dashboard (soft delete)
  */
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "dashboard:admin", site: { kind: "dashboard", id: input.id } }),
+  );
 
   const result = await dashboard.remove(input.id, workspaceId);
   if (result.error !== undefined) throwServiceError(result);
