@@ -10234,6 +10234,14 @@
                   "description": {
                     "type": "string"
                   },
+                  "sourceType": {
+                    "type": "string",
+                    "enum": [
+                      "DRIVER",
+                      "STATIC"
+                    ]
+                  },
+                  "staticValue": {},
                   "address": {
                     "type": "string"
                   },
@@ -10255,9 +10263,7 @@
                   }
                 },
                 "required": [
-                  "name",
-                  "address",
-                  "dataType"
+                  "name"
                 ]
               }
             }
@@ -10293,6 +10299,14 @@
                       "type": "string",
                       "nullable": true
                     },
+                    "sourceType": {
+                      "type": "string",
+                      "enum": [
+                        "DRIVER",
+                        "STATIC"
+                      ]
+                    },
+                    "staticValue": {},
                     "address": {
                       "type": "string"
                     },
@@ -10485,6 +10499,14 @@
                         "type": "string",
                         "nullable": true
                       },
+                      "sourceType": {
+                        "type": "string",
+                        "enum": [
+                          "DRIVER",
+                          "STATIC"
+                        ]
+                      },
+                      "staticValue": {},
                       "address": {
                         "type": "string"
                       },
@@ -10722,6 +10744,14 @@
                             "type": "string",
                             "nullable": true
                           },
+                          "sourceType": {
+                            "type": "string",
+                            "enum": [
+                              "DRIVER",
+                              "STATIC"
+                            ]
+                          },
+                          "staticValue": {},
                           "address": {
                             "type": "string"
                           },
@@ -10900,6 +10930,14 @@
                       "type": "string",
                       "nullable": true
                     },
+                    "sourceType": {
+                      "type": "string",
+                      "enum": [
+                        "DRIVER",
+                        "STATIC"
+                      ]
+                    },
+                    "staticValue": {},
                     "address": {
                       "type": "string"
                     },
@@ -11026,6 +11064,7 @@
                   "description": {
                     "type": "string"
                   },
+                  "staticValue": {},
                   "address": {
                     "type": "string"
                   },
@@ -11082,6 +11121,14 @@
                       "type": "string",
                       "nullable": true
                     },
+                    "sourceType": {
+                      "type": "string",
+                      "enum": [
+                        "DRIVER",
+                        "STATIC"
+                      ]
+                    },
+                    "staticValue": {},
                     "address": {
                       "type": "string"
                     },
@@ -11358,6 +11405,14 @@
                             "type": "string",
                             "nullable": true
                           },
+                          "sourceType": {
+                            "type": "string",
+                            "enum": [
+                              "DRIVER",
+                              "STATIC"
+                            ]
+                          },
+                          "staticValue": {},
                           "address": {
                             "type": "string"
                           },

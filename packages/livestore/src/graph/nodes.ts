@@ -542,6 +542,16 @@ async function resolveSystemEntityRecord(
     return { data: { ...category, site: category.siteId, statusReasons: category.statusReasons.map((row) => row.id) } };
   }
 
+  if (entityKey === SYSTEM_ENTITY_KEYS.Point) {
+    // Point has no siteId; scope through its datasource
+    const point = await prisma.point.findFirst({
+      where: { id: entityId, datasource: { siteId: scope.siteId, site: { workspaceId: scope.workspaceId } } },
+      select: { id: true, name: true, description: true, staticValue: true },
+    });
+    if (!point) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
+    return { data: { ...point } };
+  }
+
   return errorResult("ENTITY_REF_SCHEMA_NOT_FOUND", "Entity reference schema was not found");
 }
 

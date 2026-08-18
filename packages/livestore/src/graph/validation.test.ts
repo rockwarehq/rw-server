@@ -3,6 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@rw/db", () => ({
   default: {
     station: { findFirst: vi.fn(async () => ({ id: "station-1" })) },
+    point: {
+      findFirst: vi.fn(async ({ where }: { where: { id: string } }) =>
+        where.id === "point-1" ? { id: "point-1" } : null,
+      ),
+    },
   },
 }));
 
@@ -73,5 +78,49 @@ describe("validateResolverConfig entity path", () => {
       });
       expect("data" in result, `path ${path} should validate`).toBe(true);
     }
+  });
+});
+
+describe("validateResolverConfig datasource.point", () => {
+  it("accepts a static point in the site", async () => {
+    const result = await validateResolverConfig({
+      resolverType: "entity",
+      resolver: { type: "entity", entityType: "datasource.point", entityId: "point-1", path: "staticValue" },
+      scope,
+    });
+    expect("data" in result).toBe(true);
+  });
+
+  it("rejects a point outside the site", async () => {
+    const result = await validateResolverConfig({
+      resolverType: "entity",
+      resolver: { type: "entity", entityType: "datasource.point", entityId: "point-elsewhere", path: "staticValue" },
+      scope,
+    });
+    expect(result).toMatchObject({ code: "ENTITY_SITE_MISMATCH" });
+  });
+
+  it("rejects a path that is not in the point catalog", async () => {
+    const result = await validateResolverConfig({
+      resolverType: "entity",
+      resolver: { type: "entity", entityType: "datasource.point", entityId: "point-1", path: "address" },
+      scope,
+    });
+    expect(result).toMatchObject({ code: "ENTITY_PATH_NOT_FOUND" });
+  });
+
+  it("rejects points as metric targets", async () => {
+    const result = await validateResolverConfig({
+      resolverType: "metric",
+      resolver: {
+        type: "metric",
+        entityType: "Point",
+        entityId: "point-1",
+        granularity: "SHIFT",
+        metricKey: "goodCount",
+      },
+      scope,
+    });
+    expect(result).toMatchObject({ code: "INVALID_RESOLVER" });
   });
 });

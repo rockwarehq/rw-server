@@ -35,6 +35,7 @@ export const SYSTEM_ENTITY_KEYS = {
   ShiftInstance: `${SYSTEM_ENTITY_NAMESPACE}.shiftInstance`,
   StatusReason: `${SYSTEM_ENTITY_NAMESPACE}.statusReason`,
   StatusCategory: `${SYSTEM_ENTITY_NAMESPACE}.statusCategory`,
+  Point: "datasource.point",
 } as const;
 
 export const SYSTEM_ENTITY_REGISTRY: readonly SystemEntitySpec[] = [
@@ -522,6 +523,19 @@ export const SYSTEM_ENTITY_REGISTRY: readonly SystemEntitySpec[] = [
         isList: true,
         sortOrder: 70,
       },
+    ],
+  },
+  {
+    key: SYSTEM_ENTITY_KEYS.Point,
+    model: "Point",
+    name: "Point",
+    label: "Static Point",
+    description: "Manually-entered device point value (never polled).",
+    fields: [
+      { name: "id", type: "TEXT", sortOrder: 0 },
+      { name: "name", type: "TEXT", required: true, sortOrder: 10 },
+      { name: "description", type: "TEXT", sortOrder: 20 },
+      { name: "staticValue", type: "JSON", sortOrder: 30 },
     ],
   },
 ];

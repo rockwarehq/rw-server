@@ -127,7 +127,11 @@ async function loadDatasources(
   if (options.datasourceIds.length > 0) where.id = { in: options.datasourceIds };
   if (options.gatewayId) where.gatewayId = options.gatewayId;
 
-  const pointFilter = options.pointIds.length > 0 ? { id: { in: options.pointIds } } : undefined;
+  // Static points hold manual values; never simulate tag traffic over them
+  const pointFilter = {
+    sourceType: "DRIVER" as const,
+    ...(options.pointIds.length > 0 ? { id: { in: options.pointIds } } : {}),
+  };
 
   return prisma.datasource.findMany({
     where,
@@ -139,7 +143,7 @@ async function loadDatasources(
       site: { select: { id: true, name: true } },
       gateway: { select: { id: true, name: true } },
       points: {
-        ...(pointFilter ? { where: pointFilter } : {}),
+        where: pointFilter,
         orderBy: { name: "asc" },
         select: {
           id: true,

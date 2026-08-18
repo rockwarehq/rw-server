@@ -622,6 +622,32 @@ async function listSystemInstances(
     };
   }
 
+  if (key === SYSTEM_ENTITY_KEYS.Point) {
+    // Only static points are catalog-addressable; scope rides the datasource→site relation
+    const where = {
+      sourceType: "STATIC" as const,
+      datasource: { siteId: scope.siteId, site: { workspaceId: scope.workspaceId } },
+      ...(name ? { name: { contains: name, mode: "insensitive" as const } } : {}),
+    };
+    const [points, total] = await Promise.all([
+      prisma.point.findMany({ where, ...pagination }),
+      prisma.point.count({ where }),
+    ]);
+    return {
+      data: points.map((point) =>
+        systemInstance(key, point, {
+          id: point.id,
+          name: point.name,
+          description: point.description,
+          staticValue: point.staticValue,
+        }),
+      ),
+      total,
+      limit: Number(limit),
+      offset: Number(offset),
+    };
+  }
+
   return errorResult("ENTITY_NOT_FOUND", "System entity not found");
 }
 
