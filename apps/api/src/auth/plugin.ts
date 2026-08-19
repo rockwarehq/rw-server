@@ -199,25 +199,36 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
     return invalidIAM;
   }
 
-  const membership = await prisma.workspaceMembership.findUnique({
-    where: {
-      userId_workspaceId: {
-        userId: decodedToken.id,
-        workspaceId: decodedToken.workspaceId,
-      },
-    },
-    select: {
-      workspace: {
-        select: {
-          id: true,
-          name: true,
-          slug: true,
+  // System users (SUPPORT/ENGINEER staff) hold no memberships by design —
+  // their workspace context is validated directly against the workspace row.
+  let workspaceContext: { id: string; name: string; slug: string } | null;
+  if (userResult.systemRole) {
+    workspaceContext = await prisma.workspace.findUnique({
+      where: { id: decodedToken.workspaceId },
+      select: { id: true, name: true, slug: true },
+    });
+  } else {
+    const membership = await prisma.workspaceMembership.findUnique({
+      where: {
+        userId_workspaceId: {
+          userId: decodedToken.id,
+          workspaceId: decodedToken.workspaceId,
         },
       },
-    },
-  });
+      select: {
+        workspace: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+          },
+        },
+      },
+    });
+    workspaceContext = membership?.workspace ?? null;
+  }
 
-  if (!membership) {
+  if (!workspaceContext) {
     return invalidIAM;
   }
 
@@ -259,7 +270,7 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
     email: userResult.email,
     workspaceId: decodedToken.workspaceId,
     siteId: decodedToken.siteId,
-    workspace: membership.workspace,
+    workspace: workspaceContext,
     permissionSnapshot,
     user: {
       id: userResult.id,

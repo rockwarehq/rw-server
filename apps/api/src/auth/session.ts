@@ -43,40 +43,73 @@ export interface AuthContext {
 interface TokenUser {
   id: string;
   email: string;
+  /** Rockware-staff tier (SUPPORT/ENGINEER): permissions resolve from code
+   * and no WorkspaceMembership exists — workspace context comes from the
+   * deployment's workspace instead. */
+  systemRole?: string | null;
+}
+
+/**
+ * System users hold no memberships by design: resolve their workspace
+ * context directly (requested workspace when valid, else the deployment's
+ * default/oldest workspace).
+ */
+async function resolveSystemUserWorkspaceId(requestedWorkspaceId?: string): Promise<string | null> {
+  if (requestedWorkspaceId) {
+    const workspace = await prisma.workspace.findUnique({
+      where: { id: requestedWorkspaceId },
+      select: { id: true },
+    });
+    return workspace?.id ?? null;
+  }
+  const workspace = await prisma.workspace.findFirst({
+    orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
+    select: { id: true },
+  });
+  return workspace?.id ?? null;
 }
 
 async function createUserAccessTokenForContext(
   user: TokenUser,
   options: { workspaceId?: string; siteId?: string } = {},
 ): Promise<{ success: true; accessToken: string; workspaceId: string } | { success: false; error: string }> {
-  const membership = options.workspaceId
-    ? await prisma.workspaceMembership.findUnique({
-        where: {
-          userId_workspaceId: {
-            userId: user.id,
-            workspaceId: options.workspaceId,
+  let workspaceId: string | null;
+  if (user.systemRole) {
+    workspaceId = await resolveSystemUserWorkspaceId(options.workspaceId);
+    if (!workspaceId) {
+      return { success: false, error: "Workspace not found" };
+    }
+  } else {
+    const membership = options.workspaceId
+      ? await prisma.workspaceMembership.findUnique({
+          where: {
+            userId_workspaceId: {
+              userId: user.id,
+              workspaceId: options.workspaceId,
+            },
           },
-        },
-        select: { workspaceId: true },
-      })
-    : await prisma.workspaceMembership.findFirst({
-        where: { userId: user.id },
-        select: { workspaceId: true },
-        orderBy: { joinedAt: "asc" },
-      });
+          select: { workspaceId: true },
+        })
+      : await prisma.workspaceMembership.findFirst({
+          where: { userId: user.id },
+          select: { workspaceId: true },
+          orderBy: { joinedAt: "asc" },
+        });
+
+    if (!membership) {
+      return { success: false, error: "User is not assigned to a workspace" };
+    }
+    workspaceId = membership.workspaceId;
+  }
 
   const tokenPayload: AccessTokenPayload = {
     id: user.id,
     email: user.email,
   };
 
-  if (!membership) {
-    return { success: false, error: "User is not assigned to a workspace" };
-  }
+  tokenPayload.workspaceId = workspaceId;
 
-  tokenPayload.workspaceId = membership.workspaceId;
-
-  const sites = await listAccessibleSites(user.id, membership.workspaceId);
+  const sites = await listAccessibleSites(user.id, workspaceId);
   if (options.siteId) {
     const site = sites.find((item) => item.id === options.siteId);
     if (!site) {
@@ -90,7 +123,7 @@ async function createUserAccessTokenForContext(
   return {
     success: true,
     accessToken: createAccessToken(tokenPayload),
-    workspaceId: membership.workspaceId,
+    workspaceId,
   };
 }
 
@@ -362,21 +395,25 @@ export async function switchWorkspace(
     return { success: false, error: "Account is temporarily locked" };
   }
 
-  const membership = await prisma.workspaceMembership.findUnique({
-    where: {
-      userId_workspaceId: {
-        userId,
-        workspaceId,
+  // System users hold no memberships: any existing workspace is switchable
+  // (the token helper validates existence).
+  if (!user.systemRole) {
+    const membership = await prisma.workspaceMembership.findUnique({
+      where: {
+        userId_workspaceId: {
+          userId,
+          workspaceId,
+        },
       },
-    },
-  });
+    });
 
-  if (!membership) {
-    return { success: false, error: "Not a member of this workspace" };
+    if (!membership) {
+      return { success: false, error: "Not a member of this workspace" };
+    }
   }
 
   const tokenResult = await createUserAccessTokenForContext(user, {
-    workspaceId: membership.workspaceId,
+    workspaceId,
   });
   if (!tokenResult.success) return { success: false, error: tokenResult.error };
 
