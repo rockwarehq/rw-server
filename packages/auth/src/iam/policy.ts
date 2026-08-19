@@ -55,34 +55,43 @@ export interface WorkspaceGrant {
 export type PolicyResult = SiteGrant | WorkspaceGrant | PolicyDenial;
 
 /**
- * Scope for a list/search query, shaped to spread into the facility list
- * filters via {@link scopeFilter}: `siteIds` undefined means all sites,
- * `[]` is preserved so services stay fail-closed (empty result).
+ * Scope for a list/search query. Single-site by design: users work within
+ * one site at a time (the token's active site, or an explicitly requested
+ * site they hold the permission at). Cross-site listing exists only through
+ * {@link SiteDirectoryScope} for the site directory.
  */
 export interface ListScope {
   ok: true;
   workspaceId: string;
-  siteId?: string;
-  siteIds?: string[];
+  siteId: string;
 }
 
 export type ListPolicyResult = ListScope | PolicyDenial;
 
+/**
+ * The ONE sanctioned multi-site shape: which sites may this user see in the
+ * site directory (site picker / site administration). `siteIds` undefined
+ * means all sites in the workspace. Do not use for domain lists — those are
+ * single-site via {@link ListScope}.
+ */
+export interface SiteDirectoryScope {
+  ok: true;
+  workspaceId: string;
+  siteIds?: string[];
+}
+
 /** The list-filter fragment without the `ok` discriminant. */
-export function scopeFilter(scope: ListScope): { workspaceId: string; siteId?: string; siteIds?: string[] } {
-  const { ok: _ok, ...filter } = scope;
-  return filter;
+export function scopeFilter(scope: ListScope): { workspaceId: string; siteId: string } {
+  return { workspaceId: scope.workspaceId, siteId: scope.siteId };
 }
 
 /**
  * Prisma-shaped site predicate for handler-level direct-Prisma reads
  * (ADR-0002 amendment). Merge into `AND` — a plain spread can be clobbered
- * by later `where.siteId` assignments. `{in: []}` stays fail-closed.
+ * by later `where.siteId` assignments.
  */
-export function scopeWhere(scope: ListScope): { siteId?: string | { in: string[] } } {
-  if (scope.siteId) return { siteId: scope.siteId };
-  if (scope.siteIds) return { siteId: { in: scope.siteIds } };
-  return {};
+export function scopeWhere(scope: ListScope): { siteId: string } {
+  return { siteId: scope.siteId };
 }
 
 export interface PolicyDeps {
@@ -289,20 +298,47 @@ export function createPolicy(deps: PolicyDeps) {
       return { ok: true, workspaceId, siteId: ownSiteId };
     }
 
-    const access = await userAccessibleSites(auth.iam, check.permission, workspaceId);
-    if (check.requestedSiteId) {
-      if (!access.all && !access.siteIds.includes(check.requestedSiteId)) {
-        return deny("FORBIDDEN", `Missing permission: ${check.permission}`, check.permission);
-      }
-      return { ok: true, workspaceId, siteId: check.requestedSiteId };
+    // Single-site rule: an explicit request wins; otherwise the token's
+    // active site (bound at login / switch-site) is the query context.
+    const siteId = check.requestedSiteId ?? auth.iam.siteId;
+    if (!siteId) {
+      return deny("NO_WORKSPACE", "Site context required");
     }
+    const ok = await userHasPermission(auth.iam, check.permission, workspaceId, siteId);
+    if (!ok) {
+      return deny("FORBIDDEN", `Missing permission: ${check.permission}`, check.permission);
+    }
+    return { ok: true, workspaceId, siteId };
+  }
+
+  /**
+   * Site-directory scope: the accessible-site set for the site picker and
+   * site administration ONLY. Every other list is single-site.
+   */
+  async function authorizeAccessibleSites(
+    iam: IAMContext | undefined,
+    check: { permission: Permission },
+  ): Promise<SiteDirectoryScope | PolicyDenial> {
+    const auth = requireAuthenticated(iam);
+    if (!auth.ok) return auth;
+    const { workspaceId } = auth;
+
+    if (auth.iam.principal !== Principal.USER) {
+      const ownSiteId = auth.iam.siteId;
+      if (!ownSiteId) {
+        return deny("NO_WORKSPACE", "Site context required");
+      }
+      return { ok: true, workspaceId, siteIds: [ownSiteId] };
+    }
+
+    const access = await userAccessibleSites(auth.iam, check.permission, workspaceId);
     if (access.all) {
       return { ok: true, workspaceId };
     }
     return { ok: true, workspaceId, siteIds: access.siteIds };
   }
 
-  return { authorize: authorize as AuthorizeFn, authorizeList };
+  return { authorize: authorize as AuthorizeFn, authorizeList, authorizeAccessibleSites };
 }
 
 const NOT_FOUND_MESSAGES: Record<ResolvableSiteRef["kind"], string> = {
@@ -364,4 +400,5 @@ const defaultPolicy = createPolicy({
 
 export const authorize = defaultPolicy.authorize;
 export const authorizeList = defaultPolicy.authorizeList;
+export const authorizeAccessibleSites = defaultPolicy.authorizeAccessibleSites;
 export type { Permission, ResolvableSiteRef };
