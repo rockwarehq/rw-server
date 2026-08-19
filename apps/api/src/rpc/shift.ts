@@ -185,7 +185,10 @@ export const patternDuplicate = authRequired.input(duplicateInputSchema).handler
 
 export const definitionCreate = authRequired.input(definitionCreateInputSchema).handler(async ({ input, context }) => {
   grant(
-    await authorize(context.iam, { permission: "schedule:write", scope: { kind: "shiftPattern", id: input.patternId } }),
+    await authorize(context.iam, {
+      permission: "schedule:write",
+      scope: { kind: "shiftPattern", id: input.patternId },
+    }),
   );
 
   const result = await shift.definition.create(input);
@@ -202,7 +205,9 @@ export const definitionList = authRequired.input(definitionListInputSchema).hand
 });
 
 export const definitionGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "shiftDefinition", id: input.id } }));
+  grant(
+    await authorize(context.iam, { permission: "schedule:read", scope: { kind: "shiftDefinition", id: input.id } }),
+  );
 
   const result = await shift.definition.getById(input.id);
   return unwrap(result, { notFoundMessage: "Shift definition not found" });
@@ -247,7 +252,9 @@ export const assignmentList = authRequired.input(assignmentListInputSchema).hand
 });
 
 export const assignmentGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "shiftAssignment", id: input.id } }));
+  grant(
+    await authorize(context.iam, { permission: "schedule:read", scope: { kind: "shiftAssignment", id: input.id } }),
+  );
 
   const result = await shift.assignment.getById(input.id);
   return unwrap(result, { notFoundMessage: "Shift assignment not found" });
