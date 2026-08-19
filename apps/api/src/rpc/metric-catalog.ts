@@ -1,4 +1,3 @@
-import { ORPCError } from "@orpc/server";
 import * as z from "zod";
 import {
   METRIC_CATALOG_DEFAULT_AGGREGATIONS,
@@ -7,9 +6,10 @@ import {
   METRIC_CATALOG_VALUE_TYPES,
   listMetrics,
 } from "@rw/services/metric-catalog/index";
-import { Principal } from "../auth/index.js";
 import { throwServiceError } from "./errors.js";
 import { userOrDisplayRequired } from "./middleware.js";
+import { authorize } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 
 const metricCatalogItemSchema = z.object({
   key: z.string(),
@@ -35,14 +35,9 @@ export const list = userOrDisplayRequired
   .input(listInputSchema)
   .output(listOutputSchema)
   .handler(async ({ context, input }) => {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-    }
-
-    if (context.iam.principal === Principal.DISPLAY && input.siteId !== context.iam.siteId) {
-      throw new ORPCError("FORBIDDEN", { message: "Display can only access metric catalog for its site" });
-    }
+    const { workspaceId } = grant(
+      await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.siteId } }),
+    );
 
     const result = await listMetrics({
       siteId: input.siteId,

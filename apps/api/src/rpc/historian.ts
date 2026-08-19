@@ -10,8 +10,9 @@ import {
   type SeriesDefinition,
   type ShiftWindow,
 } from "@rw/historian";
-import { Principal } from "../auth/index.js";
 import { userOrDisplayRequired } from "./middleware.js";
+import { authorize } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 import { throwServiceError } from "./errors.js";
 
 // Historian series queries (ADR 0008): `query` returns a range snapshot plus
@@ -66,51 +67,14 @@ const changesInputSchema = z.object({
 // Shared authorization (pattern from metrics.ts)
 // ============================================================================
 
-async function assertSiteAccess(siteId: string, workspaceId: string): Promise<void> {
-  const site = await prisma.site.findUnique({
-    where: { id: siteId },
-    select: { workspaceId: true },
-  });
-
-  if (!site) {
-    throw new ORPCError("NOT_FOUND", { message: "Site not found" });
-  }
-
-  if (site.workspaceId !== workspaceId) {
-    throw new ORPCError("FORBIDDEN", { message: "Site does not belong to this workspace" });
-  }
-}
-
-async function assertRuntimeSiteAccess(
-  iam: { principal: string; workspaceId?: string; siteId?: string },
-  siteId: string,
-): Promise<void> {
-  if (iam.principal === Principal.DISPLAY) {
-    if (iam.siteId !== siteId) {
-      throw new ORPCError("FORBIDDEN", { message: "Display can only access history for its site" });
-    }
-
-    return;
-  }
-
-  if (!iam.workspaceId) {
-    throw new ORPCError("UNAUTHORIZED", { message: "Workspace context required" });
-  }
-
-  await assertSiteAccess(siteId, iam.workspaceId);
-}
-
 /**
  * Every verb re-validates caller↔site access and scope↔site consistency —
  * a forged or replayed cursor can only reach data the caller may read anyway.
  */
 async function authorizeSeries(
-  iam: { principal: string; workspaceId?: string; siteId?: string },
   series: SeriesSelector,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): Promise<SeriesDefinition<any, any>> {
-  await assertRuntimeSiteAccess(iam, series.siteId);
-
   const definition = getSeries(series.seriesType);
   if (!definition) {
     throw new ORPCError("BAD_REQUEST", { message: `Unknown series type: ${series.seriesType}` });
@@ -178,7 +142,10 @@ async function dbNowMs(): Promise<number> {
 // ============================================================================
 
 export const query = userOrDisplayRequired.input(queryInputSchema).handler(async ({ context, input }) => {
-  const definition = await authorizeSeries(context.iam, input.series);
+  grant(
+    await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.series.siteId } }),
+  );
+  const definition = await authorizeSeries(input.series);
 
   const window = await resolveRange(definition, input.series, input.range);
   if (!window) {
@@ -216,7 +183,10 @@ export const query = userOrDisplayRequired.input(queryInputSchema).handler(async
 });
 
 export const changes = userOrDisplayRequired.input(changesInputSchema).handler(async ({ context, input }) => {
-  const definition = await authorizeSeries(context.iam, input.series);
+  grant(
+    await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.series.siteId } }),
+  );
+  const definition = await authorizeSeries(input.series);
 
   const decoded = decodeCursor(input.cursor, input.series.seriesType, input.series, Date.now());
   if (isHistorianError(decoded)) throwServiceError(decoded);

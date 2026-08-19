@@ -2,6 +2,8 @@ import { ORPCError, eventIterator } from "@orpc/server";
 import * as z from "zod";
 import prisma from "@rw/db";
 import { authRequired, processorRequired } from "./middleware.js";
+import { authorize } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 import { publishStreamEvent, subscribeStreamEvents } from "@rw/runtime/events-bus";
 
 const pointValueQualitySchema = z.enum(["GOOD", "BAD", "UNKNOWN"]);
@@ -186,10 +188,11 @@ export const stream = authRequired
   .input(streamInputSchema)
   .output(eventIterator(streamEventSchema))
   .handler(async function* ({ context, input, signal }) {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("UNAUTHORIZED", { message: "Workspace context required" });
-    }
+    // The event envelope carries no siteId, so the stream is gated on
+    // holding facility:read somewhere; authorization happens at subscribe
+    // time only (no mid-stream re-check — known limitation).
+    const scope = grant(await authorize(context.iam, { permission: "facility:read", scope: { kind: "anySite" } }));
+    const workspaceId = scope.workspaceId;
 
     const requestedTypes = new Set(input.types ?? STREAM_EVENT_TYPES);
 

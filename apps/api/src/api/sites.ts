@@ -2,7 +2,8 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { site } from "@rw/services/facility/index";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
-import { getAccessibleSites, hasPermission } from "@rw/auth/iam/index";
+import { authorize, authorizeAccessibleSites } from "@rw/auth/iam/policy";
+import { replyPolicyDenial } from "./authz.js";
 
 // ============================================================================
 // Schemas
@@ -168,10 +169,8 @@ const getSiteResponseSchema = {
 // Helper
 // ============================================================================
 
-function getStatusForCode(code: string): 401 | 404 | 400 | 409 {
+function getStatusForCode(code: string): 404 | 400 | 409 {
   switch (code) {
-    case "WORKSPACE_MISMATCH":
-      return 401;
     case "SITE_NOT_FOUND":
       return 404;
     case "HAS_WORKCENTERS":
@@ -205,16 +204,10 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = request.iam?.workspaceId;
-      const userId = request.iam?.id;
-      if (!workspaceId) {
-        return reply.status(401).send({ error: "No workspace context" });
-      }
-      if (!userId || !(await hasPermission(userId, "facility:write", { workspaceId }))) {
-        return reply.status(403).send({ error: "forbidden" });
-      }
+      const auth = await authorize(request.iam, { permission: "facility:write", scope: { kind: "workspace" } });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
 
-      const result = await site.create({ ...request.body, workspaceId });
+      const result = await site.create({ ...request.body, workspaceId: auth.workspaceId });
       if ("error" in result && typeof result.error === "string") {
         return reply.status(400).send({ error: result.error });
       }
@@ -237,19 +230,10 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = request.iam?.workspaceId;
-      const userId = request.iam?.id;
-      if (!workspaceId) {
-        return reply.status(401).send({ error: "No workspace context" });
-      }
+      const scope = await authorizeAccessibleSites(request.iam, { permission: "facility:read" });
+      if (!scope.ok) return replyPolicyDenial(reply, scope);
 
-      if (!userId) return reply.status(401).send({ error: "Unauthorized" });
-      const access = await getAccessibleSites(userId, "facility:read", workspaceId);
-      return site.list({
-        ...request.query,
-        workspaceId,
-        siteIds: access.all ? undefined : access.siteIds,
-      });
+      return site.list({ ...request.query, workspaceId: scope.workspaceId, siteIds: scope.siteIds });
     },
   });
 
@@ -267,15 +251,10 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = request.iam?.workspaceId;
-      const userId = request.iam?.id;
-      if (!workspaceId) {
-        return reply.status(401).send({ error: "No workspace context" });
-      }
+      const scope = await authorizeAccessibleSites(request.iam, { permission: "facility:read" });
+      if (!scope.ok) return replyPolicyDenial(reply, scope);
 
-      if (!userId) return reply.status(401).send({ error: "Unauthorized" });
-      const access = await getAccessibleSites(userId, "facility:read", workspaceId);
-      return site.getTree(workspaceId, access.all ? undefined : access.siteIds);
+      return site.getTree(scope.workspaceId, scope.siteIds);
     },
   });
 
@@ -296,21 +275,15 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = request.iam?.workspaceId;
-      const userId = request.iam?.id;
-      if (!workspaceId) {
-        return reply.status(401).send({ error: "No workspace context" });
-      }
+      const auth = await authorize(request.iam, {
+        permission: "facility:read",
+        scope: { kind: "site", siteId: request.params.id },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
 
-      const result = await site.getById(request.params.id, workspaceId);
-      if (!result) {
+      const result = await site.getById(request.params.id, auth.workspaceId);
+      if (!result || "error" in result) {
         return reply.status(404).send({ error: "Site not found" });
-      }
-      if ("error" in result) {
-        return reply.status(401).send({ error: result.error });
-      }
-      if (!userId || !(await hasPermission(userId, "facility:read", { workspaceId, siteId: request.params.id }))) {
-        return reply.status(403).send({ error: "forbidden" });
       }
       return result.data;
     },
@@ -336,16 +309,13 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = request.iam?.workspaceId;
-      const userId = request.iam?.id;
-      if (!workspaceId) {
-        return reply.status(401).send({ error: "No workspace context" });
-      }
-      if (!userId || !(await hasPermission(userId, "facility:write", { workspaceId, siteId: request.params.id }))) {
-        return reply.status(403).send({ error: "forbidden" });
-      }
+      const auth = await authorize(request.iam, {
+        permission: "facility:write",
+        scope: { kind: "site", siteId: request.params.id },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
 
-      const result = await site.update(request.params.id, request.body, workspaceId);
+      const result = await site.update(request.params.id, request.body, auth.workspaceId);
       if ("error" in result) {
         const status = getStatusForCode(result.code ?? "UNKNOWN");
         return reply.status(status).send({ error: result.error });
@@ -373,16 +343,13 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = request.iam?.workspaceId;
-      const userId = request.iam?.id;
-      if (!workspaceId) {
-        return reply.status(401).send({ error: "No workspace context" });
-      }
-      if (!userId || !(await hasPermission(userId, "facility:admin", { workspaceId, siteId: request.params.id }))) {
-        return reply.status(403).send({ error: "forbidden" });
-      }
+      const auth = await authorize(request.iam, {
+        permission: "facility:admin",
+        scope: { kind: "site", siteId: request.params.id },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
 
-      const result = await site.remove(request.params.id, workspaceId);
+      const result = await site.remove(request.params.id, auth.workspaceId);
       if ("error" in result) {
         const status = getStatusForCode(result.code ?? "UNKNOWN");
         return reply.status(status).send({ error: result.error });

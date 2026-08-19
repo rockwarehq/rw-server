@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
+import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 import { statusReason } from "@rw/services/facility/index";
 import { throwServiceError, unwrap } from "./errors.js";
 
@@ -37,29 +39,38 @@ const listInputSchema = z.object({
 // Procedures
 // ============================================================================
 
-export const create = authRequired.input(createInputSchema).handler(async ({ input }) => {
+export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "status:write", scope: { kind: "site", siteId: input.siteId } }));
+
   const result = await statusReason.create(input);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
-export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input }) => {
-  return statusReason.list(input);
+export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
+  const scope = grant(await authorizeList(context.iam, { permission: "status:read", requestedSiteId: input.siteId }));
+  return statusReason.list({ ...input, ...scopeFilter(scope) });
 });
 
-export const get = authRequired.input(idInputSchema).handler(async ({ input }) => {
+export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "status:read", scope: { kind: "statusReason", id: input.id } }));
+
   const result = await statusReason.getById(input.id);
   return unwrap(result, { notFoundMessage: "Status reason not found" });
 });
 
-export const update = authRequired.input(updateInputSchema).handler(async ({ input }) => {
+export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "status:write", scope: { kind: "statusReason", id: input.id } }));
+
   const { id, ...updateData } = input;
   const result = await statusReason.update(id, updateData);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
-export const remove = authRequired.input(idInputSchema).handler(async ({ input }) => {
+export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "status:admin", scope: { kind: "statusReason", id: input.id } }));
+
   const result = await statusReason.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };

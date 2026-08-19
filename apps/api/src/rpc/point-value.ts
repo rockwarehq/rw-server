@@ -3,11 +3,10 @@ import * as z from "zod";
 import {
   getLatestPointSnapshots,
   validatePointSiteAccess,
-  validatePointWorkspaceAccess,
   type ValidatePointSiteAccessResult,
-  type ValidatePointWorkspaceAccessResult,
 } from "../services/point-value.js";
-import { Principal } from "../auth/index.js";
+import { authorizeList } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 import { subscribeStreamEvents, type PointValueEvent, type StreamEvent } from "@rw/runtime/events-bus";
 import { throwServiceError, type CodeOverrides } from "./errors.js";
 import { userOrDisplayRequired } from "./middleware.js";
@@ -87,23 +86,11 @@ export const getSnapshots = userOrDisplayRequired
   .output(getSnapshotsOutputSchema)
   .handler(async ({ context, input }) => {
     const pointIds = dedupePointIds(input.pointIds);
-    let accessValidationResult: ValidatePointWorkspaceAccessResult | ValidatePointSiteAccessResult;
-
-    if (context.iam.principal === Principal.DISPLAY) {
-      const siteId = context.iam.siteId;
-      if (!siteId) {
-        throw new ORPCError("BAD_REQUEST", { message: "Display site context required" });
-      }
-
-      accessValidationResult = await validatePointSiteAccess(pointIds, siteId);
-    } else {
-      const workspaceId = context.iam.workspaceId;
-      if (!workspaceId) {
-        throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-      }
-
-      accessValidationResult = await validatePointWorkspaceAccess(pointIds, workspaceId);
-    }
+    // Displays are pinned to their own site by the policy; site-scoped users
+    // must have every point inside an accessible site; all-sites users keep
+    // the existence/workspace validation.
+    const scope = grant(await authorizeList(context.iam, { permission: "facility:read" }));
+    const accessValidationResult: ValidatePointSiteAccessResult = await validatePointSiteAccess(pointIds, scope.siteId);
 
     if (!accessValidationResult.success) {
       throwServiceError(accessValidationResult, POINT_ACCESS_OVERRIDES);
@@ -119,23 +106,11 @@ export const stream = userOrDisplayRequired
   .output(eventIterator(pointValueStreamEventSchema))
   .handler(async function* ({ context, input, signal }) {
     const pointIds = dedupePointIds(input.pointIds);
-    let accessValidationResult: ValidatePointWorkspaceAccessResult | ValidatePointSiteAccessResult;
-
-    if (context.iam.principal === Principal.DISPLAY) {
-      const siteId = context.iam.siteId;
-      if (!siteId) {
-        throw new ORPCError("BAD_REQUEST", { message: "Display site context required" });
-      }
-
-      accessValidationResult = await validatePointSiteAccess(pointIds, siteId);
-    } else {
-      const workspaceId = context.iam.workspaceId;
-      if (!workspaceId) {
-        throw new ORPCError("UNAUTHORIZED", { message: "Workspace context required" });
-      }
-
-      accessValidationResult = await validatePointWorkspaceAccess(pointIds, workspaceId);
-    }
+    // Displays are pinned to their own site by the policy; site-scoped users
+    // must have every point inside an accessible site; all-sites users keep
+    // the existence/workspace validation.
+    const scope = grant(await authorizeList(context.iam, { permission: "facility:read" }));
+    const accessValidationResult: ValidatePointSiteAccessResult = await validatePointSiteAccess(pointIds, scope.siteId);
 
     if (!accessValidationResult.success) {
       throwServiceError(accessValidationResult, POINT_ACCESS_OVERRIDES);

@@ -21,7 +21,17 @@ async function seed() {
   // tenant DB has been seeded — only an empty DB gets bootstrapped.
   const existingUsers = await prisma.user.count();
   if (existingUsers > 0) {
-    console.log(`Seed: ${existingUsers} user(s) already exist — already bootstrapped, skipping.`);
+    // Role bundles are code-owned: refresh them for every workspace on every
+    // deploy so bundle changes reach live tenants (idempotent upserts). Only
+    // the rest of the bootstrap (admin user, site, employee roles) is skipped.
+    const workspaces = await prisma.workspace.findMany({ select: { id: true, name: true } });
+    for (const ws of workspaces) {
+      await seedSystemRoles(ws.id);
+    }
+    console.log(
+      `Seed: refreshed system roles for ${workspaces.length} workspace(s); ` +
+        `${existingUsers} user(s) already exist — skipping bootstrap.`,
+    );
     return;
   }
 

@@ -5,6 +5,8 @@ import * as documents from "@rw/services/document/index";
 import { storageConfig } from "../config.js";
 import { Principal } from "../auth/index.js";
 import { authRequired, displayRequired, userOrDisplayRequired } from "./middleware.js";
+import { authorize } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 import { throwServiceError } from "./errors.js";
 
 const documentTargetTypeSchema = z.enum(["SITE", "WORKCENTER", "STATION", "JOB", "TOOL", "PRODUCT", "MATERIAL"]);
@@ -119,10 +121,12 @@ async function assertDisplayCanAccessDocument(
 }
 
 export const createFolder = authRequired.input(createFolderInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  const { workspaceId } = grant(
+    await authorize(context.iam, {
+      permission: "facility:write",
+      scope: input.siteId ? { kind: "site", siteId: input.siteId } : { kind: "anySite" },
+    }),
+  );
 
   const result = await documents.createFolder({ ...input, workspaceId });
   if ("error" in result) throwServiceError(result);
@@ -130,10 +134,12 @@ export const createFolder = authRequired.input(createFolderInputSchema).handler(
 });
 
 export const createUpload = authRequired.input(createUploadInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  const { workspaceId } = grant(
+    await authorize(context.iam, {
+      permission: "facility:write",
+      scope: input.siteId ? { kind: "site", siteId: input.siteId } : { kind: "anySite" },
+    }),
+  );
 
   const result = await documents.createUpload({ ...input, workspaceId });
   if ("error" in result) throwServiceError(result);
@@ -141,10 +147,9 @@ export const createUpload = authRequired.input(createUploadInputSchema).handler(
 });
 
 export const completeUpload = authRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "document", id: input.documentId } }),
+  );
 
   const result = await documents.completeUpload(input.documentId);
   if (result.error !== undefined) throwServiceError(result);
@@ -152,10 +157,12 @@ export const completeUpload = authRequired.input(documentIdInputSchema).handler(
 });
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  grant(
+    await authorize(context.iam, {
+      permission: "facility:read",
+      scope: input.siteId ? { kind: "site", siteId: input.siteId } : { kind: "anySite" },
+    }),
+  );
 
   return documents.list(input);
 });
@@ -169,10 +176,9 @@ export const get = userOrDisplayRequired.input(documentIdInputSchema).handler(as
     return result.data;
   }
 
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  grant(
+    await authorize(context.iam, { permission: "facility:read", scope: { kind: "document", id: input.documentId } }),
+  );
 
   const result = await documents.getById(input.documentId, { includePending: true });
   if (!result) throw new ORPCError("NOT_FOUND", { message: "Document not found" });
@@ -184,10 +190,9 @@ export const download = userOrDisplayRequired.input(documentIdInputSchema).handl
   if (context.iam.principal === Principal.DISPLAY) {
     await assertDisplayCanAccessDocument(context, input.documentId);
   } else {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-    }
+    grant(
+      await authorize(context.iam, { permission: "facility:read", scope: { kind: "document", id: input.documentId } }),
+    );
   }
 
   const result = await documents.getDownloadUrl(input.documentId);
@@ -199,10 +204,9 @@ export const open = userOrDisplayRequired.input(documentIdInputSchema).handler(a
   if (context.iam.principal === Principal.DISPLAY) {
     await assertDisplayCanAccessDocument(context, input.documentId);
   } else {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-    }
+    grant(
+      await authorize(context.iam, { permission: "facility:read", scope: { kind: "document", id: input.documentId } }),
+    );
   }
 
   const result = await documents.getOpenUrl(input.documentId);
@@ -211,10 +215,9 @@ export const open = userOrDisplayRequired.input(documentIdInputSchema).handler(a
 });
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "document", id: input.documentId } }),
+  );
 
   const { documentId, ...updateData } = input;
   const result = await documents.update(documentId, updateData);
@@ -223,10 +226,9 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 });
 
 export const remove = authRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  grant(
+    await authorize(context.iam, { permission: "facility:admin", scope: { kind: "document", id: input.documentId } }),
+  );
 
   const result = await documents.remove(input.documentId);
   if (result.error !== undefined) throwServiceError(result);
@@ -234,10 +236,9 @@ export const remove = authRequired.input(documentIdInputSchema).handler(async ({
 });
 
 export const link = authRequired.input(documentLinkInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "document", id: input.documentId } }),
+  );
 
   const result = await documents.link(input.documentId, input.targetType as DocumentTargetType, input.targetId);
   if ("error" in result) throwServiceError(result);
@@ -245,19 +246,15 @@ export const link = authRequired.input(documentLinkInputSchema).handler(async ({
 });
 
 export const unlink = authRequired.input(documentLinkInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "document", id: input.documentId } }),
+  );
 
   return documents.unlink(input.documentId, input.targetType as DocumentTargetType, input.targetId);
 });
 
 export const listForTarget = authRequired.input(targetInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  grant(await authorize(context.iam, { permission: "facility:read", scope: { kind: "anySite" } }));
 
   return documents.listForTarget(input.targetType as DocumentTargetType, input.targetId, getLabelFilter(input));
 });

@@ -2,9 +2,9 @@ import { z } from "zod";
 import { ORPCError } from "@orpc/server";
 import { moduleLogger } from "../logger.js";
 import { authRequired, processorRequired, userOrDisplayRequired } from "./middleware.js";
-import { Principal } from "../auth/index.js";
-import { station, workcenter } from "@rw/services/facility/index";
-import { getAccessibleSites, hasPermission } from "@rw/auth/iam/index";
+import { station } from "@rw/services/facility/index";
+import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 import { getAutomationFramework } from "../automations/index.js";
 import { type CodeOverrides, throwServiceError } from "./errors.js";
 
@@ -178,15 +178,7 @@ const triggerEventInputSchema = z
  * Create a new station
  */
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
-  if (!(await hasPermission(context.iam.id, "facility:write", { workspaceId, siteId: input.siteId }))) {
-    throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:write" });
-  }
+  grant(await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await station.create(input);
   if (result.error !== undefined) throwServiceError(result, CREATE_OVERRIDES);
@@ -197,82 +189,25 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
  * List stations
  */
 export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
-
-  if (context.iam.principal === Principal.DISPLAY) {
-    const siteId = context.iam.siteId;
-    if (!siteId) {
-      throw new ORPCError("BAD_REQUEST", {
-        message: "Display site context required",
-      });
-    }
-
-    if (input.siteId && input.siteId !== siteId) {
-      throw new ORPCError("FORBIDDEN", {
-        message: "Display can only access stations in its site",
-      });
-    }
-
-    if (input.workcenterId) {
-      const workcenterResult = await workcenter.getById(input.workcenterId, workspaceId);
-      if (workcenterResult && "error" in workcenterResult) {
-        throw new ORPCError("FORBIDDEN", {
-          message: "Display can only access stations in its site",
-          cause: workcenterResult,
-        });
-      }
-
-      if (workcenterResult && workcenterResult.data.site.id !== siteId) {
-        throw new ORPCError("FORBIDDEN", {
-          message: "Display can only access stations in its site",
-        });
-      }
-    }
-
-    return station.list({
-      ...input,
-      siteId,
-      workspaceId,
-    });
-  }
-
-  const userId = context.iam.id;
-  if (!userId) {
-    throw new ORPCError("UNAUTHORIZED", { message: "Authentication required" });
-  }
-  const access = await getAccessibleSites(userId, "facility:read", workspaceId);
-  if (input.siteId && !access.all && !access.siteIds.includes(input.siteId)) {
-    throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:read" });
-  }
-  return station.list({
-    ...input,
-    workspaceId,
-    siteIds: input.siteId || access.all ? undefined : access.siteIds,
-  });
+  // Displays are pinned to their own site by the policy; a workcenterId from
+  // another site simply intersects to an empty result.
+  const scope = grant(await authorizeList(context.iam, { permission: "facility:read", requestedSiteId: input.siteId }));
+  return station.list({ ...input, ...scopeFilter(scope) });
 });
 
 /**
  * Get station by ID
  */
 export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const scope = grant(
+    await authorize(context.iam, { permission: "facility:read", scope: { kind: "station", id: input.id } }),
+  );
 
-  const result = await station.getById(input.id, workspaceId);
+  const result = await station.getById(input.id, scope.workspaceId);
   if (!result) {
     throw new ORPCError("NOT_FOUND", { message: "Station not found" });
   }
   if (result.error !== undefined) throwServiceError(result);
-  if (
-    !workspaceId ||
-    !(await hasPermission(context.iam.id, "facility:read", { workspaceId, siteId: result.data.siteId }))
-  ) {
-    throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:read" });
-  }
   return result.data;
 });
 
@@ -281,18 +216,11 @@ export const get = authRequired.input(idInputSchema).handler(async ({ input, con
  */
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
-  const workspaceId = context.iam.workspaceId;
+  const scope = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "station", id: id } }),
+  );
 
-  const existing = await station.getById(id, workspaceId);
-  if (!existing || "error" in existing) throw new ORPCError("NOT_FOUND", { message: "Station not found" });
-  if (
-    !workspaceId ||
-    !(await hasPermission(context.iam.id, "facility:write", { workspaceId, siteId: existing.data.siteId }))
-  ) {
-    throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:write" });
-  }
-
-  const result = await station.update(id, updateData, workspaceId);
+  const result = await station.update(id, updateData, scope.workspaceId);
   if (result.error !== undefined) throwServiceError(result, UPDATE_OVERRIDES);
   return result.data;
 });
@@ -301,18 +229,11 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
  * Move station to a different workcenter (within same site)
  */
 export const move = authRequired.input(moveInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const scope = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "station", id: input.id } }),
+  );
 
-  const existing = await station.getById(input.id, workspaceId);
-  if (!existing || "error" in existing) throw new ORPCError("NOT_FOUND", { message: "Station not found" });
-  if (
-    !workspaceId ||
-    !(await hasPermission(context.iam.id, "facility:write", { workspaceId, siteId: existing.data.siteId }))
-  ) {
-    throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:write" });
-  }
-
-  const result = await station.move(input.id, input.workcenterId, workspaceId);
+  const result = await station.move(input.id, input.workcenterId, scope.workspaceId);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -321,18 +242,11 @@ export const move = authRequired.input(moveInputSchema).handler(async ({ input, 
  * Delete station
  */
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const scope = grant(
+    await authorize(context.iam, { permission: "facility:admin", scope: { kind: "station", id: input.id } }),
+  );
 
-  const existing = await station.getById(input.id, workspaceId);
-  if (!existing || "error" in existing) throw new ORPCError("NOT_FOUND", { message: "Station not found" });
-  if (
-    !workspaceId ||
-    !(await hasPermission(context.iam.id, "facility:admin", { workspaceId, siteId: existing.data.siteId }))
-  ) {
-    throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:admin" });
-  }
-
-  const result = await station.remove(input.id, workspaceId);
+  const result = await station.remove(input.id, scope.workspaceId);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
@@ -341,14 +255,14 @@ export const remove = authRequired.input(idInputSchema).handler(async ({ input, 
  * Create station event
  */
 export const createEvent = authRequired.input(createEventInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  const scope = grant(
+    await authorize(context.iam, {
+      permission: "facility:write",
+      scope: { kind: "station", id: input.stationId },
+    }),
+  );
 
-  const result = await station.createEvent(input as station.CreateStationEventInput, workspaceId);
+  const result = await station.createEvent(input as station.CreateStationEventInput, scope.workspaceId);
   if ("error" in result && result.error !== undefined) throwServiceError(result, EVENT_ACTION_OVERRIDES);
   return result.data;
 });
@@ -357,14 +271,14 @@ export const createEvent = authRequired.input(createEventInputSchema).handler(as
  * Update station event
  */
 export const updateEvent = authRequired.input(updateEventInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  const scope = grant(
+    await authorize(context.iam, {
+      permission: "facility:write",
+      scope: { kind: "station", id: input.stationId },
+    }),
+  );
 
-  const result = await station.updateEvent(input as station.UpdateStationEventInput, workspaceId);
+  const result = await station.updateEvent(input as station.UpdateStationEventInput, scope.workspaceId);
   if ("error" in result && result.error !== undefined) throwServiceError(result, EVENT_ACTION_OVERRIDES);
   return result.data;
 });
@@ -373,14 +287,14 @@ export const updateEvent = authRequired.input(updateEventInputSchema).handler(as
  * List station events
  */
 export const listEvents = authRequired.input(listEventsInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  const scope = grant(
+    await authorize(context.iam, {
+      permission: "facility:read",
+      scope: { kind: "station", id: input.stationId },
+    }),
+  );
 
-  const result = await station.listEvents(input.stationId, workspaceId);
+  const result = await station.listEvents(input.stationId, scope.workspaceId);
   if ("error" in result && result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -391,14 +305,14 @@ export const listEvents = authRequired.input(listEventsInputSchema).handler(asyn
 export const listEventExecutions = authRequired
   .input(listEventExecutionsInputSchema)
   .handler(async ({ input, context }) => {
-    const workspaceId = context.iam.workspaceId;
-    if (!workspaceId) {
-      throw new ORPCError("BAD_REQUEST", {
-        message: "Workspace context required",
-      });
-    }
+    const scope = grant(
+      await authorize(context.iam, {
+        permission: "facility:read",
+        scope: { kind: "station", id: input.stationId },
+      }),
+    );
 
-    const result = await station.listEventExecutions(input.stationId, workspaceId, {
+    const result = await station.listEventExecutions(input.stationId, scope.workspaceId, {
       limit: input.limit,
     });
     if ("error" in result && result.error !== undefined) throwServiceError(result);
@@ -447,14 +361,14 @@ export const getTagSnapshotsForProcessor = processorRequired
  * Toggle station event
  */
 export const toggleEvent = authRequired.input(toggleEventInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  const scope = grant(
+    await authorize(context.iam, {
+      permission: "facility:write",
+      scope: { kind: "station", id: input.stationId },
+    }),
+  );
 
-  const result = await station.toggleEvent(input.stationId, input.eventId, input.enabled, workspaceId);
+  const result = await station.toggleEvent(input.stationId, input.eventId, input.enabled, scope.workspaceId);
   if ("error" in result && result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -477,14 +391,14 @@ export const triggerEvent = processorRequired.input(triggerEventInputSchema).han
  * Delete station event
  */
 export const deleteEvent = authRequired.input(stationEventIdInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  const scope = grant(
+    await authorize(context.iam, {
+      permission: "facility:write",
+      scope: { kind: "station", id: input.stationId },
+    }),
+  );
 
-  const result = await station.removeEvent(input.stationId, input.eventId, workspaceId);
+  const result = await station.removeEvent(input.stationId, input.eventId, scope.workspaceId);
   if ("error" in result && result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
@@ -512,9 +426,14 @@ const stationIdInputSchema = z.object({
  * Validates all belong to the same site
  */
 export const addDatasource = authRequired.input(addDatasourceInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const scope = grant(
+    await authorize(context.iam, {
+      permission: "facility:write",
+      scope: { kind: "station", id: input.stationId },
+    }),
+  );
 
-  const result = await station.addDatasource(input.stationId, input.datasourceIds, workspaceId);
+  const result = await station.addDatasource(input.stationId, input.datasourceIds, scope.workspaceId);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -523,9 +442,14 @@ export const addDatasource = authRequired.input(addDatasourceInputSchema).handle
  * Remove a datasource from a station
  */
 export const removeDatasource = authRequired.input(removeDatasourceInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const scope = grant(
+    await authorize(context.iam, {
+      permission: "facility:write",
+      scope: { kind: "station", id: input.stationId },
+    }),
+  );
 
-  const result = await station.removeDatasource(input.stationId, input.datasourceId, workspaceId);
+  const result = await station.removeDatasource(input.stationId, input.datasourceId, scope.workspaceId);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
@@ -534,9 +458,14 @@ export const removeDatasource = authRequired.input(removeDatasourceInputSchema).
  * List all datasources linked to a station
  */
 export const listDatasources = authRequired.input(stationIdInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const scope = grant(
+    await authorize(context.iam, {
+      permission: "facility:read",
+      scope: { kind: "station", id: input.stationId },
+    }),
+  );
 
-  const result = await station.listDatasources(input.stationId, workspaceId);
+  const result = await station.listDatasources(input.stationId, scope.workspaceId);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -583,7 +512,14 @@ const listStateLogsInputSchema = z.object({
 export const splitDowntime = userOrDisplayRequired
   .input(splitDowntimeInputSchema)
   .output(splitDowntimeOutputSchema)
-  .handler(async ({ input }) => {
+  .handler(async ({ input, context }) => {
+    grant(
+      await authorize(context.iam, {
+        permission: "status:write",
+        scope: { kind: "stationStateLog", id: input.entryId },
+      }),
+    );
+
     const result = await station.splitDownEntry(input.entryId, input.splitAt);
     if ("error" in result) throwServiceError(result);
     return result;
@@ -594,7 +530,14 @@ export const splitDowntime = userOrDisplayRequired
  */
 export const assignDowntimeReason = userOrDisplayRequired
   .input(assignDowntimeReasonInputSchema)
-  .handler(async ({ input }) => {
+  .handler(async ({ input, context }) => {
+    grant(
+      await authorize(context.iam, {
+        permission: "status:write",
+        scope: { kind: "stationStateLog", id: input.entryId },
+      }),
+    );
+
     const result = await station.assignDowntimeReason(input.entryId, input.statusReasonId, {
       applyToBlock: input.applyToBlock,
     });
@@ -605,7 +548,14 @@ export const assignDowntimeReason = userOrDisplayRequired
 /**
  * Change the current job assigned to a station
  */
-export const changeJob = userOrDisplayRequired.input(changeJobInputSchema).handler(async ({ input }) => {
+export const changeJob = userOrDisplayRequired.input(changeJobInputSchema).handler(async ({ input, context }) => {
+  grant(
+    await authorize(context.iam, {
+      permission: "job:write",
+      scope: { kind: "station", id: input.stationId },
+    }),
+  );
+
   const result = await station.changeJob(input.stationId, input.jobId);
   if ("error" in result) throwServiceError(result);
 
@@ -637,6 +587,13 @@ export const changeJob = userOrDisplayRequired.input(changeJobInputSchema).handl
 /**
  * List state logs for a station
  */
-export const listStateLogs = authRequired.input(listStateLogsInputSchema).handler(async ({ input }) => {
+export const listStateLogs = authRequired.input(listStateLogsInputSchema).handler(async ({ input, context }) => {
+  grant(
+    await authorize(context.iam, {
+      permission: "facility:read",
+      scope: { kind: "station", id: input.stationId },
+    }),
+  );
+
   return station.listStateLogs(input);
 });

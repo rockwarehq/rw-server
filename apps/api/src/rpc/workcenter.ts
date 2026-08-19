@@ -1,10 +1,9 @@
 import { z } from "zod";
-import { ORPCError } from "@orpc/server";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import { workcenter } from "@rw/services/facility/index";
-import { getAccessibleSites, hasPermission } from "@rw/auth/iam/index";
-import { Principal } from "../auth/index.js";
-import { throwServiceError } from "./errors.js";
+import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
+import { throwServiceError, unwrap } from "./errors.js";
 
 // ============================================================================
 // Input Schemas
@@ -50,15 +49,7 @@ const listInputSchema = z.object({
  * Create a new workcenter
  */
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
-  if (!(await hasPermission(context.iam.id, "facility:write", { workspaceId, siteId: input.siteId }))) {
-    throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:write" });
-  }
+  grant(await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await workcenter.create(input);
   if (result.error !== undefined) throwServiceError(result);
@@ -69,40 +60,20 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
  * List workcenters
  */
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
-
-  const access = await getAccessibleSites(context.iam.id, "facility:read", workspaceId);
-  if (input.siteId && !access.all && !access.siteIds.includes(input.siteId)) {
-    throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:read" });
-  }
-  return workcenter.list({ ...input, siteIds: input.siteId || access.all ? undefined : access.siteIds });
+  const scope = grant(await authorizeList(context.iam, { permission: "facility:read", requestedSiteId: input.siteId }));
+  return workcenter.list({ ...input, ...scopeFilter(scope) });
 });
 
 /**
  * Get workcenter by ID
  */
 export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const scope = grant(
+    await authorize(context.iam, { permission: "facility:read", scope: { kind: "workcenter", id: input.id } }),
+  );
 
-  const result = await workcenter.getById(input.id, workspaceId);
-  if (!result) {
-    throw new ORPCError("NOT_FOUND", { message: "Workcenter not found" });
-  }
-  if (result.error !== undefined) throwServiceError(result);
-  if (
-    context.iam.principal !== Principal.DISPLAY &&
-    (!context.iam.id ||
-      !workspaceId ||
-      !(await hasPermission(context.iam.id, "facility:read", { workspaceId, siteId: result.data.siteId })))
-  ) {
-    throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:read" });
-  }
-  return result.data;
+  const result = await workcenter.getById(input.id, scope.workspaceId);
+  return unwrap(result, { notFoundMessage: "Workcenter not found" });
 });
 
 /**
@@ -110,20 +81,11 @@ export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ i
  */
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
-  const workspaceId = context.iam.workspaceId;
+  const scope = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "workcenter", id: id } }),
+  );
 
-  const existing = await workcenter.getById(id, workspaceId);
-  if (!existing || "error" in existing) {
-    throw new ORPCError("NOT_FOUND", { message: "Workcenter not found" });
-  }
-  if (
-    !workspaceId ||
-    !(await hasPermission(context.iam.id, "facility:write", { workspaceId, siteId: existing.data.siteId }))
-  ) {
-    throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:write" });
-  }
-
-  const result = await workcenter.update(id, updateData, workspaceId);
+  const result = await workcenter.update(id, updateData, scope.workspaceId);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -132,20 +94,14 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
  * Move workcenter to a new parent (within same site)
  */
 export const move = authRequired.input(moveInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const scope = grant(
+    await authorize(context.iam, {
+      permission: "facility:write",
+      scope: { kind: "workcenter", id: input.id },
+    }),
+  );
 
-  const existing = await workcenter.getById(input.id, workspaceId);
-  if (!existing || "error" in existing) {
-    throw new ORPCError("NOT_FOUND", { message: "Workcenter not found" });
-  }
-  if (
-    !workspaceId ||
-    !(await hasPermission(context.iam.id, "facility:write", { workspaceId, siteId: existing.data.siteId }))
-  ) {
-    throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:write" });
-  }
-
-  const result = await workcenter.move(input.id, input.parentId, workspaceId);
+  const result = await workcenter.move(input.id, input.parentId, scope.workspaceId);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -154,20 +110,14 @@ export const move = authRequired.input(moveInputSchema).handler(async ({ input, 
  * Delete workcenter
  */
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const scope = grant(
+    await authorize(context.iam, {
+      permission: "facility:admin",
+      scope: { kind: "workcenter", id: input.id },
+    }),
+  );
 
-  const existing = await workcenter.getById(input.id, workspaceId);
-  if (!existing || "error" in existing) {
-    throw new ORPCError("NOT_FOUND", { message: "Workcenter not found" });
-  }
-  if (
-    !workspaceId ||
-    !(await hasPermission(context.iam.id, "facility:admin", { workspaceId, siteId: existing.data.siteId }))
-  ) {
-    throw new ORPCError("FORBIDDEN", { message: "Missing permission: facility:admin" });
-  }
-
-  const result = await workcenter.remove(input.id, workspaceId);
+  const result = await workcenter.remove(input.id, scope.workspaceId);
   // HAS_CHILDREN / HAS_STATIONS map to CONFLICT via the shared table
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };

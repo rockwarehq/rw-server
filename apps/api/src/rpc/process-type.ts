@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { authRequired } from "./middleware.js";
+import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 import { processType } from "@rw/services/facility/index";
 import { throwServiceError, unwrap } from "./errors.js";
 
@@ -34,24 +36,33 @@ const listInputSchema = z.object({
 // Procedures
 // ============================================================================
 
-export const create = authRequired.input(createInputSchema).handler(async ({ input }) => {
+export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "product:write", scope: { kind: "site", siteId: input.siteId } }));
+
   return unwrap(await processType.create(input));
 });
 
-export const list = authRequired.input(listInputSchema).handler(async ({ input }) => {
-  return processType.list(input);
+export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
+  const scope = grant(await authorizeList(context.iam, { permission: "product:read", requestedSiteId: input.siteId }));
+  return processType.list({ ...input, ...scopeFilter(scope) });
 });
 
-export const get = authRequired.input(idInputSchema).handler(async ({ input }) => {
+export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "product:read", scope: { kind: "processType", id: input.id } }));
+
   return unwrap(await processType.getById(input.id), { notFoundMessage: "Process type not found" });
 });
 
-export const update = authRequired.input(updateInputSchema).handler(async ({ input }) => {
+export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "product:write", scope: { kind: "processType", id: input.id } }));
+
   const { id, ...updateData } = input;
   return unwrap(await processType.update(id, updateData));
 });
 
-export const remove = authRequired.input(idInputSchema).handler(async ({ input }) => {
+export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "product:admin", scope: { kind: "processType", id: input.id } }));
+
   const result = await processType.remove(input.id);
   if (result.error) throwServiceError(result);
   return { success: true };

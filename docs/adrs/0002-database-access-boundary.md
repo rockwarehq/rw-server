@@ -1,6 +1,6 @@
 # 0002 – Database Access Boundary for the API App
 
-- **Status:** Accepted
+- **Status:** Accepted (amended 2026-08-18 — see Amendment below)
 - **Date:** 2026-07-08
 - **Deciders:** Michael Lindenau
 
@@ -30,3 +30,48 @@ Outside the RPC layer, `seed.ts` (bootstrap script), `edge.ts` (gateway protocol
 
 - **Move all reads behind services** — large mechanical refactor, higher regression risk, and the service layer gains nothing from owning single-consumer reporting queries.
 - **Move writes only** — already the state of the world (the audit found no direct writes); this ADR records it as a rule rather than an accident.
+
+## Amendment (2026-08-18): direct-Prisma reads must carry authorization scope
+
+The original rationale — "reads cannot corrupt state" — is true but incomplete:
+reads can *leak* state. With centralized authorization (RW-156) every read must
+be scoped to the caller's accessible sites, including the sanctioned
+direct-Prisma routers. The exception list stands; the obligation on its members
+changes.
+
+**Decision.** Any handler-level Prisma read MUST:
+
+1. Obtain scope from the policy layer before touching the database —
+   `authorize(iam, { permission, scope })` when the input names a site or
+   resource, `authorizeList(iam, { permission, requestedSiteId? })` otherwise.
+   Authorization runs **before** any `findUnique`/`findUniqueOrThrow`, so
+   resource existence is never disclosed to an unauthorized caller.
+2. Apply the scope to every query: a literal `siteId` equality where the input
+   requires a site, or `scopeWhere(scope)` (from `@rw/auth/iam/policy`) merged
+   into the Prisma `where` via `AND` for open-ended lists. Queries are
+   single-site by design: `scopeWhere` yields exactly one `siteId` (the
+   requested or token-active site); tokens without site context are denied.
+3. Carry the authorized `siteId` predicate on lookups of related entities
+   (stations, workcenters, shift instances) so a valid site plus a foreign
+   resource id cannot read across sites.
+
+`operator.ts` is exempt from user-permission checks: it is display-principal
+driven, and identity is bound to the display row (stricter than site scope).
+`events.ts` ingest is processor-secret gated. Both are recorded in the
+policy-coverage exclusion list with rationale.
+
+**Enforcement.** The authorization coverage test
+(`apps/api/test/policy-coverage.test.ts`) fails CI for any RPC procedure whose
+handler lacks an inline `authorize`/`authorizeList` call and is not on the
+commented exclusion list. This is why policy calls must appear lexically inside
+handler bodies rather than behind local helpers. Scope application on
+individual queries remains a review obligation, backed by the reporting
+integration tests.
+
+**Consequences.**
+
+- Rows outside the caller's accessible sites vanish from searches — intended.
+- Scoping is query-free per check: the auth plugin resolves a permission
+  snapshot once per request, so gating reporting reads adds no DB round-trips.
+- Cross-site probe attempts (valid `siteId`, foreign `stationId`) return
+  empty/NOT_FOUND rather than data.

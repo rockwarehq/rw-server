@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import createError from "http-errors";
 import { verifyAccessToken, isExpiredTokenError, type DecodedAccessToken } from "@rw/auth/tokens";
 import { API_TOKEN_PREFIX, touchApiToken, validateApiToken } from "@rw/auth/api-tokens";
-import { listAccessibleSites } from "@rw/auth/iam/index";
+import { type PermissionSnapshot, snapshotAccessibleSites } from "@rw/auth/iam/index";
 import { Principal, type AppIAMContext, type IAMContext, type UnknownIAMContext } from "@rw/auth/context";
 import prisma from "@rw/db";
 
@@ -179,6 +179,7 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
       lastName: true,
       status: true,
       lockedUntil: true,
+      systemRole: true,
     },
   });
 
@@ -198,31 +199,66 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
     return invalidIAM;
   }
 
-  const membership = await prisma.workspaceMembership.findUnique({
-    where: {
-      userId_workspaceId: {
-        userId: decodedToken.id,
-        workspaceId: decodedToken.workspaceId,
-      },
-    },
-    select: {
-      workspace: {
-        select: {
-          id: true,
-          name: true,
-          slug: true,
+  // System users (SUPPORT/ENGINEER staff) hold no memberships by design —
+  // their workspace context is validated directly against the workspace row.
+  let workspaceContext: { id: string; name: string; slug: string } | null;
+  if (userResult.systemRole) {
+    workspaceContext = await prisma.workspace.findUnique({
+      where: { id: decodedToken.workspaceId },
+      select: { id: true, name: true, slug: true },
+    });
+  } else {
+    const membership = await prisma.workspaceMembership.findUnique({
+      where: {
+        userId_workspaceId: {
+          userId: decodedToken.id,
+          workspaceId: decodedToken.workspaceId,
         },
       },
-    },
-  });
+      select: {
+        workspace: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+          },
+        },
+      },
+    });
+    workspaceContext = membership?.workspace ?? null;
+  }
 
-  if (!membership) {
+  if (!workspaceContext) {
     return invalidIAM;
   }
 
+  // Resolve the role/permission snapshot once; the site-claim check below
+  // and every downstream policy evaluation share it instead of re-querying.
+  const permissionSnapshot: PermissionSnapshot = userResult.systemRole
+    ? { systemRole: userResult.systemRole, assignments: [] }
+    : {
+        systemRole: null,
+        assignments: (
+          await prisma.roleAssignment.findMany({
+            where: { membership: { userId: decodedToken.id, workspaceId: decodedToken.workspaceId } },
+            select: { siteId: true, role: { select: { permissions: true } } },
+          })
+        ).map((a) => ({ siteId: a.siteId, permissions: a.role.permissions })),
+      };
+
   if (decodedToken.siteId) {
-    const sites = await listAccessibleSites(decodedToken.id, decodedToken.workspaceId);
-    if (!sites.some((site) => site.id === decodedToken.siteId)) {
+    const access = snapshotAccessibleSites(permissionSnapshot, "facility:read");
+    if (access.all) {
+      // All-sites grants still require the claimed site to exist in the
+      // workspace (parity with the listAccessibleSites-based check).
+      const site = await prisma.site.findFirst({
+        where: { id: decodedToken.siteId, workspaceId: decodedToken.workspaceId },
+        select: { id: true },
+      });
+      if (!site) {
+        return invalidIAM;
+      }
+    } else if (!access.siteIds.includes(decodedToken.siteId)) {
       return invalidIAM;
     }
   }
@@ -234,7 +270,8 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
     email: userResult.email,
     workspaceId: decodedToken.workspaceId,
     siteId: decodedToken.siteId,
-    workspace: membership.workspace,
+    workspace: workspaceContext,
+    permissionSnapshot,
     user: {
       id: userResult.id,
       email: userResult.email,

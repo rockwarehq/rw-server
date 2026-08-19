@@ -2,7 +2,8 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { station } from "@rw/services/facility/index";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
-import { getAccessibleSites, hasPermission } from "@rw/auth/iam/index";
+import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { replyPolicyDenial } from "./authz.js";
 
 // ============================================================================
 // Schemas
@@ -100,10 +101,8 @@ const listResponseSchema = {
 // Helper
 // ============================================================================
 
-function getStatusForCode(code: string): 400 | 401 | 404 | 409 {
+function getStatusForCode(code: string): 400 | 404 | 409 {
   switch (code) {
-    case "WORKSPACE_MISMATCH":
-      return 401;
     case "STATION_NOT_FOUND":
     case "WORKCENTER_NOT_FOUND":
     case "SITE_NOT_FOUND":
@@ -139,14 +138,11 @@ export default async function stations(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = request.iam?.workspaceId;
-      const userId = request.iam?.id;
-      if (!workspaceId) {
-        return reply.status(401).send({ error: "No workspace context" });
-      }
-      if (!userId || !(await hasPermission(userId, "facility:write", { workspaceId, siteId: request.body.siteId }))) {
-        return reply.status(403).send({ error: "forbidden" });
-      }
+      const auth = await authorize(request.iam, {
+        permission: "facility:write",
+        scope: { kind: "site", siteId: request.body.siteId },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await station.create(request.body);
       if ("error" in result && typeof result.error === "string") {
@@ -173,23 +169,13 @@ export default async function stations(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = request.iam?.workspaceId;
-      const userId = request.iam?.id;
-      if (!workspaceId) {
-        return reply.status(401).send({ error: "No workspace context" });
-      }
-
-      if (!userId) return reply.status(401).send({ error: "Unauthorized" });
-      const access = await getAccessibleSites(userId, "facility:read", workspaceId);
-      if (request.query.siteId && !access.all && !access.siteIds.includes(request.query.siteId)) {
-        return reply.status(403).send({ error: "forbidden" });
-      }
-
-      return station.list({
-        ...request.query,
-        workspaceId,
-        siteIds: request.query.siteId || access.all ? undefined : access.siteIds,
+      const scope = await authorizeList(request.iam, {
+        permission: "facility:read",
+        requestedSiteId: request.query.siteId,
       });
+      if (!scope.ok) return replyPolicyDenial(reply, scope);
+
+      return station.list({ ...request.query, ...scopeFilter(scope) });
     },
   });
 
@@ -210,21 +196,15 @@ export default async function stations(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = request.iam?.workspaceId;
-      if (!workspaceId) {
-        return reply.status(401).send({ error: "No workspace context" });
-      }
+      const auth = await authorize(request.iam, {
+        permission: "facility:read",
+        scope: { kind: "station", id: request.params.id },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
 
-      const result = await station.getById(request.params.id, workspaceId);
-      if (!result) {
+      const result = await station.getById(request.params.id, auth.workspaceId);
+      if (!result || "error" in result) {
         return reply.status(404).send({ error: "Station not found" });
-      }
-      if ("error" in result) {
-        return reply.status(401).send({ error: result.error });
-      }
-      const userId = request.iam?.id;
-      if (!userId || !(await hasPermission(userId, "facility:read", { workspaceId, siteId: result.data.siteId }))) {
-        return reply.status(403).send({ error: "forbidden" });
       }
       return result.data;
     },
@@ -250,19 +230,13 @@ export default async function stations(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = request.iam?.workspaceId;
-      const userId = request.iam?.id;
-      if (!workspaceId) {
-        return reply.status(401).send({ error: "No workspace context" });
-      }
+      const auth = await authorize(request.iam, {
+        permission: "facility:write",
+        scope: { kind: "station", id: request.params.id },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
 
-      const existing = await station.getById(request.params.id, workspaceId);
-      if (!existing || "error" in existing) return reply.status(404).send({ error: "Station not found" });
-      if (!userId || !(await hasPermission(userId, "facility:write", { workspaceId, siteId: existing.data.siteId }))) {
-        return reply.status(403).send({ error: "forbidden" });
-      }
-
-      const result = await station.update(request.params.id, request.body, workspaceId);
+      const result = await station.update(request.params.id, request.body, auth.workspaceId);
       if ("error" in result && typeof result.error === "string") {
         const status = getStatusForCode(result.code ?? "UNKNOWN");
         return reply.status(status).send({ error: result.error });
@@ -291,19 +265,13 @@ export default async function stations(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = request.iam?.workspaceId;
-      const userId = request.iam?.id;
-      if (!workspaceId) {
-        return reply.status(401).send({ error: "No workspace context" });
-      }
+      const auth = await authorize(request.iam, {
+        permission: "facility:write",
+        scope: { kind: "station", id: request.params.id },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
 
-      const existing = await station.getById(request.params.id, workspaceId);
-      if (!existing || "error" in existing) return reply.status(404).send({ error: "Station not found" });
-      if (!userId || !(await hasPermission(userId, "facility:write", { workspaceId, siteId: existing.data.siteId }))) {
-        return reply.status(403).send({ error: "forbidden" });
-      }
-
-      const result = await station.move(request.params.id, request.body.workcenterId, workspaceId);
+      const result = await station.move(request.params.id, request.body.workcenterId, auth.workspaceId);
       if ("error" in result && typeof result.error === "string") {
         const status = getStatusForCode(result.code ?? "UNKNOWN");
         return reply.status(status).send({ error: result.error });
@@ -331,19 +299,13 @@ export default async function stations(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = request.iam?.workspaceId;
-      const userId = request.iam?.id;
-      if (!workspaceId) {
-        return reply.status(401).send({ error: "No workspace context" });
-      }
+      const auth = await authorize(request.iam, {
+        permission: "facility:admin",
+        scope: { kind: "station", id: request.params.id },
+      });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
 
-      const existing = await station.getById(request.params.id, workspaceId);
-      if (!existing || "error" in existing) return reply.status(404).send({ error: "Station not found" });
-      if (!userId || !(await hasPermission(userId, "facility:admin", { workspaceId, siteId: existing.data.siteId }))) {
-        return reply.status(403).send({ error: "forbidden" });
-      }
-
-      const result = await station.remove(request.params.id, workspaceId);
+      const result = await station.remove(request.params.id, auth.workspaceId);
       if ("error" in result && typeof result.error === "string") {
         const status = getStatusForCode(result.code ?? "UNKNOWN");
         return reply.status(status).send({ error: result.error });

@@ -3,6 +3,8 @@ import type { AutomationAction, AutomationFramework } from "@rw/automations";
 import * as z from "zod";
 import { getAutomationFramework } from "../automations/index.js";
 import { authRequired } from "./middleware.js";
+import { authorize } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 
 // Automations are global — handlers resolve the single shared framework (cached after first build;
 // the first call pays the Prisma initial-load cost). `authRequired` still gates on user identity.
@@ -62,7 +64,9 @@ export const getCatalog = authRequired
       actionVersion: z.string().min(1).optional(),
     }),
   )
-  .handler(async ({ input }) => {
+  .handler(async ({ input, context }) => {
+    grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "workspace" } }));
+
     const fw = await getAutomationFramework();
     return fw.catalog(input.eventType, input.actionType, input.eventVersion, input.actionVersion);
   });
@@ -73,17 +77,23 @@ export const getCatalog = authRequired
  * registered (startup validation would have caught a schema-side typo — this is defense against
  * typo'd client calls).
  */
-export const listRefOptions = authRequired.input(z.object({ source: z.string().min(1) })).handler(async ({ input }) => {
-  const fw = await getAutomationFramework();
-  try {
-    return await fw.listRefOptions(input.source);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new ORPCError("BAD_REQUEST", { message: msg });
-  }
-});
+export const listRefOptions = authRequired
+  .input(z.object({ source: z.string().min(1) }))
+  .handler(async ({ input, context }) => {
+    grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "workspace" } }));
 
-export const listAutomations = authRequired.handler(async () => {
+    const fw = await getAutomationFramework();
+    try {
+      return await fw.listRefOptions(input.source);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new ORPCError("BAD_REQUEST", { message: msg });
+    }
+  });
+
+export const listAutomations = authRequired.handler(async ({ context }) => {
+  grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "workspace" } }));
+
   const fw = await getAutomationFramework();
   return fw.store.list();
 });
@@ -102,7 +112,9 @@ export const createAutomation = authRequired
       actions: z.array(actionSchema).default([]),
     }),
   )
-  .handler(async ({ input }) => {
+  .handler(async ({ input, context }) => {
+    grant(await authorize(context.iam, { permission: "settings:write", scope: { kind: "workspace" } }));
+
     const fw = await getAutomationFramework();
     const eventSchema = fw.eventSchemas[input.event];
     if (!eventSchema) throw new ORPCError("BAD_REQUEST", { message: `unknown event type: "${input.event}"` });
@@ -138,7 +150,9 @@ export const updateAutomation = authRequired
       actions: actionsSchema.optional(),
     }),
   )
-  .handler(async ({ input }) => {
+  .handler(async ({ input, context }) => {
+    grant(await authorize(context.iam, { permission: "settings:write", scope: { kind: "workspace" } }));
+
     const fw = await getAutomationFramework();
     const existing = fw.store.get(input.id);
     if (!existing) throw new ORPCError("NOT_FOUND", { message: "automation not found" });
@@ -168,7 +182,9 @@ export const updateAutomation = authRequired
     return updated;
   });
 
-export const deleteAutomation = authRequired.input(z.object({ id: z.string() })).handler(async ({ input }) => {
+export const deleteAutomation = authRequired.input(z.object({ id: z.string() })).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "settings:admin", scope: { kind: "workspace" } }));
+
   const fw = await getAutomationFramework();
   if (!(await fw.store.remove(input.id))) throw new ORPCError("NOT_FOUND", { message: "automation not found" });
   fw.engine.reload();

@@ -1,13 +1,14 @@
 import { ORPCError, eventIterator } from "@orpc/server";
 import * as z from "zod";
 import prisma from "@rw/db";
-import { Principal } from "../auth/index.js";
 import { METRIC_CATALOG_REGISTRY } from "@rw/services/metric-catalog/index";
 import { MetricsContext } from "@rw/services/metrics/context";
 import * as query from "../services/metrics.js";
 import { getShiftForEntity } from "@rw/services/metrics/shift";
 import { rowToSnapshot } from "@rw/services/metrics/sync";
 import { userOrDisplayRequired } from "./middleware.js";
+import { authorize } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 import {
   subscribeMetricChanges,
   subscribeMetricValueChanges,
@@ -440,45 +441,11 @@ async function getCurrentStreamValues(
   });
 }
 
-async function assertSiteAccess(siteId: string, workspaceId: string): Promise<void> {
-  const site = await prisma.site.findUnique({
-    where: { id: siteId },
-    select: { workspaceId: true },
-  });
-
-  if (!site) {
-    throw new ORPCError("NOT_FOUND", { message: "Site not found" });
-  }
-
-  if (site.workspaceId !== workspaceId) {
-    throw new ORPCError("FORBIDDEN", { message: "Site does not belong to this workspace" });
-  }
-}
-
-async function assertRuntimeSiteAccess(
-  iam: { principal: string; workspaceId?: string; siteId?: string },
-  siteId: string,
-): Promise<void> {
-  if (iam.principal === Principal.DISPLAY) {
-    if (iam.siteId !== siteId) {
-      throw new ORPCError("FORBIDDEN", { message: "Display can only access metrics for its site" });
-    }
-
-    return;
-  }
-
-  if (!iam.workspaceId) {
-    throw new ORPCError("UNAUTHORIZED", { message: "Workspace context required" });
-  }
-
-  await assertSiteAccess(siteId, iam.workspaceId);
-}
-
 export const stream = userOrDisplayRequired
   .input(streamInputSchema)
   .output(eventIterator(metricChangeSchema))
   .handler(async function* ({ context, input, signal }) {
-    await assertRuntimeSiteAccess(context.iam, input.siteId);
+    grant(await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.siteId } }));
 
     const subscriptions = new Map<string, Set<string>>();
     for (const entity of input.entities) {
@@ -512,7 +479,7 @@ export const streamValues = userOrDisplayRequired
   .input(streamValuesInputSchema)
   .output(eventIterator(streamValueEventSchema))
   .handler(async function* ({ context, input, signal }) {
-    await assertRuntimeSiteAccess(context.iam, input.siteId);
+    grant(await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.siteId } }));
 
     const requestByKey = new Map<string, NormalizedMetricValueRequest>();
     for (const request of input.requests) {
@@ -594,7 +561,7 @@ export const getBuckets = userOrDisplayRequired
   .input(getBucketsInputSchema)
   .output(z.array(bucketSchema))
   .handler(async ({ context, input }) => {
-    await assertRuntimeSiteAccess(context.iam, input.siteId);
+    grant(await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.siteId } }));
 
     const buckets = await query.getBuckets({
       siteId: input.siteId,
@@ -626,7 +593,7 @@ export const getShiftValues = userOrDisplayRequired
   .input(getShiftValuesInputSchema)
   .output(getShiftValuesOutputSchema)
   .handler(async ({ context, input }) => {
-    await assertRuntimeSiteAccess(context.iam, input.siteId);
+    grant(await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.siteId } }));
 
     const uniqueMetricKeys = [...new Set(input.metricKeys)] as ShiftMetricKey[];
 

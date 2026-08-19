@@ -2,6 +2,8 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { driver } from "../services/device/index.js";
 import { errorSchema, idParamsSchema } from "./schemas.js";
+import { authorize } from "@rw/auth/iam/policy";
+import { replyPolicyDenial } from "./authz.js";
 
 const driverSummarySchema = {
   type: "object",
@@ -55,6 +57,7 @@ export default async function drivers(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "GET",
     url: "/",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["drivers"],
       querystring: listQuerySchema,
@@ -62,7 +65,10 @@ export default async function drivers(fastify: FastifyTypedInstance) {
         200: listDriversResponseSchema,
       },
     },
-    handler: async (request) => {
+    handler: async (request, reply) => {
+      const auth = await authorize(request.iam, { permission: "facility:read", scope: { kind: "anySite" } });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
+
       const { name, version } = request.query;
       return driver.list({ name, version });
     },
@@ -72,6 +78,7 @@ export default async function drivers(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "GET",
     url: "/:id",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["drivers"],
       params: idParamsSchema,
@@ -81,6 +88,9 @@ export default async function drivers(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
+      const auth = await authorize(request.iam, { permission: "facility:read", scope: { kind: "anySite" } });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
+
       const { id } = request.params;
       const result = await driver.getById(id);
       if (!result) {
@@ -94,6 +104,7 @@ export default async function drivers(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "GET",
     url: "/:id/schemas",
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["drivers"],
       params: idParamsSchema,
@@ -103,6 +114,9 @@ export default async function drivers(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
+      const auth = await authorize(request.iam, { permission: "facility:read", scope: { kind: "anySite" } });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
+
       const { id } = request.params;
       const schemas = await driver.getSchemas(id);
       if (!schemas) {

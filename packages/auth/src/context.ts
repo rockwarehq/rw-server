@@ -9,6 +9,16 @@ export const Principal = {
 
 export type PrincipalType = (typeof Principal)[keyof typeof Principal];
 
+/**
+ * Role/permission state resolved once per request by the auth plugin.
+ * Structural twin of PermissionSnapshot in iam/permissions.ts (kept
+ * import-free here); lets policy checks evaluate without re-querying.
+ */
+export interface IAMPermissionSnapshot {
+  systemRole: string | null;
+  assignments: Array<{ siteId: string | null; permissions: string[] }>;
+}
+
 interface BaseIAMContext {
   principal: PrincipalType;
   validToken: boolean;
@@ -22,6 +32,7 @@ interface BaseIAMContext {
     name: string;
     slug: string;
   };
+  permissionSnapshot?: IAMPermissionSnapshot;
 }
 
 export interface IAMContext extends BaseIAMContext {

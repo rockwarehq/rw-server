@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
 import { authRequired } from "./middleware.js";
+import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 import { gateway, datasource } from "../services/device/index.js";
 import { throwServiceError } from "./errors.js";
 
@@ -31,6 +33,8 @@ const gatewayIdInputSchema = z.object({
 
 const gatewayListInputSchema = z.object({
   siteId: z.uuid().optional(),
+  /** Workspace pool view: only gateways not yet assigned to a site. */
+  unassigned: z.boolean().optional(),
 });
 
 // ============================================================================
@@ -80,12 +84,9 @@ const datasourceListInputSchema = z.object({
  * Create a new gateway at a site
  */
 export const gatewayCreate = authRequired.input(gatewayCreateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }),
+  );
 
   const result = await gateway.create({ ...input, workspaceId });
   if (result.error !== undefined) throwServiceError(result);
@@ -96,21 +97,24 @@ export const gatewayCreate = authRequired.input(gatewayCreateInputSchema).handle
  * List gateways (optionally filtered by siteId)
  */
 export const gatewayList = authRequired.input(gatewayListInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
+  if (input.unassigned) {
+    // Workspace pool: claimed hardware awaiting site assignment — visible to
+    // anyone who could assign it (facility:write held somewhere).
+    const pool = grant(await authorize(context.iam, { permission: "facility:write", scope: { kind: "anySite" } }));
+    return gateway.list({ workspaceId: pool.workspaceId, unassigned: true });
   }
 
-  return gateway.list({ ...input, workspaceId });
+  const scope = grant(await authorizeList(context.iam, { permission: "facility:read", requestedSiteId: input.siteId }));
+  return gateway.list(scopeFilter(scope));
 });
 
 /**
  * Get gateway by ID with details
  */
 export const gatewayGet = authRequired.input(gatewayIdInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:read", scope: { kind: "gateway", id: input.id } }),
+  );
 
   // gateway.getById only emits WORKSPACE_MISMATCH, which the shared table maps
   // to FORBIDDEN — same as the previous blanket FORBIDDEN here.
@@ -127,7 +131,13 @@ export const gatewayGet = authRequired.input(gatewayIdInputSchema).handler(async
  */
 export const gatewayUpdate = authRequired.input(gatewayUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
-  const workspaceId = context.iam.workspaceId;
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "gateway", id } }),
+  );
+  if (input.siteId) {
+    // Moving a gateway requires facility:write at the TARGET site too.
+    grant(await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }));
+  }
 
   const result = await gateway.update(id, { ...updateData, workspaceId });
   if (result.error !== undefined) throwServiceError(result);
@@ -138,7 +148,9 @@ export const gatewayUpdate = authRequired.input(gatewayUpdateInputSchema).handle
  * Delete gateway
  */
 export const gatewayDelete = authRequired.input(gatewayIdInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:admin", scope: { kind: "gateway", id: input.id } }),
+  );
 
   const result = await gateway.remove(input.id, workspaceId);
   if (result.error !== undefined) throwServiceError(result);
@@ -153,12 +165,9 @@ export const gatewayDelete = authRequired.input(gatewayIdInputSchema).handler(as
  * Create a new datasource (always creates as DRAFT)
  */
 export const datasourceCreate = authRequired.input(datasourceCreateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }),
+  );
 
   const result = await datasource.create({ ...input, workspaceId });
   if ("error" in result) {
@@ -181,7 +190,9 @@ export const datasourceCreate = authRequired.input(datasourceCreateInputSchema).
  */
 export const datasourceUpdate = authRequired.input(datasourceUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
-  const workspaceId = context.iam.workspaceId;
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "datasource", id } }),
+  );
 
   const result = await datasource.update(id, updateData, workspaceId);
 
@@ -200,7 +211,9 @@ export const datasourceUpdate = authRequired.input(datasourceUpdateInputSchema).
  * Delete datasource
  */
 export const datasourceDelete = authRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:admin", scope: { kind: "datasource", id: input.id } }),
+  );
 
   const result = await datasource.remove(input.id, workspaceId);
   if ("error" in result) {
@@ -219,7 +232,9 @@ export const datasourceDelete = authRequired.input(datasourceIdInputSchema).hand
  * Validates connection info exists and is valid against driver schema
  */
 export const datasourcePublish = authRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "datasource", id: input.id } }),
+  );
 
   const result = await datasource.publish(input.id, workspaceId);
   if ("error" in result) {
@@ -239,7 +254,9 @@ export const datasourcePublish = authRequired.input(datasourceIdInputSchema).han
  * Removes datasource from gateway sync
  */
 export const datasourceUnpublish = authRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "datasource", id: input.id } }),
+  );
 
   const result = await datasource.unpublish(input.id, workspaceId);
   if ("error" in result) {
@@ -258,22 +275,19 @@ export const datasourceUnpublish = authRequired.input(datasourceIdInputSchema).h
  * Automatically filtered by workspace
  */
 export const datasourceList = authRequired.input(datasourceListInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Workspace context required",
-    });
-  }
+  const scope = grant(await authorizeList(context.iam, { permission: "facility:read", requestedSiteId: input.siteId }));
 
   // Filter by workspace via site relationship
-  return datasource.list({ ...input, workspaceId });
+  return datasource.list({ ...input, ...scopeFilter(scope) });
 });
 
 /**
  * Get datasource by ID with related data
  */
 export const datasourceGet = authRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:read", scope: { kind: "datasource", id: input.id } }),
+  );
 
   const result = await datasource.getById(input.id);
   if (!result) {

@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { ORPCError } from "@orpc/server";
 import { publicProcedure, authRequired } from "./middleware.js";
+import { authorize, authorizeList } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 import { display } from "@rw/services/display/index";
 import { throwServiceError, unwrap } from "./errors.js";
 import { Principal } from "../auth/index.js";
@@ -84,10 +85,9 @@ export const heartbeat = publicProcedure.input(idInputSchema).handler(async ({ i
  * Claim a display by its claim code
  */
 export const claim = authRequired.input(claimInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }),
+  );
 
   const result = await display.claim(workspaceId, input.claimCode, {
     name: input.name,
@@ -104,22 +104,18 @@ export const claim = authRequired.input(claimInputSchema).handler(async ({ input
  * List displays for a site
  */
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  const scope = grant(await authorizeList(context.iam, { permission: "facility:read", requestedSiteId: input.siteId }));
 
-  return display.listForWorkspace(workspaceId, input);
+  return display.listForWorkspace(scope.workspaceId, { ...input, siteId: scope.siteId });
 });
 
 /**
  * Assign a dashboard to a display
  */
 export const assignDashboard = authRequired.input(assignDashboardInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "display", id: input.id } }),
+  );
 
   const result = await display.assignDashboard(workspaceId, input.id, input.dashboardId);
   // Historical mapping: dashboard/display site mismatch is referential-input
@@ -132,10 +128,9 @@ export const assignDashboard = authRequired.input(assignDashboardInputSchema).ha
  * Unassign dashboard from a display
  */
 export const unassignDashboard = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "display", id: input.id } }),
+  );
 
   const result = await display.unassignDashboard(workspaceId, input.id);
   if (result.error !== undefined) throwServiceError(result);
@@ -146,10 +141,9 @@ export const unassignDashboard = authRequired.input(idInputSchema).handler(async
  * Update display (rename)
  */
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "display", id: input.id } }),
+  );
 
   const { id, ...updateData } = input;
   const result = await display.update(workspaceId, id, updateData);
@@ -165,10 +159,9 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
  * Delete display
  */
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = context.iam.workspaceId;
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:admin", scope: { kind: "display", id: input.id } }),
+  );
 
   const result = await display.remove(workspaceId, input.id);
   if (result.error !== undefined) throwServiceError(result);

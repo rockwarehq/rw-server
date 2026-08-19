@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { ORPCError } from "@orpc/server";
-import { Principal } from "../auth/index.js";
 import { site } from "@rw/services/facility/index";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
+import { authorize } from "@rw/auth/iam/policy";
+import { grant } from "./authz.js";
 import { throwServiceError } from "./errors.js";
 
 const andonRuleInputSchema = z.object({
@@ -36,14 +36,6 @@ const reorderInputSchema = z.object({
   orderedIds: z.array(z.uuid()),
 });
 
-function requireWorkspaceId(workspaceId?: string) {
-  if (!workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
-
-  return workspaceId;
-}
-
 function hasAndonRuleError(result: unknown): result is { error: string; code: string } {
   return (
     typeof result === "object" &&
@@ -56,11 +48,9 @@ function hasAndonRuleError(result: unknown): result is { error: string; code: st
 }
 
 export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = requireWorkspaceId(context.iam.workspaceId);
-
-  if (context.iam.principal === Principal.DISPLAY && input.siteId !== context.iam.siteId) {
-    throw new ORPCError("FORBIDDEN", { message: "Display can only access Andon rules for its site" });
-  }
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.siteId } }),
+  );
 
   const result = await site.andonRules.list(input, workspaceId);
   if (hasAndonRuleError(result)) {
@@ -71,7 +61,9 @@ export const list = userOrDisplayRequired.input(listInputSchema).handler(async (
 });
 
 export const create = authRequired.input(andonRuleInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = requireWorkspaceId(context.iam.workspaceId);
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }),
+  );
 
   const result = await site.andonRules.create(input, workspaceId);
   if (hasAndonRuleError(result)) {
@@ -82,7 +74,9 @@ export const create = authRequired.input(andonRuleInputSchema).handler(async ({ 
 });
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = requireWorkspaceId(context.iam.workspaceId);
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "siteAndonRule", id: input.id } }),
+  );
 
   const result = await site.andonRules.update(input, workspaceId);
   if (hasAndonRuleError(result)) {
@@ -93,7 +87,9 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 });
 
 export const remove = authRequired.input(deleteInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = requireWorkspaceId(context.iam.workspaceId);
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "siteAndonRule", id: input.id } }),
+  );
 
   const result = await site.andonRules.remove(input.id, workspaceId);
   if (hasAndonRuleError(result)) {
@@ -104,7 +100,9 @@ export const remove = authRequired.input(deleteInputSchema).handler(async ({ inp
 });
 
 export const reorder = authRequired.input(reorderInputSchema).handler(async ({ input, context }) => {
-  const workspaceId = requireWorkspaceId(context.iam.workspaceId);
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }),
+  );
 
   const result = await site.andonRules.reorder(input, workspaceId);
   if (hasAndonRuleError(result)) {

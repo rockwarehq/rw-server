@@ -96,9 +96,35 @@ export async function list(filter: ListUsersFilter = {}) {
 export async function getMe(userId: string, workspaceId?: string, siteId?: string) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, email: true, status: true },
+    select: { id: true, email: true, status: true, systemRole: true },
   });
   if (!user) return null;
+
+  // Rockware-staff users hold no memberships: build the view from the token's
+  // workspace context and the code-resolved permission bundle.
+  if (user.systemRole && workspaceId) {
+    const workspace = await prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { id: true, name: true, slug: true },
+    });
+    const sites = workspace ? await listAccessibleSites(userId, workspaceId) : [];
+    const site = siteId ? (sites.find((item) => item.id === siteId) ?? null) : null;
+    const permissions = await getEffectivePermissions(userId, {
+      workspaceId,
+      ...(site ? { siteId: site.id } : {}),
+    });
+    return {
+      user: { id: user.id, email: user.email, status: user.status },
+      employee: null,
+      workspace,
+      site,
+      sites,
+      access: {
+        roles: [{ id: `system:${user.systemRole}`, name: `System ${user.systemRole}`, scope: "WORKSPACE" as const }],
+        permissions: sortPermissions(permissions),
+      },
+    };
+  }
 
   const membership = await prisma.workspaceMembership.findFirst({
     where: { userId, ...(workspaceId ? { workspaceId } : {}) },

@@ -18,7 +18,6 @@ export interface UpdateWorkcenterInput {
 
 export interface ListWorkcentersFilter {
   siteId?: string;
-  siteIds?: string[];
   parentId?: string | null;
   name?: string;
   limit?: number;
@@ -96,18 +95,12 @@ export async function create(input: CreateWorkcenterInput) {
  * List workcenters with optional filtering
  */
 export async function list(filter: ListWorkcentersFilter = {}) {
-  const { siteId, siteIds, parentId, name, limit = 50, offset = 0 } = filter;
-
-  if (siteIds && siteIds.length === 0) {
-    return { data: [], total: 0, limit: Number(limit), offset: Number(offset) };
-  }
+  const { siteId, parentId, name, limit = 50, offset = 0 } = filter;
 
   const where: Record<string, unknown> = {};
 
   if (siteId) {
     where.siteId = siteId;
-  } else if (siteIds) {
-    where.siteId = { in: siteIds };
   }
 
   // Filter by parent (null = top-level workcenters only)
