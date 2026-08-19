@@ -13,6 +13,7 @@ const PROD_BASELINE = {
   REDIS_URL: "redis://redis:6379",
   APP_BASE_URL: "https://demo.rockware.io",
   PROCESSOR_SHARED_SECRET: "a-sufficiently-long-secret",
+  INTEGRATION_ENCRYPTION_KEY: "0".repeat(64),
 };
 
 describe("config validation", () => {
