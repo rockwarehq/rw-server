@@ -742,6 +742,30 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
   return result.entry;
 }
 
+// Mid-run job or job-product edits: re-publish job-derived context for every
+// station currently running the job, mirroring what a job change publishes
+// (see station/jobs.ts). `undefined` means the field didn't change; `null` clears it.
+export async function refreshStationsRunningJob(
+  jobId: string,
+  changes: { name?: string | null; standardCycleSeconds?: number | null; itemsPerCycleChanged?: boolean },
+  observedAt: Date,
+): Promise<void> {
+  const stations = await prisma.station.findMany({
+    where: { currentJobId: jobId, deletedAt: null },
+    select: { id: true },
+  });
+  for (const { id } of stations) {
+    if (changes.name !== undefined) await publishStationCurrentJobMetric(id, changes.name, observedAt);
+    if (changes.standardCycleSeconds !== undefined) {
+      await publishStationStandardCycleMetric(id, changes.standardCycleSeconds, observedAt);
+    }
+    if (changes.itemsPerCycleChanged) {
+      const ctx = await loadStationMetricContext(prisma, id);
+      if (ctx) publishStationStatusEntityEvent(ctx, ["itemsPerCycle"]);
+    }
+  }
+}
+
 export {
   publishStationStatusMetric,
   publishStationStatusReasonMetric,

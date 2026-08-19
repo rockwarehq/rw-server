@@ -306,6 +306,16 @@ export const IMM_GRAPH_TYPE_NAMESPACE = {
           "date",
           13,
         ),
+        entityField(
+          "itemsPerCycle",
+          "Items Per Cycle",
+          "Inventory items created per completed cycle (sum of the current job's active product quantities)",
+          "imm.station",
+          "$input.stationId",
+          "itemsPerCycle",
+          "number",
+          14,
+        ),
 
         // Mirrored counters (NATS metric subjects, SHIFT granularity)
         ...counterMetricFields(100),
@@ -323,6 +333,14 @@ export const IMM_GRAPH_TYPE_NAMESPACE = {
         ),
         metricField("businessDate", "Business Date", "Business date of the current shift", "businessDate", "date", 410),
         metricField("businessShift", "Business Shift", "Human-readable shift name", "businessShift", "string", 420),
+        metricField(
+          "shiftInstanceId",
+          "Shift Instance Id",
+          "Id of the current shift instance",
+          "shiftInstanceId",
+          "string",
+          425,
+        ),
         metricField(
           "currentStandardCycle",
           "Standard Cycle",

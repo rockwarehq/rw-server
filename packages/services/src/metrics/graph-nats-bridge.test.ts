@@ -49,9 +49,13 @@ describe("metricChangeToGraphPublishes", () => {
       currentJobName: "Job A",
       currentStandardCycle: 12.5,
     } as unknown as MetricChangeEvent["snapshot"];
-    const publishes = metricChangeToGraphPublishes(change({ snapshot, startTime: new Date(1000) }), 1000);
+    const publishes = metricChangeToGraphPublishes(
+      change({ snapshot, startTime: new Date(1000), shiftInstanceId: "shift-inst-1" }),
+      1000,
+    );
     const envelopeFor = (key: string) => publishes.find((p) => p.subject === `metrics.stn-25.SHIFT.${key}`)?.envelope;
 
+    expect(envelopeFor("shiftInstanceId")).toEqual({ value: "shift-inst-1", quality: "good", timestamp: 1000 });
     expect(envelopeFor("businessShift")).toEqual({ value: "Shift 1", quality: "good", timestamp: 1000 });
     expect(envelopeFor("businessDate")).toEqual({ value: "2026-06-30", quality: "good", timestamp: 1000 });
     expect(envelopeFor("currentJobName")).toEqual({ value: "Job A", quality: "good", timestamp: 1000 });
@@ -68,6 +72,7 @@ describe("metricChangeToGraphPublishes", () => {
     const envelopeFor = (key: string) => publishes.find((p) => p.subject === `metrics.stn-25.SHIFT.${key}`)?.envelope;
     expect(envelopeFor("businessShift")).toEqual({ value: null, quality: "stale", timestamp: 1000 });
     expect(envelopeFor("startTime")).toEqual({ value: null, quality: "stale", timestamp: 1000 });
+    expect(envelopeFor("shiftInstanceId")).toEqual({ value: null, quality: "stale", timestamp: 1000 });
   });
 
   it("ignores non-STATION entities (graph rolls those up itself)", () => {

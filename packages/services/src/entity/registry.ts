@@ -167,6 +167,14 @@ export const SYSTEM_ENTITY_REGISTRY: readonly SystemEntitySpec[] = [
         description: "When the most recent completed cycle ended.",
         sortOrder: 79,
       },
+      {
+        name: "itemsPerCycle",
+        label: "Items Per Cycle",
+        type: "NUMBER",
+        description:
+          "Inventory items created per completed cycle (sum of the current job's active product quantities).",
+        sortOrder: 79,
+      },
       { name: "createdAt", type: "TIMESTAMP", sortOrder: 80 },
       { name: "updatedAt", type: "TIMESTAMP", sortOrder: 90 },
       { name: "deletedAt", type: "TIMESTAMP", sortOrder: 100 },
