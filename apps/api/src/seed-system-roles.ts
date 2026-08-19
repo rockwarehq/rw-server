@@ -20,6 +20,11 @@ const FACTORY_ADMINISTRATOR_PERMISSIONS: readonly Permission[] = [
   ...all("employee"),
   "user:read",
   "user:write",
+  // Local factory admins manage their site's integrations (settings:write);
+  // destructive/execute integration ops and API token minting stay
+  // settings:admin (Company Administrator).
+  "settings:read",
+  "settings:write",
 ];
 
 const OFFICE_USER_PERMISSIONS: readonly Permission[] = [
@@ -35,10 +40,10 @@ const OFFICE_USER_PERMISSIONS: readonly Permission[] = [
   "product:read",
   "product:write",
   "dashboard:read",
+  // Reads only on the engineering surfaces: entity/graph configuration is
+  // Factory Administrator territory (office users analyze, not configure).
   "entity:read",
-  "entity:write",
   "graph:read",
-  "graph:write",
   "employee:read",
 ];
 

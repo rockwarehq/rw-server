@@ -4,6 +4,8 @@ import { user } from "../services/account/index.js";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
 import { sensitiveRateLimit } from "../plugins/ratelimit.js";
 import { requirePermission } from "../plugins/require-permission.js";
+import { authorize } from "@rw/auth/iam/policy";
+import { replyPolicyDenial } from "./authz.js";
 
 const userSchema = {
   type: "object",
@@ -353,7 +355,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "GET",
     url: "/",
-    preHandler: [fastify.verifyAccessToken, requirePermission("user:read", { scope: "workspace" })],
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -364,7 +366,12 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
         403: errorSchema,
       },
     },
-    handler: async (request) => {
+    handler: async (request, reply) => {
+      // Roster reads align with RPC workspace.listMembers: user:read held at
+      // any site suffices (site Factory Administrators manage their people).
+      const auth = await authorize(request.iam, { permission: "user:read", site: { kind: "anySite" } });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
+
       return user.list(request.query);
     },
   });
@@ -525,7 +532,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "GET",
     url: "/:id",
-    preHandler: [fastify.verifyAccessToken, requirePermission("user:read", { scope: "workspace" })],
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -538,6 +545,9 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
+      const auth = await authorize(request.iam, { permission: "user:read", site: { kind: "anySite" } });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
+
       const result = await user.getById(request.params.id);
       if (!result) {
         return reply.status(404).send({ error: "User not found" });
@@ -550,7 +560,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "GET",
     url: "/:id/lock-status",
-    preHandler: [fastify.verifyAccessToken, requirePermission("user:read", { scope: "workspace" })],
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -563,6 +573,9 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
+      const auth = await authorize(request.iam, { permission: "user:read", site: { kind: "anySite" } });
+      if (!auth.ok) return replyPolicyDenial(reply, auth);
+
       const result = await user.getLockStatus(request.params.id);
       if (!result) {
         return reply.status(404).send({ error: "User not found" });

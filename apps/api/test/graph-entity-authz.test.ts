@@ -5,6 +5,7 @@ import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js
 import { rpcCall } from "./helpers/rpc-call.js";
 
 const FA_EMAIL = "graph-authz-fa@test.local";
+const OFFICE_EMAIL = "graph-authz-office@test.local";
 const PASSWORD = "graph-authz-password-1";
 
 // Tier 2: graph, entity (token-site model), and integration enforcement.
@@ -13,6 +14,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("graph/entity/integration author
   let siteA: { id: string };
   let siteB: { id: string };
   let workspaceToken: string;
+  let officeToken: string;
   let siteToken: string;
 
   beforeAll(async () => {
@@ -36,24 +38,34 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("graph/entity/integration author
       where: { workspaceId_name_scope: { workspaceId, name: "Factory Administrator", scope: "SITE" } },
       select: { id: true },
     });
+    const officeRole = await prisma.role.findUniqueOrThrow({
+      where: { workspaceId_name_scope: { workspaceId, name: "Office User", scope: "SITE" } },
+      select: { id: true },
+    });
     const passwordHash = await hashPassword(PASSWORD);
-    const u = await prisma.user.upsert({
-      where: { email: FA_EMAIL },
-      update: {},
-      create: { email: FA_EMAIL, passwordHash, firstName: "GraphAuthZ", status: "ACTIVE" },
-    });
-    const membership = await prisma.workspaceMembership.upsert({
-      where: { userId_workspaceId: { userId: u.id, workspaceId } },
-      update: {},
-      create: { userId: u.id, workspaceId },
-    });
-    const existing = await prisma.roleAssignment.findFirst({
-      where: { membershipId: membership.id, roleId: faRole.id, siteId: siteA.id },
-    });
-    if (!existing) {
-      await prisma.roleAssignment.create({ data: { membershipId: membership.id, roleId: faRole.id, siteId: siteA.id } });
+    for (const { email, roleId } of [
+      { email: FA_EMAIL, roleId: faRole.id },
+      { email: OFFICE_EMAIL, roleId: officeRole.id },
+    ]) {
+      const u = await prisma.user.upsert({
+        where: { email },
+        update: {},
+        create: { email, passwordHash, firstName: "GraphAuthZ", status: "ACTIVE" },
+      });
+      const membership = await prisma.workspaceMembership.upsert({
+        where: { userId_workspaceId: { userId: u.id, workspaceId } },
+        update: {},
+        create: { userId: u.id, workspaceId },
+      });
+      const existing = await prisma.roleAssignment.findFirst({
+        where: { membershipId: membership.id, roleId, siteId: siteA.id },
+      });
+      if (!existing) {
+        await prisma.roleAssignment.create({ data: { membershipId: membership.id, roleId, siteId: siteA.id } });
+      }
     }
 
+    officeToken = (await loginAs(server, OFFICE_EMAIL, PASSWORD)).accessToken;
     workspaceToken = (await loginAs(server, FA_EMAIL, PASSWORD)).accessToken;
     const switched = await server.inject({
       method: "POST",
@@ -66,7 +78,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("graph/entity/integration author
   }, 30_000);
 
   afterAll(async () => {
-    await prisma.user.deleteMany({ where: { email: FA_EMAIL } });
+    await prisma.user.deleteMany({ where: { email: { in: [FA_EMAIL, OFFICE_EMAIL] } } });
     await prisma.site.deleteMany({ where: { name: "GraphAuthZ Site B" } });
     await server.close();
   });
@@ -98,8 +110,22 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("graph/entity/integration author
     expect(res.statusCode).toBe(200);
   });
 
-  it("integrations remain settings:admin — Factory Administrator is denied", async () => {
-    const res = await rpcCall(server, "integration/list", { siteId: siteA.id }, workspaceToken);
-    expect(res.statusCode).toBe(403);
+  it("integration reads are settings:read (FA allowed); destructive ops stay settings:admin", async () => {
+    const list = await rpcCall(server, "integration/list", { siteId: siteA.id }, workspaceToken);
+    expect(list.statusCode).toBe(200);
+    const del = await rpcCall(
+      server,
+      "integration/delete",
+      { id: "00000000-0000-4000-8000-000000000009", siteId: siteA.id },
+      workspaceToken,
+    );
+    expect(del.statusCode).toBe(403);
+  });
+
+  it("Office User can read but not configure the graph (engineering writes stripped)", async () => {
+    const list = await rpcCall(server, "graph/node/list", { siteId: siteA.id }, officeToken);
+    expect(list.statusCode).toBe(200);
+    const create = await rpcCall(server, "graph/node/create", { siteId: siteA.id, name: "office-nope" }, officeToken);
+    expect(create.statusCode).toBe(403);
   });
 });
