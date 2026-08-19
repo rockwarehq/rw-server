@@ -136,7 +136,9 @@ export const gatewayUpdate = authRequired.input(gatewayUpdateInputSchema).handle
   );
   if (input.siteId) {
     // Moving a gateway requires facility:write at the TARGET site too.
-    grant(await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }));
+    grant(
+      await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }),
+    );
   }
 
   const result = await gateway.update(id, { ...updateData, workspaceId });

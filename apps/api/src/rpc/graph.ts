@@ -220,7 +220,9 @@ export const nodeGet = graphReadRequired.input(idInputSchema).handler(async ({ i
 
 export const nodeUpdate = authRequired.input(nodeUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updates } = input;
-  const scope = grant(await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphNode", id: id } }));
+  const scope = grant(
+    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphNode", id: id } }),
+  );
   return unwrap(await graph.nodes.update(id, updates, scope));
 });
 
@@ -420,7 +422,9 @@ export const hookGet = authRequired.input(idInputSchema).handler(async ({ input,
 
 export const hookUpdate = authRequired.input(hookUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updates } = input;
-  const scope = grant(await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphHook", id: id } }));
+  const scope = grant(
+    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphHook", id: id } }),
+  );
   return unwrap(await graph.hooks.update(id, updates, scope));
 });
 

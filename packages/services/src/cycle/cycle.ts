@@ -472,7 +472,9 @@ async function completeOpenClose(
       let items: Array<{ id: string; productId: string }> = [];
 
       if (openCycles.length > 0) {
-        const itemArrays = await Promise.all(openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId, quantity)));
+        const itemArrays = await Promise.all(
+          openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId, quantity)),
+        );
         items = itemArrays.flat();
 
         await tx.cycle.updateMany({
@@ -682,7 +684,9 @@ async function completeOpenCloseReplay(
       let items: Array<{ id: string; productId: string }> = [];
 
       if (openCycles.length > 0) {
-        const itemArrays = await Promise.all(openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId, quantity)));
+        const itemArrays = await Promise.all(
+          openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId, quantity)),
+        );
         items = itemArrays.flat();
 
         await tx.cycle.updateMany({

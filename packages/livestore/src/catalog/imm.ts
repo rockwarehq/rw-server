@@ -37,7 +37,8 @@ export const immLivestoreCatalog = {
           label: "Quantity",
           type: "number",
           required: false,
-          description: "Quantity produced by the cycle (e.g. wire length). Defaults to 1 per inventory item when absent.",
+          description:
+            "Quantity produced by the cycle (e.g. wire length). Defaults to 1 per inventory item when absent.",
           sourceTypes: ["property"],
         },
       },
