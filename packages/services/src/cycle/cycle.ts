@@ -34,6 +34,10 @@ export interface StartCycleInput {
   replayed?: boolean;
   /** Livestore hook-event id that produced this cycle. */
   sourceEventId?: string;
+  /** Optional quantity carried by the cycle event (e.g. wire length per
+   *  cycle). Stamped on every InventoryItem created for the cycle; items
+   *  default to 1 when absent. */
+  quantity?: number;
 }
 
 /** Result from all strategy functions — unified so post-commit publishes can share one connection. */
@@ -75,7 +79,7 @@ interface StrategyResult {
  * rollback never leaks observable side effects.
  */
 export async function complete(input: StartCycleInput) {
-  const { stationId, timestamp, jobId, keepOpen = false, replayed = false, sourceEventId = null } = input;
+  const { stationId, timestamp, jobId, keepOpen = false, replayed = false, sourceEventId = null, quantity } = input;
   const t0 = Date.now();
 
   // Redelivery fast path: a cycle already recorded for this event returns
@@ -169,8 +173,8 @@ export async function complete(input: StartCycleInput) {
 
   const result = replayed
     ? keepOpen
-      ? await completeOpenCloseReplay(stationId, siteId, timestamp, jobId, versionConnects, sourceEventId)
-      : await completeImmediateReplay(stationId, siteId, timestamp, jobId, versionConnects, sourceEventId)
+      ? await completeOpenCloseReplay(stationId, siteId, timestamp, jobId, versionConnects, sourceEventId, quantity)
+      : await completeImmediateReplay(stationId, siteId, timestamp, jobId, versionConnects, sourceEventId, quantity)
     : keepOpen
       ? await completeOpenClose(
           stationId,
@@ -181,6 +185,7 @@ export async function complete(input: StartCycleInput) {
           idealCycleIncrement,
           sourceEventId,
           slowThresholdSeconds,
+          quantity,
         )
       : await completeImmediate(
           stationId,
@@ -191,6 +196,7 @@ export async function complete(input: StartCycleInput) {
           idealCycleIncrement,
           sourceEventId,
           slowThresholdSeconds,
+          quantity,
         );
 
   // Null strategy result = lost the sourceEventId insert race to a concurrent
@@ -296,6 +302,7 @@ async function completeImmediate(
   idealCycleIncrement: number,
   sourceEventId: string | null,
   slowThresholdSeconds?: number,
+  quantity?: number,
 ): Promise<StrategyResult | null> {
   return prisma.$transaction(async (tx) => {
     // Per-station advisory lock as its own statement BEFORE the prev-cycle
@@ -398,7 +405,7 @@ async function completeImmediate(
       openRow,
     });
 
-    const items = await inventory.createFromCycle(tx, cycle.id, jobId);
+    const items = await inventory.createFromCycle(tx, cycle.id, jobId, quantity);
 
     // Order allocation — was previously fire-and-forget on the global prisma
     // client, now runs serially inside the tx so the whole completion is one
@@ -450,6 +457,7 @@ async function completeOpenClose(
   idealCycleIncrement: number,
   sourceEventId: string | null,
   slowThresholdSeconds?: number,
+  quantity?: number,
 ): Promise<StrategyResult | null> {
   return prisma
     .$transaction(async (tx) => {
@@ -464,7 +472,7 @@ async function completeOpenClose(
       let items: Array<{ id: string; productId: string }> = [];
 
       if (openCycles.length > 0) {
-        const itemArrays = await Promise.all(openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId)));
+        const itemArrays = await Promise.all(openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId, quantity)));
         items = itemArrays.flat();
 
         await tx.cycle.updateMany({
@@ -489,7 +497,7 @@ async function completeOpenClose(
             },
           });
 
-          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId);
+          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId, quantity);
         }
       }
 
@@ -571,6 +579,7 @@ async function completeImmediateReplay(
   jobId: string,
   versionConnects: VersionConnects,
   sourceEventId: string | null,
+  quantity?: number,
 ): Promise<StrategyResult | null> {
   return prisma.$transaction(async (tx) => {
     // Cross-process serialization, before the prev read — see completeImmediate.
@@ -629,7 +638,7 @@ async function completeImmediateReplay(
       await tx.$executeRaw`INSERT INTO "_CycleToJobTool" ("A", "B") VALUES ${values} ON CONFLICT DO NOTHING`;
     }
 
-    const items = await inventory.createFromCycle(tx, cycle.id, jobId);
+    const items = await inventory.createFromCycle(tx, cycle.id, jobId, quantity);
 
     // Order allocation — replayed cycles allocate too; replay path otherwise
     // skips state transitions, detection, and metrics.
@@ -658,6 +667,7 @@ async function completeOpenCloseReplay(
   jobId: string,
   versionConnects: VersionConnects,
   sourceEventId: string | null,
+  quantity?: number,
 ): Promise<StrategyResult | null> {
   return prisma
     .$transaction(async (tx) => {
@@ -672,7 +682,7 @@ async function completeOpenCloseReplay(
       let items: Array<{ id: string; productId: string }> = [];
 
       if (openCycles.length > 0) {
-        const itemArrays = await Promise.all(openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId)));
+        const itemArrays = await Promise.all(openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId, quantity)));
         items = itemArrays.flat();
 
         await tx.cycle.updateMany({
@@ -697,7 +707,7 @@ async function completeOpenCloseReplay(
             },
           });
 
-          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId);
+          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId, quantity);
         }
       }
 

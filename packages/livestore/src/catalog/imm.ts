@@ -33,6 +33,13 @@ export const immLivestoreCatalog = {
           description: "Cycle time captured from the graph when the event is emitted.",
           sourceTypes: ["property"],
         },
+        quantity: {
+          label: "Quantity",
+          type: "number",
+          required: false,
+          description: "Quantity produced by the cycle (e.g. wire length). Defaults to 1 per inventory item when absent.",
+          sourceTypes: ["property"],
+        },
       },
     },
   ],

@@ -27,8 +27,12 @@ export interface ListInventoryFilter {
  * JobProductVersion determines how many identical items are created per JobProduct.
  * Accepts a transaction client so the caller can wrap cycle-close + inventory
  * creation in a single atomic operation.
+ *
+ * `quantity` is the optional per-item quantity carried by the cycle event
+ * (e.g. wire length per cycle); it is stamped on every row created for this
+ * cycle and defaults to 1. It does NOT change how many rows are created.
  */
-export async function createFromCycle(tx: TransactionClient, cycleId: string, jobId: string) {
+export async function createFromCycle(tx: TransactionClient, cycleId: string, jobId: string, quantity?: number) {
   // Fetch active JobProducts with version refs in a single raw query
   const jobProducts = await (tx as unknown as { $queryRaw: typeof prisma.$queryRaw }).$queryRaw<
     Array<{
@@ -94,14 +98,15 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
   }
 
   // Batch INSERT all inventory items in one query
+  const itemQuantity = quantity != null && Number.isFinite(quantity) ? quantity : 1;
   const insertValues = Prisma.join(
     itemSpecs.map(
       (s) =>
-        Prisma.sql`(gen_random_uuid(), ${cycleId}::uuid, ${s.currentVersionId}::uuid, ${s.productVersionId}::uuid, ${s.toolVersionId}::uuid, ${s.toolCavityVersionId}::uuid, NOW(), NOW())`,
+        Prisma.sql`(gen_random_uuid(), ${cycleId}::uuid, ${s.currentVersionId}::uuid, ${s.productVersionId}::uuid, ${s.toolVersionId}::uuid, ${s.toolCavityVersionId}::uuid, ${itemQuantity}, NOW(), NOW())`,
     ),
   );
   const itemRows = await txRaw.$queryRaw<Array<{ id: string }>>`
-    INSERT INTO "InventoryItem" (id, "cycleId", "jobProductVersionId", "productVersionId", "toolVersionId", "toolCavityVersionId", "createdAt", "updatedAt")
+    INSERT INTO "InventoryItem" (id, "cycleId", "jobProductVersionId", "productVersionId", "toolVersionId", "toolCavityVersionId", quantity, "createdAt", "updatedAt")
     VALUES ${insertValues}
     RETURNING id
   `;
