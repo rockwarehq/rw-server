@@ -45,7 +45,6 @@ export interface UpdateOrderInput {
 
 export interface ListOrdersFilter {
   siteId?: string;
-  siteIds?: string[];
   status?: OrderStatus | OrderStatus[];
   customerId?: string;
   search?: string;
@@ -234,14 +233,12 @@ export async function create(input: CreateOrderInput) {
 }
 
 export async function list(filter: ListOrdersFilter = {}) {
-  const { siteId, siteIds, status, customerId, search, limit = 200, offset = 0 } = filter;
+  const { siteId, status, customerId, search, limit = 200, offset = 0 } = filter;
 
   const where: Prisma.OrderWhereInput = { deletedAt: null };
 
   if (siteId) {
     where.siteId = siteId;
-  } else if (siteIds) {
-    where.siteId = { in: siteIds };
   }
 
   if (status) {

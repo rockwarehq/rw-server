@@ -18,7 +18,6 @@ export interface UpdateShiftAssignmentInput {
 
 export interface ListShiftAssignmentsFilter {
   siteId?: string;
-  siteIds?: string[];
   workCenterId?: string;
   limit?: number;
   offset?: number;
@@ -147,14 +146,12 @@ export async function create(input: CreateShiftAssignmentInput) {
  * List shift assignments with optional filtering
  */
 export async function list(filter: ListShiftAssignmentsFilter = {}) {
-  const { siteId, siteIds, workCenterId, limit = 50, offset = 0 } = filter;
+  const { siteId, workCenterId, limit = 50, offset = 0 } = filter;
 
   const where: Record<string, unknown> = {};
 
   if (siteId) {
     where.siteId = siteId;
-  } else if (siteIds) {
-    where.siteId = { in: siteIds };
   }
 
   if (workCenterId) {

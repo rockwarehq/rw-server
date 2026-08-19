@@ -28,7 +28,6 @@ export interface UpdateDispositionLogInput {
 
 export interface ListDispositionLogsFilter {
   siteId?: string;
-  siteIds?: string[];
   stationId?: string;
   shiftInstanceId?: string;
   dispositionReasonId?: string;
@@ -343,7 +342,6 @@ export async function create(input: CreateDispositionLogInput) {
 export async function list(filter: ListDispositionLogsFilter = {}) {
   const {
     siteId,
-    siteIds,
     stationId,
     shiftInstanceId,
     dispositionReasonId,
@@ -356,7 +354,6 @@ export async function list(filter: ListDispositionLogsFilter = {}) {
   const where: Record<string, unknown> = { deletedAt: null };
 
   if (siteId) where.siteId = siteId;
-  else if (siteIds) where.siteId = { in: siteIds };
   if (stationId) where.stationId = stationId;
   if (shiftInstanceId) where.shiftInstanceId = shiftInstanceId;
   if (dispositionReasonId) where.dispositionReasonId = dispositionReasonId;

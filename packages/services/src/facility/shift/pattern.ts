@@ -17,7 +17,6 @@ export interface UpdateShiftPatternInput {
 
 export interface ListShiftPatternsFilter {
   siteId?: string;
-  siteIds?: string[];
   name?: string;
   limit?: number;
   offset?: number;
@@ -82,14 +81,12 @@ export async function create(input: CreateShiftPatternInput) {
  * List shift patterns with optional filtering
  */
 export async function list(filter: ListShiftPatternsFilter = {}) {
-  const { siteId, siteIds, name, limit = 50, offset = 0 } = filter;
+  const { siteId, name, limit = 50, offset = 0 } = filter;
 
   const where: Record<string, unknown> = {};
 
   if (siteId) {
     where.siteId = siteId;
-  } else if (siteIds) {
-    where.siteId = { in: siteIds };
   }
 
   if (name) {

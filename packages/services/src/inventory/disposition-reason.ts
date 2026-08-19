@@ -16,7 +16,6 @@ export interface UpdateDispositionReasonInput {
 
 export interface ListDispositionReasonsFilter {
   siteId?: string;
-  siteIds?: string[];
   itemDispositionId?: string;
   processTypeId?: string;
   name?: string;
@@ -109,12 +108,11 @@ export async function create(input: CreateDispositionReasonInput) {
 }
 
 export async function list(filter: ListDispositionReasonsFilter = {}) {
-  const { siteId, siteIds, itemDispositionId, processTypeId, name, limit = 50, offset = 0 } = filter;
+  const { siteId, itemDispositionId, processTypeId, name, limit = 50, offset = 0 } = filter;
 
   const where: Prisma.ItemDispositionReasonWhereInput = { deletedAt: null };
 
   if (siteId) where.siteId = siteId;
-  else if (siteIds) where.siteId = { in: siteIds };
   if (itemDispositionId) where.itemDispositions = { some: { id: itemDispositionId } };
   if (processTypeId) where.processTypeId = processTypeId;
   if (name) where.name = { contains: name, mode: "insensitive" };

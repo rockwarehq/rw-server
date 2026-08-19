@@ -15,7 +15,6 @@ export interface CreateLedgerEntryInput {
 
 export interface ListLedgerEntriesFilter {
   siteId?: string;
-  siteIds?: string[];
   materialId?: string;
   kind?: MaterialLedgerKind;
   limit?: number;
@@ -103,11 +102,10 @@ export async function create(input: CreateLedgerEntryInput) {
 }
 
 export async function list(filter: ListLedgerEntriesFilter = {}) {
-  const { siteId, siteIds, materialId, kind, limit = 50, offset = 0 } = filter;
+  const { siteId, materialId, kind, limit = 50, offset = 0 } = filter;
 
   const where: Prisma.MaterialLedgerEntryWhereInput = {};
   if (siteId) where.siteId = siteId;
-  else if (siteIds) where.siteId = { in: siteIds };
   if (materialId) where.materialId = materialId;
   if (kind) where.kind = kind;
 

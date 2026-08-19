@@ -26,7 +26,6 @@ export interface UpdateJobInput {
 
 export interface ListJobsFilter {
   siteId?: string;
-  siteIds?: string[];
   /** Free-text search across name and description (case-insensitive contains, OR) */
   q?: string;
   name?: string;
@@ -132,7 +131,7 @@ export async function create(input: CreateJobInput) {
  * List jobs with optional filtering
  */
 export async function list(filter: ListJobsFilter = {}) {
-  const { siteId, siteIds, q, name, productIds, view = "full", limit = 50, offset = 0 } = filter;
+  const { siteId, q, name, productIds, view = "full", limit = 50, offset = 0 } = filter;
 
   const where: Prisma.JobWhereInput = {
     deletedAt: null,
@@ -140,8 +139,6 @@ export async function list(filter: ListJobsFilter = {}) {
 
   if (siteId) {
     where.siteId = siteId;
-  } else if (siteIds) {
-    where.siteId = { in: siteIds };
   }
 
   // Free-text search OR'd across the columns shown in the UI.

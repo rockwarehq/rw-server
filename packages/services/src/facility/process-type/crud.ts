@@ -13,7 +13,6 @@ export interface UpdateProcessTypeInput {
 
 export interface ListProcessTypesFilter {
   siteId?: string;
-  siteIds?: string[];
   name?: string;
   limit?: number;
   offset?: number;
@@ -59,14 +58,12 @@ export async function create(input: CreateProcessTypeInput) {
  * List process types with optional filtering
  */
 export async function list(filter: ListProcessTypesFilter = {}) {
-  const { siteId, siteIds, name, limit = 50, offset = 0 } = filter;
+  const { siteId, name, limit = 50, offset = 0 } = filter;
 
   const where: Record<string, unknown> = { deletedAt: null };
 
   if (siteId) {
     where.siteId = siteId;
-  } else if (siteIds) {
-    where.siteId = { in: siteIds };
   }
 
   if (name) {

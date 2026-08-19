@@ -23,7 +23,6 @@ export interface UpdateDashboardInput {
 
 export interface ListDashboardsFilter {
   siteId?: string;
-  siteIds?: string[];
   name?: string;
   limit?: number;
   offset?: number;
@@ -74,7 +73,7 @@ export async function create(input: CreateDashboardInput, workspaceId: string) {
  * List dashboards with optional filtering
  */
 export async function list(filter: ListDashboardsFilter = {}, workspaceId?: string) {
-  const { siteId, siteIds, name, limit = 50, offset = 0 } = filter;
+  const { siteId, name, limit = 50, offset = 0 } = filter;
 
   const where: Record<string, unknown> = {
     deletedAt: null,
@@ -88,8 +87,6 @@ export async function list(filter: ListDashboardsFilter = {}, workspaceId?: stri
 
   if (siteId) {
     where.siteId = siteId;
-  } else if (siteIds) {
-    where.siteId = { in: siteIds };
   }
 
   if (name) {

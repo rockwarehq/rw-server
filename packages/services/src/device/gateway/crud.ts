@@ -31,8 +31,9 @@ export interface UpdateGatewayInput {
 
 export interface ListGatewaysFilter {
   siteId?: string;
-  siteIds?: string[];
   workspaceId?: string;
+  /** Workspace pool view: only gateways not yet assigned to a site. */
+  unassigned?: boolean;
 }
 
 export async function create(input: CreateGatewayInput) {
@@ -95,14 +96,16 @@ export async function create(input: CreateGatewayInput) {
 export async function list(filter?: ListGatewaysFilter) {
   const where: Record<string, unknown> = {};
 
-  if (filter?.siteId) {
+  if (filter?.unassigned) {
+    // Workspace pool: claimed hardware not yet assigned to a site. The
+    // site-workspace join below would exclude null-site rows, so skip it.
+    where.siteId = null;
+  } else if (filter?.siteId) {
     where.siteId = filter.siteId;
-  } else if (filter?.siteIds) {
-    where.siteId = { in: filter.siteIds };
   }
 
   // Filter by workspace - gateways at Sites belonging to this workspace
-  if (filter?.workspaceId) {
+  if (filter?.workspaceId && !filter?.unassigned) {
     where.site = {
       workspaceId: filter.workspaceId,
     };
