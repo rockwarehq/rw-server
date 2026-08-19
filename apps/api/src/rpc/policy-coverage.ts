@@ -1,9 +1,10 @@
 // Authorization coverage contract, enforced by test/policy-coverage.test.ts:
-// every oRPC procedure must call authorize()/authorizeList() INLINE in its
-// handler body (not behind a local helper — the gate scans handler source),
-// unless its dotted router path is listed here with a reason. Every REST
-// route must carry verifyAccessToken plus either requirePermission or a
-// policy call, unless listed in PUBLIC_REST_ROUTES.
+// every oRPC procedure must call authorize()/authorizeList() — or, for the
+// site directory only, authorizeAccessibleSites() — INLINE in its handler
+// body (not behind a local helper — the gate scans handler source), unless
+// its dotted router path is listed here with a reason. Every REST route must
+// carry verifyAccessToken plus either requirePermission or a policy call,
+// unless listed in PUBLIC_REST_ROUTES.
 //
 // Adding an entry here is a code-review decision, not a default
 // (ADR-0002 amendment, 2026-08-18).
