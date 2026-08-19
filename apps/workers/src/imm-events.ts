@@ -87,6 +87,7 @@ async function handleCycleCompleted(event: LivestoreHookEvent): Promise<void> {
     timestamp: parseEmittedAt(event.emittedAt),
     jobId,
     sourceEventId: event.id,
+    quantity: numberField(event.payload, "quantity") ?? undefined,
   });
   if ("error" in result) {
     console.error(`[imm-events] cycle.record failed for station ${stationId}: ${result.error} (${result.code})`);
@@ -125,6 +126,11 @@ function markHandled(eventId: string): void {
 function stringField(payload: Record<string, unknown>, key: string): string | null {
   const value = payload[key];
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function numberField(payload: Record<string, unknown>, key: string): number | null {
+  const value = payload[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 async function currentJobId(stationId: string): Promise<string | null> {

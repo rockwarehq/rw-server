@@ -301,6 +301,13 @@ model InventoryItem {
   id    String @id @default(uuid()) @db.Uuid
   attrs Json   @default("{}")
 
+  /// Quantity produced for this item. Defaults to 1 (discrete piece); cycle
+  /// events may supply a measured quantity (e.g. wire length per cycle).
+  quantity Decimal @default(1) @db.Decimal(18, 4)
+
+  /// Unit for `quantity`. Blank until a unit source is decided.
+  quantityUnit String @default("")
+
   cycleId String @db.Uuid
   cycle   Cycle  @relation(fields: [cycleId], references: [id], onDelete: Cascade)
 
