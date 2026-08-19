@@ -20,12 +20,14 @@ import { SampleGate } from "./sample-gate.js";
 import { Scheduler } from "./scheduler.js";
 import { deriveMetricSubject } from "@rw/runtime/graph-subjects";
 import { TagResolver } from "../resolvers/tag-resolver.js";
-import { WindowResolver } from "../resolvers/window-resolver.js";
+import { FoldResolver } from "../resolvers/fold-resolver.js";
 import {
   envelopesEqual,
   isExprResolverConfig,
   isMetricResolver,
   isRollupResolverConfig,
+  isStatefulResolverType,
+  isTotalizerResolverConfig,
   isWindowResolverConfig,
   staleEnvelope,
   type CommitSource,
@@ -57,7 +59,7 @@ export class GraphRuntime {
   private readonly tagResolver: TagResolver;
   private readonly metricResolver: MetricResolver;
   private readonly entityResolver: EntityResolver;
-  private readonly windowResolver: WindowResolver;
+  private readonly foldResolver: FoldResolver;
   private readonly hookManager: HookManager;
   private readonly definitionConsumer: GraphDefinitionConsumer;
   private readonly entityEventConsumer: EntityEventConsumer;
@@ -92,7 +94,7 @@ export class GraphRuntime {
     this.metricResolver = new MetricResolver(options.nc, this, options.logger);
     this.entityResolver = new EntityResolver(options.prisma, this, options.logger, (id) => this.kernel.getProperty(id));
     this.hookManager = new HookManager(options.prisma, options.jetstream, options.jetstreamManager, options.logger);
-    this.windowResolver = new WindowResolver(new AggStateStore(options.aggKv), this, options.logger);
+    this.foldResolver = new FoldResolver(new AggStateStore(options.aggKv), this, options.logger);
     this.definitionConsumer = new GraphDefinitionConsumer(
       options.jetstream,
       options.jetstreamManager,
@@ -109,7 +111,7 @@ export class GraphRuntime {
       (id) => this.kernel.getDependents(id),
       (id) => this.kernel.topoIndex(id),
       (id) => this.evaluate(id),
-      (id) => this.kernel.getProperty(id)?.resolverType === "window",
+      (id) => isStatefulResolverType(this.kernel.getProperty(id)?.resolverType ?? ""),
       options.logger,
       () => this.hookManager.flushPending((id) => this.kernel.getCurrent(id)),
     );
@@ -142,8 +144,9 @@ export class GraphRuntime {
   private async evaluate(propertyId: string): Promise<void> {
     const property = this.kernel.getProperty(propertyId);
     if (!property) return;
-    // Windows never compute in a flush — they emit only from their own resolver.
-    if (isWindowResolverConfig(property.resolver)) return;
+    // Windows and totalizers never compute in a flush — they emit only from
+    // their own resolver.
+    if (isWindowResolverConfig(property.resolver) || isTotalizerResolverConfig(property.resolver)) return;
     if (isRollupResolverConfig(property.resolver)) {
       const resolver = property.resolver;
       const deps = this.kernel
@@ -191,7 +194,7 @@ export class GraphRuntime {
 
     // Windows rehydrate before input subscriptions open, so no live sample can
     // arrive ahead of the resolver's source index.
-    await this.windowResolver.start(this.kernel.listProperties(), (id) => this.kernel.getProperty(id));
+    await this.foldResolver.start(this.kernel.listProperties(), (id) => this.kernel.getProperty(id));
 
     await this.tagResolver.start(this.kernel.listProperties());
     this.metricResolver.start(this.buildMetricSubscriptions());
@@ -246,7 +249,7 @@ export class GraphRuntime {
     // Join the in-flight flush and block re-arming before draining producers:
     // a flush surviving past this point would commit into a torn-down runtime.
     await this.scheduler.stop();
-    await this.windowResolver.stop(); // drains emit chains + flushes agg state to KV
+    await this.foldResolver.stop(); // drains emit chains + flushes agg state to KV
     // Publish hook events queued by the final commits; the settle-flush that
     // would have flushed them can no longer run.
     await this.hookManager.flushPending((id) => this.kernel.getCurrent(id));
@@ -453,7 +456,7 @@ export class GraphRuntime {
     const metricSub = this.metricSubscriptionForProperty(property);
     if (metricSub) this.metricResolver.upsertSubscription(metricSub);
     else this.metricResolver.removeProperty(property.id);
-    await this.windowResolver.upsertProperty(property, (id) => this.kernel.getProperty(id));
+    await this.foldResolver.upsertProperty(property, (id) => this.kernel.getProperty(id));
     await this.entityResolver.upsertProperty(property);
   }
 
@@ -462,7 +465,7 @@ export class GraphRuntime {
     this.metricResolver.removeProperty(property.id);
     this.entityResolver.removeProperty(property.id);
     this.sampleGate.forget(property.id);
-    await this.windowResolver.removeProperty(property.id);
+    await this.foldResolver.removeProperty(property.id);
   }
 
   async commitValue(propertyId: string, envelope: ValueEnvelope, source: CommitSource): Promise<void> {
@@ -480,7 +483,7 @@ export class GraphRuntime {
       this.scheduler.markDirty(propertyId);
       // Fold before the KV await: windows must see every sample synchronously —
       // the 50ms flush only ever reads the latest current value.
-      this.windowResolver.onInput(propertyId, envelope);
+      this.foldResolver.onInput(propertyId, envelope);
       this.enqueuePut(propertyId, envelope);
       const hookQueued = this.hookManager.onPropertyCommitted({ propertyId, previous, current: envelope });
       if (hookQueued) this.scheduler.scheduleTerminal();
@@ -602,7 +605,7 @@ export class GraphRuntime {
   counts() {
     return {
       ...this.kernel.counts(),
-      ...this.windowResolver.counts(),
+      ...this.foldResolver.counts(),
       tagSubscriptionCount: this.tagResolver.subscriptionCount(),
       metricSubscriptionCount: this.metricResolver.subscriptionCount(),
       ...this.hookManager.counts(),

@@ -20,7 +20,7 @@ export interface LivestoreResolverTypeDescriptor {
   label: string;
   description: string;
   // How dependency edges are derived from this resolver's config.
-  dependencies: "none" | "expressionSymbols" | "sourceProperty";
+  dependencies: "none" | "expressionSymbols" | "sourceProperty" | "sourceAndTriggerProperties";
   // Server-side checks that run on save beyond the structural configSchema.
   referentialChecks: string[];
   configSchema: Record<string, unknown>;
@@ -111,8 +111,19 @@ const RESOLVER_DESCRIPTOR_META: Record<
     dependencies: "sourceProperty",
     referentialChecks: [
       "sourcePropertyId must exist in the graph's site",
-      "the source property must not itself be a window property",
+      "the source property must not itself be a window or totalizer property",
       "the resulting dependency edge must not create a cycle",
+    ],
+  },
+  totalizer: {
+    label: "Totalizer",
+    description:
+      "Running total: each trigger firing adds the source property's latest value. An optional reset condition zeroes it.",
+    dependencies: "sourceAndTriggerProperties",
+    referentialChecks: [
+      "sourcePropertyId and the trigger (and reset, when given) properties must exist in the graph's site",
+      "none of the source, trigger, or reset properties may itself be a window or totalizer property",
+      "the resulting dependency edges must not create a cycle",
     ],
   },
   rollup: {

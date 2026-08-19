@@ -18,7 +18,8 @@ import * as nodeTypes from "./node-types.js";
 import { validateTypeInputs } from "./nodes.js";
 import { getGraphSiteForWorkspace, graphNodeSiteWhere } from "./scope.js";
 import { errorResult, type GraphScope, type ServiceResult } from "./types.js";
-import { validateResolverConfig } from "./validation.js";
+import { isStatefulResolverType } from "../types/index.js";
+import { STATEFUL_CHAIN_ERROR, validateResolverConfig } from "./validation.js";
 
 // Dry-run validation of a whole prospective changeset (creations only) in one
 // call: an agent composes nodes + properties + hooks, gets every problem back
@@ -294,16 +295,14 @@ export async function plan(input: GraphPlanInput, scope: GraphScope): Promise<Se
       continue;
     }
 
-    // validateResolverConfig skips in-batch window sources (they aren't in
-    // the DB), so enforce the window-over-window rule against the batch here.
-    const config = resolverResult.data.resolver;
+    // validateResolverConfig skips in-batch inputs (they aren't in the DB),
     if (
-      property.resolverType === "window" &&
-      typeof config.sourcePropertyId === "string" &&
-      plannedPropertyIds.has(config.sourcePropertyId) &&
-      resolverTypeById.get(config.sourcePropertyId) === "window"
+      isStatefulResolverType(property.resolverType) &&
+      resolverResult.data.dependencyIds.some(
+        (id) => plannedPropertyIds.has(id) && isStatefulResolverType(resolverTypeById.get(id) ?? ""),
+      )
     ) {
-      issue(`${path}.resolver`, "INVALID_RESOLVER", "window source cannot be another window property");
+      issue(`${path}.resolver`, "INVALID_RESOLVER", STATEFUL_CHAIN_ERROR);
       continue;
     }
 

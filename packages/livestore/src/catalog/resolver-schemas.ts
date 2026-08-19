@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { GRAPH_HOOK_CONDITION_OPERATORS } from "./hook-conditions.js";
+
 // Structural schemas for property resolver configs — the machine-readable
 // source of truth behind graph/validation.ts's validateResolverConfig and the
 // capability manifest (catalog/manifest.ts). Referential checks (entity
@@ -12,7 +14,7 @@ import { z } from "zod";
 export const LIVESTORE_AGGREGATIONS = ["sum", "avg", "count", "min", "max"] as const;
 export type LivestoreAggregation = (typeof LIVESTORE_AGGREGATIONS)[number];
 
-export const LIVESTORE_RESOLVER_TYPES = ["tag", "entity", "metric", "expr", "window", "rollup"] as const;
+export const LIVESTORE_RESOLVER_TYPES = ["tag", "entity", "metric", "expr", "window", "totalizer", "rollup"] as const;
 export type LivestoreResolverType = (typeof LIVESTORE_RESOLVER_TYPES)[number];
 
 export const tagResolverConfigSchema = z
@@ -118,6 +120,47 @@ export const windowResolverConfigSchema = z
   })
   .meta({ description: "Time aggregation over one source property; state persists across restarts." });
 
+const totalizerConditionSchema = (role: "trigger" | "reset") =>
+  z.looseObject({
+    source: z.looseObject(
+      {
+        type: z.literal("property", { error: `totalizer ${role} source must be a property` }),
+        propertyId: z
+          .string({ error: `totalizer ${role} requires source.propertyId` })
+          .meta({ description: "Property whose commits are evaluated against the operator." }),
+      },
+      { error: `totalizer ${role} requires source.propertyId` },
+    ),
+    operator: z
+      .enum(GRAPH_HOOK_CONDITION_OPERATORS, { error: `totalizer ${role} operator must be a hook condition operator` })
+      .meta({ description: "Hook condition operator deciding when the condition fires." }),
+    value: z.unknown().optional().meta({ description: "Comparison value for equals/notEquals." }),
+    threshold: z.number().optional().meta({ description: "Threshold for gt/gte/lt/lte/crossesAbove/crossesBelow." }),
+    minDelta: z.number().optional().meta({ description: "Minimum change for increases/decreases." }),
+  });
+
+export const totalizerTriggerSchema = totalizerConditionSchema("trigger").meta({
+  description: "Hook-condition-shaped trigger; same operators and semantics as graph hooks.",
+});
+
+export const totalizerResetSchema = totalizerConditionSchema("reset").meta({
+  description: "Optional hook-condition-shaped reset; when it fires, total and count return to 0.",
+});
+
+export const totalizerResolverConfigSchema = z
+  .looseObject({
+    type: z.literal("totalizer"),
+    sourcePropertyId: z.string({ error: "totalizer resolver requires sourcePropertyId" }).meta({
+      description: "Property whose latest value each trigger firing adds. Must not be a window or totalizer.",
+    }),
+    trigger: totalizerTriggerSchema,
+    reset: totalizerResetSchema.optional(),
+  })
+  .meta({
+    description:
+      "Running total: each trigger firing adds the source property's latest value; state persists across restarts. The trigger may target the source itself. An optional reset condition zeroes the total when it fires (e.g. a shift property changes).",
+  });
+
 export const rollupResolverConfigSchema = z
   .looseObject({
     type: z.literal("rollup"),
@@ -155,6 +198,7 @@ export const LIVESTORE_RESOLVER_CONFIG_SCHEMAS: Record<LivestoreResolverType, z.
   entity: entityResolverConfigSchema,
   expr: exprResolverConfigSchema,
   window: windowResolverConfigSchema,
+  totalizer: totalizerResolverConfigSchema,
   rollup: rollupResolverConfigSchema,
 };
 

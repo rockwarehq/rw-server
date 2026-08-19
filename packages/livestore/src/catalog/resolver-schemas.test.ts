@@ -136,6 +136,62 @@ const FIXTURES: Record<(typeof LIVESTORE_RESOLVER_TYPES)[number], Fixture[]> = {
       message: "ewma alpha must be a number in (0, 1]",
     },
   ],
+  totalizer: [
+    {
+      name: "valid",
+      resolver: {
+        type: "totalizer",
+        sourcePropertyId: PROP_ID,
+        trigger: { source: { type: "property", propertyId: PROP_ID }, operator: "changed" },
+      },
+      ok: true,
+    },
+    {
+      name: "missing trigger",
+      resolver: { type: "totalizer", sourcePropertyId: PROP_ID },
+      ok: false,
+    },
+    {
+      name: "missing sourcePropertyId",
+      resolver: {
+        type: "totalizer",
+        trigger: { source: { type: "property", propertyId: PROP_ID }, operator: "changed" },
+      },
+      ok: false,
+      message: "totalizer resolver requires sourcePropertyId",
+    },
+    {
+      name: "bad operator",
+      resolver: {
+        type: "totalizer",
+        sourcePropertyId: PROP_ID,
+        trigger: { source: { type: "property", propertyId: PROP_ID }, operator: "sometimes" },
+      },
+      ok: false,
+      message: "totalizer trigger operator must be a hook condition operator",
+    },
+    {
+      name: "valid with reset",
+      resolver: {
+        type: "totalizer",
+        sourcePropertyId: PROP_ID,
+        trigger: { source: { type: "property", propertyId: PROP_ID }, operator: "changed" },
+        reset: { source: { type: "property", propertyId: PROP_ID }, operator: "changed" },
+      },
+      ok: true,
+    },
+    {
+      name: "bad reset operator",
+      resolver: {
+        type: "totalizer",
+        sourcePropertyId: PROP_ID,
+        trigger: { source: { type: "property", propertyId: PROP_ID }, operator: "changed" },
+        reset: { source: { type: "property", propertyId: PROP_ID }, operator: "sometimes" },
+      },
+      ok: false,
+      message: "totalizer reset operator must be a hook condition operator",
+    },
+  ],
   rollup: [
     {
       name: "valid",

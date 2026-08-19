@@ -1,4 +1,4 @@
-import { isAggregation, type WindowResolverConfig } from "../types/index.js";
+import { isAggregation, isStatefulResolverType, type WindowResolverConfig } from "../types/index.js";
 
 const MIN_WINDOW_MS = 1000;
 
@@ -12,8 +12,8 @@ export function validateWindowResolver(
   const source = getProperty(config.sourcePropertyId);
   if (!source) {
     errors.push(`source property "${config.sourcePropertyId}" does not exist`);
-  } else if (source.resolverType === "window") {
-    errors.push("source property is a window — chained windows are not allowed in v1 (§17.10)");
+  } else if (isStatefulResolverType(source.resolverType)) {
+    errors.push("source property is a window or totalizer — chained stateful resolvers are not allowed (§17.10)");
   }
 
   if (config.kind === "tumbling") {
