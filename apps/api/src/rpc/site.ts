@@ -43,7 +43,7 @@ const listInputSchema = z.object({
  * Create a new site
  */
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorize(context.iam, { permission: "facility:write", site: { kind: "workspace" } }));
+  const scope = grant(await authorize(context.iam, { permission: "facility:write", scope: { kind: "workspace" } }));
 
   const result = await site.create({ ...input, workspaceId: scope.workspaceId });
   return unwrap(result);
@@ -63,7 +63,7 @@ export const list = authRequired.input(listInputSchema).handler(async ({ input, 
  */
 export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "facility:read", site: { kind: "site", siteId: input.id } }),
+    await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.id } }),
   );
 
   const result = await site.getById(input.id, scope.workspaceId);
@@ -93,7 +93,7 @@ export const tree = userOrDisplayRequired.input(treeInputSchema).handler(async (
     const scope = grant(
       await authorize(context.iam, {
         permission: "facility:read",
-        site: { kind: "site", siteId: input.siteId ?? ownSiteId },
+        scope: { kind: "site", siteId: input.siteId ?? ownSiteId },
       }),
     );
 
@@ -108,7 +108,7 @@ export const tree = userOrDisplayRequired.input(treeInputSchema).handler(async (
   // If siteId provided, return single site tree
   if (input.siteId) {
     const scope = grant(
-      await authorize(context.iam, { permission: "facility:read", site: { kind: "site", siteId: input.siteId } }),
+      await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.siteId } }),
     );
     const result = await site.getSiteTree(input.siteId, scope.workspaceId);
     if (result.error !== undefined) throwServiceError(result);
@@ -126,7 +126,7 @@ export const tree = userOrDisplayRequired.input(treeInputSchema).handler(async (
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
   const scope = grant(
-    await authorize(context.iam, { permission: "facility:write", site: { kind: "site", siteId: id } }),
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: id } }),
   );
 
   const result = await site.update(id, updateData, scope.workspaceId);
@@ -139,7 +139,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
  */
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "facility:admin", site: { kind: "site", siteId: input.id } }),
+    await authorize(context.iam, { permission: "facility:admin", scope: { kind: "site", siteId: input.id } }),
   );
 
   const result = await site.remove(input.id, scope.workspaceId);
@@ -158,7 +158,7 @@ const siteIdInputSchema = z.object({
  */
 export const deviceTree = authRequired.input(siteIdInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "facility:read", site: { kind: "site", siteId: input.siteId } }),
+    await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.siteId } }),
   );
 
   const result = await site.getDeviceTree(input.siteId, scope.workspaceId);

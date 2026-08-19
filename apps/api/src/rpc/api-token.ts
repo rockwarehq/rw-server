@@ -34,7 +34,7 @@ export const create = apiTokenAdminRequired.input(createInputSchema).handler(asy
   const workspaceId = requireWorkspaceId(context.iam);
   // The middleware checks settings:admin at the caller's own site; the token
   // grants access to input.siteId, so require settings:admin THERE as well.
-  grant(await authorize(context.iam, { permission: "settings:admin", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "settings:admin", scope: { kind: "site", siteId: input.siteId } }));
 
   const activeCount = await countActiveApiTokens(workspaceId);
   if (activeCount >= MAX_ACTIVE_TOKENS_PER_WORKSPACE) {
@@ -67,14 +67,14 @@ export const create = apiTokenAdminRequired.input(createInputSchema).handler(asy
 });
 
 export const list = apiTokenAdminRequired.handler(async ({ context }) => {
-  grant(await authorize(context.iam, { permission: "settings:admin", site: { kind: "workspace" } }));
+  grant(await authorize(context.iam, { permission: "settings:admin", scope: { kind: "workspace" } }));
 
   const workspaceId = requireWorkspaceId(context.iam);
   return listApiTokens(workspaceId);
 });
 
 export const revoke = apiTokenAdminRequired.input(revokeInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "settings:admin", site: { kind: "workspace" } }));
+  grant(await authorize(context.iam, { permission: "settings:admin", scope: { kind: "workspace" } }));
 
   const workspaceId = requireWorkspaceId(context.iam);
 

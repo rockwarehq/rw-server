@@ -95,7 +95,7 @@ export const inventoryList = authRequired.input(inventoryListInputSchema).handle
  * Get inventory item by ID
  */
 export const inventoryGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "product:read", site: { kind: "inventoryItem", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "product:read", scope: { kind: "inventoryItem", id: input.id } }));
 
   return unwrap(await inventory.getById(input.id), { notFoundMessage: "Inventory item not found" });
 });
@@ -104,7 +104,7 @@ export const inventoryGet = authRequired.input(idInputSchema).handler(async ({ i
  * Get all inventory items from a specific cycle
  */
 export const inventoryGetByCycle = authRequired.input(cycleIdInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "product:read", site: { kind: "cycle", id: input.cycleId } }));
+  grant(await authorize(context.iam, { permission: "product:read", scope: { kind: "cycle", id: input.cycleId } }));
 
   return unwrap(await inventory.getByCycle(input.cycleId));
 });
@@ -117,7 +117,7 @@ export const inventoryGetByCycle = authRequired.input(cycleIdInputSchema).handle
  * Create a new material
  */
 export const materialCreate = authRequired.input(materialCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "product:write", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "product:write", scope: { kind: "site", siteId: input.siteId } }));
 
   return unwrap(await material.create(input));
 });
@@ -135,7 +135,7 @@ export const materialList = authRequired.input(materialListInputSchema).handler(
  * Get material by ID
  */
 export const materialGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "product:read", site: { kind: "material", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "product:read", scope: { kind: "material", id: input.id } }));
 
   return unwrap(await material.getById(input.id), {
     notFoundMessage: "Material not found",
@@ -147,7 +147,7 @@ export const materialGet = authRequired.input(idInputSchema).handler(async ({ in
  * Update material (creates new version version)
  */
 export const materialUpdate = authRequired.input(materialUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "product:write", site: { kind: "material", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "product:write", scope: { kind: "material", id: input.id } }));
 
   const { id, ...updateData } = input;
   return unwrap(await material.update(id, updateData), { overrides: inventoryOverrides });
@@ -157,7 +157,7 @@ export const materialUpdate = authRequired.input(materialUpdateInputSchema).hand
  * Delete material (soft delete)
  */
 export const materialRemove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "product:admin", site: { kind: "material", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "product:admin", scope: { kind: "material", id: input.id } }));
 
   const result = await material.remove(input.id);
   if (result.error) throwServiceError(result, inventoryOverrides);
@@ -273,7 +273,7 @@ const productSetPrimaryPictureInputSchema = z.object({
  * Create a new product
  */
 export const productCreate = authRequired.input(productCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "product:write", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "product:write", scope: { kind: "site", siteId: input.siteId } }));
 
   return unwrap(await product.create(input));
 });
@@ -291,7 +291,7 @@ export const productList = authRequired.input(productListInputSchema).handler(as
  * Get product by ID with materials, pictures, and primary picture URL
  */
 export const productGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "product:read", site: { kind: "product", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "product:read", scope: { kind: "product", id: input.id } }));
 
   return unwrap(await product.getById(input.id), { notFoundMessage: "Product not found" });
 });
@@ -300,7 +300,7 @@ export const productGet = authRequired.input(idInputSchema).handler(async ({ inp
  * Update product (creates new version version)
  */
 export const productUpdate = authRequired.input(productUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "product:write", scope: { kind: "product", id: input.id } }));
 
   const { id, ...updateData } = input;
   return unwrap(await product.update(id, updateData), { overrides: inventoryOverrides });
@@ -310,7 +310,7 @@ export const productUpdate = authRequired.input(productUpdateInputSchema).handle
  * Delete product (soft delete)
  */
 export const productRemove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "product:admin", site: { kind: "product", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "product:admin", scope: { kind: "product", id: input.id } }));
 
   const result = await product.remove(input.id);
   if (result.error) throwServiceError(result);
@@ -325,7 +325,7 @@ export const productRemove = authRequired.input(idInputSchema).handler(async ({ 
  * Archive a product
  */
 export const productArchive = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "product:write", scope: { kind: "product", id: input.id } }));
 
   return unwrap(await product.archive(input.id));
 });
@@ -334,7 +334,7 @@ export const productArchive = authRequired.input(idInputSchema).handler(async ({
  * Unarchive a product
  */
 export const productUnarchive = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "product:write", scope: { kind: "product", id: input.id } }));
 
   return unwrap(await product.unarchive(input.id));
 });
@@ -343,7 +343,7 @@ export const productUnarchive = authRequired.input(idInputSchema).handler(async 
  * Duplicate a product with a new SKU
  */
 export const productDuplicate = authRequired.input(productDuplicateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "product:write", scope: { kind: "product", id: input.id } }));
 
   return unwrap(await product.duplicate(input), { overrides: inventoryOverrides });
 });
@@ -359,7 +359,7 @@ export const productAddMaterial = authRequired
   .input(productAddMaterialInputSchema)
   .handler(async ({ input, context }) => {
     grant(
-      await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.productId } }),
+      await authorize(context.iam, { permission: "product:write", scope: { kind: "product", id: input.productId } }),
     );
 
     return unwrap(await product.addMaterial(input), { overrides: inventoryOverrides });
@@ -372,7 +372,7 @@ export const productUpdateMaterial = authRequired
   .input(productUpdateMaterialInputSchema)
   .handler(async ({ input, context }) => {
     grant(
-      await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.productId } }),
+      await authorize(context.iam, { permission: "product:write", scope: { kind: "product", id: input.productId } }),
     );
 
     return unwrap(await product.updateMaterial(input), { overrides: inventoryOverrides });
@@ -385,7 +385,7 @@ export const productRemoveMaterial = authRequired
   .input(productRemoveMaterialInputSchema)
   .handler(async ({ input, context }) => {
     grant(
-      await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.productId } }),
+      await authorize(context.iam, { permission: "product:write", scope: { kind: "product", id: input.productId } }),
     );
 
     const result = await product.removeMaterial(
@@ -401,7 +401,7 @@ export const productRemoveMaterial = authRequired
  * List materials for a product
  */
 export const productListMaterials = authRequired.input(productIdInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "product:read", site: { kind: "product", id: input.productId } }));
+  grant(await authorize(context.iam, { permission: "product:read", scope: { kind: "product", id: input.productId } }));
 
   return unwrap(await product.listMaterials(input.productId));
 });
@@ -417,7 +417,7 @@ export const productAddPicture = authRequired
   .input(productAddPictureInputSchema)
   .handler(async ({ input, context }) => {
     grant(
-      await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.productId } }),
+      await authorize(context.iam, { permission: "product:write", scope: { kind: "product", id: input.productId } }),
     );
 
     return unwrap(await product.addPicture(input));
@@ -430,7 +430,7 @@ export const productRemovePicture = authRequired
   .input(productRemovePictureInputSchema)
   .handler(async ({ input, context }) => {
     grant(
-      await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.productId } }),
+      await authorize(context.iam, { permission: "product:write", scope: { kind: "product", id: input.productId } }),
     );
 
     const result = await product.removePicture(input.productId, input.pictureId);
@@ -445,7 +445,7 @@ export const productSetPrimaryPicture = authRequired
   .input(productSetPrimaryPictureInputSchema)
   .handler(async ({ input, context }) => {
     grant(
-      await authorize(context.iam, { permission: "product:write", site: { kind: "product", id: input.productId } }),
+      await authorize(context.iam, { permission: "product:write", scope: { kind: "product", id: input.productId } }),
     );
 
     const result = await product.setPrimaryPicture(input.productId, input.pictureId);
@@ -457,7 +457,7 @@ export const productSetPrimaryPicture = authRequired
  * List pictures for a product with presigned download URLs
  */
 export const productListPictures = authRequired.input(productIdInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "product:read", site: { kind: "product", id: input.productId } }));
+  grant(await authorize(context.iam, { permission: "product:read", scope: { kind: "product", id: input.productId } }));
 
   return unwrap(await product.listPictures(input.productId));
 });
@@ -509,7 +509,7 @@ export const productCreateAltGroup = authRequired
     grant(
       await authorize(context.iam, {
         permission: "product:write",
-        site: { kind: "productMaterial", id: input.productMaterialId },
+        scope: { kind: "productMaterial", id: input.productMaterialId },
       }),
     );
 
@@ -527,7 +527,7 @@ export const productAddMaterialToAltGroup = authRequired
     grant(
       await authorize(context.iam, {
         permission: "product:write",
-        site: { kind: "productAltGroup", id: input.altGroupId },
+        scope: { kind: "productAltGroup", id: input.altGroupId },
       }),
     );
 
@@ -545,7 +545,7 @@ export const productUpdateAltGroupLabel = authRequired
     grant(
       await authorize(context.iam, {
         permission: "product:write",
-        site: { kind: "productAltGroup", id: input.altGroupId },
+        scope: { kind: "productAltGroup", id: input.altGroupId },
       }),
     );
 
@@ -567,7 +567,7 @@ export const productSetAltGroupActive = userOrDisplayRequired
     grant(
       await authorize(context.iam, {
         permission: "product:write",
-        site: { kind: "productAltGroup", id: input.altGroupId },
+        scope: { kind: "productAltGroup", id: input.altGroupId },
       }),
     );
 
@@ -587,7 +587,7 @@ export const productRemoveFromAltGroup = authRequired
     grant(
       await authorize(context.iam, {
         permission: "product:write",
-        site: { kind: "productMaterial", id: input.productMaterialId },
+        scope: { kind: "productMaterial", id: input.productMaterialId },
       }),
     );
 
@@ -602,7 +602,7 @@ export const productDeleteAltGroup = authRequired.input(altGroupIdInputSchema).h
   grant(
     await authorize(context.iam, {
       permission: "product:write",
-      site: { kind: "productAltGroup", id: input.altGroupId },
+      scope: { kind: "productAltGroup", id: input.altGroupId },
     }),
   );
 
@@ -669,7 +669,7 @@ const materialLedgerUsageInputSchema = z.object({
 export const materialLedgerCreate = authRequired
   .input(materialLedgerCreateInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "product:write", site: { kind: "site", siteId: input.siteId } }));
+    grant(await authorize(context.iam, { permission: "product:write", scope: { kind: "site", siteId: input.siteId } }));
 
     const result = await materialLedger.create({
       siteId: input.siteId,
@@ -701,6 +701,6 @@ export const materialLedgerList = authRequired
 export const materialLedgerUsage = authRequired
   .input(materialLedgerUsageInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "product:read", site: { kind: "site", siteId: input.siteId } }));
+    grant(await authorize(context.iam, { permission: "product:read", scope: { kind: "site", siteId: input.siteId } }));
     return materialLedger.usage(input);
   });

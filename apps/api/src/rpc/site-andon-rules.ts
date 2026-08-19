@@ -49,7 +49,7 @@ function hasAndonRuleError(result: unknown): result is { error: string; code: st
 
 export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:read", site: { kind: "site", siteId: input.siteId } }),
+    await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.siteId } }),
   );
 
   const result = await site.andonRules.list(input, workspaceId);
@@ -62,7 +62,7 @@ export const list = userOrDisplayRequired.input(listInputSchema).handler(async (
 
 export const create = authRequired.input(andonRuleInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:write", site: { kind: "site", siteId: input.siteId } }),
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }),
   );
 
   const result = await site.andonRules.create(input, workspaceId);
@@ -75,7 +75,7 @@ export const create = authRequired.input(andonRuleInputSchema).handler(async ({ 
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:write", site: { kind: "siteAndonRule", id: input.id } }),
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "siteAndonRule", id: input.id } }),
   );
 
   const result = await site.andonRules.update(input, workspaceId);
@@ -88,7 +88,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 
 export const remove = authRequired.input(deleteInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:write", site: { kind: "siteAndonRule", id: input.id } }),
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "siteAndonRule", id: input.id } }),
   );
 
   const result = await site.andonRules.remove(input.id, workspaceId);
@@ -101,7 +101,7 @@ export const remove = authRequired.input(deleteInputSchema).handler(async ({ inp
 
 export const reorder = authRequired.input(reorderInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:write", site: { kind: "site", siteId: input.siteId } }),
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }),
   );
 
   const result = await site.andonRules.reorder(input, workspaceId);

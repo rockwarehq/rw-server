@@ -96,7 +96,7 @@ export default async function points(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { id } = request.params;
-      const auth = await authorize(request.iam, { permission: "facility:read", site: { kind: "point", id } });
+      const auth = await authorize(request.iam, { permission: "facility:read", scope: { kind: "point", id } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const point = await datasource.points.getById(id);
@@ -127,7 +127,7 @@ export default async function points(fastify: FastifyTypedInstance) {
       const { id } = request.params;
       const body = request.body;
 
-      const auth = await authorize(request.iam, { permission: "facility:write", site: { kind: "point", id } });
+      const auth = await authorize(request.iam, { permission: "facility:write", scope: { kind: "point", id } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await datasource.points.update(id, body);
@@ -154,7 +154,7 @@ export default async function points(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { id } = request.params;
-      const auth = await authorize(request.iam, { permission: "facility:write", site: { kind: "point", id } });
+      const auth = await authorize(request.iam, { permission: "facility:write", scope: { kind: "point", id } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await datasource.points.remove(id);

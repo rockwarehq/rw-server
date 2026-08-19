@@ -36,7 +36,7 @@ export const list = userOrDisplayRequired
   .output(listOutputSchema)
   .handler(async ({ context, input }) => {
     const { workspaceId } = grant(
-      await authorize(context.iam, { permission: "facility:read", site: { kind: "site", siteId: input.siteId } }),
+      await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.siteId } }),
     );
 
     const result = await listMetrics({

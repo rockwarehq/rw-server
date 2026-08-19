@@ -204,7 +204,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { permission: "facility:write", site: { kind: "workspace" } });
+      const auth = await authorize(request.iam, { permission: "facility:write", scope: { kind: "workspace" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await site.create({ ...request.body, workspaceId: auth.workspaceId });
@@ -277,7 +277,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
         permission: "facility:read",
-        site: { kind: "site", siteId: request.params.id },
+        scope: { kind: "site", siteId: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
@@ -311,7 +311,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
         permission: "facility:write",
-        site: { kind: "site", siteId: request.params.id },
+        scope: { kind: "site", siteId: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
@@ -345,7 +345,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
         permission: "facility:admin",
-        site: { kind: "site", siteId: request.params.id },
+        scope: { kind: "site", siteId: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 

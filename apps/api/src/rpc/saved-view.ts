@@ -84,7 +84,7 @@ function requireUserContext(iam: { id?: string; workspaceId?: string }) {
 
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
   const { userId, workspaceId } = requireUserContext(context.iam);
-  grant(await authorize(context.iam, { permission: "dashboard:write", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "dashboard:write", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await savedView.create(
     {
@@ -105,7 +105,7 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
   const { userId, workspaceId } = requireUserContext(context.iam);
-  grant(await authorize(context.iam, { permission: "dashboard:read", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "dashboard:read", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await savedView.list(
     { siteId: input.siteId, page: input.page, scopeId: input.scopeId ?? null, userId },
@@ -117,7 +117,7 @@ export const list = authRequired.input(listInputSchema).handler(async ({ input, 
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { userId, workspaceId } = requireUserContext(context.iam);
-  grant(await authorize(context.iam, { permission: "dashboard:write", site: { kind: "savedView", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "dashboard:write", scope: { kind: "savedView", id: input.id } }));
 
   const result = await savedView.update(
     input.id,
@@ -138,7 +138,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const { userId, workspaceId } = requireUserContext(context.iam);
-  grant(await authorize(context.iam, { permission: "dashboard:write", site: { kind: "savedView", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "dashboard:write", scope: { kind: "savedView", id: input.id } }));
 
   const result = await savedView.remove(input.id, { actorId: userId }, workspaceId);
   if (result.error !== undefined) {

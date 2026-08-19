@@ -25,8 +25,13 @@ import {
 // SITE-level scope only; it does not verify workspace containment of
 // resources (vacuously true) and adds no queries for it.
 
-/** Where the site scope for a check comes from. */
-export type SiteRef =
+/**
+ * The scope a permission is authorized against: a literal site, the whole
+ * workspace, "any granted site", or a resource whose site lineage the policy
+ * resolves. authorize(permission, scope) produces a verified grant — or a
+ * typed denial.
+ */
+export type ScopeRef =
   | { kind: "workspace" } // workspace-level action (e.g. site.create)
   | { kind: "anySite" } // grant if permission held workspace-wide or at >=1 site
   | { kind: "site"; siteId: string } // literal id from input/params
@@ -108,21 +113,21 @@ export interface PolicyDeps {
 export interface AuthorizeFn {
   (
     iam: IAMContext | undefined,
-    check: { permission: Permission; site: { kind: "workspace" } | { kind: "anySite" } },
+    check: { permission: Permission; scope: { kind: "workspace" } | { kind: "anySite" } },
   ): Promise<WorkspaceGrant | PolicyDenial>;
   (
     iam: IAMContext | undefined,
-    check: { permission: Permission; site: { kind: "site"; siteId: string } },
+    check: { permission: Permission; scope: { kind: "site"; siteId: string } },
   ): Promise<SiteGrant | PolicyDenial>;
   (
     iam: IAMContext | undefined,
-    check: { permission: Permission; site: { kind: NullableSiteKind; id: string } },
+    check: { permission: Permission; scope: { kind: NullableSiteKind; id: string } },
   ): Promise<SiteGrant | WorkspaceGrant | PolicyDenial>;
   (
     iam: IAMContext | undefined,
-    check: { permission: Permission; site: { kind: Exclude<ResolvableKind, NullableSiteKind>; id: string } },
+    check: { permission: Permission; scope: { kind: Exclude<ResolvableKind, NullableSiteKind>; id: string } },
   ): Promise<SiteGrant | PolicyDenial>;
-  (iam: IAMContext | undefined, check: { permission: Permission; site: SiteRef }): Promise<PolicyResult>;
+  (iam: IAMContext | undefined, check: { permission: Permission; scope: ScopeRef }): Promise<PolicyResult>;
 }
 
 const deny = (code: PolicyDenial["code"], message: string, permission?: Permission): PolicyDenial => ({
@@ -221,14 +226,14 @@ export function createPolicy(deps: PolicyDeps) {
 
   async function authorize(
     iam: IAMContext | undefined,
-    check: { permission: Permission; site: SiteRef },
+    check: { permission: Permission; scope: ScopeRef },
   ): Promise<PolicyResult> {
     const auth = requireAuthenticated(iam);
     if (!auth.ok) return auth;
     const { workspaceId } = auth;
     const principal = auth.iam.principal;
 
-    if (check.site.kind === "workspace") {
+    if (check.scope.kind === "workspace") {
       if (principal !== Principal.USER) {
         return deny("FORBIDDEN", "Workspace-level actions require a user account");
       }
@@ -239,7 +244,7 @@ export function createPolicy(deps: PolicyDeps) {
       return { ok: true, workspaceId };
     }
 
-    if (check.site.kind === "anySite") {
+    if (check.scope.kind === "anySite") {
       return anySiteGrant(auth.iam, check.permission, workspaceId);
     }
 
@@ -248,12 +253,12 @@ export function createPolicy(deps: PolicyDeps) {
     // parent hop), and run BEFORE any permission query so nonexistent ids
     // short-circuit.
     let siteId: string;
-    if (check.site.kind === "site") {
-      siteId = check.site.siteId;
+    if (check.scope.kind === "site") {
+      siteId = check.scope.siteId;
     } else {
-      const resolved = await deps.resolveSiteRef(check.site);
+      const resolved = await deps.resolveSiteRef(check.scope);
       if (!resolved) {
-        return deny("NOT_FOUND", NOT_FOUND_MESSAGES[check.site.kind]);
+        return deny("NOT_FOUND", NOT_FOUND_MESSAGES[check.scope.kind]);
       }
       if (resolved.siteId === null) {
         // Row exists but is not attached to a site (unassigned device,

@@ -66,7 +66,7 @@ export default async function drivers(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { permission: "facility:read", site: { kind: "anySite" } });
+      const auth = await authorize(request.iam, { permission: "facility:read", scope: { kind: "anySite" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const { name, version } = request.query;
@@ -88,7 +88,7 @@ export default async function drivers(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { permission: "facility:read", site: { kind: "anySite" } });
+      const auth = await authorize(request.iam, { permission: "facility:read", scope: { kind: "anySite" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const { id } = request.params;
@@ -114,7 +114,7 @@ export default async function drivers(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { permission: "facility:read", site: { kind: "anySite" } });
+      const auth = await authorize(request.iam, { permission: "facility:read", scope: { kind: "anySite" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const { id } = request.params;

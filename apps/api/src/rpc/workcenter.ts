@@ -49,7 +49,7 @@ const listInputSchema = z.object({
  * Create a new workcenter
  */
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "facility:write", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await workcenter.create(input);
   if (result.error !== undefined) throwServiceError(result);
@@ -69,7 +69,7 @@ export const list = authRequired.input(listInputSchema).handler(async ({ input, 
  */
 export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "facility:read", site: { kind: "workcenter", id: input.id } }),
+    await authorize(context.iam, { permission: "facility:read", scope: { kind: "workcenter", id: input.id } }),
   );
 
   const result = await workcenter.getById(input.id, scope.workspaceId);
@@ -82,7 +82,7 @@ export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ i
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
   const scope = grant(
-    await authorize(context.iam, { permission: "facility:write", site: { kind: "workcenter", id: id } }),
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "workcenter", id: id } }),
   );
 
   const result = await workcenter.update(id, updateData, scope.workspaceId);
@@ -97,7 +97,7 @@ export const move = authRequired.input(moveInputSchema).handler(async ({ input, 
   const scope = grant(
     await authorize(context.iam, {
       permission: "facility:write",
-      site: { kind: "workcenter", id: input.id },
+      scope: { kind: "workcenter", id: input.id },
     }),
   );
 
@@ -113,7 +113,7 @@ export const remove = authRequired.input(idInputSchema).handler(async ({ input, 
   const scope = grant(
     await authorize(context.iam, {
       permission: "facility:admin",
-      site: { kind: "workcenter", id: input.id },
+      scope: { kind: "workcenter", id: input.id },
     }),
   );
 

@@ -48,26 +48,26 @@ const idInputSchema = z.object({
 // ============================================================================
 
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "employee:write", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "employee:write", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await crud.create(input);
   return result.data;
 });
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "employee:read", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "employee:read", scope: { kind: "site", siteId: input.siteId } }));
 
   return crud.list(input);
 });
 
 export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "employee:read", site: { kind: "anySite" } }));
+  grant(await authorize(context.iam, { permission: "employee:read", scope: { kind: "anySite" } }));
 
   return unwrap(await crud.getById(input.id), { notFoundMessage: "Employee not found" });
 });
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "employee:write", site: { kind: "anySite" } }));
+  grant(await authorize(context.iam, { permission: "employee:write", scope: { kind: "anySite" } }));
 
   const { id, ...updateData } = input;
   const result = await crud.update(id, updateData);
@@ -78,7 +78,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 });
 
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "employee:admin", site: { kind: "anySite" } }));
+  grant(await authorize(context.iam, { permission: "employee:admin", scope: { kind: "anySite" } }));
 
   const result = await crud.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);

@@ -140,7 +140,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
         permission: "facility:write",
-        site: { kind: "site", siteId: request.body.siteId },
+        scope: { kind: "site", siteId: request.body.siteId },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
@@ -198,7 +198,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
         permission: "facility:read",
-        site: { kind: "station", id: request.params.id },
+        scope: { kind: "station", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
@@ -232,7 +232,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
         permission: "facility:write",
-        site: { kind: "station", id: request.params.id },
+        scope: { kind: "station", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
@@ -267,7 +267,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
         permission: "facility:write",
-        site: { kind: "station", id: request.params.id },
+        scope: { kind: "station", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
@@ -301,7 +301,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
         permission: "facility:admin",
-        site: { kind: "station", id: request.params.id },
+        scope: { kind: "station", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 

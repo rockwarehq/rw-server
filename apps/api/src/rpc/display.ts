@@ -86,7 +86,7 @@ export const heartbeat = publicProcedure.input(idInputSchema).handler(async ({ i
  */
 export const claim = authRequired.input(claimInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:write", site: { kind: "site", siteId: input.siteId } }),
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }),
   );
 
   const result = await display.claim(workspaceId, input.claimCode, {
@@ -114,7 +114,7 @@ export const list = authRequired.input(listInputSchema).handler(async ({ input, 
  */
 export const assignDashboard = authRequired.input(assignDashboardInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:write", site: { kind: "display", id: input.id } }),
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "display", id: input.id } }),
   );
 
   const result = await display.assignDashboard(workspaceId, input.id, input.dashboardId);
@@ -129,7 +129,7 @@ export const assignDashboard = authRequired.input(assignDashboardInputSchema).ha
  */
 export const unassignDashboard = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:write", site: { kind: "display", id: input.id } }),
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "display", id: input.id } }),
   );
 
   const result = await display.unassignDashboard(workspaceId, input.id);
@@ -142,7 +142,7 @@ export const unassignDashboard = authRequired.input(idInputSchema).handler(async
  */
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:write", site: { kind: "display", id: input.id } }),
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "display", id: input.id } }),
   );
 
   const { id, ...updateData } = input;
@@ -160,7 +160,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
  */
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:admin", site: { kind: "display", id: input.id } }),
+    await authorize(context.iam, { permission: "facility:admin", scope: { kind: "display", id: input.id } }),
   );
 
   const result = await display.remove(workspaceId, input.id);

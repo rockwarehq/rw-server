@@ -29,7 +29,7 @@ const currentInputSchema = z.object({
 });
 
 export const current = userOrDisplayRequired.input(currentInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:read", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await shift.current.getCurrentShift(input.siteId, input.workCenterId);
   return unwrap(result);
@@ -135,7 +135,7 @@ const assignmentListInputSchema = z.object({
 // ============================================================================
 
 export const patternCreate = authRequired.input(patternCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await shift.pattern.create(input);
   if (result.error !== undefined) throwServiceError(result);
@@ -148,14 +148,14 @@ export const patternList = authRequired.input(patternListInputSchema).handler(as
 });
 
 export const patternGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:read", site: { kind: "shiftPattern", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "shiftPattern", id: input.id } }));
 
   const result = await shift.pattern.getById(input.id);
   return unwrap(result, { notFoundMessage: "Shift pattern not found" });
 });
 
 export const patternUpdate = authRequired.input(patternUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", site: { kind: "shiftPattern", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "shiftPattern", id: input.id } }));
 
   const { id, ...updateData } = input;
   const result = await shift.pattern.update(id, updateData);
@@ -164,7 +164,7 @@ export const patternUpdate = authRequired.input(patternUpdateInputSchema).handle
 });
 
 export const patternDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:admin", site: { kind: "shiftPattern", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "schedule:admin", scope: { kind: "shiftPattern", id: input.id } }));
 
   const result = await shift.pattern.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
@@ -172,7 +172,7 @@ export const patternDelete = authRequired.input(idInputSchema).handler(async ({ 
 });
 
 export const patternDuplicate = authRequired.input(duplicateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", site: { kind: "shiftPattern", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "shiftPattern", id: input.id } }));
 
   const result = await shift.pattern.duplicate(input.id, input.name);
   if (result.error !== undefined) throwServiceError(result);
@@ -185,7 +185,7 @@ export const patternDuplicate = authRequired.input(duplicateInputSchema).handler
 
 export const definitionCreate = authRequired.input(definitionCreateInputSchema).handler(async ({ input, context }) => {
   grant(
-    await authorize(context.iam, { permission: "schedule:write", site: { kind: "shiftPattern", id: input.patternId } }),
+    await authorize(context.iam, { permission: "schedule:write", scope: { kind: "shiftPattern", id: input.patternId } }),
   );
 
   const result = await shift.definition.create(input);
@@ -195,14 +195,14 @@ export const definitionCreate = authRequired.input(definitionCreateInputSchema).
 
 export const definitionList = authRequired.input(definitionListInputSchema).handler(async ({ input, context }) => {
   grant(
-    await authorize(context.iam, { permission: "schedule:read", site: { kind: "shiftPattern", id: input.patternId } }),
+    await authorize(context.iam, { permission: "schedule:read", scope: { kind: "shiftPattern", id: input.patternId } }),
   );
 
   return shift.definition.list(input);
 });
 
 export const definitionGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:read", site: { kind: "shiftDefinition", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "shiftDefinition", id: input.id } }));
 
   const result = await shift.definition.getById(input.id);
   return unwrap(result, { notFoundMessage: "Shift definition not found" });
@@ -210,7 +210,7 @@ export const definitionGet = authRequired.input(idInputSchema).handler(async ({ 
 
 export const definitionUpdate = authRequired.input(definitionUpdateInputSchema).handler(async ({ input, context }) => {
   grant(
-    await authorize(context.iam, { permission: "schedule:write", site: { kind: "shiftDefinition", id: input.id } }),
+    await authorize(context.iam, { permission: "schedule:write", scope: { kind: "shiftDefinition", id: input.id } }),
   );
 
   const { id, ...updateData } = input;
@@ -221,7 +221,7 @@ export const definitionUpdate = authRequired.input(definitionUpdateInputSchema).
 
 export const definitionDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   grant(
-    await authorize(context.iam, { permission: "schedule:admin", site: { kind: "shiftDefinition", id: input.id } }),
+    await authorize(context.iam, { permission: "schedule:admin", scope: { kind: "shiftDefinition", id: input.id } }),
   );
 
   const result = await shift.definition.remove(input.id);
@@ -234,7 +234,7 @@ export const definitionDelete = authRequired.input(idInputSchema).handler(async 
 // ============================================================================
 
 export const assignmentCreate = authRequired.input(assignmentCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await shift.assignment.create(input);
   if (result.error !== undefined) throwServiceError(result, ASSIGNMENT_CREATE_OVERRIDES);
@@ -247,7 +247,7 @@ export const assignmentList = authRequired.input(assignmentListInputSchema).hand
 });
 
 export const assignmentGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:read", site: { kind: "shiftAssignment", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "shiftAssignment", id: input.id } }));
 
   const result = await shift.assignment.getById(input.id);
   return unwrap(result, { notFoundMessage: "Shift assignment not found" });
@@ -255,7 +255,7 @@ export const assignmentGet = authRequired.input(idInputSchema).handler(async ({ 
 
 export const assignmentUpdate = authRequired.input(assignmentUpdateInputSchema).handler(async ({ input, context }) => {
   grant(
-    await authorize(context.iam, { permission: "schedule:write", site: { kind: "shiftAssignment", id: input.id } }),
+    await authorize(context.iam, { permission: "schedule:write", scope: { kind: "shiftAssignment", id: input.id } }),
   );
 
   const { id, ...updateData } = input;
@@ -266,7 +266,7 @@ export const assignmentUpdate = authRequired.input(assignmentUpdateInputSchema).
 
 export const assignmentDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   grant(
-    await authorize(context.iam, { permission: "schedule:admin", site: { kind: "shiftAssignment", id: input.id } }),
+    await authorize(context.iam, { permission: "schedule:admin", scope: { kind: "shiftAssignment", id: input.id } }),
   );
 
   const result = await shift.assignment.remove(input.id);

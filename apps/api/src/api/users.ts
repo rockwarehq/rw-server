@@ -369,7 +369,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       // Roster reads align with RPC workspace.listMembers: user:read held at
       // any site suffices (site Factory Administrators manage their people).
-      const auth = await authorize(request.iam, { permission: "user:read", site: { kind: "anySite" } });
+      const auth = await authorize(request.iam, { permission: "user:read", scope: { kind: "anySite" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       return user.list(request.query);
@@ -545,7 +545,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { permission: "user:read", site: { kind: "anySite" } });
+      const auth = await authorize(request.iam, { permission: "user:read", scope: { kind: "anySite" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await user.getById(request.params.id);
@@ -573,7 +573,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { permission: "user:read", site: { kind: "anySite" } });
+      const auth = await authorize(request.iam, { permission: "user:read", scope: { kind: "anySite" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await user.getLockStatus(request.params.id);

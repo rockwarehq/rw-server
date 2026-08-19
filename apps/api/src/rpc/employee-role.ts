@@ -34,21 +34,21 @@ const idInputSchema = z.object({
 // ============================================================================
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "employee:read", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "employee:read", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await role.list(input.siteId);
   return result.data;
 });
 
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "employee:admin", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "employee:admin", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await role.create(input);
   return result.data;
 });
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "employee:admin", site: { kind: "employeeRole", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "employee:admin", scope: { kind: "employeeRole", id: input.id } }));
 
   const { id, ...data } = input;
   const result = await role.update(id, data);
@@ -57,7 +57,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 });
 
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "employee:admin", site: { kind: "employeeRole", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "employee:admin", scope: { kind: "employeeRole", id: input.id } }));
 
   const result = await role.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);

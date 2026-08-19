@@ -65,7 +65,7 @@ export const getCatalog = authRequired
     }),
   )
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "settings:read", site: { kind: "workspace" } }));
+    grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "workspace" } }));
 
     const fw = await getAutomationFramework();
     return fw.catalog(input.eventType, input.actionType, input.eventVersion, input.actionVersion);
@@ -80,7 +80,7 @@ export const getCatalog = authRequired
 export const listRefOptions = authRequired
   .input(z.object({ source: z.string().min(1) }))
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "settings:read", site: { kind: "workspace" } }));
+    grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "workspace" } }));
 
     const fw = await getAutomationFramework();
     try {
@@ -92,7 +92,7 @@ export const listRefOptions = authRequired
   });
 
 export const listAutomations = authRequired.handler(async ({ context }) => {
-  grant(await authorize(context.iam, { permission: "settings:read", site: { kind: "workspace" } }));
+  grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "workspace" } }));
 
   const fw = await getAutomationFramework();
   return fw.store.list();
@@ -113,7 +113,7 @@ export const createAutomation = authRequired
     }),
   )
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "settings:write", site: { kind: "workspace" } }));
+    grant(await authorize(context.iam, { permission: "settings:write", scope: { kind: "workspace" } }));
 
     const fw = await getAutomationFramework();
     const eventSchema = fw.eventSchemas[input.event];
@@ -151,7 +151,7 @@ export const updateAutomation = authRequired
     }),
   )
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "settings:write", site: { kind: "workspace" } }));
+    grant(await authorize(context.iam, { permission: "settings:write", scope: { kind: "workspace" } }));
 
     const fw = await getAutomationFramework();
     const existing = fw.store.get(input.id);
@@ -183,7 +183,7 @@ export const updateAutomation = authRequired
   });
 
 export const deleteAutomation = authRequired.input(z.object({ id: z.string() })).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "settings:admin", site: { kind: "workspace" } }));
+  grant(await authorize(context.iam, { permission: "settings:admin", scope: { kind: "workspace" } }));
 
   const fw = await getAutomationFramework();
   if (!(await fw.store.remove(input.id))) throw new ORPCError("NOT_FOUND", { message: "automation not found" });

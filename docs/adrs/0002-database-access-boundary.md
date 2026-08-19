@@ -42,7 +42,7 @@ changes.
 **Decision.** Any handler-level Prisma read MUST:
 
 1. Obtain scope from the policy layer before touching the database —
-   `authorize(iam, { permission, site })` when the input names a site or
+   `authorize(iam, { permission, scope })` when the input names a site or
    resource, `authorizeList(iam, { permission, requestedSiteId? })` otherwise.
    Authorization runs **before** any `findUnique`/`findUniqueOrThrow`, so
    resource existence is never disclosed to an unauthorized caller.

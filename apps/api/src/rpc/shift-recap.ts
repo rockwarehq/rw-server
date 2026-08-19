@@ -28,7 +28,7 @@ const shiftInstanceSelect = {
 export const shiftInstanceList = authRequired
   .input(shiftInstanceListInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "schedule:read", site: { kind: "site", siteId: input.siteId } }));
+    grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "site", siteId: input.siteId } }));
 
     const rows = await prisma.shiftInstance.findMany({
       where: {
@@ -54,7 +54,7 @@ const currentShiftInstanceInputSchema = z.object({
 export const currentShiftInstance = userOrDisplayRequired
   .input(currentShiftInstanceInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "schedule:read", site: { kind: "site", siteId: input.siteId } }));
+    grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "site", siteId: input.siteId } }));
 
     const now = new Date();
     const row = await prisma.shiftInstance.findFirst({
@@ -83,7 +83,7 @@ const metricBucketLogListInputSchema = z.object({
 export const metricBucketLogList = authRequired
   .input(metricBucketLogListInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:read", site: { kind: "site", siteId: input.siteId } }));
+    grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
 
     // Get stations belonging to this workcenter
     const stations = await prisma.station.findMany({
@@ -159,7 +159,7 @@ const stationJobLogListInputSchema = z.object({
 export const stationJobLogList = authRequired
   .input(stationJobLogListInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:read", site: { kind: "site", siteId: input.siteId } }));
+    grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
 
     // Look up the shift instance for its time boundaries
     const shiftInstance = await prisma.shiftInstance.findFirstOrThrow({
@@ -214,7 +214,7 @@ const jobMetricsListInputSchema = z.object({
 });
 
 export const jobMetricsList = authRequired.input(jobMetricsListInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
 
   // Get stations in workcenter to build path filter
   const stations = await prisma.station.findMany({
@@ -319,7 +319,7 @@ const downtimeLogListInputSchema = z.object({
 export const downtimeLogList = userOrDisplayRequired
   .input(downtimeLogListInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "status:read", site: { kind: "site", siteId: input.siteId } }));
+    grant(await authorize(context.iam, { permission: "status:read", scope: { kind: "site", siteId: input.siteId } }));
 
     const shiftInstance = await prisma.shiftInstance.findFirstOrThrow({
       where: { id: input.shiftInstanceId, siteId: input.siteId },
@@ -393,7 +393,7 @@ const scrapByReasonListInputSchema = z.object({
 export const scrapByReasonList = userOrDisplayRequired
   .input(scrapByReasonListInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:read", site: { kind: "site", siteId: input.siteId } }));
+    grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
 
     const stations = await prisma.station.findMany({
       where: { siteId: input.siteId, workcenterId: input.workCenterId },
@@ -443,7 +443,7 @@ const commentListInputSchema = z.object({
 });
 
 export const commentList = userOrDisplayRequired.input(commentListInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:read", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await shiftCommentService.list({
     shiftInstanceId: input.shiftInstanceId,
@@ -461,7 +461,7 @@ const commentCreateInputSchema = z.object({
 });
 
 export const commentCreate = authRequired.input(commentCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await shiftCommentService.create({
     siteId: input.siteId,
@@ -481,7 +481,7 @@ const commentUpdateInputSchema = z.object({
 });
 
 export const commentUpdate = authRequired.input(commentUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", site: { kind: "shiftComment", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "shiftComment", id: input.id } }));
 
   const result = await shiftCommentService.update(input.id, {
     text: input.text,
@@ -496,7 +496,7 @@ const commentDeleteInputSchema = z.object({
 });
 
 export const commentDelete = authRequired.input(commentDeleteInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", site: { kind: "shiftComment", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "shiftComment", id: input.id } }));
 
   const result = await shiftCommentService.remove(input.id, { actorId: context.iam.id });
   if (result.error !== undefined) throwServiceError(result);

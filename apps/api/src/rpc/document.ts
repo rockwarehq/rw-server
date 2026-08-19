@@ -124,7 +124,7 @@ export const createFolder = authRequired.input(createFolderInputSchema).handler(
   const { workspaceId } = grant(
     await authorize(context.iam, {
       permission: "facility:write",
-      site: input.siteId ? { kind: "site", siteId: input.siteId } : { kind: "anySite" },
+      scope: input.siteId ? { kind: "site", siteId: input.siteId } : { kind: "anySite" },
     }),
   );
 
@@ -137,7 +137,7 @@ export const createUpload = authRequired.input(createUploadInputSchema).handler(
   const { workspaceId } = grant(
     await authorize(context.iam, {
       permission: "facility:write",
-      site: input.siteId ? { kind: "site", siteId: input.siteId } : { kind: "anySite" },
+      scope: input.siteId ? { kind: "site", siteId: input.siteId } : { kind: "anySite" },
     }),
   );
 
@@ -148,7 +148,7 @@ export const createUpload = authRequired.input(createUploadInputSchema).handler(
 
 export const completeUpload = authRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
   grant(
-    await authorize(context.iam, { permission: "facility:write", site: { kind: "document", id: input.documentId } }),
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "document", id: input.documentId } }),
   );
 
   const result = await documents.completeUpload(input.documentId);
@@ -160,7 +160,7 @@ export const list = authRequired.input(listInputSchema).handler(async ({ input, 
   grant(
     await authorize(context.iam, {
       permission: "facility:read",
-      site: input.siteId ? { kind: "site", siteId: input.siteId } : { kind: "anySite" },
+      scope: input.siteId ? { kind: "site", siteId: input.siteId } : { kind: "anySite" },
     }),
   );
 
@@ -177,7 +177,7 @@ export const get = userOrDisplayRequired.input(documentIdInputSchema).handler(as
   }
 
   grant(
-    await authorize(context.iam, { permission: "facility:read", site: { kind: "document", id: input.documentId } }),
+    await authorize(context.iam, { permission: "facility:read", scope: { kind: "document", id: input.documentId } }),
   );
 
   const result = await documents.getById(input.documentId, { includePending: true });
@@ -191,7 +191,7 @@ export const download = userOrDisplayRequired.input(documentIdInputSchema).handl
     await assertDisplayCanAccessDocument(context, input.documentId);
   } else {
     grant(
-      await authorize(context.iam, { permission: "facility:read", site: { kind: "document", id: input.documentId } }),
+      await authorize(context.iam, { permission: "facility:read", scope: { kind: "document", id: input.documentId } }),
     );
   }
 
@@ -205,7 +205,7 @@ export const open = userOrDisplayRequired.input(documentIdInputSchema).handler(a
     await assertDisplayCanAccessDocument(context, input.documentId);
   } else {
     grant(
-      await authorize(context.iam, { permission: "facility:read", site: { kind: "document", id: input.documentId } }),
+      await authorize(context.iam, { permission: "facility:read", scope: { kind: "document", id: input.documentId } }),
     );
   }
 
@@ -216,7 +216,7 @@ export const open = userOrDisplayRequired.input(documentIdInputSchema).handler(a
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   grant(
-    await authorize(context.iam, { permission: "facility:write", site: { kind: "document", id: input.documentId } }),
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "document", id: input.documentId } }),
   );
 
   const { documentId, ...updateData } = input;
@@ -227,7 +227,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 
 export const remove = authRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
   grant(
-    await authorize(context.iam, { permission: "facility:admin", site: { kind: "document", id: input.documentId } }),
+    await authorize(context.iam, { permission: "facility:admin", scope: { kind: "document", id: input.documentId } }),
   );
 
   const result = await documents.remove(input.documentId);
@@ -237,7 +237,7 @@ export const remove = authRequired.input(documentIdInputSchema).handler(async ({
 
 export const link = authRequired.input(documentLinkInputSchema).handler(async ({ input, context }) => {
   grant(
-    await authorize(context.iam, { permission: "facility:write", site: { kind: "document", id: input.documentId } }),
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "document", id: input.documentId } }),
   );
 
   const result = await documents.link(input.documentId, input.targetType as DocumentTargetType, input.targetId);
@@ -247,14 +247,14 @@ export const link = authRequired.input(documentLinkInputSchema).handler(async ({
 
 export const unlink = authRequired.input(documentLinkInputSchema).handler(async ({ input, context }) => {
   grant(
-    await authorize(context.iam, { permission: "facility:write", site: { kind: "document", id: input.documentId } }),
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "document", id: input.documentId } }),
   );
 
   return documents.unlink(input.documentId, input.targetType as DocumentTargetType, input.targetId);
 });
 
 export const listForTarget = authRequired.input(targetInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "facility:read", site: { kind: "anySite" } }));
+  grant(await authorize(context.iam, { permission: "facility:read", scope: { kind: "anySite" } }));
 
   return documents.listForTarget(input.targetType as DocumentTargetType, input.targetId, getLabelFilter(input));
 });

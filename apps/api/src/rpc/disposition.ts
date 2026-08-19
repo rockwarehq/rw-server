@@ -128,7 +128,7 @@ const logListInputSchema = z.object({
 export const dispositionCreate = authRequired
   .input(dispositionCreateInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:write", site: { kind: "site", siteId: input.siteId } }));
+    grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "site", siteId: input.siteId } }));
 
     return unwrap(await dispositionService.create(input));
   });
@@ -141,7 +141,7 @@ export const dispositionList = userOrDisplayRequired
   });
 
 export const dispositionGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", site: { kind: "disposition", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "disposition", id: input.id } }));
 
   return unwrap(await dispositionService.getById(input.id), { notFoundMessage: "Disposition not found" });
 });
@@ -149,14 +149,14 @@ export const dispositionGet = authRequired.input(idInputSchema).handler(async ({
 export const dispositionUpdate = authRequired
   .input(dispositionUpdateInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:write", site: { kind: "disposition", id: input.id } }));
+    grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "disposition", id: input.id } }));
 
     const { id, ...updateData } = input;
     return unwrap(await dispositionService.update(id, updateData));
   });
 
 export const dispositionDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:admin", site: { kind: "disposition", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "job:admin", scope: { kind: "disposition", id: input.id } }));
 
   const result = await dispositionService.remove(input.id);
   if (result.error) throwServiceError(result);
@@ -168,7 +168,7 @@ export const dispositionDelete = authRequired.input(idInputSchema).handler(async
 // ============================================================================
 
 export const reasonCreate = authRequired.input(reasonCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await dispositionReasonService.create(input);
   if ("error" in result && result.error) throwServiceError(result);
@@ -181,7 +181,7 @@ export const reasonList = userOrDisplayRequired.input(reasonListInputSchema).han
 });
 
 export const reasonGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", site: { kind: "dispositionReason", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "dispositionReason", id: input.id } }));
 
   return unwrap(await dispositionReasonService.getById(input.id), {
     notFoundMessage: "Disposition reason not found",
@@ -189,7 +189,7 @@ export const reasonGet = authRequired.input(idInputSchema).handler(async ({ inpu
 });
 
 export const reasonUpdate = authRequired.input(reasonUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", site: { kind: "dispositionReason", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "dispositionReason", id: input.id } }));
 
   const { id, ...updateData } = input;
   const result = await dispositionReasonService.update(id, updateData);
@@ -198,7 +198,7 @@ export const reasonUpdate = authRequired.input(reasonUpdateInputSchema).handler(
 });
 
 export const reasonDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:admin", site: { kind: "dispositionReason", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "job:admin", scope: { kind: "dispositionReason", id: input.id } }));
 
   const result = await dispositionReasonService.remove(input.id);
   if (result.error) throwServiceError(result);
@@ -210,7 +210,7 @@ export const reasonDelete = authRequired.input(idInputSchema).handler(async ({ i
 // ============================================================================
 
 export const logRecord = userOrDisplayRequired.input(logRecordInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", site: { kind: "station", id: input.stationId } }));
+  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "station", id: input.stationId } }));
 
   const result = await dispositionLogService.record(input);
   if ("error" in result && result.error) throwServiceError(result, dispositionLogOverrides);
@@ -218,7 +218,7 @@ export const logRecord = userOrDisplayRequired.input(logRecordInputSchema).handl
 });
 
 export const logCreate = authRequired.input(logCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", site: { kind: "station", id: input.stationId } }));
+  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "station", id: input.stationId } }));
 
   const result = await dispositionLogService.create(input);
   if ("error" in result && result.error) throwServiceError(result, dispositionLogOverrides);
@@ -231,13 +231,13 @@ export const logList = userOrDisplayRequired.input(logListInputSchema).handler(a
 });
 
 export const logGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", site: { kind: "dispositionLog", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "dispositionLog", id: input.id } }));
 
   return unwrap(await dispositionLogService.getById(input.id), { notFoundMessage: "Disposition log not found" });
 });
 
 export const logUpdate = authRequired.input(logUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", site: { kind: "dispositionLog", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "dispositionLog", id: input.id } }));
 
   const { id, ...updateData } = input;
   const result = await dispositionLogService.update(id, updateData);
@@ -246,7 +246,7 @@ export const logUpdate = authRequired.input(logUpdateInputSchema).handler(async 
 });
 
 export const logDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:admin", site: { kind: "dispositionLog", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "job:admin", scope: { kind: "dispositionLog", id: input.id } }));
 
   const result = await dispositionLogService.remove(input.id);
   if (result.error) throwServiceError(result);

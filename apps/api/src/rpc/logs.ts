@@ -104,7 +104,7 @@ const metricBucketLogSearchInputSchema = z.object({
 export const metricBucketLogSearch = userOrDisplayRequired
   .input(metricBucketLogSearchInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:read", site: { kind: "site", siteId: input.siteId } }));
+    grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
 
     const where: Record<string, unknown> = {
       siteId: input.siteId,
@@ -271,7 +271,7 @@ const hourlyBucketSearchInputSchema = z.object({
 export const hourlyBucketSearch = userOrDisplayRequired
   .input(hourlyBucketSearchInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:read", site: { kind: "site", siteId: input.siteId } }));
+    grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
 
     const where: Record<string, unknown> = {
       siteId: input.siteId,
@@ -357,7 +357,7 @@ const stationShiftSummaryInputSchema = z.object({
 export const stationShiftSummary = authRequired
   .input(stationShiftSummaryInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:read", site: { kind: "site", siteId: input.siteId } }));
+    grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
 
     const where = {
       siteId: input.siteId,
@@ -436,7 +436,7 @@ const downtimeLogSearchInputSchema = z.object({
 export const downtimeLogSearch = authRequired
   .input(downtimeLogSearchInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "status:read", site: { kind: "site", siteId: input.siteId } }));
+    grant(await authorize(context.iam, { permission: "status:read", scope: { kind: "site", siteId: input.siteId } }));
 
     // Resolve station IDs for the scope
     let stationIds: string[];
@@ -690,7 +690,7 @@ const dispositionLogSearchInputSchema = z.object({
 export const dispositionLogSearch = authRequired
   .input(dispositionLogSearchInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:read", site: { kind: "site", siteId: input.siteId } }));
+    grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
 
     const where: Prisma.ItemDispositionLogWhereInput = {
       siteId: input.siteId,
@@ -841,7 +841,7 @@ const materialUsageSearchInputSchema = z.object({
 export const materialUsageSearch = authRequired
   .input(materialUsageSearchInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "product:read", site: { kind: "site", siteId: input.siteId } }));
+    grant(await authorize(context.iam, { permission: "product:read", scope: { kind: "site", siteId: input.siteId } }));
 
     // Resolve station scope — always build workcenter map for shift lookup
     let stationIds: string[] | undefined;
@@ -1091,7 +1091,7 @@ const CYCLE_FIELD_TO_SQL: Record<string, Prisma.Sql> = {
 };
 
 export const cycleSearch = authRequired.input(cycleSearchInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
 
   // Resolve station scope to a uuid[] we can ANY() in SQL.
   let stationIds: string[];
@@ -1314,7 +1314,7 @@ const logonLogSearchInputSchema = z.object({
 });
 
 export const logonLogSearch = authRequired.input(logonLogSearchInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "employee:read", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "employee:read", scope: { kind: "site", siteId: input.siteId } }));
 
   const where: Prisma.StationLogonSessionWhereInput = {
     station: { siteId: input.siteId },
@@ -1463,7 +1463,7 @@ const partLogSearchInputSchema = z.object({
 });
 
 export const partLogSearch = authRequired.input(partLogSearchInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", site: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
 
   // Resolve station scope + workcenter map for shift lookup
   let stationIds: string[];

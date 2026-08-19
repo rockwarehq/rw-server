@@ -384,7 +384,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       if (!isMember) {
         return reply.status(403).send({ error: "Not a member of this workspace" });
       }
-      const auth = await authorize(request.iam, { permission: "user:read", site: { kind: "anySite" } });
+      const auth = await authorize(request.iam, { permission: "user:read", scope: { kind: "anySite" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       return workspace.listMembers(request.params.id);

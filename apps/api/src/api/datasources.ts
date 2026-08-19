@@ -339,7 +339,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const body = request.body;
       const auth = await authorize(request.iam, {
         permission: "facility:write",
-        site: { kind: "site", siteId: request.body.siteId },
+        scope: { kind: "site", siteId: request.body.siteId },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
@@ -397,7 +397,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { id } = request.params;
-      const auth = await authorize(request.iam, { permission: "facility:read", site: { kind: "datasource", id } });
+      const auth = await authorize(request.iam, { permission: "facility:read", scope: { kind: "datasource", id } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await datasource.getById(id);
@@ -427,7 +427,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const { id } = request.params;
       const body = request.body;
-      const auth = await authorize(request.iam, { permission: "facility:write", site: { kind: "datasource", id } });
+      const auth = await authorize(request.iam, { permission: "facility:write", scope: { kind: "datasource", id } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await datasource.update(id, body, auth.workspaceId);
@@ -455,7 +455,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     preHandler: fastify.verifyAccessToken,
     handler: async (request, reply) => {
       const { id } = request.params;
-      const auth = await authorize(request.iam, { permission: "facility:admin", site: { kind: "datasource", id } });
+      const auth = await authorize(request.iam, { permission: "facility:admin", scope: { kind: "datasource", id } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await datasource.remove(id, auth.workspaceId);
@@ -485,13 +485,13 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const { id } = request.params;
       const { gatewayId } = request.body;
-      const auth = await authorize(request.iam, { permission: "facility:write", site: { kind: "datasource", id } });
+      const auth = await authorize(request.iam, { permission: "facility:write", scope: { kind: "datasource", id } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
       if (gatewayId) {
         // Attaching to a gateway requires facility:write for the gateway's site too.
         const target = await authorize(request.iam, {
           permission: "facility:write",
-          site: { kind: "gateway", id: gatewayId },
+          scope: { kind: "gateway", id: gatewayId },
         });
         if (!target.ok) return replyPolicyDenial(reply, target);
       }
@@ -530,7 +530,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
 
       const auth = await authorize(request.iam, {
         permission: "facility:write",
-        site: { kind: "datasource", id: datasourceId },
+        scope: { kind: "datasource", id: datasourceId },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
@@ -563,7 +563,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const { datasourceId } = request.params;
       const auth = await authorize(request.iam, {
         permission: "facility:read",
-        site: { kind: "datasource", id: datasourceId },
+        scope: { kind: "datasource", id: datasourceId },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
@@ -601,7 +601,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
 
       const auth = await authorize(request.iam, {
         permission: "facility:write",
-        site: { kind: "datasource", id: datasourceId },
+        scope: { kind: "datasource", id: datasourceId },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
@@ -637,7 +637,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
 
       const auth = await authorize(request.iam, {
         permission: "facility:read",
-        site: { kind: "datasource", id: datasourceId },
+        scope: { kind: "datasource", id: datasourceId },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
@@ -671,7 +671,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
 
       const auth = await authorize(request.iam, {
         permission: "facility:write",
-        site: { kind: "datasource", id: datasourceId },
+        scope: { kind: "datasource", id: datasourceId },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 

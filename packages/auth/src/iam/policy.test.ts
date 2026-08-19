@@ -58,7 +58,7 @@ describe("authorize", () => {
     const { policy } = buildPolicy();
     const result = await policy.authorize(undefined, {
       permission: "facility:read",
-      site: { kind: "site", siteId: SITE_A },
+      scope: { kind: "site", siteId: SITE_A },
     });
     expect(result).toMatchObject({ ok: false, code: "UNAUTHENTICATED" });
   });
@@ -68,7 +68,7 @@ describe("authorize", () => {
     const iam: IAMContext = { principal: "UNKNOWN", validToken: false };
     const result = await policy.authorize(iam, {
       permission: "facility:read",
-      site: { kind: "site", siteId: SITE_A },
+      scope: { kind: "site", siteId: SITE_A },
     });
     expect(result).toMatchObject({ ok: false, code: "UNAUTHENTICATED" });
   });
@@ -77,7 +77,7 @@ describe("authorize", () => {
     const { policy, deps } = buildPolicy();
     const result = await policy.authorize(user({ workspaceId: undefined }), {
       permission: "facility:read",
-      site: { kind: "site", siteId: SITE_A },
+      scope: { kind: "site", siteId: SITE_A },
     });
     expect(result).toMatchObject({ ok: false, code: "NO_WORKSPACE" });
     expect(deps.hasPermission).not.toHaveBeenCalled();
@@ -87,7 +87,7 @@ describe("authorize", () => {
     const { policy, deps } = buildPolicy();
     const result = await policy.authorize(user(), {
       permission: "facility:write",
-      site: { kind: "workspace" },
+      scope: { kind: "workspace" },
     });
     expect(result).toEqual({ ok: true, workspaceId: WORKSPACE });
     expect(deps.hasPermission).toHaveBeenCalledWith("user-1", "facility:write", { workspaceId: WORKSPACE });
@@ -97,7 +97,7 @@ describe("authorize", () => {
     const { policy } = buildPolicy({ hasPermission: vi.fn(async () => false) });
     const result = await policy.authorize(user(), {
       permission: "facility:write",
-      site: { kind: "workspace" },
+      scope: { kind: "workspace" },
     });
     expect(result).toMatchObject({ ok: false, code: "FORBIDDEN", permission: "facility:write" });
   });
@@ -107,7 +107,7 @@ describe("authorize", () => {
     for (const iam of [display(), app()]) {
       const result = await policy.authorize(iam, {
         permission: "facility:write",
-        site: { kind: "workspace" },
+        scope: { kind: "workspace" },
       });
       expect(result).toMatchObject({ ok: false, code: "FORBIDDEN" });
     }
@@ -118,7 +118,7 @@ describe("authorize", () => {
     const { policy, deps } = buildPolicy();
     const result = await policy.authorize(user(), {
       permission: "facility:read",
-      site: { kind: "site", siteId: SITE_B },
+      scope: { kind: "site", siteId: SITE_B },
     });
     expect(result).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_B });
     expect(deps.resolveSiteRef).not.toHaveBeenCalled();
@@ -132,7 +132,7 @@ describe("authorize", () => {
     const { policy, deps } = buildPolicy();
     const result = await policy.authorize(user(), {
       permission: "facility:write",
-      site: { kind: "station", id: STATION },
+      scope: { kind: "station", id: STATION },
     });
     expect(result).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
     expect(deps.resolveSiteRef).toHaveBeenCalledWith({ kind: "station", id: STATION });
@@ -142,7 +142,7 @@ describe("authorize", () => {
     const { policy } = buildPolicy({ hasPermission: vi.fn(async () => false) });
     const result = await policy.authorize(user(), {
       permission: "facility:admin",
-      site: { kind: "workcenter", id: STATION },
+      scope: { kind: "workcenter", id: STATION },
     });
     expect(result).toMatchObject({ ok: false, code: "FORBIDDEN", permission: "facility:admin" });
   });
@@ -151,7 +151,7 @@ describe("authorize", () => {
     const { policy, deps } = buildPolicy({ resolveSiteRef: vi.fn(async () => null) });
     const result = await policy.authorize(user(), {
       permission: "facility:read",
-      site: { kind: "station", id: STATION },
+      scope: { kind: "station", id: STATION },
     });
     expect(result).toMatchObject({ ok: false, code: "NOT_FOUND" });
     expect(deps.hasPermission).not.toHaveBeenCalled();
@@ -162,7 +162,7 @@ describe("authorize", () => {
     for (const iam of [display(), app()]) {
       const result = await policy.authorize(iam, {
         permission: "facility:read",
-        site: { kind: "site", siteId: SITE_A },
+        scope: { kind: "site", siteId: SITE_A },
       });
       expect(result).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
     }
@@ -174,7 +174,7 @@ describe("authorize", () => {
     for (const iam of [display(), app()]) {
       const result = await policy.authorize(iam, {
         permission: "facility:read",
-        site: { kind: "site", siteId: SITE_B },
+        scope: { kind: "site", siteId: SITE_B },
       });
       expect(result).toMatchObject({ ok: false, code: "FORBIDDEN" });
     }
@@ -184,7 +184,7 @@ describe("authorize", () => {
     const { policy } = buildPolicy({ resolveSiteRef: vi.fn(async () => ({ siteId: SITE_B })) });
     const result = await policy.authorize(display(), {
       permission: "facility:read",
-      site: { kind: "station", id: STATION },
+      scope: { kind: "station", id: STATION },
     });
     expect(result).toMatchObject({ ok: false, code: "FORBIDDEN" });
   });
@@ -195,7 +195,7 @@ describe("anySite refs", () => {
     const { policy, deps } = buildPolicy();
     const result = await policy.authorize(user(), {
       permission: "employee:write",
-      site: { kind: "anySite" },
+      scope: { kind: "anySite" },
     });
     expect(result).toEqual({ ok: true, workspaceId: WORKSPACE });
     expect(deps.getAccessibleSites).toHaveBeenCalledWith("user-1", "employee:write", WORKSPACE);
@@ -207,7 +207,7 @@ describe("anySite refs", () => {
     });
     const result = await policy.authorize(user(), {
       permission: "employee:write",
-      site: { kind: "anySite" },
+      scope: { kind: "anySite" },
     });
     expect(result).toEqual({ ok: true, workspaceId: WORKSPACE });
   });
@@ -218,7 +218,7 @@ describe("anySite refs", () => {
     });
     const result = await policy.authorize(user(), {
       permission: "employee:write",
-      site: { kind: "anySite" },
+      scope: { kind: "anySite" },
     });
     expect(result).toMatchObject({ ok: false, code: "FORBIDDEN", permission: "employee:write" });
   });
@@ -228,7 +228,7 @@ describe("anySite refs", () => {
     for (const iam of [display(), app()]) {
       const result = await policy.authorize(iam, {
         permission: "facility:read",
-        site: { kind: "anySite" },
+        scope: { kind: "anySite" },
       });
       expect(result).toMatchObject({ ok: false, code: "FORBIDDEN" });
     }
@@ -244,7 +244,7 @@ describe("null-site resources", () => {
     });
     const result = await policy.authorize(user(), {
       permission: "facility:write",
-      site: { kind: "gateway", id: STATION },
+      scope: { kind: "gateway", id: STATION },
     });
     expect(result).toEqual({ ok: true, workspaceId: WORKSPACE });
     expect(deps.hasPermission).not.toHaveBeenCalled();
@@ -257,7 +257,7 @@ describe("null-site resources", () => {
     });
     const result = await policy.authorize(user(), {
       permission: "facility:write",
-      site: { kind: "gateway", id: STATION },
+      scope: { kind: "gateway", id: STATION },
     });
     expect(result).toMatchObject({ ok: false, code: "FORBIDDEN", permission: "facility:write" });
   });
@@ -266,7 +266,7 @@ describe("null-site resources", () => {
     const { policy } = buildPolicy({ resolveSiteRef: vi.fn(async () => ({ siteId: null })) });
     const result = await policy.authorize(display(), {
       permission: "facility:read",
-      site: { kind: "document", id: STATION },
+      scope: { kind: "document", id: STATION },
     });
     expect(result).toMatchObject({ ok: false, code: "FORBIDDEN" });
   });
@@ -275,7 +275,7 @@ describe("null-site resources", () => {
     const { policy } = buildPolicy({ resolveSiteRef: vi.fn(async () => null) });
     const result = await policy.authorize(user(), {
       permission: "facility:read",
-      site: { kind: "gateway", id: STATION },
+      scope: { kind: "gateway", id: STATION },
     });
     expect(result).toMatchObject({ ok: false, code: "NOT_FOUND" });
   });
@@ -370,13 +370,13 @@ describe("with a per-request permission snapshot", () => {
 
     const allowed = await policy.authorize(iam, {
       permission: "facility:write",
-      site: { kind: "site", siteId: SITE_A },
+      scope: { kind: "site", siteId: SITE_A },
     });
     expect(allowed).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
 
     const denied = await policy.authorize(iam, {
       permission: "facility:write",
-      site: { kind: "site", siteId: SITE_B },
+      scope: { kind: "site", siteId: SITE_B },
     });
     expect(denied).toMatchObject({ ok: false, code: "FORBIDDEN", permission: "facility:write" });
 
@@ -387,7 +387,7 @@ describe("with a per-request permission snapshot", () => {
     const { policy, deps } = buildPolicy({ resolveSiteRef: vi.fn(async () => null) });
     const result = await policy.authorize(snapshotUser([{ siteId: null, permissions: ["facility:read"] }]), {
       permission: "facility:read",
-      site: { kind: "station", id: STATION },
+      scope: { kind: "station", id: STATION },
     });
     expect(result).toMatchObject({ ok: false, code: "NOT_FOUND" });
     expect(deps.hasPermission).not.toHaveBeenCalled();
@@ -429,19 +429,19 @@ describe("authorize overload return types", () => {
   it("narrows grant shapes by ref kind", () => {
     const { policy } = buildPolicy();
     expectTypeOf(
-      policy.authorize(user(), { permission: "user:read", site: { kind: "workspace" } }),
+      policy.authorize(user(), { permission: "user:read", scope: { kind: "workspace" } }),
     ).resolves.toEqualTypeOf<WorkspaceGrant | PolicyDenial>();
     expectTypeOf(
-      policy.authorize(user(), { permission: "user:read", site: { kind: "anySite" } }),
+      policy.authorize(user(), { permission: "user:read", scope: { kind: "anySite" } }),
     ).resolves.toEqualTypeOf<WorkspaceGrant | PolicyDenial>();
     expectTypeOf(
-      policy.authorize(user(), { permission: "user:read", site: { kind: "site", siteId: SITE_A } }),
+      policy.authorize(user(), { permission: "user:read", scope: { kind: "site", siteId: SITE_A } }),
     ).resolves.toEqualTypeOf<SiteGrant | PolicyDenial>();
     expectTypeOf(
-      policy.authorize(user(), { permission: "user:read", site: { kind: "station", id: STATION } }),
+      policy.authorize(user(), { permission: "user:read", scope: { kind: "station", id: STATION } }),
     ).resolves.toEqualTypeOf<SiteGrant | PolicyDenial>();
     expectTypeOf(
-      policy.authorize(user(), { permission: "user:read", site: { kind: "gateway", id: STATION } }),
+      policy.authorize(user(), { permission: "user:read", scope: { kind: "gateway", id: STATION } }),
     ).resolves.toEqualTypeOf<SiteGrant | WorkspaceGrant | PolicyDenial>();
   });
 });
