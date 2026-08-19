@@ -7173,6 +7173,14 @@
             "in": "query",
             "name": "siteId",
             "required": false
+          },
+          {
+            "schema": {
+              "type": "boolean"
+            },
+            "in": "query",
+            "name": "unassigned",
+            "required": false
           }
         ],
         "security": [
