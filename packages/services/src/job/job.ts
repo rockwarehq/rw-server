@@ -2,6 +2,7 @@ import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
+import { refreshStationsRunningJob } from "../facility/station/state.js";
 
 // ============================================================================
 // Types - Job
@@ -353,6 +354,27 @@ export async function update(id: string, input: UpdateJobInput) {
       .filter(([, value]) => value !== undefined)
       .map(([key]) => key),
   });
+
+  // Mid-run edits: stations running this job carry its name/standard cycle in
+  // the shift-bucket mirror — refresh them so livestore doesn't wait for the
+  // next job change. (itemsPerCycle is driven by JobProduct edits, not here.)
+  if (name !== undefined || standardCycle !== undefined) {
+    refreshStationsRunningJob(
+      id,
+      {
+        name,
+        standardCycleSeconds:
+          standardCycle !== undefined
+            ? job.currentVersion?.standardCycle != null
+              ? Number(job.currentVersion.standardCycle)
+              : null
+            : undefined,
+      },
+      new Date(),
+    ).catch((err) => {
+      console.error(`[job.update] refreshStationsRunningJob failed for job ${id}:`, err);
+    });
+  }
 
   return { data: job };
 }
@@ -744,6 +766,10 @@ export async function addItem(input: AddItemInput) {
     changedFields: ["jobs"],
   });
 
+  refreshStationsRunningJob(jobId, { itemsPerCycleChanged: true }, new Date()).catch((err) => {
+    console.error(`[job.addItem] refreshStationsRunningJob failed for job ${jobId}:`, err);
+  });
+
   return { data: jobProduct };
 }
 
@@ -881,6 +907,13 @@ export async function updateItem(itemId: string, input: UpdateItemInput) {
     changedFields: ["jobs"],
   });
 
+  // Only quantity/isActive affect how many items a cycle creates.
+  if (quantity !== undefined || isActive !== undefined) {
+    refreshStationsRunningJob(current.jobId, { itemsPerCycleChanged: true }, new Date()).catch((err) => {
+      console.error(`[job.updateItem] refreshStationsRunningJob failed for job ${current.jobId}:`, err);
+    });
+  }
+
   return { data: jobProduct };
 }
 
@@ -921,6 +954,10 @@ export async function removeItem(itemId: string) {
     siteId: item.job.siteId,
     workspaceId: item.job.site.workspaceId,
     changedFields: ["jobs"],
+  });
+
+  refreshStationsRunningJob(item.jobId, { itemsPerCycleChanged: true }, new Date()).catch((err) => {
+    console.error(`[job.removeItem] refreshStationsRunningJob failed for job ${item.jobId}:`, err);
   });
 
   return { success: true };

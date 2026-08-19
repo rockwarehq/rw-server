@@ -34,6 +34,7 @@ export function metricChangeToGraphPublishes(
     currentStandardCycle: snapshot.currentStandardCycle ?? null,
     currentJobName: snapshot.currentJobName ?? null,
     startTime: change.startTime ? change.startTime.toISOString() : null,
+    shiftInstanceId: change.shiftInstanceId ?? null,
   };
 
   const toEnvelope = (value: unknown): ValueEnvelope =>

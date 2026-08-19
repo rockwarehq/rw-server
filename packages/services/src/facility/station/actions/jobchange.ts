@@ -155,7 +155,7 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
       entityId: station.id,
       siteId: station.siteId,
       workspaceId: station.site.workspaceId,
-      changedFields: ["currentJobId"],
+      changedFields: ["currentJobId", "itemsPerCycle"],
     });
 
     // ── Fire-and-forget side effects after the transaction commits ──

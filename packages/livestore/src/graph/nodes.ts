@@ -344,6 +344,22 @@ async function resolveSystemEntityRecord(
       include: { currentVersion: true },
     });
     if (!station) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
+    // Items per cycle mirrors inventory.createFromCycle: sum of active
+    // JobProduct quantities on the current job — the count of InventoryItems
+    // each completed cycle actually creates.
+    let itemsPerCycle: number | null = null;
+    if (station.currentJobId) {
+      const jobProducts = await prisma.jobProduct.findMany({
+        where: {
+          jobId: station.currentJobId,
+          deletedAt: null,
+          currentVersion: { isActive: true },
+          product: { currentVersionId: { not: null } },
+        },
+        select: { currentVersion: { select: { quantity: true } } },
+      });
+      itemsPerCycle = jobProducts.reduce((sum, jp) => sum + (jp.currentVersion?.quantity ?? 1), 0);
+    }
     // Live status is derived from the open state-log row, not a Station column.
     const openState = await prisma.stationStateLog.findFirst({
       where: { stationId: station.id, endTime: null, deletedAt: null },
@@ -373,6 +389,7 @@ async function resolveSystemEntityRecord(
         site: station.siteId,
         workcenter: station.workcenterId,
         currentJob: station.currentJobId,
+        itemsPerCycle,
         status: openState ? (openState.status ?? openState.state) : null,
         statusReasonId: openState?.statusReasonId ?? null,
         statusReason: openState?.statusReason?.name ?? null,

@@ -34,6 +34,7 @@ export const MIRRORED_CONTEXT_KEYS = [
   "currentStandardCycle",
   "currentJobName",
   "startTime",
+  "shiftInstanceId",
 ] as const;
 
 export type MirroredContextKey = (typeof MIRRORED_CONTEXT_KEYS)[number];
