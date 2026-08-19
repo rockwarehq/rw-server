@@ -3,7 +3,7 @@ import { ORPCError } from "@orpc/server";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import { site } from "@rw/services/facility/index";
 import { Principal } from "../auth/index.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { authorize, authorizeAccessibleSites } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
 import { throwServiceError, unwrap } from "./errors.js";
 
@@ -53,8 +53,9 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
  * List sites in workspace
  */
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "facility:read" }));
-  return site.list({ ...input, ...scopeFilter(scope) });
+  // Site directory: the sanctioned cross-site surface (site picker/admin).
+  const scope = grant(await authorizeAccessibleSites(context.iam, { permission: "facility:read" }));
+  return site.list({ ...input, workspaceId: scope.workspaceId, siteIds: scope.siteIds });
 });
 
 /**
@@ -114,8 +115,8 @@ export const tree = userOrDisplayRequired.input(treeInputSchema).handler(async (
     return result.data;
   }
 
-  // No siteId, return full workspace tree
-  const scope = grant(await authorizeList(context.iam, { permission: "facility:read" }));
+  // No siteId, return the accessible-site tree (site directory surface)
+  const scope = grant(await authorizeAccessibleSites(context.iam, { permission: "facility:read" }));
   return site.getTree(scope.workspaceId, scope.siteIds);
 });
 

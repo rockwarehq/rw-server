@@ -3,10 +3,7 @@ import * as z from "zod";
 import {
   getLatestPointSnapshots,
   validatePointSiteAccess,
-  validatePointSitesAccess,
-  validatePointWorkspaceAccess,
   type ValidatePointSiteAccessResult,
-  type ValidatePointWorkspaceAccessResult,
 } from "../services/point-value.js";
 import { authorizeList } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
@@ -93,11 +90,7 @@ export const getSnapshots = userOrDisplayRequired
     // must have every point inside an accessible site; all-sites users keep
     // the existence/workspace validation.
     const scope = grant(await authorizeList(context.iam, { permission: "facility:read" }));
-    const accessValidationResult: ValidatePointWorkspaceAccessResult | ValidatePointSiteAccessResult = scope.siteId
-      ? await validatePointSiteAccess(pointIds, scope.siteId)
-      : scope.siteIds
-        ? await validatePointSitesAccess(pointIds, scope.siteIds)
-        : await validatePointWorkspaceAccess(pointIds, scope.workspaceId);
+    const accessValidationResult: ValidatePointSiteAccessResult = await validatePointSiteAccess(pointIds, scope.siteId);
 
     if (!accessValidationResult.success) {
       throwServiceError(accessValidationResult, POINT_ACCESS_OVERRIDES);
@@ -117,11 +110,7 @@ export const stream = userOrDisplayRequired
     // must have every point inside an accessible site; all-sites users keep
     // the existence/workspace validation.
     const scope = grant(await authorizeList(context.iam, { permission: "facility:read" }));
-    const accessValidationResult: ValidatePointWorkspaceAccessResult | ValidatePointSiteAccessResult = scope.siteId
-      ? await validatePointSiteAccess(pointIds, scope.siteId)
-      : scope.siteIds
-        ? await validatePointSitesAccess(pointIds, scope.siteIds)
-        : await validatePointWorkspaceAccess(pointIds, scope.workspaceId);
+    const accessValidationResult: ValidatePointSiteAccessResult = await validatePointSiteAccess(pointIds, scope.siteId);
 
     if (!accessValidationResult.success) {
       throwServiceError(accessValidationResult, POINT_ACCESS_OVERRIDES);

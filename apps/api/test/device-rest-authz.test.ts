@@ -121,6 +121,28 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("device REST authorization (Tier
     expect(list.statusCode).toBe(200);
   });
 
+  it("the unassigned-gateway pool is an explicit view for hardware assigners", async () => {
+    const pool = await prisma.gateway.create({
+      data: { name: "dev-authz-gw-pool", serialNumber: "sn-dev-authz-gw-pool" },
+      select: { id: true },
+    });
+    try {
+      // Not visible in a site-scoped list…
+      const siteList = await call("GET", `/gateways/?siteId=${siteA.id}`, faToken);
+      expect(siteList.statusCode).toBe(200);
+      expect((siteList.json() as Array<{ id: string }>).map((g) => g.id)).not.toContain(pool.id);
+      // …visible via the explicit pool view for facility:write holders…
+      const poolList = await call("GET", "/gateways/?unassigned=true", faToken);
+      expect(poolList.statusCode).toBe(200);
+      expect((poolList.json() as Array<{ id: string }>).map((g) => g.id)).toContain(pool.id);
+      // …and denied for read-only users.
+      const readerPool = await call("GET", "/gateways/?unassigned=true", readerToken);
+      expect(readerPool.statusCode).toBe(403);
+    } finally {
+      await prisma.gateway.deleteMany({ where: { id: pool.id } });
+    }
+  });
+
   it("datasource listing is scope-filtered and drivers require facility:read", async () => {
     const list = await call("GET", `/datasources/?siteId=${siteB.id}`, faToken);
     expect(list.statusCode).toBe(403);

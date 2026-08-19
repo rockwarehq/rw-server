@@ -64,7 +64,7 @@ export const list = userOrDisplayRequired.input(listInputSchema).handler(async (
     await authorizeList(context.iam, { permission: "dashboard:read", requestedSiteId: input.siteId }),
   );
 
-  return dashboard.list({ ...input, siteId: scope.siteId ?? input.siteId, siteIds: scope.siteIds }, scope.workspaceId);
+  return dashboard.list({ ...input, siteId: scope.siteId }, scope.workspaceId);
 });
 
 /**

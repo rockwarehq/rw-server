@@ -15,7 +15,7 @@ import { buildServer, type TestServer } from "./helpers/build-server.js";
 
 // Bundlers/vitest rewrite imported calls as (0,__import__.authorize)(...),
 // so match the identifier rather than an exact call shape.
-const POLICY_CALL = /\bauthorize(List)?\b/;
+const POLICY_CALL = /\bauthorize(List|AccessibleSites)?\b/;
 
 interface Leaf {
   path: string;

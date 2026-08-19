@@ -2,7 +2,7 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { site } from "@rw/services/facility/index";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { authorize, authorizeAccessibleSites } from "@rw/auth/iam/policy";
 import { replyPolicyDenial } from "./authz.js";
 
 // ============================================================================
@@ -230,10 +230,10 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const scope = await authorizeList(request.iam, { permission: "facility:read" });
+      const scope = await authorizeAccessibleSites(request.iam, { permission: "facility:read" });
       if (!scope.ok) return replyPolicyDenial(reply, scope);
 
-      return site.list({ ...request.query, ...scopeFilter(scope) });
+      return site.list({ ...request.query, workspaceId: scope.workspaceId, siteIds: scope.siteIds });
     },
   });
 
@@ -251,7 +251,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const scope = await authorizeList(request.iam, { permission: "facility:read" });
+      const scope = await authorizeAccessibleSites(request.iam, { permission: "facility:read" });
       if (!scope.ok) return replyPolicyDenial(reply, scope);
 
       return site.getTree(scope.workspaceId, scope.siteIds);

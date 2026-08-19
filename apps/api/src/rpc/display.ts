@@ -106,11 +106,7 @@ export const claim = authRequired.input(claimInputSchema).handler(async ({ input
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
   const scope = grant(await authorizeList(context.iam, { permission: "facility:read", requestedSiteId: input.siteId }));
 
-  return display.listForWorkspace(scope.workspaceId, {
-    ...input,
-    siteId: scope.siteId ?? input.siteId,
-    siteIds: scope.siteIds,
-  });
+  return display.listForWorkspace(scope.workspaceId, { ...input, siteId: scope.siteId });
 });
 
 /**

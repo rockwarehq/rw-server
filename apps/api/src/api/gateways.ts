@@ -74,6 +74,7 @@ const listQuerySchema = {
   type: "object",
   properties: {
     siteId: { type: "string", format: "uuid" },
+    unassigned: { type: "boolean" },
   },
 } as const satisfies JSONSchema;
 
@@ -265,13 +266,20 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
+      if (request.query.unassigned) {
+        // Workspace pool: claimed hardware awaiting site assignment.
+        const pool = await authorize(request.iam, { permission: "facility:write", site: { kind: "anySite" } });
+        if (!pool.ok) return replyPolicyDenial(reply, pool);
+        return gateway.list({ workspaceId: pool.workspaceId, unassigned: true });
+      }
+
       const scope = await authorizeList(request.iam, {
         permission: "facility:read",
         requestedSiteId: request.query.siteId,
       });
       if (!scope.ok) return replyPolicyDenial(reply, scope);
 
-      return gateway.list({ siteId: request.query.siteId, ...scopeFilter(scope) });
+      return gateway.list(scopeFilter(scope));
     },
   });
 

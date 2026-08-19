@@ -33,6 +33,8 @@ const gatewayIdInputSchema = z.object({
 
 const gatewayListInputSchema = z.object({
   siteId: z.uuid().optional(),
+  /** Workspace pool view: only gateways not yet assigned to a site. */
+  unassigned: z.boolean().optional(),
 });
 
 // ============================================================================
@@ -95,9 +97,15 @@ export const gatewayCreate = authRequired.input(gatewayCreateInputSchema).handle
  * List gateways (optionally filtered by siteId)
  */
 export const gatewayList = authRequired.input(gatewayListInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "facility:read", requestedSiteId: input.siteId }));
+  if (input.unassigned) {
+    // Workspace pool: claimed hardware awaiting site assignment — visible to
+    // anyone who could assign it (facility:write held somewhere).
+    const pool = grant(await authorize(context.iam, { permission: "facility:write", site: { kind: "anySite" } }));
+    return gateway.list({ workspaceId: pool.workspaceId, unassigned: true });
+  }
 
-  return gateway.list({ ...input, ...scopeFilter(scope) });
+  const scope = grant(await authorizeList(context.iam, { permission: "facility:read", requestedSiteId: input.siteId }));
+  return gateway.list(scopeFilter(scope));
 });
 
 /**

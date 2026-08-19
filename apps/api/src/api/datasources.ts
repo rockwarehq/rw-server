@@ -369,9 +369,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       if (!scope.ok) return replyPolicyDenial(reply, scope);
 
       return datasource.list({
-        ...scopeFilter(scope),
         gatewayId,
-        siteId,
         driver,
         type,
         status,
@@ -379,6 +377,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
         unassigned: unassigned === "true",
         limit,
         offset,
+        ...scopeFilter(scope),
       });
     },
   });

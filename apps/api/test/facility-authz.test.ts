@@ -183,13 +183,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
       expect(workcenters.statusCode).toBe(403);
     });
 
-    it("a member with no role assignments gets empty lists, not errors", async () => {
+    it("a member with no role assignments sees an empty site directory and no site context", async () => {
+      // The site directory (picker) stays reachable and empty…
       const res = await rpcCall(server, "site/list", {}, noroleToken);
       expect(res.statusCode).toBe(200);
       expect((res.json as { data: unknown[] }).data).toEqual([]);
+      // …but domain lists are single-site, and this token has no site.
       const stations = await rpcCall(server, "station/list", {}, noroleToken);
-      expect(stations.statusCode).toBe(200);
-      expect((stations.json as { data: unknown[] }).data).toEqual([]);
+      expect(stations.statusCode).toBe(400);
     });
   });
 

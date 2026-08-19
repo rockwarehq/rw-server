@@ -48,8 +48,9 @@ changes.
    resource existence is never disclosed to an unauthorized caller.
 2. Apply the scope to every query: a literal `siteId` equality where the input
    requires a site, or `scopeWhere(scope)` (from `@rw/auth/iam/policy`) merged
-   into the Prisma `where` via `AND` for open-ended lists. `scopeWhere` yields
-   `{ siteId: { in: [] } }` for zero-grant users — fail-closed by construction.
+   into the Prisma `where` via `AND` for open-ended lists. Queries are
+   single-site by design: `scopeWhere` yields exactly one `siteId` (the
+   requested or token-active site); tokens without site context are denied.
 3. Carry the authorized `siteId` predicate on lookups of related entities
    (stations, workcenters, shift instances) so a valid site plus a foreign
    resource id cannot read across sites.
