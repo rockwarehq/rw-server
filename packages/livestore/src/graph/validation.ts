@@ -2,10 +2,13 @@ import prisma from "@rw/db";
 
 import { systemEntityCatalogEntryByKey } from "@rw/services/entity/registry";
 import type { EntityCatalogField } from "@rw/services/entity/registry.types";
+import { parseGraphHookCondition } from "../catalog/hook-conditions.js";
 import { livestoreResolverConfigSchema } from "../catalog/resolver-schemas.js";
+import { isStatefulResolverType } from "../types/index.js";
 import { graphNodeSiteWhere } from "./scope.js";
 import { validateExpression } from "../resolvers/expr-sandbox.js";
 import { errorResult, type GraphScope, type ServiceResult } from "./types.js";
+export const STATEFUL_CHAIN_ERROR = "window and totalizer inputs cannot be other window or totalizer properties";
 const PREFIXED_UUID_PATTERN = /\bp_([0-9a-f]{8}_[0-9a-f]{4}_[1-8][0-9a-f]{3}_[89ab][0-9a-f]{3}_[0-9a-f]{12})\b/gi;
 // Any property-shaped symbol the expression sandbox will accept at eval time.
 const PROPERTY_SYMBOL_PATTERN = /\bp_\w+\b/g;
@@ -248,19 +251,32 @@ export async function validateResolverConfig(args: {
     return { data: { resolver, dependencyIds } };
   }
 
-  if (resolverType === "window") {
+  if (resolverType === "window" || resolverType === "totalizer") {
     const sourcePropertyId = resolver.sourcePropertyId as string;
+    const dependencyIds = [sourcePropertyId];
+    if (resolverType === "totalizer") {
+      // Zod checked the shape; the parser enforces per-operator requirements
+      // (threshold for gt/crosses*, value for equals/notEquals).
+      const trigger = parseGraphHookCondition(resolver.trigger);
+      if (!trigger) return errorResult("INVALID_RESOLVER", "totalizer trigger must be a valid hook condition");
+      if (trigger.source.propertyId !== sourcePropertyId) dependencyIds.push(trigger.source.propertyId);
+      if (resolver.reset !== undefined) {
+        const reset = parseGraphHookCondition(resolver.reset);
+        if (!reset) return errorResult("INVALID_RESOLVER", "totalizer reset must be a valid hook condition");
+        if (!dependencyIds.includes(reset.source.propertyId)) dependencyIds.push(reset.source.propertyId);
+      }
+    }
     // In-batch sibling sources skip the "exists in site" check (like expr
     // dependencies above); batch callers verify the planned source's resolver
     // type themselves since it isn't in the DB yet.
-    if (!args.knownPropertyIds?.has(sourcePropertyId)) {
-      const dependencyResult = await assertPropertiesInSite([sourcePropertyId], args.scope);
+    const toCheck = dependencyIds.filter((id) => !args.knownPropertyIds?.has(id));
+    if (toCheck.length > 0) {
+      const dependencyResult = await assertPropertiesInSite(toCheck, args.scope);
       if (dependencyResult && "error" in dependencyResult) return dependencyResult;
-      const source = dependencyResult?.data[0];
-      if (source?.resolverType === "window")
-        return errorResult("INVALID_RESOLVER", "window source cannot be another window property");
+      if (dependencyResult?.data.some((dep) => isStatefulResolverType(dep.resolverType)))
+        return errorResult("INVALID_RESOLVER", STATEFUL_CHAIN_ERROR);
     }
-    return { data: { resolver, dependencyIds: [sourcePropertyId] } };
+    return { data: { resolver, dependencyIds } };
   }
 
   if (resolverType === "rollup") {

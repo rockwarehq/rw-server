@@ -124,3 +124,96 @@ describe("validateResolverConfig datasource.point", () => {
     expect(result).toMatchObject({ code: "INVALID_RESOLVER" });
   });
 });
+
+describe("validateResolverConfig totalizer", () => {
+  const SRC = "11111111-1111-4111-8111-111111111111";
+  const TRIG = "22222222-2222-4222-8222-222222222222";
+
+  it("returns both source and trigger as dependencies", async () => {
+    const result = await validateResolverConfig({
+      resolverType: "totalizer",
+      resolver: {
+        type: "totalizer",
+        sourcePropertyId: SRC,
+        trigger: { source: { type: "property", propertyId: TRIG }, operator: "crossesAbove", threshold: 0.5 },
+      },
+      scope,
+      knownPropertyIds: new Set([SRC, TRIG]),
+    });
+    expect(result).toMatchObject({ data: { dependencyIds: [SRC, TRIG] } });
+  });
+
+  it("dedupes the dependency when the trigger is the source", async () => {
+    const result = await validateResolverConfig({
+      resolverType: "totalizer",
+      resolver: {
+        type: "totalizer",
+        sourcePropertyId: SRC,
+        trigger: { source: { type: "property", propertyId: SRC }, operator: "changed" },
+      },
+      scope,
+      knownPropertyIds: new Set([SRC]),
+    });
+    expect(result).toMatchObject({ data: { dependencyIds: [SRC] } });
+  });
+
+  it("rejects a trigger missing its operator-required config", async () => {
+    const result = await validateResolverConfig({
+      resolverType: "totalizer",
+      resolver: {
+        type: "totalizer",
+        sourcePropertyId: SRC,
+        trigger: { source: { type: "property", propertyId: TRIG }, operator: "gt" }, // no threshold
+      },
+      scope,
+      knownPropertyIds: new Set([SRC, TRIG]),
+    });
+    expect(result).toMatchObject({ code: "INVALID_RESOLVER" });
+    expect((result as { error: string }).error).toContain("trigger");
+  });
+
+  it("includes the reset property as a dependency, deduped against source and trigger", async () => {
+    const RESET = "33333333-3333-4333-8333-333333333333";
+    const result = await validateResolverConfig({
+      resolverType: "totalizer",
+      resolver: {
+        type: "totalizer",
+        sourcePropertyId: SRC,
+        trigger: { source: { type: "property", propertyId: TRIG }, operator: "increases" },
+        reset: { source: { type: "property", propertyId: RESET }, operator: "changed" },
+      },
+      scope,
+      knownPropertyIds: new Set([SRC, TRIG, RESET]),
+    });
+    expect(result).toMatchObject({ data: { dependencyIds: [SRC, TRIG, RESET] } });
+
+    const deduped = await validateResolverConfig({
+      resolverType: "totalizer",
+      resolver: {
+        type: "totalizer",
+        sourcePropertyId: SRC,
+        trigger: { source: { type: "property", propertyId: TRIG }, operator: "increases" },
+        reset: { source: { type: "property", propertyId: TRIG }, operator: "changed" },
+      },
+      scope,
+      knownPropertyIds: new Set([SRC, TRIG]),
+    });
+    expect(deduped).toMatchObject({ data: { dependencyIds: [SRC, TRIG] } });
+  });
+
+  it("rejects a reset missing its operator-required config", async () => {
+    const result = await validateResolverConfig({
+      resolverType: "totalizer",
+      resolver: {
+        type: "totalizer",
+        sourcePropertyId: SRC,
+        trigger: { source: { type: "property", propertyId: SRC }, operator: "changed" },
+        reset: { source: { type: "property", propertyId: TRIG }, operator: "equals" }, // no value
+      },
+      scope,
+      knownPropertyIds: new Set([SRC, TRIG]),
+    });
+    expect(result).toMatchObject({ code: "INVALID_RESOLVER" });
+    expect((result as { error: string }).error).toContain("reset");
+  });
+});

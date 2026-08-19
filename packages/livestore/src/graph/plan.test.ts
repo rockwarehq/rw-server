@@ -171,7 +171,43 @@ describe("plan", () => {
     expect(result.data.issues).toEqual([
       expect.objectContaining({
         path: "properties[1].resolver",
-        error: "window source cannot be another window property",
+        error: "window and totalizer inputs cannot be other window or totalizer properties",
+      }),
+    ]);
+  });
+
+  it("rejects a totalizer whose trigger targets a planned window", async () => {
+    const result = await plan(
+      {
+        nodes: [{ ref: "n", name: "Node" }],
+        properties: [
+          {
+            id: NEW_WINDOW,
+            nodeRef: "n",
+            name: "w1",
+            resolverType: "window",
+            resolver: { type: "window", sourcePropertyId: EXISTING_PROP, kind: "ewma", alpha: 0.5 },
+          },
+          {
+            id: NEW_EXPR,
+            nodeRef: "n",
+            name: "t1",
+            resolverType: "totalizer",
+            resolver: {
+              type: "totalizer",
+              sourcePropertyId: EXISTING_PROP,
+              trigger: { source: { type: "property", propertyId: NEW_WINDOW }, operator: "changed" },
+            },
+          },
+        ],
+      },
+      scope,
+    );
+    if (!("data" in result)) throw new Error("expected data");
+    expect(result.data.issues).toEqual([
+      expect.objectContaining({
+        path: "properties[1].resolver",
+        error: "window and totalizer inputs cannot be other window or totalizer properties",
       }),
     ]);
   });

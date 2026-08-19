@@ -40,7 +40,7 @@ export interface GraphHookPropertyContextBinding {
 export type GraphHookEventContextBinding = GraphHookPropertyContextBinding;
 export type GraphHookEventContext = Record<string, GraphHookEventContextBinding>;
 
-const OPERATORS = new Set<GraphHookConditionOperator>([
+export const GRAPH_HOOK_CONDITION_OPERATORS = [
   "changed",
   "increases",
   "decreases",
@@ -52,7 +52,9 @@ const OPERATORS = new Set<GraphHookConditionOperator>([
   "lte",
   "crossesAbove",
   "crossesBelow",
-]);
+] as const;
+
+const OPERATORS = new Set<GraphHookConditionOperator>(GRAPH_HOOK_CONDITION_OPERATORS);
 
 const CONTEXT_VALUE_TYPES = new Set<LivestoreHookContextFieldType>(["string", "number", "boolean", "object"]);
 

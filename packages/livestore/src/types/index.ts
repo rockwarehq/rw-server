@@ -31,13 +31,32 @@ export interface RollupResolverConfig {
   weightBy?: string;
 }
 
+// Structural mirror of GraphHookCondition (catalog/hook-conditions.ts); kept
+// here so base types don't import the catalog.
+export interface TotalizerTriggerConfig {
+  source: { type: "property"; propertyId: string };
+  operator: string;
+  value?: unknown;
+  threshold?: number;
+  minDelta?: number;
+}
+
+// Running total: each trigger firing adds the source's latest value (ADR-0010).
+// Optional reset zeroes total+count when its condition fires (e.g. shift change).
+export interface TotalizerResolverConfig {
+  type: "totalizer";
+  sourcePropertyId: string;
+  trigger: TotalizerTriggerConfig;
+  reset?: TotalizerTriggerConfig;
+}
+
 // Time-windowed aggregation over one source property (spec §17.3).
 // aggregation/windowMs/alignToMs are tumbling-only; alpha is ewma-only.
 export interface WindowResolverConfig {
   type: "window";
   sourcePropertyId: string;
   kind: "tumbling" | "ewma";
-  aggregation: Aggregation;
+  aggregation?: Aggregation;
   windowMs?: number;
   alignToMs?: number;
   alpha?: number;
@@ -70,7 +89,15 @@ export type GraphResolver =
   | ExprResolverConfig
   | EntityResolverConfig
   | WindowResolverConfig
+  | TotalizerResolverConfig
   | ({ type: string } & Record<string, unknown>);
+
+// Stateful fold resolvers (KV-persisted state, synchronous per-commit folds).
+// They must not chain: a stateful input compounds restart/catch-up artifacts
+// into downstream state (spec §17.10, ADR-0010).
+export function isStatefulResolverType(resolverType: string): boolean {
+  return resolverType === "window" || resolverType === "totalizer";
+}
 
 // Aggregation state persisted to imm_agg_state, keyed agg.<propertyId> (spec §17.4).
 // Internal to the engine — never exposed to WS clients.
@@ -98,7 +125,26 @@ export interface EwmaState {
   sourcePropertyId?: string;
 }
 
-export type AggState = TumblingState | EwmaState;
+// Unbounded running total: each trigger firing adds the latest source value.
+export interface TotalizerState {
+  kind: "totalizer";
+  total: number;
+  count: number; // adds performed
+  lastQuality: Quality; // quality of the last add's inputs
+  lastTriggerValue: unknown; // last good trigger sample (null until seen)
+  lastTriggerTs: number; // 0 = no trigger sample seen yet
+  lastResetValue: unknown; // last good reset sample (null until seen)
+  lastResetTs: number; // 0 = no reset sample seen yet
+  lastEmitTs: number; // ts of the last add/reset emit (0 = none); boot re-emits stamp this
+  latestSourceValue: number | null;
+  latestSourceQuality: Quality;
+  // See TumblingState.sourcePropertyId; trigger/reset tracked the same way.
+  sourcePropertyId?: string;
+  triggerPropertyId?: string;
+  resetPropertyId?: string;
+}
+
+export type AggState = TumblingState | EwmaState | TotalizerState;
 
 export interface NodeRuntime {
   id: string;
@@ -133,7 +179,7 @@ export interface GraphSnapshotProperty extends Omit<PropertyRuntime, "current"> 
   current: ValueEnvelope;
 }
 
-export type CommitSource = "tag" | "entity" | "expr" | "window" | "rollup" | "metric" | "manual";
+export type CommitSource = "tag" | "entity" | "expr" | "window" | "totalizer" | "rollup" | "metric" | "manual";
 
 export interface LivestoreLogger {
   info: (obj: Record<string, unknown>, msg?: string) => void;
@@ -220,6 +266,12 @@ export function isWindowResolverConfig(value: GraphResolver): value is WindowRes
   return typeof window.sourcePropertyId === "string" && (window.kind === "tumbling" || window.kind === "ewma");
 }
 
+export function isTotalizerResolverConfig(value: GraphResolver): value is TotalizerResolverConfig {
+  if (value.type !== "totalizer") return false;
+  const totalizer = value as TotalizerResolverConfig;
+  return typeof totalizer.sourcePropertyId === "string" && isRecord(totalizer.trigger);
+}
+
 export function parseAggState(value: unknown): AggState | null {
   if (!isRecord(value)) return null;
   if (value.sourcePropertyId !== undefined && typeof value.sourcePropertyId !== "string") return null;
@@ -235,6 +287,23 @@ export function parseAggState(value: unknown): AggState | null {
     if (typeof value.value !== "number" || typeof value.lastInputTs !== "number") return null;
     if (!isQuality(value.lastInputQuality)) return null;
     return value as unknown as EwmaState;
+  }
+  if (value.kind === "totalizer") {
+    if (typeof value.total !== "number" || typeof value.count !== "number") return null;
+    if (typeof value.lastTriggerTs !== "number") return null;
+    if (!isQuality(value.lastQuality) || !isQuality(value.latestSourceQuality)) return null;
+    if (value.latestSourceValue !== null && typeof value.latestSourceValue !== "number") return null;
+    if (value.triggerPropertyId !== undefined && typeof value.triggerPropertyId !== "string") return null;
+    if (value.resetPropertyId !== undefined && typeof value.resetPropertyId !== "string") return null;
+    if (value.lastResetTs !== undefined && typeof value.lastResetTs !== "number") return null;
+    if (value.lastEmitTs !== undefined && typeof value.lastEmitTs !== "number") return null;
+    // State persisted before reset/lastEmitTs existed lacks those fields; default them.
+    return {
+      ...(value as unknown as TotalizerState),
+      lastResetValue: value.lastResetValue ?? null,
+      lastResetTs: typeof value.lastResetTs === "number" ? value.lastResetTs : 0,
+      lastEmitTs: typeof value.lastEmitTs === "number" ? value.lastEmitTs : 0,
+    };
   }
   return null;
 }
