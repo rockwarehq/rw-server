@@ -113,24 +113,27 @@ export async function startMetricBucketEnsure(): Promise<void> {
   // Self-chaining delayed job (~60s). Uses delayed jobs (not a repeating
   // scheduler) so the shift-change worker can preempt the next tick by
   // re-adding with delay: 0.
-  bucketEnsureWorker = new Worker(
-    "metric-bucket-ensure",
-    async () => {
-      try {
-        return await runMetricBucketEnsureTick();
-      } finally {
-        await scheduleNextEnsureTick();
-      }
-    },
-    {
-      connection,
-      stalledInterval: bullmqConfig.stalledInterval,
-      drainDelay: bullmqConfig.drainDelay,
-    },
-  );
+  //
+  // The next tick MUST be scheduled from the completed/failed events, not a
+  // finally inside the processor: while the tick job is still active its
+  // deterministic jobId exists, so an add() from inside the processor is
+  // silently rejected as a duplicate and the chain dies after one solo tick
+  // (removeOnComplete then erases the only copy).
+  bucketEnsureWorker = new Worker("metric-bucket-ensure", async () => runMetricBucketEnsureTick(), {
+    connection,
+    stalledInterval: bullmqConfig.stalledInterval,
+    drainDelay: bullmqConfig.drainDelay,
+  });
 
+  const chainNextTick = () => {
+    scheduleNextEnsureTick().catch((err) =>
+      console.error("[metric-bucket-ensure] failed to schedule next tick", err),
+    );
+  };
+  bucketEnsureWorker.on("completed", chainNextTick);
   bucketEnsureWorker.on("failed", (job, err) => {
     console.error(`[metric-bucket-ensure] Bucket ensure job ${job?.id} failed`, err);
+    chainNextTick();
   });
 
   bucketEnsureQueue = new Queue("metric-bucket-ensure", { connection });
@@ -310,9 +313,12 @@ export async function runMetricBucketEnsureTick(): Promise<{ checked: number; ar
 export async function scheduleNextEnsureTick(delayMs = ENSURE_TICK_INTERVAL_MS): Promise<void> {
   if (!bucketEnsureQueue) return;
   try {
+    // Clears a pending delayed tick so the preempt (delay 0) add can take its
+    // id. No-ops when the job doesn't exist; an ACTIVE job can't be removed —
+    // callers must only schedule after completion (see the worker events).
     await bucketEnsureQueue.remove(ENSURE_TICK_JOB_ID);
   } catch {
-    // Job may not exist or may be active — both are fine
+    // Job may not exist — fine
   }
   await bucketEnsureQueue.add(
     "ensure-metric-buckets",
