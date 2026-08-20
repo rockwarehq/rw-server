@@ -339,7 +339,6 @@ function buildInstanceRows(
 
   for (let dayOffset = 0; dayOffset <= lookaheadDays; dayOffset++) {
     const targetMs = fromDayMs + dayOffset * MS_PER_DAY;
-    const targetDate = new Date(targetMs);
 
     // Skip dates before the assignment takes effect
     if (targetMs < rotationStartMs) continue;
@@ -393,7 +392,7 @@ function buildInstanceRows(
 
     // Compute business date using local calendar dates (not UTC)
     const businessDate = computeBusinessDate(
-      targetDate,
+      shiftsForDay.map((s) => s.utcStartMs),
       shiftsForDay.map((s) => s.utcEndMs),
       pattern.useEndDateForBusinessDate,
       timezone,
@@ -568,20 +567,27 @@ function computeShiftUtcTimes(
  * local midnight (e.g., a shift ending at 03:00 UTC is still April 9
  * in America/New_York because 03:00 UTC = 11:00 PM ET on April 9).
  *
- * @param targetDate                - The rotation day's anchor date
+ * The false branch must use the FIRST shift's actual start, not the
+ * rotation anchor: for west-of-UTC sites the anchor (UTC midnight) is
+ * the previous local evening, which stamped every block one day early.
+ * For UTC and east-of-UTC sites both dates coincide, so existing
+ * tenants' stamps are unchanged.
+ *
+ * @param shiftStartTimesMs         - UTC start times of all shifts on this day
  * @param shiftEndTimesMs           - UTC end times of all shifts on this day
  * @param useEndDateForBusinessDate - Pattern flag controlling the rule
  * @param timezone                  - IANA timezone string (e.g., "America/New_York")
  */
-function computeBusinessDate(
-  targetDate: Date,
+export function computeBusinessDate(
+  shiftStartTimesMs: number[],
   shiftEndTimesMs: number[],
   useEndDateForBusinessDate: boolean,
   timezone: string,
 ): Date {
   if (!useEndDateForBusinessDate) {
-    // Business date = local calendar date of the rotation day anchor
-    return getLocalCalendarDate(targetDate, timezone);
+    // Business date = local calendar date when the FIRST shift starts
+    const firstStartMs = Math.min(...shiftStartTimesMs);
+    return getLocalCalendarDate(new Date(firstStartMs), timezone);
   }
 
   // Business date = local calendar date when the LAST shift ends
