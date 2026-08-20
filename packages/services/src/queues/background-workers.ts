@@ -35,6 +35,8 @@ let staleGatewayQueue: Queue | null = null;
 let stationEventExecutionWorker: Worker | null = null;
 let bucketEnsureWorker: Worker | null = null;
 let bucketEnsureQueue: Queue | null = null;
+let ensureWatchdogTimer: NodeJS.Timeout | null = null;
+let lastEnsureTickAt = 0;
 
 function bullmqConnection() {
   if (!REDIS_URL) return null;
@@ -126,9 +128,8 @@ export async function startMetricBucketEnsure(): Promise<void> {
   });
 
   const chainNextTick = () => {
-    scheduleNextEnsureTick().catch((err) =>
-      console.error("[metric-bucket-ensure] failed to schedule next tick", err),
-    );
+    lastEnsureTickAt = Date.now();
+    scheduleNextEnsureTick().catch((err) => console.error("[metric-bucket-ensure] failed to schedule next tick", err));
   };
   bucketEnsureWorker.on("completed", chainNextTick);
   bucketEnsureWorker.on("failed", (job, err) => {
@@ -137,6 +138,27 @@ export async function startMetricBucketEnsure(): Promise<void> {
   });
 
   bucketEnsureQueue = new Queue("metric-bucket-ensure", { connection });
+
+  // Watchdog: Upstash's eviction policy (not "noeviction") can drop BullMQ's
+  // wakeup markers, leaving a seeded tick stuck in `wait` indefinitely — the
+  // blocked worker only wakes on a fresh add(), and restarts can't recover
+  // because the deterministic-id re-seed dedupes against the stuck job. When
+  // no tick has run for a few intervals, nudge with a unique-id job: the add
+  // writes a new marker (waking the worker), the extra tick is idempotent,
+  // and the completed handler restores the single deterministic-id chain.
+  lastEnsureTickAt = Date.now();
+  ensureWatchdogTimer = setInterval(() => {
+    if (Date.now() - lastEnsureTickAt < 3 * ENSURE_TICK_INTERVAL_MS) return;
+    console.warn("[metric-bucket-ensure] no tick observed, nudging queue");
+    bucketEnsureQueue
+      ?.add(
+        "ensure-metric-buckets",
+        {},
+        { jobId: `ensure-watchdog-${Date.now()}`, removeOnComplete: true, removeOnFail: { count: 1 } },
+      )
+      .catch((err) => console.error("[metric-bucket-ensure] watchdog nudge failed", err));
+  }, ENSURE_TICK_INTERVAL_MS);
+  ensureWatchdogTimer.unref();
 
   // Seed the first tick. Deterministic job ID makes this a no-op if another
   // instance has already seeded — safe under horizontal scaling.
@@ -164,6 +186,8 @@ export async function startMetricBucketEnsure(): Promise<void> {
 }
 
 export async function stopMetricBucketEnsure(): Promise<void> {
+  if (ensureWatchdogTimer) clearInterval(ensureWatchdogTimer);
+  ensureWatchdogTimer = null;
   await Promise.all([bucketEnsureWorker?.close(), bucketEnsureQueue?.close()]);
   bucketEnsureWorker = null;
   bucketEnsureQueue = null;
