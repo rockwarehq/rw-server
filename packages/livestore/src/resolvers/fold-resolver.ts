@@ -74,6 +74,8 @@ interface TotalizerRuntime extends BaseRuntime {
 
 type FoldRuntime = TumblingRuntime | EwmaRuntime | TotalizerRuntime;
 
+export type FoldInputProperty = { resolverType: string; current?: ValueEnvelope };
+
 // Shared engine for the stateful fold resolvers (window + totalizer):
 // folds live samples into KV-persisted agg state,
 // closes tumbling buckets on timers, adds totalizer trigger firings,
@@ -97,7 +99,7 @@ export class FoldResolver {
 
   async start(
     properties: Iterable<PropertyRuntime>,
-    getProperty: (id: string) => { resolverType: string } | null,
+    getProperty: (id: string) => FoldInputProperty | null,
   ): Promise<void> {
     this.stopped = false;
     for (const property of properties) {
@@ -112,7 +114,7 @@ export class FoldResolver {
 
   async upsertProperty(
     property: PropertyRuntime,
-    getProperty: (id: string) => { resolverType: string } | null,
+    getProperty: (id: string) => FoldInputProperty | null,
   ): Promise<void> {
     await this.removeProperty(property.id);
 
@@ -130,7 +132,7 @@ export class FoldResolver {
         this.logger.warn({ propertyId: property.id, errors }, "livestore totalizer skipped: invalid resolver");
         return;
       }
-      rt = await this.rehydrateTotalizer(property.id, property.resolver);
+      rt = await this.rehydrateTotalizer(property.id, property.resolver, getProperty);
     } else {
       return;
     }
@@ -376,7 +378,11 @@ export class FoldResolver {
 
   // The running total survives restarts AND input rewires — it's the business
   // quantity; only the per-input tracking fields reset when an input changes.
-  private async rehydrateTotalizer(propertyId: string, config: TotalizerResolverConfig): Promise<TotalizerRuntime> {
+  private async rehydrateTotalizer(
+    propertyId: string,
+    config: TotalizerResolverConfig,
+    getProperty: (id: string) => FoldInputProperty | null,
+  ): Promise<TotalizerRuntime> {
     const loaded = await this.store.get(propertyId);
     const trigger = parseGraphHookCondition(config.trigger);
     if (!trigger) throw new Error("totalizer trigger invalid after validation"); // unreachable
@@ -403,6 +409,14 @@ export class FoldResolver {
     } else {
       if (loaded) this.logger.warn({ propertyId }, "livestore totalizer state discarded (kind changed)");
       state = initTotalizerState();
+    }
+
+    // Seed the tracked source from its current value: a source that never
+    // changes after the totalizer is created (or rewired) would otherwise
+    // leave every trigger firing with nothing to add.
+    if (state.latestSourceValue === null) {
+      const current = getProperty(config.sourcePropertyId)?.current;
+      if (current) state = foldTotalizerSource(state, current);
     }
 
     const rt: TotalizerRuntime = {

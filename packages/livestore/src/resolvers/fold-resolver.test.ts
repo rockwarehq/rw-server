@@ -350,6 +350,19 @@ describe("totalizer", () => {
     expect(adds.map((c) => c.envelope.value)).toEqual([7, 16]);
   });
 
+  it("seeds the source from its current value so a static source adds without re-committing", async () => {
+    const h = makeHarness();
+    const withCurrent = (id: string) =>
+      id === "src" ? { resolverType: "tag", current: sample(12.5, T0 - 60_000) } : getProperty(id);
+    await h.evaluator.start([property("win", totalizer(onChange("trig"), "src"))], withCurrent);
+
+    h.evaluator.onInput("trig", sample(0, T0 + 500)); // baseline
+    h.evaluator.onInput("trig", sample(1, T0 + 1_000)); // edge → adds the seeded source value
+    await settle();
+    expect(h.evaluator.counts().totalizerAddsSkipped).toBe(0);
+    expect(h.commits.at(-1)?.envelope).toMatchObject({ value: 12.5, context: { count: 1 } });
+  });
+
   it("counts a skipped add when the trigger fires with no usable source value", async () => {
     const h = makeHarness();
     await h.evaluator.start([property("win", totalizer(onChange("trig"), "src"))], getProperty);
