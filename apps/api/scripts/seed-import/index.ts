@@ -1,7 +1,8 @@
 import "dotenv/config";
+import { parseArgs } from "node:util";
 import prisma from "@rw/db";
 import config from "./config.js";
-import { IdMap } from "./utils.js";
+import { IdMap, setDataFile } from "./utils.js";
 import { importProcessTypes } from "./importProcessTypes.js";
 import { importWorkcenters } from "./importWorkcenters.js";
 import { importProducts } from "./importProducts.js";
@@ -19,16 +20,34 @@ import { importItemDispositionReasons } from "./importItemDispositionReasons.js"
 import { importEmployeeRoles } from "./importEmployeeRoles.js";
 import { importEmployees } from "./importEmployees.js";
 
+// CLI overrides for the config.ts defaults:
+//   pnpm db:import [--file <data-file.txt>] [--site <site name>] [--db <database url>]
+const { values: cli } = parseArgs({
+  options: {
+    file: { type: "string" },
+    site: { type: "string" },
+    db: { type: "string" },
+  },
+});
+
 async function main() {
   const idMap = new IdMap();
   const startTime = Date.now();
+
+  const siteName = cli.site ?? config.siteName;
+  const dataFile = cli.file;
+  if (dataFile) setDataFile(dataFile);
+  // Must be set before the first prisma query — @rw/db builds its client
+  // (and captures DATABASE_URL) lazily on first property access.
+  if (cli.db) process.env.DATABASE_URL = cli.db;
 
   console.log("=".repeat(60));
   console.log("SQL Server -> Postgres Data Import");
   console.log("=".repeat(60));
   console.log();
   console.log(`  Workspace: ${config.workspaceName}`);
-  console.log(`  Site:      ${config.siteName}`);
+  console.log(`  Site:      ${siteName}`);
+  console.log(`  Data file: ${dataFile ?? "sqlLegacyData.txt (default)"}`);
   console.log(`  Batch:     ${config.batchSize}`);
   console.log(`  Verbose:   ${config.verbose}`);
   console.log();
@@ -38,14 +57,14 @@ async function main() {
   // -------------------------------------------------------------------------
   const site = await prisma.site.findFirst({
     where: {
-      name: config.siteName,
+      name: siteName,
       workspace: { name: config.workspaceName },
     },
   });
 
   if (!site) {
     console.error(
-      `Site "${config.siteName}" in workspace "${config.workspaceName}" not found.\n` +
+      `Site "${siteName}" in workspace "${config.workspaceName}" not found.\n` +
         `Update apps/api/scripts/seed-import/config.ts with the correct values.`,
     );
     process.exit(1);
