@@ -610,10 +610,15 @@ async function sumBucketsInWindowWithStdCycle(
 
   // currentStandardCycle, currentJobId, currentJobName: take from the latest sub-bucket
   // that has a non-null value (same "walk backwards" pattern for all three).
+  // Skip sub-buckets that haven't started yet: ensure pre-scaffolds future
+  // buckets stamped with a snapshot of the job/std-cycle at creation time,
+  // which goes stale on a mid-shift job change.
+  const nowMs = Date.now();
   let currentStandardCycle: number | null = null;
   let currentJobId: string | null = null;
   let currentJobName: string | null = null;
   for (let i = buckets.length - 1; i >= 0; i--) {
+    if (buckets[i].startTime.getTime() > nowMs) continue;
     if (currentStandardCycle == null && buckets[i].currentStandardCycle != null) {
       currentStandardCycle = Number(buckets[i].currentStandardCycle);
     }
