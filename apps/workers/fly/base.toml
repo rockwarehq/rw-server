@@ -32,6 +32,10 @@ integration-events = 'node dist/main.js --worker integration-events'
 [env]
 NODE_ENV = 'production'
 PORT = '9465'
+# pnpm 11 defaults verify-deps-before-run to "install", which re-runs a full
+# `pnpm install --production` before the release_command's `pnpm db:migrate`
+# and OOMs the release machine. The image is immutable — never reinstall.
+pnpm_config_verify_deps_before_run = 'false'
 # Metrics combined-tick interval (ms), read by the `rollups` process only.
 # Default 5000; raise to reduce Redis pub/sub bandwidth at the cost of staler KPIs.
 # COMBINED_TICK_MS = '5000'
