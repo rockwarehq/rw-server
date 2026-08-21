@@ -267,23 +267,31 @@ function publishStationCurrentJobMetricEvent(
   });
 }
 
-// Re-stamp the job columns on the shift bucket whose window covers NOW.
-// Closed shifts keep the label they ran under; if no current bucket exists
-// (station idle across a shift boundary) there is nothing to stamp — the
-// next shift-create reads Station.currentJobId fresh anyway.
+// Re-stamp the job columns on the shift bucket whose window covers NOW, plus
+// any pre-scaffolded future buckets (ensure creates them stamped with the job
+// current at creation time, which this change just made stale). Closed shifts
+// keep the label they ran under; if no current bucket exists (station idle
+// across a shift boundary) there is nothing to stamp — the next shift-create
+// reads Station.currentJobId fresh anyway.
 async function stampCurrentShiftBucketJob(stationId: string, jobName: string | null): Promise<void> {
   await prisma.$executeRaw`
     UPDATE "MetricBucket" mb
     SET "currentJobId" = s."currentJobId", "currentJobName" = ${jobName}, "updatedAt" = NOW()
     FROM "Station" s
     WHERE s.id = ${stationId}::uuid
-      AND mb.id = (
-        SELECT id FROM "MetricBucket"
-        WHERE "entityType" = 'STATION' AND "entityId" = ${stationId}::uuid AND granularity = 'SHIFT'
-          AND "startTime" <= NOW()
-          AND NOW() < "startTime" + make_interval(secs => "durationSeconds")
-        ORDER BY "startTime" DESC
-        LIMIT 1
+      AND (
+        mb.id = (
+          SELECT id FROM "MetricBucket"
+          WHERE "entityType" = 'STATION' AND "entityId" = ${stationId}::uuid AND granularity = 'SHIFT'
+            AND "startTime" <= NOW()
+            AND NOW() < "startTime" + make_interval(secs => "durationSeconds")
+          ORDER BY "startTime" DESC
+          LIMIT 1
+        )
+        OR (
+          mb."entityType" = 'STATION' AND mb."entityId" = ${stationId}::uuid
+          AND mb."startTime" > NOW()
+        )
       )`;
 }
 
