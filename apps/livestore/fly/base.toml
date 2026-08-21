@@ -15,6 +15,10 @@ app = 'node dist/main.js'
 NODE_ENV = 'production'
 HOST = '::'
 PORT = '30100'
+# pnpm 11 defaults verify-deps-before-run to "install", which re-runs a full
+# `pnpm install --production` before the release_command's `pnpm db:migrate`
+# and OOMs the release machine. The image is immutable — never reinstall.
+pnpm_config_verify_deps_before_run = 'false'
 METRICS_PORT = '9091'
 
 [http_service]
