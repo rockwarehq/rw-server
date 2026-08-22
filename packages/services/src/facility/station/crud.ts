@@ -8,7 +8,7 @@ export interface CreateStationInput {
   attrs?: Record<string, unknown>;
   siteId: string;
   workcenterId?: string;
-  /** Classification ids to attach (must belong to the same site). */
+  /** Labels to put on this record. They must come from the same site's list. */
   classificationIds?: string[];
   // Config fields (stored on StationVersion)
   standardCycle?: number;
@@ -25,7 +25,7 @@ export interface UpdateStationInput {
   name?: string;
   description?: string;
   attrs?: Record<string, unknown>;
-  /** Full-replace of attached classifications (must belong to the same site). */
+  /** Replaces the record's whole label list with this one (same-site labels only). */
   classificationIds?: string[];
   // Config fields (stored on StationVersion)
   standardCycle?: number | null;
@@ -42,7 +42,7 @@ export interface ListStationsFilter {
   workspaceId?: string;
   siteId?: string;
   workcenterId?: string;
-  /** Only stations carrying at least one of these classifications (ANY). */
+  /** Only return stations that have at least one of these labels. */
   classificationIds?: string[];
   name?: string;
   limit?: number;

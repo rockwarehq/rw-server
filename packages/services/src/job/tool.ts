@@ -9,7 +9,7 @@ import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 
 export interface CreateToolInput {
   siteId: string;
-  /** Classification ids to attach (must belong to the same site). */
+  /** Labels to put on this record. They must come from the same site's list. */
   classificationIds?: string[];
   name: string;
   description?: string;
@@ -24,13 +24,13 @@ export interface UpdateToolInput {
   pmLimit?: number | null;
   pmWarn?: number | null;
   attrs?: Record<string, unknown>;
-  /** Full-replace of attached classifications (must belong to the same site). */
+  /** Replaces the record's whole label list with this one (same-site labels only). */
   classificationIds?: string[];
 }
 
 export interface ListToolsFilter {
   siteId?: string;
-  /** Only tools carrying at least one of these classifications (ANY). */
+  /** Only return tools that have at least one of these labels. */
   classificationIds?: string[];
   name?: string;
   limit?: number;

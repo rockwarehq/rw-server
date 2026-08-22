@@ -1,17 +1,17 @@
-/// GROUP = plain label: organize and filter, no rules.
-/// CAPABILITY = matching vocabulary: stations declare it, jobs require it,
-/// dispatch (changeJob) enforces that a job's capabilities are a subset of
-/// the station's. e.g. "1 tonne press".
+/// GROUP = a plain label for grouping and filtering. Never blocks anything.
+/// CAPABILITY = a matching label: machines say what they can do, jobs say
+/// what they need (e.g. "1 tonne press"). changeJob refuses to put a job on
+/// a station that is missing any CAPABILITY label the job carries.
 enum ClassificationKind {
   GROUP
   CAPABILITY
 }
 
-/// One site-scoped vocabulary shared across master data and stations
-/// (supersedes the never-wired ToolClassification/StationClassification).
-/// The implicit m2m join tables double as star-schema bridge tables, with
-/// this table as the conformed classification dimension. Membership is
-/// overlapping by design: sums across classifications can exceed the total.
+/// One shared list of labels per site, used by jobs, tools, products,
+/// materials, and stations. Replaces the old unused ToolClassification and
+/// StationClassification tables. A record can carry many labels and a label
+/// can be on many records — so groups can overlap, and adding up totals per
+/// label can count the same record twice (see ADR-0011).
 model Classification {
   id    String             @id @default(uuid()) @db.Uuid
   name  String

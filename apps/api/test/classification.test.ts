@@ -14,10 +14,12 @@ const row = (res: { json: unknown }) => res.json as Row;
 const cls = (res: { json: unknown }) => res.json as Cls;
 const listRows = (res: { json: unknown }) => (res.json as { data: Row[] }).data;
 
-// Tier 2: classifications — one site-scoped vocabulary (GROUP labels +
-// CAPABILITY matching) shared by jobs/tools/products/materials/stations.
-// Vocabulary CRUD is settings:write; assignment rides the record's own write
-// permission; changeJob enforces capability subset.
+// Tier 2: classifications — each site has one shared list of labels used by
+// jobs, tools, products, materials, and stations. GROUP labels just group
+// things; CAPABILITY labels are rules — a job only runs on a station that
+// has every CAPABILITY label the job carries (checked in changeJob).
+// Managing the label list needs settings:write; putting labels on a record
+// only needs permission to edit that record.
 describe.skipIf(!process.env.TEST_DATABASE_URL)("classifications (Tier 2)", () => {
   let server: TestServer;
   let adminToken: string;

@@ -9,7 +9,7 @@ import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 
 export interface CreateMaterialInput {
   siteId: string;
-  /** Classification ids to attach (must belong to the same site). */
+  /** Labels to put on this record. They must come from the same site's list. */
   classificationIds?: string[];
   materialNumber: string;
   name?: string;
@@ -30,13 +30,13 @@ export interface UpdateMaterialInput {
   weightUnits?: WeightUnit | null;
   unitCost?: number | string | null;
   attrs?: Record<string, unknown>;
-  /** Full-replace of attached classifications (must belong to the same site). */
+  /** Replaces the record's whole label list with this one (same-site labels only). */
   classificationIds?: string[];
 }
 
 export interface ListMaterialsFilter {
   siteId?: string;
-  /** Only materials carrying at least one of these classifications (ANY). */
+  /** Only return materials that have at least one of these labels. */
   classificationIds?: string[];
   /** Free-text search across materialNumber, name, shortCode, description (case-insensitive contains, OR) */
   q?: string;

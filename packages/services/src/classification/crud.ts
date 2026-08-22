@@ -1,12 +1,12 @@
 import prisma from "@rw/db";
 import type { ClassificationKind, Prisma } from "@rw/db";
 
-// One site-scoped vocabulary shared by jobs, tools, products, materials, and
-// stations. kind GROUP = plain label (organize + filter, no rules); kind
-// CAPABILITY = matching vocabulary — stations declare it, jobs require it,
-// and changeJob enforces that a job's capabilities are a subset of the
-// station's. Rows are hard-deleted: the implicit m2m join rows cascade, so a
-// removed classification simply detaches everywhere.
+// One shared list of labels per site, used by jobs, tools, products,
+// materials, and stations. kind GROUP = a plain label for grouping and
+// filtering. kind CAPABILITY = a matching label: machines say what they can
+// do, jobs say what they need, and changeJob refuses a station that is
+// missing any label the job requires. Deleting a label really deletes it —
+// it disappears from every record at once and stops enforcing anything.
 
 export interface CreateClassificationInput {
   siteId: string;

@@ -59,7 +59,7 @@ const materialCreateInputSchema = z.object({
 
 const materialUpdateInputSchema = z.object({
   id: z.uuid(),
-  // Full-replace of attached classifications.
+  // Replaces the record's whole label list with this one.
   classificationIds: z.array(z.uuid()).max(50).optional(),
   materialNumber: z.string().min(1).optional(),
   name: z.string().optional(),
@@ -73,7 +73,7 @@ const materialUpdateInputSchema = z.object({
 
 const materialListInputSchema = z.object({
   siteId: z.uuid().optional(),
-  // Only rows carrying at least one of these classifications (ANY).
+  // Only return rows that have at least one of these labels.
   classificationIds: z.array(z.uuid()).max(50).optional(),
   q: z.string().optional(),
   name: z.string().optional(),
@@ -190,7 +190,7 @@ const productCreateInputSchema = z.object({
 
 const productUpdateInputSchema = z.object({
   id: z.uuid(),
-  // Full-replace of attached classifications.
+  // Replaces the record's whole label list with this one.
   classificationIds: z.array(z.uuid()).max(50).optional(),
   sku: z.string().min(1).optional(),
   name: z.string().optional(),
@@ -204,7 +204,7 @@ const productUpdateInputSchema = z.object({
 
 const productListInputSchema = z.object({
   siteId: z.uuid().optional(),
-  // Only rows carrying at least one of these classifications (ANY).
+  // Only return rows that have at least one of these labels.
   classificationIds: z.array(z.uuid()).max(50).optional(),
   q: z.string().optional(),
   sku: z.string().optional(),

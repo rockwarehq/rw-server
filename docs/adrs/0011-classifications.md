@@ -1,55 +1,65 @@
-# ADR-0011: Classifications — shared labels with optional capability matching
+# ADR-0011: Classifications — labels that can also match jobs to machines
 
 **Status.** Accepted, 2026-08-21.
 
-**Context.** Master data (Job, Tool, Product, Material) needed grouping beyond
-the site: "molding jobs", "products for the 1-tonne presses". A first attempt
-modeled this as single-workcenter ownership (`workcenterId` on each head
-table) and was rejected in review: a product can belong to several
-workcenters, and groups like "all molding machines" cut across workcenters.
-The legacy system's "process groups" solved this but conflated two ideas.
-Two dead tables (`ToolClassification`, `StationClassification`, enum
-`MACHINE_SPEC | GROUP`) anticipated the decomposition but were never wired.
+**The problem.** People need to group things like jobs, tools, products, and
+materials. For example: "these are the molding jobs" or "these products are
+for the 1 tonne presses". Our first try gave each record one home workcenter
+(a `workcenterId` column). That didn't fit real plants: one product can be
+made in several workcenters, and a group like "all molding machines" can be
+spread across many workcenters. Our old system had "process groups" for
+this, but that name mixed two different ideas together. Funny enough, two
+old tables in our database (`ToolClassification` and `StationClassification`)
+were built for this years ago but never hooked up to anything.
 
-**Decision.** One site-scoped `Classification` vocabulary
-(`@@unique([siteId, name])`), applied many-to-many to Job, Tool, Product,
-Material, and Station, with a `kind` that determines whether anything
-enforces it:
+**The decision.** One shared list of labels per site, called
+`Classification`. A label has a name (unique per site:
+`@@unique([siteId, name])`) and a `kind` that says whether the label just
+groups things or also makes rules:
 
-- **GROUP** — a plain label. Organize, filter lists (`classificationIds`,
-  ANY semantics), slice metrics. No rules.
-- **CAPABILITY** — a matching vocabulary. Stations declare capabilities;
-  jobs require them; `station.changeJob` enforces **subset semantics**:
-  every CAPABILITY classification on the job must be present on the station
-  (`CAPABILITY_MISMATCH`), so a job needing "1 tonne press" and "robot arm"
-  only dispatches to machines with both. GROUP never enforces. A label can
-  be promoted to a capability by changing its kind.
+- **GROUP** — a plain label. Use it to organize and filter. It never blocks
+  anything. Example: "Molding", "High Priority".
+- **CAPABILITY** — a matching label. Machines say what they can do; jobs say
+  what they need. When someone puts a job on a station
+  (`station.changeJob`), we check that the station has **every** CAPABILITY
+  label the job carries. If it's missing one, the change is refused with
+  `CAPABILITY_MISMATCH` and the message names what's missing. Example: a job
+  labeled "1 tonne press" and "robot arm" only runs on a machine that has
+  both labels. GROUP labels are never part of this check.
 
-Vocabulary CRUD requires `settings:write` (curated by Factory
-Administrators); *assigning* existing classifications rides each record's
-own write permission, so office users tag without minting. Classifications
-are hard-deleted: the m2m join rows cascade, detaching the label everywhere
-and dropping any requirement it expressed.
+A label can be attached to many records, and a record can carry many labels.
+You can attach them to jobs, tools, products, materials, and stations. If a
+plant starts with a plain GROUP label and later wants it to be a rule, an
+admin can change its kind to CAPABILITY.
 
-The superseded tables were dropped, carrying rows over id-preserved
-(`MACHINE_SPEC → CAPABILITY`) so saved shift-view `classificationIds` keep
-resolving. Station reads now expose `kind` where they exposed `type`.
+**Who can do what.** Creating, renaming, and deleting labels needs
+`settings:write` (Factory Administrators keep the list tidy). Putting an
+existing label ON a record only needs permission to edit that record
+(`job:write` and so on). So office users can tag things, but they can't
+invent new labels. Deleting a label removes it from every record at once and
+removes any rule it was enforcing.
 
-**Dimensional modeling.** `Classification` doubles as a conformed dimension
-for the star-schema work; the implicit m2m join tables are the bridge tables
-(the standard multivalued-dimension answer). Two semantics are deliberate:
+**What happened to the old tables.** We dropped `ToolClassification` and
+`StationClassification`. Any rows they held were copied into
+`Classification` first, keeping the same ids (so saved shift-view filters
+still work). Their old `MACHINE_SPEC` type became `CAPABILITY`. Station data
+now shows a `kind` field where it used to show `type`.
 
-1. **Overlap** — membership is not a partition. A job in both "Molding" and
-   "High-Priority" contributes facts to both groups; sums across
-   classifications can exceed the grand total. Ratio-of-sums metrics filtered
-   to one classification are always consistent; "group by classification"
-   reports are overlapping segments, not a 100% breakdown.
-2. **As-is** — the live bridge is joined at query time (current labels),
-   matching how metrics already treat the Station→Workcenter hierarchy. If
-   "label at time of production" ever matters, that is a fact-side snapshot
-   decision, not a change to this model.
+**Two things to know when reporting on labels.** Our reporting work groups
+numbers by things like site and workcenter, and labels join that list:
 
-**Consequences.** No visibility/authorization semantics are attached to
-classifications today — they organize and match, they do not hide. If plants
-later want "molding operators only see molding jobs", that becomes an IAM
-concern layered on the same vocabulary, not a new mechanism.
+1. **Groups can overlap.** A job can be in both "Molding" and
+   "High Priority", so it counts in both groups. If you add up every group's
+   total, you can get more than the real total. Filtering to one group is
+   always correct; just don't present a per-group breakdown as if it adds up
+   to 100%.
+2. **Reports use today's labels.** If someone re-labels a job next month,
+   reports about last month will group that job by its new labels, not the
+   ones it had back then. That matches how we already report on the
+   site → workcenter → station structure. If "what label did it have at the
+   time" ever matters, that's a separate future decision.
+
+**What this is not.** Labels organize and match — they don't hide anything.
+Everyone who can see jobs sees all jobs, labeled or not. If plants later
+want "molding operators only see molding jobs", that would be a permissions
+feature built on top of this same label list, not a new system.

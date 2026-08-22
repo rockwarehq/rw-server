@@ -5,11 +5,11 @@ import { grant } from "./authz.js";
 import * as classification from "@rw/services/classification/index";
 import { throwServiceError, unwrap } from "./errors.js";
 
-// One site-scoped vocabulary (GROUP labels + CAPABILITY matching). The
-// vocabulary itself is curated — create/update/delete require settings:write
-// (Factory Administrators). ASSIGNING existing classifications to a record
-// rides that record's own write permission (job:write etc.), so office users
-// can tag with the vocabulary but not mint or reshape it.
+// The site's shared list of labels (GROUP = plain grouping, CAPABILITY =
+// job↔machine matching). Only admins manage the list itself:
+// create/update/delete need settings:write. Putting an existing label ON a
+// record only needs permission to edit that record (job:write etc.), so
+// office users can tag things but can't invent or rename labels.
 
 const kindSchema = z.enum(["GROUP", "CAPABILITY"]);
 

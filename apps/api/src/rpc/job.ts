@@ -32,7 +32,7 @@ const toolCreateInputSchema = z.object({
 
 const toolUpdateInputSchema = z.object({
   id: z.uuid(),
-  // Full-replace of attached classifications.
+  // Replaces the record's whole label list with this one.
   classificationIds: z.array(z.uuid()).max(50).optional(),
   name: z.string().min(1).optional(),
   description: z.string().optional(),
@@ -48,7 +48,7 @@ const toolIdInputSchema = z.object({
 
 const toolListInputSchema = z.object({
   siteId: z.uuid().optional(),
-  // Only rows carrying at least one of these classifications (ANY).
+  // Only return rows that have at least one of these labels.
   classificationIds: z.array(z.uuid()).max(50).optional(),
   name: z.string().optional(),
   limit: z.number().min(0).default(50),
@@ -95,7 +95,7 @@ const jobCreateInputSchema = z.object({
 
 const jobUpdateInputSchema = z.object({
   id: z.uuid(),
-  // Full-replace of attached classifications.
+  // Replaces the record's whole label list with this one.
   classificationIds: z.array(z.uuid()).max(50).optional(),
   name: z.string().min(1).optional(),
   description: z.string().optional(),
@@ -110,7 +110,7 @@ const jobIdInputSchema = z.object({
 
 const jobListInputSchema = z.object({
   siteId: z.uuid().optional(),
-  // Only rows carrying at least one of these classifications (ANY).
+  // Only return rows that have at least one of these labels.
   classificationIds: z.array(z.uuid()).max(50).optional(),
   q: z.string().optional(),
   name: z.string().optional(),

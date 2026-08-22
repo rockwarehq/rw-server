@@ -98,8 +98,8 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
       return { error: "Job and station must belong to the same site" as const, code: "SITE_MISMATCH" as const };
     }
 
-    // Capability matching: every CAPABILITY classification the job requires
-    // must be declared on the station. GROUP classifications never enforce.
+    // A station must have every CAPABILITY label the job carries, or the
+    // job can't run there. GROUP labels never block anything.
     if (job && job.classifications.length > 0) {
       const stationCapabilities = new Set(station.classifications.map((c) => c.id));
       const missing = job.classifications.filter((c) => !stationCapabilities.has(c.id));
