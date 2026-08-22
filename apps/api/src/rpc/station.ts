@@ -31,6 +31,7 @@ const createInputSchema = z.object({
   attrs: z.record(z.string(), z.unknown()).optional(),
   siteId: z.uuid(),
   workcenterId: z.uuid().optional(),
+  classificationIds: z.array(z.uuid()).max(50).optional(),
   // Config fields (stored on StationVersion)
   standardCycle: z.number().positive().optional(),
   downtimeDetect: z.number().positive().optional(),
@@ -47,6 +48,8 @@ const updateInputSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().optional(),
   attrs: z.record(z.string(), z.unknown()).optional(),
+  // Replaces the record's whole label list with this one.
+  classificationIds: z.array(z.uuid()).max(50).optional(),
   // Config fields (stored on StationVersion)
   standardCycle: z.number().positive().nullable().optional(),
   downtimeDetect: z.number().positive().nullable().optional(),
@@ -70,6 +73,8 @@ const moveInputSchema = z.object({
 const listInputSchema = z.object({
   siteId: z.uuid().optional(),
   workcenterId: z.uuid().optional(),
+  // Only return stations that have at least one of these labels.
+  classificationIds: z.array(z.uuid()).max(50).optional(),
   name: z.string().optional(),
   limit: z.number().min(0).default(50),
   offset: z.number().min(0).default(0),

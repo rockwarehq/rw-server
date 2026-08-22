@@ -1,0 +1,35 @@
+/// GROUP = a plain label for grouping and filtering. Never blocks anything.
+/// CAPABILITY = a matching label: machines say what they can do, jobs say
+/// what they need (e.g. "1 tonne press"). changeJob refuses to put a job on
+/// a station that is missing any CAPABILITY label the job carries.
+enum ClassificationKind {
+  GROUP
+  CAPABILITY
+}
+
+/// One shared list of labels per site, used by jobs, tools, products,
+/// materials, and stations. Replaces the old unused ToolClassification and
+/// StationClassification tables. A record can carry many labels and a label
+/// can be on many records — so groups can overlap, and adding up totals per
+/// label can count the same record twice (see ADR-0011).
+model Classification {
+  id    String             @id @default(uuid()) @db.Uuid
+  name  String
+  kind  ClassificationKind @default(GROUP)
+  attrs Json               @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  jobs      Job[]
+  tools     Tool[]
+  products  Product[]
+  materials Material[]
+  stations  Station[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}

@@ -23,6 +23,7 @@ const jobOverrides: CodeOverrides = {
 
 const toolCreateInputSchema = z.object({
   siteId: z.uuid(),
+  classificationIds: z.array(z.uuid()).max(50).optional(),
   name: z.string().min(1),
   description: z.string().optional(),
   cavityCount: z.number().int().positive().optional(),
@@ -31,6 +32,8 @@ const toolCreateInputSchema = z.object({
 
 const toolUpdateInputSchema = z.object({
   id: z.uuid(),
+  // Replaces the record's whole label list with this one.
+  classificationIds: z.array(z.uuid()).max(50).optional(),
   name: z.string().min(1).optional(),
   description: z.string().optional(),
   cavityCount: z.number().int().positive().nullable().optional(),
@@ -45,6 +48,8 @@ const toolIdInputSchema = z.object({
 
 const toolListInputSchema = z.object({
   siteId: z.uuid().optional(),
+  // Only return rows that have at least one of these labels.
+  classificationIds: z.array(z.uuid()).max(50).optional(),
   name: z.string().optional(),
   limit: z.number().min(0).default(50),
   offset: z.number().min(0).default(0),
@@ -80,6 +85,7 @@ const listCavitiesInputSchema = z.object({
 
 const jobCreateInputSchema = z.object({
   siteId: z.uuid(),
+  classificationIds: z.array(z.uuid()).max(50).optional(),
   name: z.string().min(1),
   description: z.string().optional(),
   standardCycle: z.number().positive().optional(),
@@ -89,6 +95,8 @@ const jobCreateInputSchema = z.object({
 
 const jobUpdateInputSchema = z.object({
   id: z.uuid(),
+  // Replaces the record's whole label list with this one.
+  classificationIds: z.array(z.uuid()).max(50).optional(),
   name: z.string().min(1).optional(),
   description: z.string().optional(),
   standardCycle: z.number().positive().optional(),
@@ -102,6 +110,8 @@ const jobIdInputSchema = z.object({
 
 const jobListInputSchema = z.object({
   siteId: z.uuid().optional(),
+  // Only return rows that have at least one of these labels.
+  classificationIds: z.array(z.uuid()).max(50).optional(),
   q: z.string().optional(),
   name: z.string().optional(),
   productIds: z.array(z.uuid()).optional(),

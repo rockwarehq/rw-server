@@ -1,6 +1,7 @@
 import * as device from "./device.js";
 import * as site from "./site.js";
 import * as workcenter from "./workcenter.js";
+import * as classification from "./classification.js";
 import * as station from "./station.js";
 import * as events from "./events.js";
 import * as metrics from "./metrics.js";
@@ -187,6 +188,13 @@ export const router = {
     update: workcenter.update,
     move: workcenter.move,
     delete: workcenter.remove,
+  },
+  classification: {
+    create: classification.create,
+    list: classification.list,
+    get: classification.get,
+    update: classification.update,
+    delete: classification.remove,
   },
   station: {
     create: station.create,

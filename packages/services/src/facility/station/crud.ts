@@ -8,6 +8,8 @@ export interface CreateStationInput {
   attrs?: Record<string, unknown>;
   siteId: string;
   workcenterId?: string;
+  /** Labels to put on this record. They must come from the same site's list. */
+  classificationIds?: string[];
   // Config fields (stored on StationVersion)
   standardCycle?: number;
   downtimeDetect?: number;
@@ -23,6 +25,8 @@ export interface UpdateStationInput {
   name?: string;
   description?: string;
   attrs?: Record<string, unknown>;
+  /** Replaces the record's whole label list with this one (same-site labels only). */
+  classificationIds?: string[];
   // Config fields (stored on StationVersion)
   standardCycle?: number | null;
   downtimeDetect?: number | null;
@@ -38,6 +42,8 @@ export interface ListStationsFilter {
   workspaceId?: string;
   siteId?: string;
   workcenterId?: string;
+  /** Only return stations that have at least one of these labels. */
+  classificationIds?: string[];
   name?: string;
   limit?: number;
   offset?: number;
@@ -57,7 +63,7 @@ const stationInclude = {
     },
   },
   classifications: {
-    select: { id: true, name: true, type: true },
+    select: { id: true, name: true, kind: true },
   },
   currentJob: {
     select: {
@@ -111,6 +117,7 @@ export async function create(input: CreateStationInput) {
     attrs,
     siteId,
     workcenterId,
+    classificationIds,
     standardCycle,
     downtimeDetect,
     downtimeDetectUnit,
@@ -150,6 +157,13 @@ export async function create(input: CreateStationInput) {
     }
   }
 
+  if (classificationIds && classificationIds.length > 0) {
+    const found = await prisma.classification.count({ where: { id: { in: classificationIds }, siteId } });
+    if (found !== classificationIds.length) {
+      return { error: "One or more classifications not found for this site", code: "CLASSIFICATION_NOT_FOUND" };
+    }
+  }
+
   // If process type specified, validate it
   if (processTypeId) {
     const pt = await prisma.processType.findUnique({
@@ -179,6 +193,9 @@ export async function create(input: CreateStationInput) {
           attrs: attrs ?? {},
           siteId,
           workcenterId: workcenterId ?? null,
+          ...(classificationIds?.length
+            ? { classifications: { connect: classificationIds.map((id) => ({ id })) } }
+            : {}),
         },
       });
 
@@ -224,6 +241,7 @@ export async function create(input: CreateStationInput) {
       attrs: attrs ?? {},
       siteId,
       workcenterId: workcenterId ?? null,
+      ...(classificationIds?.length ? { classifications: { connect: classificationIds.map((id) => ({ id })) } } : {}),
     },
     include: stationInclude,
   });
@@ -242,7 +260,7 @@ export async function create(input: CreateStationInput) {
  * List stations with optional filtering
  */
 export async function list(filter: ListStationsFilter = {}) {
-  const { workspaceId, siteId, workcenterId, name, limit = 50, offset = 0 } = filter;
+  const { workspaceId, siteId, workcenterId, classificationIds, name, limit = 50, offset = 0 } = filter;
 
   const where: Record<string, unknown> = {};
 
@@ -256,6 +274,10 @@ export async function list(filter: ListStationsFilter = {}) {
 
   if (workcenterId) {
     where.workcenterId = workcenterId;
+  }
+
+  if (classificationIds && classificationIds.length > 0) {
+    where.classifications = { some: { id: { in: classificationIds } } };
   }
 
   if (name) {
@@ -310,6 +332,7 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
     name,
     description,
     attrs,
+    classificationIds,
     standardCycle,
     downtimeDetect,
     downtimeDetectUnit,
@@ -354,11 +377,23 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
     }
   }
 
+  if (classificationIds && classificationIds.length > 0) {
+    const found = await prisma.classification.count({
+      where: { id: { in: classificationIds }, siteId: current.siteId },
+    });
+    if (found !== classificationIds.length) {
+      return { error: "One or more classifications not found for this site", code: "CLASSIFICATION_NOT_FOUND" };
+    }
+  }
+
   // Build station entity update (name, description, attrs)
   const stationUpdateData: Record<string, unknown> = {};
   if (name !== undefined) stationUpdateData.name = name;
   if (description !== undefined) stationUpdateData.description = description;
   if (attrs !== undefined) stationUpdateData.attrs = attrs;
+  if (classificationIds !== undefined) {
+    stationUpdateData.classifications = { set: classificationIds.map((cid) => ({ id: cid })) };
+  }
 
   // Check if any version config fields are being updated
   const versionInput = {

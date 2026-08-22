@@ -220,11 +220,6 @@ erDiagram
     uuid stationEventId FK "cascade"
     StationEventExecutionStatus status
   }
-  StationClassification {
-    uuid id PK
-    uuid siteId FK "cascade"
-    StationClassificationType type
-  }
   StationJob {
     uuid id PK
     uuid stationId FK "cascade"
@@ -256,8 +251,8 @@ erDiagram
   Datasource ||--o{ StationDatasource : "cascade"
   Station ||--o{ StationEvent : "cascade"
   StationEvent ||--o{ StationEventExecution : "cascade"
-  Site ||--o{ StationClassification : "cascade"
-  Station }o--o{ StationClassification : "implicit m2m"
+  Site ||--o{ Classification : "cascade"
+  Station }o--o{ Classification : "implicit m2m"
   Station ||--o{ StationJob : "allowed jobs"
   Job ||--o{ StationJob : "cascade"
   Station ||--o{ StationJobLog : "cascade"
@@ -348,10 +343,10 @@ erDiagram
     datetime deletedAt
     datetime archivedAt
   }
-  ToolClassification {
+  Classification {
     uuid id PK
     uuid siteId FK "cascade"
-    ToolClassificationType type
+    ClassificationKind kind
   }
   ToolLocation {
     uuid id PK
@@ -373,9 +368,11 @@ erDiagram
   ToolCavityVersion |o--o| ToolCavity : "currentVersion 1to1"
   ToolCavity ||--o{ ToolCavityVersion : "versions"
   Site ||--o{ ToolStatus : "cascade"
-  Site ||--o{ ToolClassification : "cascade"
   Site ||--o{ ToolLocation : "cascade"
-  Tool }o--o{ ToolClassification : "implicit m2m"
+  Tool }o--o{ Classification : "implicit m2m"
+  Job }o--o{ Classification : "implicit m2m"
+  Product }o--o{ Classification : "implicit m2m"
+  Material }o--o{ Classification : "implicit m2m"
   Job ||--o{ JobTool : "cascade"
   Tool ||--o{ JobTool : "cascade"
   Job ||--o{ JobProduct : "cascade"
@@ -1198,8 +1195,11 @@ Prisma generates these; migrations renamed `*Blob` → `*Version` (`202607101200
 
 | Join table | Between |
 | --- | --- |
-| `_StationToStationClassification` | Station ↔ StationClassification |
-| `_ToolToToolClassification` | Tool ↔ ToolClassification |
+| `_ClassificationToJob` | Classification ↔ Job |
+| `_ClassificationToTool` | Classification ↔ Tool |
+| `_ClassificationToProduct` | Classification ↔ Product |
+| `_ClassificationToMaterial` | Classification ↔ Material |
+| `_ClassificationToStation` | Classification ↔ Station |
 | `_ProcessTypeToStatusReason` | ProcessType ↔ StatusReason |
 | `_StatusReasonToWorkcenter` | StatusReason ↔ Workcenter |
 | `_StationToStatusReason` | Station ↔ StatusReason |
