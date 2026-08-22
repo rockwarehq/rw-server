@@ -95,7 +95,8 @@ export interface AddPictureInput {
  * Create a new product with initial version (version 1)
  */
 export async function create(input: CreateProductInput) {
-  const { siteId, classificationIds, sku, name, description, externalSku, weight, weightUnits, itemCost, attrs } = input;
+  const { siteId, classificationIds, sku, name, description, externalSku, weight, weightUnits, itemCost, attrs } =
+    input;
 
   // Verify site exists
   const site = await prisma.site.findUnique({

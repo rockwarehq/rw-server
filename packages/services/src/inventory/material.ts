@@ -55,8 +55,18 @@ export interface ListMaterialsFilter {
  * Create a new material with initial version (version 1)
  */
 export async function create(input: CreateMaterialInput) {
-  const { siteId, classificationIds, materialNumber, name, shortCode, description, externalNumber, weightUnits, unitCost, attrs } =
-    input;
+  const {
+    siteId,
+    classificationIds,
+    materialNumber,
+    name,
+    shortCode,
+    description,
+    externalNumber,
+    weightUnits,
+    unitCost,
+    attrs,
+  } = input;
 
   // Verify site exists
   const site = await prisma.site.findUnique({
@@ -229,8 +239,17 @@ export async function getById(id: string) {
  * Update material (creates new version version)
  */
 export async function update(id: string, input: UpdateMaterialInput) {
-  const { materialNumber, name, shortCode, description, externalNumber, weightUnits, unitCost, attrs, classificationIds } =
-    input;
+  const {
+    materialNumber,
+    name,
+    shortCode,
+    description,
+    externalNumber,
+    weightUnits,
+    unitCost,
+    attrs,
+    classificationIds,
+  } = input;
 
   // Get current material with version
   const current = await prisma.material.findUnique({

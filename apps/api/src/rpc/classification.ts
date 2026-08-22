@@ -58,14 +58,18 @@ export const get = authRequired.input(idInputSchema).handler(async ({ input, con
 });
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "settings:write", scope: { kind: "classification", id: input.id } }));
+  grant(
+    await authorize(context.iam, { permission: "settings:write", scope: { kind: "classification", id: input.id } }),
+  );
 
   const { id, ...updateData } = input;
   return unwrap(await classification.update(id, updateData));
 });
 
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "settings:write", scope: { kind: "classification", id: input.id } }));
+  grant(
+    await authorize(context.iam, { permission: "settings:write", scope: { kind: "classification", id: input.id } }),
+  );
 
   const result = await classification.remove(input.id);
   if (result.error) throwServiceError(result);
