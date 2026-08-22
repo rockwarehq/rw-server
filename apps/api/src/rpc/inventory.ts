@@ -46,6 +46,7 @@ const cycleIdInputSchema = z.object({
 
 const materialCreateInputSchema = z.object({
   siteId: z.uuid(),
+  classificationIds: z.array(z.uuid()).max(50).optional(),
   materialNumber: z.string().min(1),
   name: z.string().optional(),
   shortCode: z.string().optional(),
@@ -58,6 +59,8 @@ const materialCreateInputSchema = z.object({
 
 const materialUpdateInputSchema = z.object({
   id: z.uuid(),
+  // Full-replace of attached classifications.
+  classificationIds: z.array(z.uuid()).max(50).optional(),
   materialNumber: z.string().min(1).optional(),
   name: z.string().optional(),
   shortCode: z.string().optional(),
@@ -70,6 +73,8 @@ const materialUpdateInputSchema = z.object({
 
 const materialListInputSchema = z.object({
   siteId: z.uuid().optional(),
+  // Only rows carrying at least one of these classifications (ANY).
+  classificationIds: z.array(z.uuid()).max(50).optional(),
   q: z.string().optional(),
   name: z.string().optional(),
   materialNumber: z.string().optional(),
@@ -172,6 +177,7 @@ const weightUnitSchema = z.enum(["KG", "LB", "G", "OZ"]);
 
 const productCreateInputSchema = z.object({
   siteId: z.uuid(),
+  classificationIds: z.array(z.uuid()).max(50).optional(),
   sku: z.string().min(1),
   name: z.string().optional(),
   description: z.string().optional(),
@@ -184,6 +190,8 @@ const productCreateInputSchema = z.object({
 
 const productUpdateInputSchema = z.object({
   id: z.uuid(),
+  // Full-replace of attached classifications.
+  classificationIds: z.array(z.uuid()).max(50).optional(),
   sku: z.string().min(1).optional(),
   name: z.string().optional(),
   description: z.string().optional(),
@@ -196,6 +204,8 @@ const productUpdateInputSchema = z.object({
 
 const productListInputSchema = z.object({
   siteId: z.uuid().optional(),
+  // Only rows carrying at least one of these classifications (ANY).
+  classificationIds: z.array(z.uuid()).max(50).optional(),
   q: z.string().optional(),
   sku: z.string().optional(),
   name: z.string().optional(),

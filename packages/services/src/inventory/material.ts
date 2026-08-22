@@ -9,6 +9,8 @@ import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 
 export interface CreateMaterialInput {
   siteId: string;
+  /** Classification ids to attach (must belong to the same site). */
+  classificationIds?: string[];
   materialNumber: string;
   name?: string;
   shortCode?: string;
@@ -28,10 +30,14 @@ export interface UpdateMaterialInput {
   weightUnits?: WeightUnit | null;
   unitCost?: number | string | null;
   attrs?: Record<string, unknown>;
+  /** Full-replace of attached classifications (must belong to the same site). */
+  classificationIds?: string[];
 }
 
 export interface ListMaterialsFilter {
   siteId?: string;
+  /** Only materials carrying at least one of these classifications (ANY). */
+  classificationIds?: string[];
   /** Free-text search across materialNumber, name, shortCode, description (case-insensitive contains, OR) */
   q?: string;
   name?: string;
@@ -49,7 +55,8 @@ export interface ListMaterialsFilter {
  * Create a new material with initial version (version 1)
  */
 export async function create(input: CreateMaterialInput) {
-  const { siteId, materialNumber, name, shortCode, description, externalNumber, weightUnits, unitCost, attrs } = input;
+  const { siteId, classificationIds, materialNumber, name, shortCode, description, externalNumber, weightUnits, unitCost, attrs } =
+    input;
 
   // Verify site exists
   const site = await prisma.site.findUnique({
@@ -61,11 +68,21 @@ export async function create(input: CreateMaterialInput) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
 
+  if (classificationIds && classificationIds.length > 0) {
+    const found = await prisma.classification.count({ where: { id: { in: classificationIds }, siteId } });
+    if (found !== classificationIds.length) {
+      return { error: "One or more classifications not found for this site", code: "CLASSIFICATION_NOT_FOUND" };
+    }
+  }
+
   // Create material and initial version in transaction
   const material = await prisma.$transaction(async (tx) => {
     // 1. Create Material entity
     const mat = await tx.material.create({
-      data: { siteId },
+      data: {
+        siteId,
+        ...(classificationIds?.length ? { classifications: { connect: classificationIds.map((id) => ({ id })) } } : {}),
+      },
     });
 
     // 2. Create initial MaterialVersion (version 1)
@@ -91,6 +108,7 @@ export async function create(input: CreateMaterialInput) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
+        classifications: { select: { id: true, name: true, kind: true } },
         _count: { select: { products: true, versions: true } },
       },
     });
@@ -111,7 +129,7 @@ export async function create(input: CreateMaterialInput) {
  * List materials with optional filtering
  */
 export async function list(filter: ListMaterialsFilter = {}) {
-  const { siteId, q, name, materialNumber, shortCode, limit = 50, offset = 0 } = filter;
+  const { siteId, classificationIds, q, name, materialNumber, shortCode, limit = 50, offset = 0 } = filter;
 
   const where: Prisma.MaterialWhereInput = {
     deletedAt: null,
@@ -119,6 +137,10 @@ export async function list(filter: ListMaterialsFilter = {}) {
 
   if (siteId) {
     where.siteId = siteId;
+  }
+
+  if (classificationIds && classificationIds.length > 0) {
+    where.classifications = { some: { id: { in: classificationIds } } };
   }
 
   // Free-text search OR'd across the columns shown in the UI.
@@ -151,6 +173,7 @@ export async function list(filter: ListMaterialsFilter = {}) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
+        classifications: { select: { id: true, name: true, kind: true } },
         _count: { select: { products: true, versions: true } },
       },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
@@ -186,6 +209,7 @@ export async function getById(id: string) {
           },
         },
       },
+      classifications: { select: { id: true, name: true, kind: true } },
       _count: { select: { products: true, versions: true } },
     },
   });
@@ -205,7 +229,8 @@ export async function getById(id: string) {
  * Update material (creates new version version)
  */
 export async function update(id: string, input: UpdateMaterialInput) {
-  const { materialNumber, name, shortCode, description, externalNumber, weightUnits, unitCost, attrs } = input;
+  const { materialNumber, name, shortCode, description, externalNumber, weightUnits, unitCost, attrs, classificationIds } =
+    input;
 
   // Get current material with version
   const current = await prisma.material.findUnique({
@@ -223,6 +248,15 @@ export async function update(id: string, input: UpdateMaterialInput) {
 
   if (!current.currentVersion) {
     return { error: "Material has no current version", code: "NO_CURRENT_VERSION" };
+  }
+
+  if (classificationIds && classificationIds.length > 0) {
+    const found = await prisma.classification.count({
+      where: { id: { in: classificationIds }, siteId: current.siteId },
+    });
+    if (found !== classificationIds.length) {
+      return { error: "One or more classifications not found for this site", code: "CLASSIFICATION_NOT_FOUND" };
+    }
   }
 
   const currentVersion = current.currentVersion;
@@ -256,10 +290,16 @@ export async function update(id: string, input: UpdateMaterialInput) {
 
     return tx.material.update({
       where: { id },
-      data: { currentVersionId: version.id },
+      data: {
+        currentVersionId: version.id,
+        ...(classificationIds !== undefined
+          ? { classifications: { set: classificationIds.map((cid) => ({ id: cid })) } }
+          : {}),
+      },
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
+        classifications: { select: { id: true, name: true, kind: true } },
         _count: { select: { products: true, versions: true } },
       },
     });

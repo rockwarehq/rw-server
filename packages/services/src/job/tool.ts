@@ -9,6 +9,8 @@ import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 
 export interface CreateToolInput {
   siteId: string;
+  /** Classification ids to attach (must belong to the same site). */
+  classificationIds?: string[];
   name: string;
   description?: string;
   cavityCount?: number;
@@ -22,10 +24,14 @@ export interface UpdateToolInput {
   pmLimit?: number | null;
   pmWarn?: number | null;
   attrs?: Record<string, unknown>;
+  /** Full-replace of attached classifications (must belong to the same site). */
+  classificationIds?: string[];
 }
 
 export interface ListToolsFilter {
   siteId?: string;
+  /** Only tools carrying at least one of these classifications (ANY). */
+  classificationIds?: string[];
   name?: string;
   limit?: number;
   offset?: number;
@@ -54,7 +60,7 @@ export interface UpdateCavityInput {
  * Create a new tool with initial version (version 1)
  */
 export async function create(input: CreateToolInput) {
-  const { siteId, name, description, cavityCount, attrs } = input;
+  const { siteId, classificationIds, name, description, cavityCount, attrs } = input;
 
   // Verify site exists
   const site = await prisma.site.findUnique({
@@ -66,11 +72,21 @@ export async function create(input: CreateToolInput) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
 
+  if (classificationIds && classificationIds.length > 0) {
+    const found = await prisma.classification.count({ where: { id: { in: classificationIds }, siteId } });
+    if (found !== classificationIds.length) {
+      return { error: "One or more classifications not found for this site", code: "CLASSIFICATION_NOT_FOUND" };
+    }
+  }
+
   // Create tool and initial version in transaction
   const tool = await prisma.$transaction(async (tx) => {
     // 1. Create Tool entity
     const t = await tx.tool.create({
-      data: { siteId },
+      data: {
+        siteId,
+        ...(classificationIds?.length ? { classifications: { connect: classificationIds.map((id) => ({ id })) } } : {}),
+      },
     });
 
     // 2. Create initial ToolVersion (version 1)
@@ -92,6 +108,7 @@ export async function create(input: CreateToolInput) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
+        classifications: { select: { id: true, name: true, kind: true } },
         _count: { select: { toolCavities: true, jobs: true, versions: true } },
       },
     });
@@ -112,7 +129,7 @@ export async function create(input: CreateToolInput) {
  * List tools with optional filtering
  */
 export async function list(filter: ListToolsFilter = {}) {
-  const { siteId, name, limit = 50, offset = 0 } = filter;
+  const { siteId, classificationIds, name, limit = 50, offset = 0 } = filter;
 
   const where: Prisma.ToolWhereInput = {
     deletedAt: null,
@@ -120,6 +137,10 @@ export async function list(filter: ListToolsFilter = {}) {
 
   if (siteId) {
     where.siteId = siteId;
+  }
+
+  if (classificationIds && classificationIds.length > 0) {
+    where.classifications = { some: { id: { in: classificationIds } } };
   }
 
   // Filter by current version fields
@@ -135,6 +156,7 @@ export async function list(filter: ListToolsFilter = {}) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
+        classifications: { select: { id: true, name: true, kind: true } },
         _count: { select: { toolCavities: true, jobs: true, versions: true } },
       },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
@@ -168,6 +190,7 @@ export async function getById(id: string) {
         },
         orderBy: { createdAt: "asc" },
       },
+      classifications: { select: { id: true, name: true, kind: true } },
       _count: { select: { toolCavities: true, jobs: true, versions: true } },
     },
   });
@@ -187,7 +210,7 @@ export async function getById(id: string) {
  * Update tool (creates new version version)
  */
 export async function update(id: string, input: UpdateToolInput) {
-  const { name, description, cavityCount, pmLimit, pmWarn, attrs } = input;
+  const { name, description, cavityCount, pmLimit, pmWarn, attrs, classificationIds } = input;
 
   // Get current tool with version
   const current = await prisma.tool.findUnique({
@@ -205,6 +228,15 @@ export async function update(id: string, input: UpdateToolInput) {
 
   if (!current.currentVersion) {
     return { error: "Tool has no current version", code: "NO_CURRENT_VERSION" };
+  }
+
+  if (classificationIds && classificationIds.length > 0) {
+    const found = await prisma.classification.count({
+      where: { id: { in: classificationIds }, siteId: current.siteId },
+    });
+    if (found !== classificationIds.length) {
+      return { error: "One or more classifications not found for this site", code: "CLASSIFICATION_NOT_FOUND" };
+    }
   }
 
   const currentVersion = current.currentVersion;
@@ -237,10 +269,16 @@ export async function update(id: string, input: UpdateToolInput) {
 
     return tx.tool.update({
       where: { id },
-      data: { currentVersionId: version.id },
+      data: {
+        currentVersionId: version.id,
+        ...(classificationIds !== undefined
+          ? { classifications: { set: classificationIds.map((cid) => ({ id: cid })) } }
+          : {}),
+      },
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
+        classifications: { select: { id: true, name: true, kind: true } },
         _count: { select: { toolCavities: true, jobs: true, versions: true } },
       },
     });

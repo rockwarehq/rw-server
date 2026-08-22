@@ -49,6 +49,10 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
         currentVersion: {
           select: { standardCycle: true, name: true },
         },
+        classifications: {
+          where: { kind: "CAPABILITY" },
+          select: { id: true, name: true },
+        },
       },
     });
 
@@ -79,6 +83,10 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
         workcenterId: true,
         site: { select: { workspaceId: true } },
         workcenter: { select: { name: true } },
+        classifications: {
+          where: { kind: "CAPABILITY" },
+          select: { id: true },
+        },
       },
     });
 
@@ -88,6 +96,19 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
 
     if (job && job.siteId !== station.siteId) {
       return { error: "Job and station must belong to the same site" as const, code: "SITE_MISMATCH" as const };
+    }
+
+    // Capability matching: every CAPABILITY classification the job requires
+    // must be declared on the station. GROUP classifications never enforce.
+    if (job && job.classifications.length > 0) {
+      const stationCapabilities = new Set(station.classifications.map((c) => c.id));
+      const missing = job.classifications.filter((c) => !stationCapabilities.has(c.id));
+      if (missing.length > 0) {
+        return {
+          error: `Station lacks required capabilities: ${missing.map((c) => c.name).join(", ")}`,
+          code: "CAPABILITY_MISMATCH" as const,
+        };
+      }
     }
 
     const previousJobId = station.currentJobId;

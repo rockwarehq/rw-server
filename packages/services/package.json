@@ -6,6 +6,7 @@
   "exports": {
     "./audit/*": "./dist/audit/*.js",
     "./automation/*": "./dist/automation/*.js",
+    "./classification/*": "./dist/classification/*.js",
     "./config": "./dist/config.js",
     "./cycle/*": "./dist/cycle/*.js",
     "./dashboard/*": "./dist/dashboard/*.js",

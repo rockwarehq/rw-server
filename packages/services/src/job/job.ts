@@ -10,6 +10,8 @@ import { refreshStationsRunningJob } from "../facility/station/state.js";
 
 export interface CreateJobInput {
   siteId: string;
+  /** Classification ids to attach (must belong to the same site). */
+  classificationIds?: string[];
   name: string;
   description?: string;
   standardCycle?: number;
@@ -23,10 +25,14 @@ export interface UpdateJobInput {
   standardCycle?: number;
   productsPerCycle?: number;
   attrs?: Record<string, unknown>;
+  /** Full-replace of attached classifications (must belong to the same site). */
+  classificationIds?: string[];
 }
 
 export interface ListJobsFilter {
   siteId?: string;
+  /** Only jobs carrying at least one of these classifications (ANY). */
+  classificationIds?: string[];
   /** Free-text search across name and description (case-insensitive contains, OR) */
   q?: string;
   name?: string;
@@ -73,7 +79,7 @@ export interface UpdateItemInput {
  * Create a new job with initial version (version 1)
  */
 export async function create(input: CreateJobInput) {
-  const { siteId, name, description, standardCycle, productsPerCycle, attrs } = input;
+  const { siteId, classificationIds, name, description, standardCycle, productsPerCycle, attrs } = input;
 
   // Verify site exists
   const site = await prisma.site.findUnique({
@@ -85,11 +91,21 @@ export async function create(input: CreateJobInput) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
 
+  if (classificationIds && classificationIds.length > 0) {
+    const found = await prisma.classification.count({ where: { id: { in: classificationIds }, siteId } });
+    if (found !== classificationIds.length) {
+      return { error: "One or more classifications not found for this site", code: "CLASSIFICATION_NOT_FOUND" };
+    }
+  }
+
   // Create job and initial version in transaction
   const job = await prisma.$transaction(async (tx) => {
     // 1. Create Job entity
     const j = await tx.job.create({
-      data: { siteId },
+      data: {
+        siteId,
+        ...(classificationIds?.length ? { classifications: { connect: classificationIds.map((id) => ({ id })) } } : {}),
+      },
     });
 
     // 2. Create initial JobVersion (version 1)
@@ -112,6 +128,7 @@ export async function create(input: CreateJobInput) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
+        classifications: { select: { id: true, name: true, kind: true } },
         _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
       },
     });
@@ -132,7 +149,7 @@ export async function create(input: CreateJobInput) {
  * List jobs with optional filtering
  */
 export async function list(filter: ListJobsFilter = {}) {
-  const { siteId, q, name, productIds, view = "full", limit = 50, offset = 0 } = filter;
+  const { siteId, classificationIds, q, name, productIds, view = "full", limit = 50, offset = 0 } = filter;
 
   const where: Prisma.JobWhereInput = {
     deletedAt: null,
@@ -140,6 +157,10 @@ export async function list(filter: ListJobsFilter = {}) {
 
   if (siteId) {
     where.siteId = siteId;
+  }
+
+  if (classificationIds && classificationIds.length > 0) {
+    where.classifications = { some: { id: { in: classificationIds } } };
   }
 
   // Free-text search OR'd across the columns shown in the UI.
@@ -200,6 +221,7 @@ export async function list(filter: ListJobsFilter = {}) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
+        classifications: { select: { id: true, name: true, kind: true } },
         _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
       },
       ...pagination,
@@ -224,6 +246,7 @@ export async function getById(id: string) {
     include: {
       currentVersion: true,
       site: { select: { id: true, name: true } },
+      classifications: { select: { id: true, name: true, kind: true } },
       tools: {
         where: { deletedAt: null },
         include: {
@@ -288,7 +311,7 @@ export async function getById(id: string) {
  * Update job (creates new version version)
  */
 export async function update(id: string, input: UpdateJobInput) {
-  const { name, description, standardCycle, productsPerCycle, attrs } = input;
+  const { name, description, standardCycle, productsPerCycle, attrs, classificationIds } = input;
 
   // Get current job with version
   const current = await prisma.job.findUnique({
@@ -306,6 +329,15 @@ export async function update(id: string, input: UpdateJobInput) {
 
   if (!current.currentVersion) {
     return { error: "Job has no current version", code: "NO_CURRENT_VERSION" };
+  }
+
+  if (classificationIds && classificationIds.length > 0) {
+    const found = await prisma.classification.count({
+      where: { id: { in: classificationIds }, siteId: current.siteId },
+    });
+    if (found !== classificationIds.length) {
+      return { error: "One or more classifications not found for this site", code: "CLASSIFICATION_NOT_FOUND" };
+    }
   }
 
   const currentVersion = current.currentVersion;
@@ -335,10 +367,16 @@ export async function update(id: string, input: UpdateJobInput) {
 
     return tx.job.update({
       where: { id },
-      data: { currentVersionId: version.id },
+      data: {
+        currentVersionId: version.id,
+        ...(classificationIds !== undefined
+          ? { classifications: { set: classificationIds.map((cid) => ({ id: cid })) } }
+          : {}),
+      },
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
+        classifications: { select: { id: true, name: true, kind: true } },
         _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
       },
     });
