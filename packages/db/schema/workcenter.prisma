@@ -54,11 +54,6 @@ enum SlowDetectUnit {
   PERCENTAGE
 }
 
-enum StationClassificationType {
-  MACHINE_SPEC
-  GROUP
-}
-
 enum StationEventExecutionStatus {
   RUNNING
   FAILED
@@ -93,7 +88,7 @@ model Station {
   currentVersion   StationVersion?  @relation("StationCurrent", fields: [currentVersionId], references: [id])
   versions         StationVersion[] @relation("StationVersions")
 
-  classifications StationClassification[]
+  classifications Classification[]
 
   // Allowed jobs (many-to-many via join table)
   allowedJobs   StationJob[]
@@ -239,25 +234,6 @@ model StationVersion {
 
   @@unique([stationId, version])
   @@index([stationId])
-}
-
-/// Assignment (implicit m2m): links Classifications to Stations
-model StationClassification {
-  id    String                    @id @default(uuid()) @db.Uuid
-  name  String
-  type  StationClassificationType
-  attrs Json                      @default("{}")
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
-  siteId String @db.Uuid
-  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
-
-  stations Station[]
-
-  @@unique([siteId, name])
-  @@index([siteId])
 }
 
 /// Log of job assignments on a station. Each entry records when a job was

@@ -1,0 +1,35 @@
+/// GROUP = plain label: organize and filter, no rules.
+/// CAPABILITY = matching vocabulary: stations declare it, jobs require it,
+/// dispatch (changeJob) enforces that a job's capabilities are a subset of
+/// the station's. e.g. "1 tonne press".
+enum ClassificationKind {
+  GROUP
+  CAPABILITY
+}
+
+/// One site-scoped vocabulary shared across master data and stations
+/// (supersedes the never-wired ToolClassification/StationClassification).
+/// The implicit m2m join tables double as star-schema bridge tables, with
+/// this table as the conformed classification dimension. Membership is
+/// overlapping by design: sums across classifications can exceed the total.
+model Classification {
+  id    String             @id @default(uuid()) @db.Uuid
+  name  String
+  kind  ClassificationKind @default(GROUP)
+  attrs Json               @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  jobs      Job[]
+  tools     Tool[]
+  products  Product[]
+  materials Material[]
+  stations  Station[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}
