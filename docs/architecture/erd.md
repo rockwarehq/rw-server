@@ -112,12 +112,6 @@ erDiagram
     string timezone
     json attrs
   }
-  ProcessType {
-    uuid id PK
-    uuid siteId FK "cascade"
-    datetime deletedAt "soft delete"
-    datetime archivedAt "also archive"
-  }
   StatusReason {
     uuid id PK
     uuid siteId FK "cascade"
@@ -152,11 +146,9 @@ erDiagram
   AuditLog }o..o| User : "userId / actorId - no FK"
   AuditLog }o..o| Workspace : "workspaceId - no FK"
   Workspace ||--o{ Site : "cascade"
-  Site ||--o{ ProcessType : "cascade"
   Site ||--o{ StatusReason : "cascade"
   Site ||--o{ StatusCategory : "cascade"
   StatusCategory |o--o{ StatusReason : "SetNull"
-  ProcessType }o--o{ StatusReason : "implicit m2m"
   Workspace |o--o{ Location : "DEPRECATED"
   Location |o--o{ Location : "parent of"
 ```
@@ -173,7 +165,6 @@ erDiagram
   Workcenter {
     uuid id PK
     uuid siteId FK "cascade"
-    uuid processTypeId FK "nullable, SetNull"
     uuid parentId FK "self, SetNull"
     string name "unique per site+parent"
   }
@@ -190,7 +181,6 @@ erDiagram
   StationVersion {
     uuid id PK
     uuid stationId FK "cascade"
-    uuid processTypeId FK "nullable, SetNull"
     int version "unique per station"
     decimal standardCycle
   }
@@ -235,14 +225,12 @@ erDiagram
   }
 
   Site ||--o{ Workcenter : "cascade"
-  ProcessType |o--o{ Workcenter : "SetNull"
   Workcenter |o--o{ Workcenter : "parent of"
   Site ||--o{ Station : "cascade"
   Workcenter |o--o{ Station : "Restrict"
   Job |o--o{ Station : "currentJob, SetNull"
   StationVersion |o--o| Station : "currentVersion 1to1"
   Station ||--o{ StationVersion : "versions, cascade"
-  ProcessType |o--o{ StationVersion : "SetNull"
   Station ||--o{ StationStateLog : "cascade"
   StationVersion |o--o{ StationStateLog : "snapshot"
   JobVersion |o--o{ StationStateLog : "snapshot"
@@ -251,8 +239,10 @@ erDiagram
   Datasource ||--o{ StationDatasource : "cascade"
   Station ||--o{ StationEvent : "cascade"
   StationEvent ||--o{ StationEventExecution : "cascade"
-  Site ||--o{ Classification : "cascade"
-  Station }o--o{ Classification : "implicit m2m"
+  Site ||--o{ Label : "cascade"
+  Station }o--o{ Label : "implicit m2m"
+  Station ||--o{ LabelFilter : "cascade"
+  Label }o--o{ LabelFilter : "implicit m2m"
   Station ||--o{ StationJob : "allowed jobs"
   Job ||--o{ StationJob : "cascade"
   Station ||--o{ StationJobLog : "cascade"
@@ -275,7 +265,6 @@ erDiagram
     uuid id PK
     uuid siteId FK "NO cascade - default NoAction"
     uuid currentVersionId FK "nullable, unique"
-    uuid processTypeId FK "nullable, SetNull"
     datetime deletedAt "soft delete"
     datetime archivedAt "archive"
   }
@@ -343,10 +332,15 @@ erDiagram
     datetime deletedAt
     datetime archivedAt
   }
-  Classification {
+  Label {
     uuid id PK
     uuid siteId FK "cascade"
-    ClassificationKind kind
+    string name "unique per site"
+  }
+  LabelFilter {
+    uuid id PK
+    uuid stationId FK "cascade"
+    LabelFilterTarget target "unique per station+target"
   }
   ToolLocation {
     uuid id PK
@@ -356,7 +350,6 @@ erDiagram
   }
 
   Site ||--o{ Job : "no cascade"
-  ProcessType |o--o{ Job : "SetNull"
   JobVersion |o--o| Job : "currentVersion 1to1"
   Job ||--o{ JobVersion : "versions"
   Site ||--o{ Tool : "no cascade"
@@ -369,10 +362,12 @@ erDiagram
   ToolCavity ||--o{ ToolCavityVersion : "versions"
   Site ||--o{ ToolStatus : "cascade"
   Site ||--o{ ToolLocation : "cascade"
-  Tool }o--o{ Classification : "implicit m2m"
-  Job }o--o{ Classification : "implicit m2m"
-  Product }o--o{ Classification : "implicit m2m"
-  Material }o--o{ Classification : "implicit m2m"
+  Tool }o--o{ Label : "implicit m2m"
+  Job }o--o{ Label : "implicit m2m"
+  Product }o--o{ Label : "implicit m2m"
+  Material }o--o{ Label : "implicit m2m"
+  Label }o--o{ StatusReason : "implicit m2m"
+  Label }o--o{ ItemDispositionReason : "implicit m2m"
   Job ||--o{ JobTool : "cascade"
   Tool ||--o{ JobTool : "cascade"
   Job ||--o{ JobProduct : "cascade"
@@ -578,7 +573,6 @@ erDiagram
   ItemDispositionReason {
     uuid id PK
     uuid siteId FK "cascade"
-    uuid processTypeId FK "nullable, SetNull"
     datetime deletedAt
     datetime archivedAt
   }
@@ -608,7 +602,6 @@ erDiagram
   InventoryItem }o--o{ ProductMaterialVersion : "implicit m2m"
   Site ||--o{ ItemDisposition : "cascade"
   Site ||--o{ ItemDispositionReason : "cascade"
-  ProcessType |o--o{ ItemDispositionReason : "SetNull"
   ItemDisposition }o--o{ ItemDispositionReason : "implicit m2m"
   Site ||--o{ ItemDispositionLog : "no cascade"
   Station ||--o{ ItemDispositionLog : "no cascade"
@@ -1195,12 +1188,14 @@ Prisma generates these; migrations renamed `*Blob` → `*Version` (`202607101200
 
 | Join table | Between |
 | --- | --- |
-| `_ClassificationToJob` | Classification ↔ Job |
-| `_ClassificationToTool` | Classification ↔ Tool |
-| `_ClassificationToProduct` | Classification ↔ Product |
-| `_ClassificationToMaterial` | Classification ↔ Material |
-| `_ClassificationToStation` | Classification ↔ Station |
-| `_ProcessTypeToStatusReason` | ProcessType ↔ StatusReason |
+| `_JobToLabel` | Job ↔ Label |
+| `_LabelToTool` | Label ↔ Tool |
+| `_LabelToProduct` | Label ↔ Product |
+| `_LabelToMaterial` | Label ↔ Material |
+| `_LabelToStation` | Label ↔ Station |
+| `_LabelToStatusReason` | Label ↔ StatusReason |
+| `_ItemDispositionReasonToLabel` | ItemDispositionReason ↔ Label |
+| `_LabelToLabelFilter` | Label ↔ LabelFilter |
 | `_StatusReasonToWorkcenter` | StatusReason ↔ Workcenter |
 | `_StationToStatusReason` | Station ↔ StatusReason |
 | `_DispositionReasonDispositions` | ItemDisposition ↔ ItemDispositionReason |
@@ -1240,7 +1235,7 @@ Site children mix three behaviors: **Cascade** (Workcenter, Station, Graph\*, Me
 ### 3. Three coexisting soft-delete conventions
 
 - `deletedAt DateTime?` — operational entities (Cycle, Station, Customer, Document, SavedView, …)
-- `archivedAt DateTime?` — versioned catalog entities (Job, Tool, Product, Material, ProcessType, StatusReason, ToolStatus, ItemDisposition\*, ProductMaterial); several carry **both** `deletedAt` and `archivedAt` with distinct meanings
+- `archivedAt DateTime?` — versioned catalog entities (Job, Tool, Product, Material, StatusReason, ToolStatus, ItemDisposition\*, ProductMaterial); several carry **both** `deletedAt` and `archivedAt` with distinct meanings
 - `isDeleted Boolean` — Graph\*, Object\*, Integration\*
 
 No global middleware enforces filtering; every query must remember. See the standing `docs/notes/soft-delete-audit.md` for the per-callsite audit.

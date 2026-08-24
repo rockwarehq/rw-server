@@ -24,4 +24,4 @@ They are immutable once accepted — a change of course gets a **new** ADR that 
 | [0008](./0008-historian-series-queries.md) | Historian Series Queries | Proposed | 2026-07-13 |
 | [0009](./0009-outbound-integrations.md) | Outbound Integrations and Hook Trigger Binding | Accepted | 2026-08-03 |
 | [0010](./0010-livestore-totalizer-resolver.md) | Livestore Totalizer Resolver on the Shared Fold Engine | Accepted | 2026-08-18 |
-| [0011](./0011-classifications.md) | Classifications: Shared Labels with Optional Capability Matching | Accepted | 2026-08-21 |
+| [0011](./0011-labels.md) | Labels and Station Filters | Accepted | 2026-08-24 |
