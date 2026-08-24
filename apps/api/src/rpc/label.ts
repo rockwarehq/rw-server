@@ -13,13 +13,11 @@ import { throwServiceError, unwrap } from "./errors.js";
 const createInputSchema = z.object({
   siteId: z.uuid(),
   name: z.string().min(1).max(80),
-  attrs: z.record(z.string(), z.unknown()).optional(),
 });
 
 const updateInputSchema = z.object({
   id: z.uuid(),
   name: z.string().min(1).max(80).optional(),
-  attrs: z.record(z.string(), z.unknown()).optional(),
 });
 
 const idInputSchema = z.object({

@@ -6,9 +6,8 @@
 /// Labels replaced the old "process groups" (ProcessType) and the never-used
 /// ToolClassification/StationClassification tables.
 model Label {
-  id    String @id @default(uuid()) @db.Uuid
-  name  String
-  attrs Json   @default("{}")
+  id   String @id @default(uuid()) @db.Uuid
+  name String
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)

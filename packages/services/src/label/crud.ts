@@ -11,12 +11,10 @@ import type { Prisma } from "@rw/db";
 export interface CreateLabelInput {
   siteId: string;
   name: string;
-  attrs?: Record<string, unknown>;
 }
 
 export interface UpdateLabelInput {
   name?: string;
-  attrs?: Record<string, unknown>;
 }
 
 export interface ListLabelsFilter {
@@ -43,7 +41,7 @@ const usageCount = {
 } as const;
 
 export async function create(input: CreateLabelInput) {
-  const { siteId, name, attrs } = input;
+  const { siteId, name } = input;
 
   const site = await prisma.site.findUnique({ where: { id: siteId }, select: { id: true } });
   if (!site) {
@@ -59,7 +57,7 @@ export async function create(input: CreateLabelInput) {
   }
 
   const label = await prisma.label.create({
-    data: { siteId, name, attrs: attrs ?? {} },
+    data: { siteId, name },
     include: usageCount,
   });
   return { data: label };
@@ -93,7 +91,7 @@ export async function getById(id: string) {
 }
 
 export async function update(id: string, input: UpdateLabelInput) {
-  const { name, attrs } = input;
+  const { name } = input;
 
   const current = await prisma.label.findUnique({ where: { id }, select: { id: true, siteId: true } });
   if (!current) {
@@ -112,7 +110,6 @@ export async function update(id: string, input: UpdateLabelInput) {
 
   const data: Prisma.LabelUpdateInput = {};
   if (name !== undefined) data.name = name;
-  if (attrs !== undefined) data.attrs = attrs;
 
   const label = await prisma.label.update({ where: { id }, data, include: usageCount });
   return { data: label };
