@@ -35,8 +35,6 @@ const listInputSchema = z.object({
   categoryId: z.uuid().optional(),
   // Only return codes that have at least one of these labels.
   labelIds: z.array(z.uuid()).max(50).optional(),
-  // Narrow to what this station's downtime-code filter allows.
-  stationId: z.uuid().optional(),
   name: z.string().optional(),
   limit: z.number().min(0).default(50),
   offset: z.number().min(0).default(0),

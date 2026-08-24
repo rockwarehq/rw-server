@@ -59,6 +59,12 @@ const stationInclude = {
   labels: {
     select: { id: true, name: true },
   },
+  // The station's filters, so one station read is enough for a client to
+  // resolve a picker: find the target's filter, pass its label ids to the
+  // list endpoint (no filter row = call the list with no labelIds).
+  labelFilters: {
+    select: { target: true, labels: { select: { id: true, name: true } } },
+  },
   currentJob: {
     select: {
       id: true,

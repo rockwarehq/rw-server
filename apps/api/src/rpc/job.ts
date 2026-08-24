@@ -48,8 +48,6 @@ const toolIdInputSchema = z.object({
 
 const toolListInputSchema = z.object({
   siteId: z.uuid().optional(),
-  // Narrow to what this station's tool filter allows.
-  stationId: z.uuid().optional(),
   // Only return rows that have at least one of these labels.
   labelIds: z.array(z.uuid()).max(50).optional(),
   name: z.string().optional(),
@@ -112,8 +110,6 @@ const jobIdInputSchema = z.object({
 
 const jobListInputSchema = z.object({
   siteId: z.uuid().optional(),
-  // Narrow to what this station's job filter allows.
-  stationId: z.uuid().optional(),
   // Only return rows that have at least one of these labels.
   labelIds: z.array(z.uuid()).max(50).optional(),
   q: z.string().optional(),

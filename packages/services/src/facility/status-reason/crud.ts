@@ -24,8 +24,6 @@ export interface ListStatusReasonsFilter {
   categoryId?: string;
   /** Only return codes that have at least one of these labels. */
   labelIds?: string[];
-  /** Narrow to what this station's downtime-code filter allows. */
-  stationId?: string;
   name?: string;
   limit?: number;
   offset?: number;
@@ -110,7 +108,7 @@ export async function create(input: CreateStatusReasonInput) {
  * List status reasons with optional filtering
  */
 export async function list(filter: ListStatusReasonsFilter = {}) {
-  const { siteId, categoryId, labelIds, stationId, name, limit = 50, offset = 0 } = filter;
+  const { siteId, categoryId, labelIds, name, limit = 50, offset = 0 } = filter;
 
   const where: Record<string, unknown> = { archivedAt: null };
 
@@ -126,21 +124,9 @@ export async function list(filter: ListStatusReasonsFilter = {}) {
     where.name = { contains: name, mode: "insensitive" };
   }
 
-  const labelConditions: Record<string, unknown>[] = [];
   if (labelIds && labelIds.length > 0) {
-    labelConditions.push({ labels: { some: { id: { in: labelIds } } } });
+    where.labels = { some: { id: { in: labelIds } } };
   }
-  if (stationId) {
-    // Narrow to the station's downtime-code filter; no filter = no narrowing.
-    const stationFilter = await prisma.labelFilter.findUnique({
-      where: { stationId_target: { stationId, target: "STATUS_REASON" } },
-      select: { labels: { select: { id: true } } },
-    });
-    if (stationFilter) {
-      labelConditions.push({ labels: { some: { id: { in: stationFilter.labels.map((l) => l.id) } } } });
-    }
-  }
-  if (labelConditions.length > 0) where.AND = labelConditions;
 
   const [reasons, total] = await Promise.all([
     prisma.statusReason.findMany({

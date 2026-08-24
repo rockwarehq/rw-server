@@ -32,8 +32,6 @@ export interface ListToolsFilter {
   siteId?: string;
   /** Only return tools that have at least one of these labels. */
   labelIds?: string[];
-  /** Narrow to what this station's tool filter allows. */
-  stationId?: string;
   name?: string;
   limit?: number;
   offset?: number;
@@ -131,7 +129,7 @@ export async function create(input: CreateToolInput) {
  * List tools with optional filtering
  */
 export async function list(filter: ListToolsFilter = {}) {
-  const { siteId, labelIds, stationId, name, limit = 50, offset = 0 } = filter;
+  const { siteId, labelIds, name, limit = 50, offset = 0 } = filter;
 
   const where: Prisma.ToolWhereInput = {
     deletedAt: null,
@@ -141,21 +139,9 @@ export async function list(filter: ListToolsFilter = {}) {
     where.siteId = siteId;
   }
 
-  const labelConditions: Prisma.ToolWhereInput[] = [];
   if (labelIds && labelIds.length > 0) {
-    labelConditions.push({ labels: { some: { id: { in: labelIds } } } });
+    where.labels = { some: { id: { in: labelIds } } };
   }
-  if (stationId) {
-    // Narrow to the station's filter for this kind of item; no filter = no narrowing.
-    const stationFilter = await prisma.labelFilter.findUnique({
-      where: { stationId_target: { stationId, target: "TOOL" } },
-      select: { labels: { select: { id: true } } },
-    });
-    if (stationFilter) {
-      labelConditions.push({ labels: { some: { id: { in: stationFilter.labels.map((l) => l.id) } } } });
-    }
-  }
-  if (labelConditions.length > 0) where.AND = labelConditions;
 
   // Filter by current version fields
   if (name) {

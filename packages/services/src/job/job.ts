@@ -33,8 +33,6 @@ export interface ListJobsFilter {
   siteId?: string;
   /** Only return jobs that have at least one of these labels. */
   labelIds?: string[];
-  /** Narrow to what this station's job filter allows. */
-  stationId?: string;
   /** Free-text search across name and description (case-insensitive contains, OR) */
   q?: string;
   name?: string;
@@ -151,7 +149,7 @@ export async function create(input: CreateJobInput) {
  * List jobs with optional filtering
  */
 export async function list(filter: ListJobsFilter = {}) {
-  const { siteId, labelIds, stationId, q, name, productIds, view = "full", limit = 50, offset = 0 } = filter;
+  const { siteId, labelIds, q, name, productIds, view = "full", limit = 50, offset = 0 } = filter;
 
   const where: Prisma.JobWhereInput = {
     deletedAt: null,
@@ -161,21 +159,9 @@ export async function list(filter: ListJobsFilter = {}) {
     where.siteId = siteId;
   }
 
-  const labelConditions: Prisma.JobWhereInput[] = [];
   if (labelIds && labelIds.length > 0) {
-    labelConditions.push({ labels: { some: { id: { in: labelIds } } } });
+    where.labels = { some: { id: { in: labelIds } } };
   }
-  if (stationId) {
-    // Narrow to the station's filter for this kind of item; no filter = no narrowing.
-    const stationFilter = await prisma.labelFilter.findUnique({
-      where: { stationId_target: { stationId, target: "JOB" } },
-      select: { labels: { select: { id: true } } },
-    });
-    if (stationFilter) {
-      labelConditions.push({ labels: { some: { id: { in: stationFilter.labels.map((l) => l.id) } } } });
-    }
-  }
-  if (labelConditions.length > 0) where.AND = labelConditions;
 
   // Free-text search OR'd across the columns shown in the UI.
   if (q) {

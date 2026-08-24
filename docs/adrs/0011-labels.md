@@ -34,13 +34,17 @@ nothing.
    filter JOB, TOOL, STATUS_REASON, or DISPOSITION_REASON. The rule is
    simple: an item passes when it carries **at least one** of the filter's
    labels; no filter row = everything is eligible. Filters do two jobs:
-   - **Narrow pickers.** Pass a `stationId` to the job/tool/status-code/
-     scrap-code list endpoints and only what the station's filter allows
-     comes back — so operator screens stop showing the whole site's list.
+   - **Narrow pickers.** List endpoints stay generic — they only know
+     `labelIds`. A client reads the station once (station reads include its
+     filters), finds the filter for the target, and passes that filter's
+     labels to the list; no filter row means call the list with no
+     `labelIds`. This keeps station knowledge out of every list endpoint,
+     and any future filter owner works the same way with no API changes.
    - **Enforce on assignment.** `station.changeJob` refuses a job outside
      the JOB filter; assigning a downtime reason checks the STATUS_REASON
      filter; recording scrap checks the DISPOSITION_REASON filter
-     (`LABEL_FILTER_MISMATCH`). What you can't pick, you also can't submit.
+     (`LABEL_FILTER_MISMATCH`). Enforcement is the guarantee: even if a
+   client narrows a picker wrong, an out-of-filter submission is refused.
 
    When something else needs to own filters later (a workcenter, a display),
    it gets its own owner column on the same table — no redesign.

@@ -21,8 +21,6 @@ export interface ListDispositionReasonsFilter {
   itemDispositionId?: string;
   /** Only return codes that have at least one of these labels. */
   labelIds?: string[];
-  /** Narrow to what this station's scrap-code filter allows. */
-  stationId?: string;
   name?: string;
   limit?: number;
   offset?: number;
@@ -104,7 +102,7 @@ export async function create(input: CreateDispositionReasonInput) {
 }
 
 export async function list(filter: ListDispositionReasonsFilter = {}) {
-  const { siteId, itemDispositionId, labelIds, stationId, name, limit = 50, offset = 0 } = filter;
+  const { siteId, itemDispositionId, labelIds, name, limit = 50, offset = 0 } = filter;
 
   const where: Prisma.ItemDispositionReasonWhereInput = { deletedAt: null };
 
@@ -112,21 +110,9 @@ export async function list(filter: ListDispositionReasonsFilter = {}) {
   if (itemDispositionId) where.itemDispositions = { some: { id: itemDispositionId } };
   if (name) where.name = { contains: name, mode: "insensitive" };
 
-  const labelConditions: Prisma.ItemDispositionReasonWhereInput[] = [];
   if (labelIds && labelIds.length > 0) {
-    labelConditions.push({ labels: { some: { id: { in: labelIds } } } });
+    where.labels = { some: { id: { in: labelIds } } };
   }
-  if (stationId) {
-    // Narrow to the station's scrap-code filter; no filter = no narrowing.
-    const stationFilter = await prisma.labelFilter.findUnique({
-      where: { stationId_target: { stationId, target: "DISPOSITION_REASON" } },
-      select: { labels: { select: { id: true } } },
-    });
-    if (stationFilter) {
-      labelConditions.push({ labels: { some: { id: { in: stationFilter.labels.map((l) => l.id) } } } });
-    }
-  }
-  if (labelConditions.length > 0) where.AND = labelConditions;
 
   const [reasons, total] = await Promise.all([
     prisma.itemDispositionReason.findMany({

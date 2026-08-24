@@ -19,8 +19,9 @@ const listRows = (res: { json: unknown }) => (res.json as { data: Row[] }).data;
 // used by jobs, tools, products, materials, stations, and the status/scrap
 // codes. A station can define a filter per target kind: only items with at
 // least one of the filter's labels are eligible — enforced on assignment
-// (changeJob, downtime reason, scrap reason) and applied when pickers pass a
-// stationId. Managing the label list needs settings:write; tagging a record
+// (changeJob, downtime reason, scrap reason). Pickers narrow client-side:
+// station reads carry the filters, the client passes the filter's labels as
+// labelIds. Managing the label list needs settings:write; tagging a record
 // only needs permission to edit that record.
 describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tier 2)", () => {
   let server: TestServer;
@@ -215,11 +216,17 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tie
     const open = await rpcCall(server, "station/changeJob", { stationId: stationOpen.id, jobId: jobPlain.id }, adminToken);
     expect(open.statusCode).toBe(200);
 
-    // The job picker narrows when asked for this station.
+    // Pickers narrow client-side: read the station's filters, resolve the
+    // target's labels, pass them to the list.
+    const stationFilters = (
+      await rpcCall(server, "station/listLabelFilters", { stationId: stationFiltered.id }, adminToken)
+    ).json as Array<{ target: string; labels: Lbl[] }>;
+    const jobFilter = stationFilters.find((f) => f.target === "JOB");
+    expect(jobFilter).toBeDefined();
     const picker = await rpcCall(
       server,
       "job/list",
-      { siteId: site.id, stationId: stationFiltered.id, limit: 0 },
+      { siteId: site.id, labelIds: jobFilter?.labels.map((l) => l.id), limit: 0 },
       adminToken,
     );
     const pickerIds = listRows(picker).map((j) => j.id);
@@ -266,11 +273,17 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tie
       adminToken,
     );
 
-    // Picker narrowing: only codes passing the station's filter come back.
+    // Picker narrowing, client-style: station reads carry the filters; the
+    // client passes the filter's labels to the list.
+    const stationRead = (await rpcCall(server, "station/get", { id: stationFiltered.id }, adminToken)).json as {
+      labelFilters: Array<{ target: string; labels: Lbl[] }>;
+    };
+    const reasonFilter = stationRead.labelFilters.find((f) => f.target === "STATUS_REASON");
+    expect(reasonFilter).toBeDefined();
     const narrowed = await rpcCall(
       server,
       "statusReason/list",
-      { siteId: site.id, stationId: stationFiltered.id, limit: 0 },
+      { siteId: site.id, labelIds: reasonFilter?.labels.map((l) => l.id), limit: 0 },
       adminToken,
     );
     const names = listRows(narrowed).map((r) => (r as unknown as { name: string }).name);
@@ -335,10 +348,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tie
       { stationId: stationFiltered.id, target: "DISPOSITION_REASON", labelIds: [molding.id] },
       adminToken,
     );
+    const scrapFilters = (
+      await rpcCall(server, "station/listLabelFilters", { stationId: stationFiltered.id }, adminToken)
+    ).json as Array<{ target: string; labels: Lbl[] }>;
+    const scrapFilter = scrapFilters.find((f) => f.target === "DISPOSITION_REASON");
     const narrowed = await rpcCall(
       server,
       "dispositionReason/list",
-      { siteId: site.id, stationId: stationFiltered.id, limit: 0 },
+      { siteId: site.id, labelIds: scrapFilter?.labels.map((l) => l.id), limit: 0 },
       adminToken,
     );
     const names = listRows(narrowed).map((r) => (r as unknown as { name: string }).name);
