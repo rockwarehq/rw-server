@@ -349,12 +349,11 @@ export function createPolicy(deps: PolicyDeps) {
 const NOT_FOUND_MESSAGES: Record<ResolvableSiteRef["kind"], string> = {
   station: "Station not found",
   workcenter: "Workcenter not found",
-  classification: "Classification not found",
+  label: "Label not found",
   stationStateLog: "State log entry not found",
   order: "Order not found",
   orderLineItem: "Order line item not found",
   customer: "Customer not found",
-  processType: "Process type not found",
   statusReason: "Status reason not found",
   statusCategory: "Status category not found",
   disposition: "Disposition not found",

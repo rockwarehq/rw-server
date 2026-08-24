@@ -49,10 +49,7 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
         currentVersion: {
           select: { standardCycle: true, name: true },
         },
-        classifications: {
-          where: { kind: "CAPABILITY" },
-          select: { id: true, name: true },
-        },
+        labels: { select: { id: true } },
       },
     });
 
@@ -83,9 +80,9 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
         workcenterId: true,
         site: { select: { workspaceId: true } },
         workcenter: { select: { name: true } },
-        classifications: {
-          where: { kind: "CAPABILITY" },
-          select: { id: true },
+        labelFilters: {
+          where: { target: "JOB" },
+          select: { labels: { select: { id: true } } },
         },
       },
     });
@@ -98,15 +95,15 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
       return { error: "Job and station must belong to the same site" as const, code: "SITE_MISMATCH" as const };
     }
 
-    // A station must have every CAPABILITY label the job carries, or the
-    // job can't run there. GROUP labels never block anything.
-    if (job && job.classifications.length > 0) {
-      const stationCapabilities = new Set(station.classifications.map((c) => c.id));
-      const missing = job.classifications.filter((c) => !stationCapabilities.has(c.id));
-      if (missing.length > 0) {
+    // If the station has a job filter, the job must carry at least one of
+    // the filter's labels. No filter = every job is eligible.
+    const jobFilter = station.labelFilters[0];
+    if (job && jobFilter) {
+      const allowed = new Set(jobFilter.labels.map((l) => l.id));
+      if (!job.labels.some((l) => allowed.has(l.id))) {
         return {
-          error: `Station lacks required capabilities: ${missing.map((c) => c.name).join(", ")}`,
-          code: "CAPABILITY_MISMATCH" as const,
+          error: "The station's job filter does not allow this job" as const,
+          code: "LABEL_FILTER_MISMATCH" as const,
         };
       }
     }

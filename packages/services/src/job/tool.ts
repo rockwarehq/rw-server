@@ -10,7 +10,7 @@ import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 export interface CreateToolInput {
   siteId: string;
   /** Labels to put on this record. They must come from the same site's list. */
-  classificationIds?: string[];
+  labelIds?: string[];
   name: string;
   description?: string;
   cavityCount?: number;
@@ -25,13 +25,15 @@ export interface UpdateToolInput {
   pmWarn?: number | null;
   attrs?: Record<string, unknown>;
   /** Replaces the record's whole label list with this one (same-site labels only). */
-  classificationIds?: string[];
+  labelIds?: string[];
 }
 
 export interface ListToolsFilter {
   siteId?: string;
   /** Only return tools that have at least one of these labels. */
-  classificationIds?: string[];
+  labelIds?: string[];
+  /** Narrow to what this station's tool filter allows. */
+  stationId?: string;
   name?: string;
   limit?: number;
   offset?: number;
@@ -60,7 +62,7 @@ export interface UpdateCavityInput {
  * Create a new tool with initial version (version 1)
  */
 export async function create(input: CreateToolInput) {
-  const { siteId, classificationIds, name, description, cavityCount, attrs } = input;
+  const { siteId, labelIds, name, description, cavityCount, attrs } = input;
 
   // Verify site exists
   const site = await prisma.site.findUnique({
@@ -72,10 +74,10 @@ export async function create(input: CreateToolInput) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
 
-  if (classificationIds && classificationIds.length > 0) {
-    const found = await prisma.classification.count({ where: { id: { in: classificationIds }, siteId } });
-    if (found !== classificationIds.length) {
-      return { error: "One or more classifications not found for this site", code: "CLASSIFICATION_NOT_FOUND" };
+  if (labelIds && labelIds.length > 0) {
+    const found = await prisma.label.count({ where: { id: { in: labelIds }, siteId } });
+    if (found !== labelIds.length) {
+      return { error: "One or more labels not found for this site", code: "LABEL_NOT_FOUND" };
     }
   }
 
@@ -85,7 +87,7 @@ export async function create(input: CreateToolInput) {
     const t = await tx.tool.create({
       data: {
         siteId,
-        ...(classificationIds?.length ? { classifications: { connect: classificationIds.map((id) => ({ id })) } } : {}),
+        ...(labelIds?.length ? { labels: { connect: labelIds.map((id) => ({ id })) } } : {}),
       },
     });
 
@@ -108,7 +110,7 @@ export async function create(input: CreateToolInput) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        classifications: { select: { id: true, name: true, kind: true } },
+        labels: { select: { id: true, name: true } },
         _count: { select: { toolCavities: true, jobs: true, versions: true } },
       },
     });
@@ -129,7 +131,7 @@ export async function create(input: CreateToolInput) {
  * List tools with optional filtering
  */
 export async function list(filter: ListToolsFilter = {}) {
-  const { siteId, classificationIds, name, limit = 50, offset = 0 } = filter;
+  const { siteId, labelIds, stationId, name, limit = 50, offset = 0 } = filter;
 
   const where: Prisma.ToolWhereInput = {
     deletedAt: null,
@@ -139,9 +141,21 @@ export async function list(filter: ListToolsFilter = {}) {
     where.siteId = siteId;
   }
 
-  if (classificationIds && classificationIds.length > 0) {
-    where.classifications = { some: { id: { in: classificationIds } } };
+  const labelConditions: Prisma.ToolWhereInput[] = [];
+  if (labelIds && labelIds.length > 0) {
+    labelConditions.push({ labels: { some: { id: { in: labelIds } } } });
   }
+  if (stationId) {
+    // Narrow to the station's filter for this kind of item; no filter = no narrowing.
+    const stationFilter = await prisma.labelFilter.findUnique({
+      where: { stationId_target: { stationId, target: "TOOL" } },
+      select: { labels: { select: { id: true } } },
+    });
+    if (stationFilter) {
+      labelConditions.push({ labels: { some: { id: { in: stationFilter.labels.map((l) => l.id) } } } });
+    }
+  }
+  if (labelConditions.length > 0) where.AND = labelConditions;
 
   // Filter by current version fields
   if (name) {
@@ -156,7 +170,7 @@ export async function list(filter: ListToolsFilter = {}) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        classifications: { select: { id: true, name: true, kind: true } },
+        labels: { select: { id: true, name: true } },
         _count: { select: { toolCavities: true, jobs: true, versions: true } },
       },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
@@ -190,7 +204,7 @@ export async function getById(id: string) {
         },
         orderBy: { createdAt: "asc" },
       },
-      classifications: { select: { id: true, name: true, kind: true } },
+      labels: { select: { id: true, name: true } },
       _count: { select: { toolCavities: true, jobs: true, versions: true } },
     },
   });
@@ -210,7 +224,7 @@ export async function getById(id: string) {
  * Update tool (creates new version version)
  */
 export async function update(id: string, input: UpdateToolInput) {
-  const { name, description, cavityCount, pmLimit, pmWarn, attrs, classificationIds } = input;
+  const { name, description, cavityCount, pmLimit, pmWarn, attrs, labelIds } = input;
 
   // Get current tool with version
   const current = await prisma.tool.findUnique({
@@ -230,12 +244,12 @@ export async function update(id: string, input: UpdateToolInput) {
     return { error: "Tool has no current version", code: "NO_CURRENT_VERSION" };
   }
 
-  if (classificationIds && classificationIds.length > 0) {
-    const found = await prisma.classification.count({
-      where: { id: { in: classificationIds }, siteId: current.siteId },
+  if (labelIds && labelIds.length > 0) {
+    const found = await prisma.label.count({
+      where: { id: { in: labelIds }, siteId: current.siteId },
     });
-    if (found !== classificationIds.length) {
-      return { error: "One or more classifications not found for this site", code: "CLASSIFICATION_NOT_FOUND" };
+    if (found !== labelIds.length) {
+      return { error: "One or more labels not found for this site", code: "LABEL_NOT_FOUND" };
     }
   }
 
@@ -271,14 +285,12 @@ export async function update(id: string, input: UpdateToolInput) {
       where: { id },
       data: {
         currentVersionId: version.id,
-        ...(classificationIds !== undefined
-          ? { classifications: { set: classificationIds.map((cid) => ({ id: cid })) } }
-          : {}),
+        ...(labelIds !== undefined ? { labels: { set: labelIds.map((cid) => ({ id: cid })) } } : {}),
       },
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        classifications: { select: { id: true, name: true, kind: true } },
+        labels: { select: { id: true, name: true } },
         _count: { select: { toolCavities: true, jobs: true, versions: true } },
       },
     });

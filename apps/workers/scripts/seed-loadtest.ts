@@ -70,7 +70,7 @@ const GATEWAY_ID = process.env.SEED_GATEWAY_ID;
 // belongs to workcenter ceil(i / size). Re-running MOVES existing stations to
 // their computed workcenter (the one intentional non-additive behavior).
 const WORKCENTER_SIZE = Number.parseInt(process.env.SEED_WC_SIZE ?? "50", 10);
-const PROCESS_TYPE_NAME = "Injection Molding";
+const GROUP_LABEL_NAME = "Injection Molding";
 const MATERIAL_COUNT = 5;
 const STANDARD_CYCLE_SECONDS = 20;
 const CYCLE_ADDRESS = "cycle-20s"; // builtin sim sequence: 0 for 10s, 1 for 10s
@@ -142,21 +142,21 @@ async function resolveGateway(siteId: string) {
   return gw;
 }
 
-async function ensureProcessType(siteId: string) {
-  const existing = await prisma.processType.findFirst({ where: { siteId, name: PROCESS_TYPE_NAME } });
+async function ensureGroupLabel(siteId: string) {
+  const existing = await prisma.label.findFirst({ where: { siteId, name: GROUP_LABEL_NAME } });
   if (existing) return existing.id;
-  const created = await prisma.processType.create({ data: { siteId, name: PROCESS_TYPE_NAME } });
-  mark(true, `ProcessType ${PROCESS_TYPE_NAME}`);
+  const created = await prisma.label.create({ data: { siteId, name: GROUP_LABEL_NAME } });
+  mark(true, `Label ${GROUP_LABEL_NAME}`);
   return created.id;
 }
 
-async function ensureWorkcenter(siteId: string, processTypeId: string, name: string) {
+async function ensureWorkcenter(siteId: string, name: string) {
   const existing = await prisma.workcenter.findFirst({
     where: { siteId, parentId: null, name },
   });
   if (existing) return existing.id;
   const created = await prisma.workcenter.create({
-    data: { siteId, name, processTypeId },
+    data: { siteId, name },
   });
   mark(true, `Workcenter ${name}`);
   return created.id;
@@ -325,7 +325,7 @@ async function ensureTool(siteId: string, i: number) {
 
 async function ensureJob(
   siteId: string,
-  processTypeId: string,
+  groupLabelId: string,
   i: number,
   product: { productId: string; productVersionId: string },
   tool: { toolId: string; toolCavityId: string | null },
@@ -339,7 +339,7 @@ async function ensureJob(
   if (existing) {
     jobId = existing.id;
   } else {
-    const job = await prisma.job.create({ data: { siteId, processTypeId } });
+    const job = await prisma.job.create({ data: { siteId, labels: { connect: [{ id: groupLabelId }] } } });
     const version = await prisma.jobVersion.create({
       data: {
         version: 1,
@@ -377,7 +377,7 @@ async function ensureJob(
   return jobId;
 }
 
-async function ensureStation(siteId: string, workcenterId: string, processTypeId: string, i: number, jobId: string) {
+async function ensureStation(siteId: string, workcenterId: string, groupLabelId: string, i: number, jobId: string) {
   const name = stationName(i);
   const existing = await prisma.station.findFirst({
     where: { siteId, name: { equals: name, mode: "insensitive" } },
@@ -402,7 +402,14 @@ async function ensureStation(siteId: string, workcenterId: string, processTypeId
   }
 
   const station = await prisma.station.create({
-    data: { name, siteId, workcenterId, currentJobId: jobId, description: "Load test sim station" },
+    data: {
+      name,
+      siteId,
+      workcenterId,
+      currentJobId: jobId,
+      description: "Load test sim station",
+      labels: { connect: [{ id: groupLabelId }] },
+    },
   });
   const version = await prisma.stationVersion.create({
     data: {
@@ -412,7 +419,6 @@ async function ensureStation(siteId: string, workcenterId: string, processTypeId
       downtimeDetectUnit: "SECONDS",
       slowDetect: 25,
       slowDetectUnit: "PERCENTAGE",
-      processTypeId,
       stationId: station.id,
     },
   });
@@ -629,7 +635,7 @@ async function main() {
   const gateway = await resolveGateway(scope.siteId);
   console.log(`gateway   ${gateway.id} (${gateway.name}, serial ${gateway.serialNumber})\n`);
 
-  const processTypeId = await ensureProcessType(scope.siteId);
+  const groupLabelId = await ensureGroupLabel(scope.siteId);
   const materials = await ensureMaterials(scope.siteId);
   await ensureShifts(scope.siteId);
 
@@ -637,7 +643,7 @@ async function main() {
   const workcenterIds = new Map<number, string>();
   const groups = Math.ceil(STATION_COUNT / WORKCENTER_SIZE);
   for (let g = 1; g <= groups; g++) {
-    workcenterIds.set(g, await ensureWorkcenter(scope.siteId, processTypeId, wcName(g)));
+    workcenterIds.set(g, await ensureWorkcenter(scope.siteId, wcName(g)));
   }
 
   let specChanged = false;
@@ -647,8 +653,8 @@ async function main() {
     if (!workcenterId) throw new Error(`no workcenter for station ${i}`);
     const product = await ensureProduct(scope.siteId, i, material);
     const tool = await ensureTool(scope.siteId, i);
-    const jobId = await ensureJob(scope.siteId, processTypeId, i, product, tool);
-    const stationId = await ensureStation(scope.siteId, workcenterId, processTypeId, i, jobId);
+    const jobId = await ensureJob(scope.siteId, groupLabelId, i, product, tool);
+    const stationId = await ensureStation(scope.siteId, workcenterId, groupLabelId, i, jobId);
     const ds = await ensureDatasource(scope.siteId, gateway.id, stationId, i);
     await ensureGraph(scope, i, stationId, ds.datasourceId, ds.pointId);
     specChanged = specChanged || ds.changedSpec;

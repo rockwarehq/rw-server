@@ -883,7 +883,7 @@ export async function splitDownEntry(entryId: string, splitAt: Date): Promise<Sp
 
 type AssignDowntimeReasonResult =
   | { success: true; updatedCount: number }
-  | { error: string; code: "NOT_FOUND" | "INVALID_STATE" | "REASON_NOT_FOUND" };
+  | { error: string; code: "NOT_FOUND" | "INVALID_STATE" | "REASON_NOT_FOUND" | "LABEL_FILTER_MISMATCH" };
 
 /**
  * Assign (or clear) a StatusReason on a DOWN state log entry.
@@ -920,14 +920,28 @@ export async function assignDowntimeReason(
     return { error: "Only DOWN entries can have a downtime reason", code: "INVALID_STATE" };
   }
 
-  // Validate the reason exists (when assigning, not clearing)
+  // Validate the reason (when assigning, not clearing): it must exist, belong
+  // to the station's site, and pass the station's downtime-code filter.
   if (statusReasonId != null) {
     const reason = await prisma.statusReason.findUnique({
       where: { id: statusReasonId },
-      select: { id: true },
+      select: { id: true, siteId: true, labels: { select: { id: true } } },
     });
-    if (!reason) {
+    if (!reason || reason.siteId !== entry.station.siteId) {
       return { error: "Status reason not found", code: "REASON_NOT_FOUND" };
+    }
+    const filter = await prisma.labelFilter.findUnique({
+      where: { stationId_target: { stationId: entry.stationId, target: "STATUS_REASON" } },
+      select: { labels: { select: { id: true } } },
+    });
+    if (filter) {
+      const allowed = new Set(filter.labels.map((l) => l.id));
+      if (!reason.labels.some((l) => allowed.has(l.id))) {
+        return {
+          error: "The station's downtime-code filter does not allow this reason",
+          code: "LABEL_FILTER_MISMATCH",
+        };
+      }
     }
   }
 

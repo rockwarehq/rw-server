@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@rw/db";
-import { type IdMap, readData, batchUpsert, logger, nullable } from "./utils.js";
+import { type IdMap, readData, batchUpsert, logger } from "./utils.js";
 
 // ---------------------------------------------------------------------------
 // SQL Server source shape
@@ -14,8 +14,8 @@ interface SqlServerRow {
 // Importer
 // ---------------------------------------------------------------------------
 
-export async function importProcessTypes(prisma: PrismaClient, idMap: IdMap, siteId: string): Promise<void> {
-  const log = logger("ProcessType");
+export async function importLabels(prisma: PrismaClient, idMap: IdMap, siteId: string): Promise<void> {
+  const log = logger("Label");
 
   const rows = await readData<SqlServerRow>("ProcessType");
 
@@ -29,26 +29,19 @@ export async function importProcessTypes(prisma: PrismaClient, idMap: IdMap, sit
   const result = await batchUpsert(
     rows,
     async (row) => {
-      // Case-insensitive existence check (treats "MOLD" / "Mold" as the same).
-      // Can't use the siteId_name upsert because that's case-sensitive.
-      const existing = await prisma.processType.findFirst({
+      // The legacy system's process groups become labels. Case-insensitive
+      // existence check (treats "MOLD" / "Mold" as the same); can't use the
+      // siteId_name upsert because that's case-sensitive.
+      const existing = await prisma.label.findFirst({
         where: { siteId, name: { equals: row.name, mode: "insensitive" } },
       });
-      const description = nullable(row.Description);
 
-      const record = existing
-        ? await prisma.processType.update({
-            where: { id: existing.id },
-            data: { description },
-          })
-        : await prisma.processType.create({
-            data: { name: row.name, description, siteId },
-          });
+      const record = existing ?? (await prisma.label.create({ data: { name: row.name, siteId } }));
 
       // Store mapping by name since SQL Server source has no UUID
-      idMap.set("processType", row.name, record.id);
+      idMap.set("label", row.name, record.id);
     },
-    { label: "process types" },
+    { label: "labels" },
   );
 
   log.summary(result);

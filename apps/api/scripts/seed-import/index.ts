@@ -3,7 +3,7 @@ import { parseArgs } from "node:util";
 import prisma from "@rw/db";
 import config from "./config.js";
 import { IdMap, setDataFile } from "./utils.js";
-import { importProcessTypes } from "./importProcessTypes.js";
+import { importLabels } from "./importLabels.js";
 import { importWorkcenters } from "./importWorkcenters.js";
 import { importProducts } from "./importProducts.js";
 import { importMaterials } from "./importMaterials.js";
@@ -81,9 +81,9 @@ async function main() {
   // -------------------------------------------------------------------------
 
   // 1. Reference / configuration data
-  await importProcessTypes(prisma, idMap, site.id);
+  await importLabels(prisma, idMap, site.id);
 
-  // 2. Workcenters (depends on processTypes)
+  // 2. Workcenters (depends on labels)
   await importWorkcenters(prisma, idMap, site.id);
 
   // 3. Products + Materials (independent of each other)
@@ -99,7 +99,7 @@ async function main() {
   // 6. ToolCavities (depends on tools)
   await importToolCavities(prisma, idMap, site.id);
 
-  // 7. Jobs + JobTool (depends on processTypes + tools)
+  // 7. Jobs + JobTool (depends on labels + tools)
   await importJobs(prisma, idMap, site.id);
 
   // 8. Stations (depends on workcenters + jobs)
@@ -111,13 +111,13 @@ async function main() {
   // 10. StatusCategories (no dependencies — reference table)
   await importStatusCategories(prisma, idMap, site.id);
 
-  // 11. StatusReasons (depends on statusCategories + processTypes)
+  // 11. StatusReasons (depends on statusCategories + labels)
   await importStatusReasons(prisma, idMap, site.id);
 
   // 12. ItemDispositions (no dependencies — reference table)
   await importItemDispositions(prisma, idMap, site.id);
 
-  // 13. ItemDispositionReasons (depends on processTypes)
+  // 13. ItemDispositionReasons (depends on labels)
   await importItemDispositionReasons(prisma, idMap, site.id);
 
   // 14. EmployeeRoles (per-site reference; also picks up any pre-seeded roles)

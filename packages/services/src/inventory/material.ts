@@ -10,7 +10,7 @@ import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 export interface CreateMaterialInput {
   siteId: string;
   /** Labels to put on this record. They must come from the same site's list. */
-  classificationIds?: string[];
+  labelIds?: string[];
   materialNumber: string;
   name?: string;
   shortCode?: string;
@@ -31,13 +31,13 @@ export interface UpdateMaterialInput {
   unitCost?: number | string | null;
   attrs?: Record<string, unknown>;
   /** Replaces the record's whole label list with this one (same-site labels only). */
-  classificationIds?: string[];
+  labelIds?: string[];
 }
 
 export interface ListMaterialsFilter {
   siteId?: string;
   /** Only return materials that have at least one of these labels. */
-  classificationIds?: string[];
+  labelIds?: string[];
   /** Free-text search across materialNumber, name, shortCode, description (case-insensitive contains, OR) */
   q?: string;
   name?: string;
@@ -57,7 +57,7 @@ export interface ListMaterialsFilter {
 export async function create(input: CreateMaterialInput) {
   const {
     siteId,
-    classificationIds,
+    labelIds,
     materialNumber,
     name,
     shortCode,
@@ -78,10 +78,10 @@ export async function create(input: CreateMaterialInput) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
 
-  if (classificationIds && classificationIds.length > 0) {
-    const found = await prisma.classification.count({ where: { id: { in: classificationIds }, siteId } });
-    if (found !== classificationIds.length) {
-      return { error: "One or more classifications not found for this site", code: "CLASSIFICATION_NOT_FOUND" };
+  if (labelIds && labelIds.length > 0) {
+    const found = await prisma.label.count({ where: { id: { in: labelIds }, siteId } });
+    if (found !== labelIds.length) {
+      return { error: "One or more labels not found for this site", code: "LABEL_NOT_FOUND" };
     }
   }
 
@@ -91,7 +91,7 @@ export async function create(input: CreateMaterialInput) {
     const mat = await tx.material.create({
       data: {
         siteId,
-        ...(classificationIds?.length ? { classifications: { connect: classificationIds.map((id) => ({ id })) } } : {}),
+        ...(labelIds?.length ? { labels: { connect: labelIds.map((id) => ({ id })) } } : {}),
       },
     });
 
@@ -118,7 +118,7 @@ export async function create(input: CreateMaterialInput) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        classifications: { select: { id: true, name: true, kind: true } },
+        labels: { select: { id: true, name: true } },
         _count: { select: { products: true, versions: true } },
       },
     });
@@ -139,7 +139,7 @@ export async function create(input: CreateMaterialInput) {
  * List materials with optional filtering
  */
 export async function list(filter: ListMaterialsFilter = {}) {
-  const { siteId, classificationIds, q, name, materialNumber, shortCode, limit = 50, offset = 0 } = filter;
+  const { siteId, labelIds, q, name, materialNumber, shortCode, limit = 50, offset = 0 } = filter;
 
   const where: Prisma.MaterialWhereInput = {
     deletedAt: null,
@@ -149,8 +149,8 @@ export async function list(filter: ListMaterialsFilter = {}) {
     where.siteId = siteId;
   }
 
-  if (classificationIds && classificationIds.length > 0) {
-    where.classifications = { some: { id: { in: classificationIds } } };
+  if (labelIds && labelIds.length > 0) {
+    where.labels = { some: { id: { in: labelIds } } };
   }
 
   // Free-text search OR'd across the columns shown in the UI.
@@ -183,7 +183,7 @@ export async function list(filter: ListMaterialsFilter = {}) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        classifications: { select: { id: true, name: true, kind: true } },
+        labels: { select: { id: true, name: true } },
         _count: { select: { products: true, versions: true } },
       },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
@@ -219,7 +219,7 @@ export async function getById(id: string) {
           },
         },
       },
-      classifications: { select: { id: true, name: true, kind: true } },
+      labels: { select: { id: true, name: true } },
       _count: { select: { products: true, versions: true } },
     },
   });
@@ -239,17 +239,8 @@ export async function getById(id: string) {
  * Update material (creates new version version)
  */
 export async function update(id: string, input: UpdateMaterialInput) {
-  const {
-    materialNumber,
-    name,
-    shortCode,
-    description,
-    externalNumber,
-    weightUnits,
-    unitCost,
-    attrs,
-    classificationIds,
-  } = input;
+  const { materialNumber, name, shortCode, description, externalNumber, weightUnits, unitCost, attrs, labelIds } =
+    input;
 
   // Get current material with version
   const current = await prisma.material.findUnique({
@@ -269,12 +260,12 @@ export async function update(id: string, input: UpdateMaterialInput) {
     return { error: "Material has no current version", code: "NO_CURRENT_VERSION" };
   }
 
-  if (classificationIds && classificationIds.length > 0) {
-    const found = await prisma.classification.count({
-      where: { id: { in: classificationIds }, siteId: current.siteId },
+  if (labelIds && labelIds.length > 0) {
+    const found = await prisma.label.count({
+      where: { id: { in: labelIds }, siteId: current.siteId },
     });
-    if (found !== classificationIds.length) {
-      return { error: "One or more classifications not found for this site", code: "CLASSIFICATION_NOT_FOUND" };
+    if (found !== labelIds.length) {
+      return { error: "One or more labels not found for this site", code: "LABEL_NOT_FOUND" };
     }
   }
 
@@ -311,14 +302,12 @@ export async function update(id: string, input: UpdateMaterialInput) {
       where: { id },
       data: {
         currentVersionId: version.id,
-        ...(classificationIds !== undefined
-          ? { classifications: { set: classificationIds.map((cid) => ({ id: cid })) } }
-          : {}),
+        ...(labelIds !== undefined ? { labels: { set: labelIds.map((cid) => ({ id: cid })) } } : {}),
       },
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        classifications: { select: { id: true, name: true, kind: true } },
+        labels: { select: { id: true, name: true } },
         _count: { select: { products: true, versions: true } },
       },
     });

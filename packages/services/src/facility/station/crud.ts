@@ -9,14 +9,13 @@ export interface CreateStationInput {
   siteId: string;
   workcenterId?: string;
   /** Labels to put on this record. They must come from the same site's list. */
-  classificationIds?: string[];
+  labelIds?: string[];
   // Config fields (stored on StationVersion)
   standardCycle?: number;
   downtimeDetect?: number;
   downtimeDetectUnit?: "SECONDS";
   slowDetect?: number;
   slowDetectUnit?: "PERCENTAGE";
-  processTypeId?: string;
   inLineCalculations?: boolean;
   inStationCalculations?: boolean;
 }
@@ -26,14 +25,13 @@ export interface UpdateStationInput {
   description?: string;
   attrs?: Record<string, unknown>;
   /** Replaces the record's whole label list with this one (same-site labels only). */
-  classificationIds?: string[];
+  labelIds?: string[];
   // Config fields (stored on StationVersion)
   standardCycle?: number | null;
   downtimeDetect?: number | null;
   downtimeDetectUnit?: "SECONDS";
   slowDetect?: number | null;
   slowDetectUnit?: "PERCENTAGE";
-  processTypeId?: string | null;
   inLineCalculations?: boolean;
   inStationCalculations?: boolean;
 }
@@ -43,7 +41,7 @@ export interface ListStationsFilter {
   siteId?: string;
   workcenterId?: string;
   /** Only return stations that have at least one of these labels. */
-  classificationIds?: string[];
+  labelIds?: string[];
   name?: string;
   limit?: number;
   offset?: number;
@@ -57,13 +55,9 @@ const stationInclude = {
   workcenter: {
     select: { id: true, name: true },
   },
-  currentVersion: {
-    include: {
-      processType: { select: { id: true, name: true } },
-    },
-  },
-  classifications: {
-    select: { id: true, name: true, kind: true },
+  currentVersion: true,
+  labels: {
+    select: { id: true, name: true },
   },
   currentJob: {
     select: {
@@ -80,7 +74,6 @@ const VERSION_FIELDS = [
   "downtimeDetectUnit",
   "slowDetect",
   "slowDetectUnit",
-  "processTypeId",
   "inLineCalculations",
   "inStationCalculations",
 ] as const;
@@ -117,13 +110,12 @@ export async function create(input: CreateStationInput) {
     attrs,
     siteId,
     workcenterId,
-    classificationIds,
+    labelIds,
     standardCycle,
     downtimeDetect,
     downtimeDetectUnit,
     slowDetect,
     slowDetectUnit,
-    processTypeId,
     inLineCalculations,
     inStationCalculations,
   } = input;
@@ -157,26 +149,10 @@ export async function create(input: CreateStationInput) {
     }
   }
 
-  if (classificationIds && classificationIds.length > 0) {
-    const found = await prisma.classification.count({ where: { id: { in: classificationIds }, siteId } });
-    if (found !== classificationIds.length) {
-      return { error: "One or more classifications not found for this site", code: "CLASSIFICATION_NOT_FOUND" };
-    }
-  }
-
-  // If process type specified, validate it
-  if (processTypeId) {
-    const pt = await prisma.processType.findUnique({
-      where: { id: processTypeId },
-      select: { id: true, siteId: true, deletedAt: true },
-    });
-
-    if (!pt || pt.deletedAt) {
-      return { error: "Process type not found", code: "PROCESS_TYPE_NOT_FOUND" };
-    }
-
-    if (pt.siteId !== siteId) {
-      return { error: "Process type must belong to the same site", code: "SITE_MISMATCH" };
+  if (labelIds && labelIds.length > 0) {
+    const found = await prisma.label.count({ where: { id: { in: labelIds }, siteId } });
+    if (found !== labelIds.length) {
+      return { error: "One or more labels not found for this site", code: "LABEL_NOT_FOUND" };
     }
   }
 
@@ -193,9 +169,7 @@ export async function create(input: CreateStationInput) {
           attrs: attrs ?? {},
           siteId,
           workcenterId: workcenterId ?? null,
-          ...(classificationIds?.length
-            ? { classifications: { connect: classificationIds.map((id) => ({ id })) } }
-            : {}),
+          ...(labelIds?.length ? { labels: { connect: labelIds.map((id) => ({ id })) } } : {}),
         },
       });
 
@@ -209,7 +183,6 @@ export async function create(input: CreateStationInput) {
           downtimeDetectUnit: downtimeDetectUnit ?? "SECONDS",
           slowDetect: slowDetect ?? null,
           slowDetectUnit: slowDetectUnit ?? "PERCENTAGE",
-          processTypeId: processTypeId ?? null,
           inLineCalculations: inLineCalculations ?? false,
           inStationCalculations: inStationCalculations ?? false,
         },
@@ -241,7 +214,7 @@ export async function create(input: CreateStationInput) {
       attrs: attrs ?? {},
       siteId,
       workcenterId: workcenterId ?? null,
-      ...(classificationIds?.length ? { classifications: { connect: classificationIds.map((id) => ({ id })) } } : {}),
+      ...(labelIds?.length ? { labels: { connect: labelIds.map((id) => ({ id })) } } : {}),
     },
     include: stationInclude,
   });
@@ -260,7 +233,7 @@ export async function create(input: CreateStationInput) {
  * List stations with optional filtering
  */
 export async function list(filter: ListStationsFilter = {}) {
-  const { workspaceId, siteId, workcenterId, classificationIds, name, limit = 50, offset = 0 } = filter;
+  const { workspaceId, siteId, workcenterId, labelIds, name, limit = 50, offset = 0 } = filter;
 
   const where: Record<string, unknown> = {};
 
@@ -276,8 +249,8 @@ export async function list(filter: ListStationsFilter = {}) {
     where.workcenterId = workcenterId;
   }
 
-  if (classificationIds && classificationIds.length > 0) {
-    where.classifications = { some: { id: { in: classificationIds } } };
+  if (labelIds && labelIds.length > 0) {
+    where.labels = { some: { id: { in: labelIds } } };
   }
 
   if (name) {
@@ -332,13 +305,12 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
     name,
     description,
     attrs,
-    classificationIds,
+    labelIds,
     standardCycle,
     downtimeDetect,
     downtimeDetectUnit,
     slowDetect,
     slowDetectUnit,
-    processTypeId,
     inLineCalculations,
     inStationCalculations,
   } = input;
@@ -361,28 +333,12 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
     return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
-  // Validate process type if changing
-  if (processTypeId !== undefined && processTypeId !== null) {
-    const pt = await prisma.processType.findUnique({
-      where: { id: processTypeId },
-      select: { id: true, siteId: true, deletedAt: true },
+  if (labelIds && labelIds.length > 0) {
+    const found = await prisma.label.count({
+      where: { id: { in: labelIds }, siteId: current.siteId },
     });
-
-    if (!pt || pt.deletedAt) {
-      return { error: "Process type not found", code: "PROCESS_TYPE_NOT_FOUND" };
-    }
-
-    if (pt.siteId !== current.siteId) {
-      return { error: "Process type must belong to the same site", code: "SITE_MISMATCH" };
-    }
-  }
-
-  if (classificationIds && classificationIds.length > 0) {
-    const found = await prisma.classification.count({
-      where: { id: { in: classificationIds }, siteId: current.siteId },
-    });
-    if (found !== classificationIds.length) {
-      return { error: "One or more classifications not found for this site", code: "CLASSIFICATION_NOT_FOUND" };
+    if (found !== labelIds.length) {
+      return { error: "One or more labels not found for this site", code: "LABEL_NOT_FOUND" };
     }
   }
 
@@ -391,8 +347,8 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
   if (name !== undefined) stationUpdateData.name = name;
   if (description !== undefined) stationUpdateData.description = description;
   if (attrs !== undefined) stationUpdateData.attrs = attrs;
-  if (classificationIds !== undefined) {
-    stationUpdateData.classifications = { set: classificationIds.map((cid) => ({ id: cid })) };
+  if (labelIds !== undefined) {
+    stationUpdateData.labels = { set: labelIds.map((lid) => ({ id: lid })) };
   }
 
   // Check if any version config fields are being updated
@@ -402,7 +358,6 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
     downtimeDetectUnit,
     slowDetect,
     slowDetectUnit,
-    processTypeId,
     inLineCalculations,
     inStationCalculations,
   };
@@ -431,7 +386,6 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
             downtimeDetectUnit !== undefined ? downtimeDetectUnit : (oldVersion?.downtimeDetectUnit ?? "SECONDS"),
           slowDetect: slowDetect !== undefined ? slowDetect : (oldVersion?.slowDetect ?? null),
           slowDetectUnit: slowDetectUnit !== undefined ? slowDetectUnit : (oldVersion?.slowDetectUnit ?? "PERCENTAGE"),
-          processTypeId: processTypeId !== undefined ? processTypeId : (oldVersion?.processTypeId ?? null),
           inLineCalculations:
             inLineCalculations !== undefined ? inLineCalculations : (oldVersion?.inLineCalculations ?? false),
           inStationCalculations:

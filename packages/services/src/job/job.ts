@@ -11,7 +11,7 @@ import { refreshStationsRunningJob } from "../facility/station/state.js";
 export interface CreateJobInput {
   siteId: string;
   /** Labels to put on this record. They must come from the same site's list. */
-  classificationIds?: string[];
+  labelIds?: string[];
   name: string;
   description?: string;
   standardCycle?: number;
@@ -26,13 +26,15 @@ export interface UpdateJobInput {
   productsPerCycle?: number;
   attrs?: Record<string, unknown>;
   /** Replaces the record's whole label list with this one (same-site labels only). */
-  classificationIds?: string[];
+  labelIds?: string[];
 }
 
 export interface ListJobsFilter {
   siteId?: string;
   /** Only return jobs that have at least one of these labels. */
-  classificationIds?: string[];
+  labelIds?: string[];
+  /** Narrow to what this station's job filter allows. */
+  stationId?: string;
   /** Free-text search across name and description (case-insensitive contains, OR) */
   q?: string;
   name?: string;
@@ -79,7 +81,7 @@ export interface UpdateItemInput {
  * Create a new job with initial version (version 1)
  */
 export async function create(input: CreateJobInput) {
-  const { siteId, classificationIds, name, description, standardCycle, productsPerCycle, attrs } = input;
+  const { siteId, labelIds, name, description, standardCycle, productsPerCycle, attrs } = input;
 
   // Verify site exists
   const site = await prisma.site.findUnique({
@@ -91,10 +93,10 @@ export async function create(input: CreateJobInput) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
 
-  if (classificationIds && classificationIds.length > 0) {
-    const found = await prisma.classification.count({ where: { id: { in: classificationIds }, siteId } });
-    if (found !== classificationIds.length) {
-      return { error: "One or more classifications not found for this site", code: "CLASSIFICATION_NOT_FOUND" };
+  if (labelIds && labelIds.length > 0) {
+    const found = await prisma.label.count({ where: { id: { in: labelIds }, siteId } });
+    if (found !== labelIds.length) {
+      return { error: "One or more labels not found for this site", code: "LABEL_NOT_FOUND" };
     }
   }
 
@@ -104,7 +106,7 @@ export async function create(input: CreateJobInput) {
     const j = await tx.job.create({
       data: {
         siteId,
-        ...(classificationIds?.length ? { classifications: { connect: classificationIds.map((id) => ({ id })) } } : {}),
+        ...(labelIds?.length ? { labels: { connect: labelIds.map((id) => ({ id })) } } : {}),
       },
     });
 
@@ -128,7 +130,7 @@ export async function create(input: CreateJobInput) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        classifications: { select: { id: true, name: true, kind: true } },
+        labels: { select: { id: true, name: true } },
         _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
       },
     });
@@ -149,7 +151,7 @@ export async function create(input: CreateJobInput) {
  * List jobs with optional filtering
  */
 export async function list(filter: ListJobsFilter = {}) {
-  const { siteId, classificationIds, q, name, productIds, view = "full", limit = 50, offset = 0 } = filter;
+  const { siteId, labelIds, stationId, q, name, productIds, view = "full", limit = 50, offset = 0 } = filter;
 
   const where: Prisma.JobWhereInput = {
     deletedAt: null,
@@ -159,9 +161,21 @@ export async function list(filter: ListJobsFilter = {}) {
     where.siteId = siteId;
   }
 
-  if (classificationIds && classificationIds.length > 0) {
-    where.classifications = { some: { id: { in: classificationIds } } };
+  const labelConditions: Prisma.JobWhereInput[] = [];
+  if (labelIds && labelIds.length > 0) {
+    labelConditions.push({ labels: { some: { id: { in: labelIds } } } });
   }
+  if (stationId) {
+    // Narrow to the station's filter for this kind of item; no filter = no narrowing.
+    const stationFilter = await prisma.labelFilter.findUnique({
+      where: { stationId_target: { stationId, target: "JOB" } },
+      select: { labels: { select: { id: true } } },
+    });
+    if (stationFilter) {
+      labelConditions.push({ labels: { some: { id: { in: stationFilter.labels.map((l) => l.id) } } } });
+    }
+  }
+  if (labelConditions.length > 0) where.AND = labelConditions;
 
   // Free-text search OR'd across the columns shown in the UI.
   if (q) {
@@ -221,7 +235,7 @@ export async function list(filter: ListJobsFilter = {}) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        classifications: { select: { id: true, name: true, kind: true } },
+        labels: { select: { id: true, name: true } },
         _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
       },
       ...pagination,
@@ -246,7 +260,7 @@ export async function getById(id: string) {
     include: {
       currentVersion: true,
       site: { select: { id: true, name: true } },
-      classifications: { select: { id: true, name: true, kind: true } },
+      labels: { select: { id: true, name: true } },
       tools: {
         where: { deletedAt: null },
         include: {
@@ -311,7 +325,7 @@ export async function getById(id: string) {
  * Update job (creates new version version)
  */
 export async function update(id: string, input: UpdateJobInput) {
-  const { name, description, standardCycle, productsPerCycle, attrs, classificationIds } = input;
+  const { name, description, standardCycle, productsPerCycle, attrs, labelIds } = input;
 
   // Get current job with version
   const current = await prisma.job.findUnique({
@@ -331,12 +345,12 @@ export async function update(id: string, input: UpdateJobInput) {
     return { error: "Job has no current version", code: "NO_CURRENT_VERSION" };
   }
 
-  if (classificationIds && classificationIds.length > 0) {
-    const found = await prisma.classification.count({
-      where: { id: { in: classificationIds }, siteId: current.siteId },
+  if (labelIds && labelIds.length > 0) {
+    const found = await prisma.label.count({
+      where: { id: { in: labelIds }, siteId: current.siteId },
     });
-    if (found !== classificationIds.length) {
-      return { error: "One or more classifications not found for this site", code: "CLASSIFICATION_NOT_FOUND" };
+    if (found !== labelIds.length) {
+      return { error: "One or more labels not found for this site", code: "LABEL_NOT_FOUND" };
     }
   }
 
@@ -369,14 +383,12 @@ export async function update(id: string, input: UpdateJobInput) {
       where: { id },
       data: {
         currentVersionId: version.id,
-        ...(classificationIds !== undefined
-          ? { classifications: { set: classificationIds.map((cid) => ({ id: cid })) } }
-          : {}),
+        ...(labelIds !== undefined ? { labels: { set: labelIds.map((cid) => ({ id: cid })) } } : {}),
       },
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        classifications: { select: { id: true, name: true, kind: true } },
+        labels: { select: { id: true, name: true } },
         _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
       },
     });
