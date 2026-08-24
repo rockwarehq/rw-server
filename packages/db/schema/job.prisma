@@ -19,7 +19,7 @@ model Tool {
   toolLocationId String?       @unique @db.Uuid
   toolLocation   ToolLocation? @relation(fields: [toolLocationId], references: [id], onDelete: SetNull)
 
-  classifications Classification[]
+  labels Label[]
 
   toolCavities ToolCavity[]
   jobs         JobTool[]
@@ -110,23 +110,18 @@ model Job {
   tools           JobTool[]
   jobProducts     JobProduct[]
   orders          WorkOrder[]
-  classifications Classification[]
+  labels Label[]
 
   currentOfStations  Station[]            @relation("StationCurrentJob")
   stationJobs        StationJob[]
   stationJobLogs     StationJobLog[]
   materialShiftUsage MaterialShiftUsage[]
 
-  // Process type (optional, single)
-  processTypeId String?      @db.Uuid
-  processType   ProcessType? @relation(fields: [processTypeId], references: [id], onDelete: SetNull)
-
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
   deletedAt  DateTime? @db.Timestamptz(3)
   archivedAt DateTime? @db.Timestamptz(3)
 
-  @@index([processTypeId])
 }
 
 enum StandardCycleUnit {

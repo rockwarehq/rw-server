@@ -11,10 +11,6 @@ model Workcenter {
   siteId String @db.Uuid
   site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
-  // Process type (optional)
-  processTypeId String?      @db.Uuid
-  processType   ProcessType? @relation(fields: [processTypeId], references: [id], onDelete: SetNull)
-
   // Self-referential hierarchy
   parentId String?      @db.Uuid
   parent   Workcenter?  @relation("WorkcenterHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
@@ -88,7 +84,8 @@ model Station {
   currentVersion   StationVersion?  @relation("StationCurrent", fields: [currentVersionId], references: [id])
   versions         StationVersion[] @relation("StationVersions")
 
-  classifications Classification[]
+  labels       Label[]
+  labelFilters LabelFilter[]
 
   // Allowed jobs (many-to-many via join table)
   allowedJobs   StationJob[]
@@ -219,8 +216,6 @@ model StationVersion {
   slowDetectUnit        SlowDetectUnit     @default(PERCENTAGE)
 
   // Process type (optional, single)
-  processTypeId String?      @db.Uuid
-  processType   ProcessType? @relation(fields: [processTypeId], references: [id], onDelete: SetNull)
 
   stationId String  @db.Uuid
   station   Station @relation("StationVersions", fields: [stationId], references: [id], onDelete: Cascade)
