@@ -484,11 +484,15 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
     },
   });
 
-  // Remove member (requires user:admin)
+  // Remove member (requires workspace-scoped user:admin — this deletes the
+  // whole membership across every site, so a site-scoped grant must not pass)
   fastify.route({
     method: "DELETE",
     url: "/:id/members/:userId",
-    preHandler: [fastify.verifyAccessToken, requirePermission("user:admin", { workspaceParam: "id" })],
+    preHandler: [
+      fastify.verifyAccessToken,
+      requirePermission("user:admin", { workspaceParam: "id", scope: "workspace" }),
+    ],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -524,6 +528,62 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
         return reply.status(404).send({ error: "Member not found" });
       }
       return reply.status(400).send({ error: "Cannot remove the last workspace owner" });
+    },
+  });
+
+  // Remove a member's access to the caller's current site only (site-scoped
+  // user:admin suffices — the blast radius is one site). The site comes from
+  // the token, mirroring PUT /:id/members/:userId. If no role assignments
+  // remain afterwards, the membership itself is removed (see removeSiteAccess).
+  fastify.route({
+    method: "DELETE",
+    url: "/:id/members/:userId/site-access",
+    preHandler: [fastify.verifyAccessToken, requirePermission("user:admin", { scope: "site" })],
+    schema: {
+      tags: ["workspaces"],
+      security: [{ bearerAuth: [] }],
+      params: memberParamsSchema,
+      response: {
+        200: successResponseSchema,
+        400: errorSchema,
+        401: errorSchema,
+        403: errorSchema,
+        404: errorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const iam = request.iam as { id?: string; workspaceId?: string; siteId?: string } | undefined;
+      const currentUserId = iam?.id;
+      const siteId = iam?.siteId;
+      if (!currentUserId || !iam?.workspaceId || !siteId) {
+        return reply.status(401).send({ error: "Unauthorized" });
+      }
+
+      if (request.params.id !== iam.workspaceId) {
+        return reply.status(403).send({ error: "Not in requested workspace context" });
+      }
+
+      if (request.params.userId === currentUserId) {
+        return reply.status(400).send({ error: "Cannot remove yourself" });
+      }
+
+      const result = await workspace.removeSiteAccess(request.params.id, request.params.userId, siteId, {
+        actorId: currentUserId,
+        ipAddress: request.ip,
+        userAgent: request.headers["user-agent"],
+      });
+
+      if (result.success) {
+        return { success: true };
+      }
+      switch (result.error) {
+        case "MEMBER_NOT_FOUND":
+          return reply.status(404).send({ error: "Member not found" });
+        case "NO_SITE_ACCESS":
+          return reply.status(404).send({ error: "Member has no access to this site" });
+        case "LAST_OWNER":
+          return reply.status(400).send({ error: "Cannot remove the last workspace owner" });
+      }
     },
   });
 }

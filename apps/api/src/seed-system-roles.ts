@@ -20,6 +20,11 @@ const FACTORY_ADMINISTRATOR_PERMISSIONS: readonly Permission[] = [
   ...all("employee"),
   "user:read",
   "user:write",
+  // user:admin at SITE scope unlocks site-scoped member removal
+  // (DELETE /workspaces/:id/members/:userId/site-access). Workspace-level
+  // user administration (org-wide removal, admin password resets, disable)
+  // stays behind scope:"workspace" checks that a site grant cannot satisfy.
+  "user:admin",
   // Local factory admins manage their site's integrations (settings:write);
   // destructive/execute integration ops and API token minting stay
   // settings:admin (Company Administrator).

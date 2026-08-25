@@ -22,6 +22,7 @@ export {
 export {
   addMember,
   removeMember,
+  removeSiteAccess,
   updateRole,
   listMembers,
   getUserWorkspaces,

@@ -341,6 +341,55 @@ export async function removeMember(
   return { success: true };
 }
 
+export type RemoveSiteAccessError = "MEMBER_NOT_FOUND" | "NO_SITE_ACCESS" | "LAST_OWNER";
+
+/**
+ * Remove a member's access to a single site by deleting their site-scoped
+ * role assignments there. If that would leave the membership with no role
+ * assignments at all, the whole membership is removed instead (an orphaned
+ * membership is invisible in every members view and, for ACTIVE users,
+ * unrecoverable — invites reject existing ACTIVE emails). Owner roles are
+ * workspace-scoped (siteId null) assignments, so they always survive a
+ * site-only removal and the cascade can never hit an owner.
+ */
+export async function removeSiteAccess(
+  workspaceId: string,
+  userId: string,
+  siteId: string,
+  opts?: { actorId?: string; ipAddress?: string; userAgent?: string },
+): Promise<{ success: true; membershipRemoved: boolean } | { success: false; error: RemoveSiteAccessError }> {
+  const membership = await prisma.workspaceMembership.findUnique({
+    where: { userId_workspaceId: { userId, workspaceId } },
+    select: {
+      id: true,
+      roleAssignments: { select: { id: true, siteId: true } },
+    },
+  });
+
+  if (!membership) {
+    return { success: false, error: "MEMBER_NOT_FOUND" };
+  }
+
+  const siteAssignments = membership.roleAssignments.filter((assignment) => assignment.siteId === siteId);
+  if (siteAssignments.length === 0) {
+    return { success: false, error: "NO_SITE_ACCESS" };
+  }
+
+  const remaining = membership.roleAssignments.length - siteAssignments.length;
+  if (remaining === 0) {
+    const result = await removeMember(workspaceId, userId, opts);
+    if (!result.success) {
+      return result;
+    }
+    return { success: true, membershipRemoved: true };
+  }
+
+  await prisma.roleAssignment.deleteMany({
+    where: { membershipId: membership.id, siteId },
+  });
+  return { success: true, membershipRemoved: false };
+}
+
 /**
  * Replace a member's role assignment in the caller's IAM context.
  * Workspace roles replace only the workspace-scoped assignment; site roles
