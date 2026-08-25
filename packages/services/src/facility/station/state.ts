@@ -934,7 +934,8 @@ export async function assignDowntimeReason(
       where: { stationId_target: { stationId: entry.stationId, target: "STATUS_REASON" } },
       select: { labels: { select: { id: true } } },
     });
-    if (filter) {
+    // An empty filter (only possible via direct DB writes) is ignored.
+    if (filter && filter.labels.length > 0) {
       const allowed = new Set(filter.labels.map((l) => l.id));
       if (!reason.labels.some((l) => allowed.has(l.id))) {
         return {

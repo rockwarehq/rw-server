@@ -40,13 +40,7 @@ export interface ListDispositionLogsFilter {
 const logInclude = {
   station: { select: { id: true, name: true } },
   itemDisposition: { select: { id: true, name: true } },
-  dispositionReason: {
-    select: {
-      id: true,
-      name: true,
-      processType: { select: { id: true, name: true } },
-    },
-  },
+  dispositionReason: { select: { id: true, name: true } },
   productVersion: { select: { id: true, version: true, name: true, sku: true } },
   stationVersion: { select: { id: true, version: true } },
   toolVersion: { select: { id: true, version: true, name: true } },
