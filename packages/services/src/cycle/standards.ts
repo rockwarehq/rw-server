@@ -76,9 +76,10 @@ export function resolveStandards(cfg: StandardsConfig): ResolvedStandards {
     };
   }
 
-  // DISCRETE — the job's entered standardCycle, unchanged behavior.
+  // DISCRETE — the job's entered standardCycle; station standardCycle is the
+  // default when the job has none (job beats station, like every input).
   return {
-    standardCycleSeconds: positive(cfg.jobStandardCycle),
+    standardCycleSeconds: positive(cfg.jobStandardCycle) ?? positive(cfg.stationStandardCycle),
     standardQuantity: null,
     quantityUnit,
     secondsPerUnit: null,

@@ -41,6 +41,14 @@ describe("DISCRETE — must match today's behavior exactly", () => {
     expect(resolveCycleActuals(std, null).standardCycle).toBeNull();
   });
 
+  it("station standardCycle is the fallback when the job has none; job wins otherwise", () => {
+    const stationDefault = { ...base, stationStandardCycle: 45 };
+    expect(resolveStandards(stationDefault).standardCycleSeconds).toBe(45);
+    expect(resolveStandards({ ...stationDefault, jobStandardCycle: 30 }).standardCycleSeconds).toBe(30);
+    // Zero/negative station values are treated as absent, not as a standard.
+    expect(resolveStandards({ ...base, stationStandardCycle: 0 }).standardCycleSeconds).toBeNull();
+  });
+
   it("rate fields on the job are ignored in DISCRETE", () => {
     const std = resolveStandards({ ...base, jobStandardCycle: 30, jobStandardRate: 50, jobStandardRateUnit: "ft" });
     expect(std.standardCycleSeconds).toBe(30);
