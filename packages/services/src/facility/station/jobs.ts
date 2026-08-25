@@ -96,9 +96,11 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
     }
 
     // If the station has a job filter, the job must carry at least one of
-    // the filter's labels. No filter = every job is eligible.
+    // the filter's labels. No filter = every job is eligible. A filter with
+    // no labels (only possible via direct DB writes) is ignored, not a
+    // block-everything rule.
     const jobFilter = station.labelFilters[0];
-    if (job && jobFilter) {
+    if (job && jobFilter && jobFilter.labels.length > 0) {
       const allowed = new Set(jobFilter.labels.map((l) => l.id));
       if (!job.labels.some((l) => allowed.has(l.id))) {
         return {

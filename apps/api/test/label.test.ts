@@ -417,9 +417,28 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tie
     expect(carried).not.toBeNull();
   });
 
-  it("label delete detaches everywhere and clears filter criteria", async () => {
+  it("a label used by a station filter cannot be deleted; a free label detaches everywhere", async () => {
     const temp = lbl(await rpcCall(server, "label/create", { siteId: site.id, name: `${PREFIX}-temp` }, adminToken));
     await rpcCall(server, "job/update", { id: jobPlain.id, labelIds: [temp.id] }, adminToken);
+
+    // Put the label in a filter — deleting it is now refused, so a filter
+    // can never end up empty and silently block everything.
+    await rpcCall(
+      server,
+      "station/setLabelFilter",
+      { stationId: stationOpen.id, target: "TOOL", labelIds: [temp.id] },
+      adminToken,
+    );
+    const blocked = await rpcCall(server, "label/delete", { id: temp.id }, adminToken);
+    expect(blocked.statusCode).toBe(409);
+
+    // Clear the filter, and the delete goes through, detaching from records.
+    await rpcCall(
+      server,
+      "station/setLabelFilter",
+      { stationId: stationOpen.id, target: "TOOL", labelIds: [] },
+      adminToken,
+    );
     const del = await rpcCall(server, "label/delete", { id: temp.id }, adminToken);
     expect(del.statusCode).toBe(200);
     const reread = await rpcCall(server, "job/get", { id: jobPlain.id }, adminToken);

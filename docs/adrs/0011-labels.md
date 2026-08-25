@@ -26,7 +26,11 @@ nothing.
    the list itself (`settings:write` to create/rename/delete); putting an
    existing label ON a record just needs permission to edit that record
    (`job:write` and so on), so office users tag things but can't invent
-   labels. Deleting a label removes it from every record and filter at once.
+   labels. Deleting a label removes it from every record at once — but a label
+that a station filter uses cannot be deleted: take it out of the filters
+first. That rule keeps a filter from ever losing its last label, which
+would silently filter out everything. The label list returns usage counts,
+so a UI can show why a delete is refused.
 
 2. **Filters.** An item that offers or accepts other items can define filter
    criteria against them, per kind of item. In v1 only **stations** own

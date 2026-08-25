@@ -74,6 +74,8 @@ export async function getFilterLabelIds(stationId: string, target: LabelFilterTa
     where: { stationId_target: { stationId, target } },
     select: { labels: { select: { id: true } } },
   });
-  if (!filter) return null;
+  // A filter with no labels (only possible via direct DB writes) means no
+  // filtering — never "block everything".
+  if (!filter || filter.labels.length === 0) return null;
   return filter.labels.map((l) => l.id);
 }

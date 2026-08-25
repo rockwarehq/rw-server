@@ -116,10 +116,25 @@ export async function update(id: string, input: UpdateLabelInput) {
 }
 
 export async function remove(id: string) {
-  const current = await prisma.label.findUnique({ where: { id }, select: { id: true } });
+  const current = await prisma.label.findUnique({
+    where: { id },
+    select: { id: true, _count: { select: { labelFilters: true } } },
+  });
   if (!current) {
     return { error: "Label not found", code: "LABEL_NOT_FOUND" };
   }
+
+  // A label that a station filter uses cannot be deleted — take it out of
+  // the filters first. This keeps a filter from ever losing its last label,
+  // which would silently filter out everything. Plain attachments (jobs,
+  // codes, ...) don't block: untagging is harmless and cascades on delete.
+  if (current._count.labelFilters > 0) {
+    return {
+      error: `This label is used by ${current._count.labelFilters} station filter(s). Remove it from those filters first.`,
+      code: "HAS_FILTERS",
+    };
+  }
+
   await prisma.label.delete({ where: { id } });
   return { success: true };
 }

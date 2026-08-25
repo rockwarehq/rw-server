@@ -156,7 +156,8 @@ async function validateDispositionReasonPair(
       where: { stationId_target: { stationId, target: "DISPOSITION_REASON" } },
       select: { labels: { select: { id: true } } },
     });
-    if (stationFilter) {
+    // An empty filter (only possible via direct DB writes) is ignored.
+    if (stationFilter && stationFilter.labels.length > 0) {
       const allowed = new Set(stationFilter.labels.map((l) => l.id));
       if (!reason.labels.some((l) => allowed.has(l.id))) {
         return {
