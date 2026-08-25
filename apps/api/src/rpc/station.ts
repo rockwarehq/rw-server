@@ -12,11 +12,9 @@ const log = moduleLogger("rpc:station");
 
 // Pinned historical mappings (observable error codes are API — see errors.ts):
 // these codes fell through to BAD_REQUEST here before the shared mapper existed,
-// while mapServiceCode would return NOT_FOUND (PROCESS_TYPE_NOT_FOUND,
-// ACTION_NOT_FOUND) or CONFLICT (SITE_MISMATCH on update).
-const CREATE_OVERRIDES: CodeOverrides = { PROCESS_TYPE_NOT_FOUND: "BAD_REQUEST" };
+// while mapServiceCode would return NOT_FOUND (ACTION_NOT_FOUND) or CONFLICT
+// (SITE_MISMATCH on update).
 const UPDATE_OVERRIDES: CodeOverrides = {
-  PROCESS_TYPE_NOT_FOUND: "BAD_REQUEST",
   SITE_MISMATCH: "BAD_REQUEST",
 };
 const EVENT_ACTION_OVERRIDES: CodeOverrides = { ACTION_NOT_FOUND: "BAD_REQUEST" };
@@ -184,7 +182,7 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
   grant(await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await station.create(input);
-  if (result.error !== undefined) throwServiceError(result, CREATE_OVERRIDES);
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 

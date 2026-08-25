@@ -16,7 +16,7 @@
  *       + GraphHook (operator: increases) emitting imm.cycle_completed
  *         with stationId (+ jobId) bound from node properties
  *   shared:
- *     - ProcessType "Injection Molding", Workcenter "Load Test"
+ *     - Label "Injection Molding", Workcenter "Load Test"
  *     - 5 Materials (RESIN-01..05) + ProductMaterial links
  *     - ShiftPattern "Load Test 24/7" (3x8h daily) + assignment + instances
  *     - Gateway.specVersion bump so the edge gateway picks up new datasources
