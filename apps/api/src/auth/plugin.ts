@@ -180,6 +180,7 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
       status: true,
       lockedUntil: true,
       systemRole: true,
+      mustChangePassword: true,
     },
   });
 
@@ -187,7 +188,11 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
     return invalidIAM;
   }
 
-  if (userResult.status !== "ACTIVE") {
+  // PENDING invitees (temp password not yet changed) get an IAM context so
+  // they can reach the password-change allowlist; any other non-ACTIVE state
+  // - including PENDING with the flag somehow cleared - gets nothing.
+  const pendingInvitee = userResult.status === "PENDING" && userResult.mustChangePassword;
+  if (userResult.status !== "ACTIVE" && !pendingInvitee) {
     return invalidIAM;
   }
 
@@ -278,6 +283,7 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
       firstName: userResult.firstName,
       lastName: userResult.lastName,
       status: userResult.status,
+      mustChangePassword: userResult.mustChangePassword,
     },
   };
 }
@@ -298,9 +304,40 @@ async function verifyAccessTokenDecorator(request: FastifyRequest, _reply: Fasti
   }
 }
 
+// While a user must change an admin-issued temporary password, they may only
+// change it or manage their session. Everything else — including all /rpc/*
+// procedures, which route through this plugin's hooks — is rejected.
+const PASSWORD_CHANGE_ALLOWED_ROUTES = new Set([
+  "PUT /users/me/password", // the change itself
+  "GET /users/me", // lets the client re-derive state on load
+  "POST /auth/login", // public, but clients may attach a stale bearer
+  "POST /auth/logout",
+  "POST /auth/refresh", // keeps the change-password screen alive
+]);
+
+async function enforcePasswordChange(request: FastifyRequest, reply: FastifyReply) {
+  const iam = request.iam;
+  if (!iam?.validToken || iam.principal !== Principal.USER || !iam.user?.mustChangePassword) {
+    return;
+  }
+  const route = `${request.method} ${request.routeOptions?.url ?? request.url}`;
+  if (PASSWORD_CHANGE_ALLOWED_ROUTES.has(route)) {
+    return;
+  }
+  // Pre-serialized so per-route response schemas can't strip the `code`
+  // field clients use to redirect to the change-password screen.
+  return reply
+    .status(403)
+    .header("content-type", "application/json; charset=utf-8")
+    .send(JSON.stringify({ error: "Password change required", code: "password_change_required" }));
+}
+
 async function authPluginImpl(server: FastifyInstance) {
   // Add IAM resolution to every request
   server.addHook("preHandler", iamDecorator);
+
+  // Hooks run in registration order, so this sees the resolved IAM context
+  server.addHook("preHandler", enforcePasswordChange);
 
   // Decorate with verification function for protected routes
   server.decorate("verifyAccessToken", verifyAccessTokenDecorator);

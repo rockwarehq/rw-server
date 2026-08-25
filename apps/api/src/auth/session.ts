@@ -25,6 +25,7 @@ export interface LoginResult {
     email: string;
     firstName: string | null;
     lastName: string | null;
+    mustChangePassword: boolean;
   };
 }
 
@@ -174,17 +175,8 @@ export async function login(
     return { success: false, error: "Account is disabled" };
   }
 
-  if (user.status === "PENDING") {
-    await logEvent({
-      action: "LOGIN_FAILED",
-      userId: user.id,
-      ipAddress: context.ipAddress,
-      userAgent: context.userAgent,
-      metadata: { reason: "registration_incomplete" },
-    });
-    return { success: false, error: "Please complete your registration first" };
-  }
-
+  // PENDING users WITH a password are invitees mid-activation - they may log
+  // in (the mustChangePassword gate boxes them in until they set their own).
   if (!user.passwordHash) {
     await logEvent({
       action: "LOGIN_FAILED",
@@ -230,6 +222,19 @@ export async function login(
     return { success: false, error: "Invalid email or password" };
   }
 
+  // Checked only after a successful password compare so outsiders cannot
+  // probe which emails hold pending invites.
+  if (user.status === "PENDING" && user.inviteTokenExpiry && user.inviteTokenExpiry < new Date()) {
+    await logEvent({
+      action: "INVITE_EXPIRED",
+      userId: user.id,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      metadata: { reason: "login_after_expiry" },
+    });
+    return { success: false, error: "Invite has expired. Ask an administrator to resend the invite." };
+  }
+
   const tokenResult = await createUserAccessTokenForContext(user);
   if (!tokenResult.success) return { success: false, error: tokenResult.error };
   const { token: refreshToken, expiresAt } = await createRefreshToken(user.id, metadata);
@@ -263,6 +268,7 @@ export async function login(
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
+        mustChangePassword: user.mustChangePassword,
       },
     },
   };

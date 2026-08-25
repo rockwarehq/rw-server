@@ -125,6 +125,10 @@ const memberSchema = {
         lastName: { type: "string", nullable: true },
         status: { type: "string", enum: ["PENDING", "ACTIVE", "DISABLED"] },
         lastLoginAt: { type: ["string", "null"], format: "date-time" },
+        invitedBy: { type: ["string", "null"], format: "uuid" },
+        invitedAt: { type: ["string", "null"], format: "date-time" },
+        inviteExpiry: { type: ["string", "null"], format: "date-time" },
+        mustChangePassword: { type: "boolean" },
       },
     },
     roles: { type: "array", items: roleRefSchema },
@@ -503,17 +507,23 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
 
-      const existingMember = await workspace.getUserAccess(request.params.id, request.params.userId);
-      if (!existingMember) {
-        return reply.status(404).send({ error: "Member not found" });
-      }
-
       if (request.params.userId === currentUserId) {
         return reply.status(400).send({ error: "Cannot remove yourself" });
       }
 
-      await workspace.removeMember(request.params.id, request.params.userId);
-      return { success: true };
+      const result = await workspace.removeMember(request.params.id, request.params.userId, {
+        actorId: currentUserId,
+        ipAddress: request.ip,
+        userAgent: request.headers["user-agent"],
+      });
+
+      if (result.success) {
+        return { success: true };
+      }
+      if (result.error === "MEMBER_NOT_FOUND") {
+        return reply.status(404).send({ error: "Member not found" });
+      }
+      return reply.status(400).send({ error: "Cannot remove the last workspace owner" });
     },
   });
 }

@@ -1,15 +1,17 @@
-import { getAppBaseUrl } from "@rw/runtime/email";
-
 interface InviteEmailParams {
   recipientEmail: string;
-  inviteToken: string;
+  temporaryPassword: string;
+  /** Validated http(s) origin to link to; omit to send without a link. */
+  appUrl?: string;
   inviterName?: string;
   workspaceName?: string;
+  expiresInDays: number;
 }
 
 interface ResetEmailParams {
   recipientEmail: string;
-  resetToken: string;
+  resetCode: string;
+  expiresInMinutes: number;
 }
 
 interface AlertEmailParams {
@@ -43,48 +45,56 @@ function baseTemplate(content: string): string {
 }
 
 export function createInviteEmailHtml(params: InviteEmailParams): string {
-  const { inviteToken, inviterName, workspaceName } = params;
-  const inviteUrl = `${getAppBaseUrl()}/invite?token=${inviteToken}`;
+  const { recipientEmail, temporaryPassword, appUrl, inviterName, workspaceName, expiresInDays } = params;
 
-  const inviterText = inviterName ? `${inviterName} has` : "You have been";
-  const workspaceText = workspaceName ? ` to join <strong>${workspaceName}</strong>` : "";
+  const inviterText = inviterName ? `${escapeHtml(inviterName)} has` : "You have been";
+  const workspaceText = workspaceName ? ` to join <strong>${escapeHtml(workspaceName)}</strong>` : "";
+  const loginUrl = appUrl ? `${appUrl}/login` : undefined;
 
-  return baseTemplate(`
-    <h1 style="color: #1a1a1a; font-size: 24px; margin-bottom: 20px;">You're Invited to Rockware</h1>
-    <p>${inviterText} invited you${workspaceText}.</p>
-    <p>Click the button below to create your account and get started:</p>
+  const loginSection = loginUrl
+    ? `
     <p style="margin: 30px 0;">
-      <a href="${inviteUrl}" style="display: inline-block; background-color: #0066cc; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 500;">
-        Accept Invitation
+      <a href="${loginUrl}" style="display: inline-block; background-color: #0066cc; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 500;">
+        Sign In
       </a>
     </p>
     <p style="font-size: 14px; color: #666;">
       Or copy and paste this link into your browser:<br>
-      <a href="${inviteUrl}" style="color: #0066cc; word-break: break-all;">${inviteUrl}</a>
+      <a href="${loginUrl}" style="color: #0066cc; word-break: break-all;">${loginUrl}</a>
+    </p>`
+    : "";
+
+  return baseTemplate(`
+    <h1 style="color: #1a1a1a; font-size: 24px; margin-bottom: 20px;">You're Invited to Rockware</h1>
+    <p>${inviterText} invited you${workspaceText}.</p>
+    <p>Sign in with your email address (<strong>${escapeHtml(recipientEmail)}</strong>) and this temporary password &mdash; you'll be asked to choose your own password on first login:</p>
+    <p style="margin: 30px 0; text-align: center;">
+      <span style="display: inline-block; font-family: 'SF Mono', 'Courier New', monospace; font-size: 24px; font-weight: 600; color: #1a1a1a; background-color: #f4f4f5; border-radius: 8px; padding: 16px 24px;">${escapeHtml(temporaryPassword)}</span>
     </p>
+    ${loginSection}
     <p style="font-size: 14px; color: #666;">
-      This invitation will expire in 7 days. If you did not expect this invitation, you can safely ignore this email.
+      This temporary password expires in ${expiresInDays} days. If you did not expect this invitation, you can safely ignore this email.
     </p>
   `);
 }
 
 export function createInviteEmailText(params: InviteEmailParams): string {
-  const { inviteToken, inviterName, workspaceName } = params;
-  const inviteUrl = `${getAppBaseUrl()}/invite?token=${inviteToken}`;
+  const { recipientEmail, temporaryPassword, appUrl, inviterName, workspaceName, expiresInDays } = params;
 
   const inviterText = inviterName ? `${inviterName} has` : "You have been";
   const workspaceText = workspaceName ? ` to join ${workspaceName}` : "";
+  const loginLine = appUrl ? `\nSign in here: ${appUrl}/login\n` : "";
 
   return `
 You're Invited to Rockware
 
 ${inviterText} invited you${workspaceText}.
 
-Click the link below to create your account and get started:
+Sign in with your email address (${recipientEmail}) and this temporary password - you'll be asked to choose your own password on first login:
 
-${inviteUrl}
-
-This invitation will expire in 7 days. If you did not expect this invitation, you can safely ignore this email.
+${temporaryPassword}
+${loginLine}
+This temporary password expires in ${expiresInDays} days. If you did not expect this invitation, you can safely ignore this email.
 
 ---
 This email was sent by Rockware.
@@ -92,24 +102,17 @@ This email was sent by Rockware.
 }
 
 export function createResetEmailHtml(params: ResetEmailParams): string {
-  const { resetToken } = params;
-  const resetUrl = `${getAppBaseUrl()}/reset-password?token=${resetToken}`;
+  const { resetCode, expiresInMinutes } = params;
 
   return baseTemplate(`
     <h1 style="color: #1a1a1a; font-size: 24px; margin-bottom: 20px;">Reset Your Password</h1>
     <p>We received a request to reset your Rockware password.</p>
-    <p>Click the button below to choose a new password:</p>
-    <p style="margin: 30px 0;">
-      <a href="${resetUrl}" style="display: inline-block; background-color: #0066cc; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 500;">
-        Reset Password
-      </a>
+    <p>Enter this code in the app to choose a new password:</p>
+    <p style="margin: 30px 0; text-align: center;">
+      <span style="display: inline-block; font-family: 'SF Mono', 'Courier New', monospace; font-size: 32px; font-weight: 600; letter-spacing: 8px; color: #1a1a1a; background-color: #f4f4f5; border-radius: 8px; padding: 16px 24px 16px 32px;">${resetCode}</span>
     </p>
     <p style="font-size: 14px; color: #666;">
-      Or copy and paste this link into your browser:<br>
-      <a href="${resetUrl}" style="color: #0066cc; word-break: break-all;">${resetUrl}</a>
-    </p>
-    <p style="font-size: 14px; color: #666;">
-      This link will expire in 1 hour. If you did not request a password reset, you can safely ignore this email.
+      This code will expire in ${expiresInMinutes} minutes. If you did not request a password reset, you can safely ignore this email.
     </p>
   `);
 }
@@ -129,19 +132,18 @@ export function createAlertEmailText(params: AlertEmailParams): string {
 }
 
 export function createResetEmailText(params: ResetEmailParams): string {
-  const { resetToken } = params;
-  const resetUrl = `${getAppBaseUrl()}/reset-password?token=${resetToken}`;
+  const { resetCode, expiresInMinutes } = params;
 
   return `
 Reset Your Password
 
 We received a request to reset your Rockware password.
 
-Click the link below to choose a new password:
+Enter this code in the app to choose a new password:
 
-${resetUrl}
+${resetCode}
 
-This link will expire in 1 hour. If you did not request a password reset, you can safely ignore this email.
+This code will expire in ${expiresInMinutes} minutes. If you did not request a password reset, you can safely ignore this email.
 
 ---
 This email was sent by Rockware.

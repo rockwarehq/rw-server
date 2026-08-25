@@ -27,19 +27,22 @@ export {
 
 export {
   createInvite,
-  verifyInviteToken,
-  completeInvite,
+  revokeInvite,
   type CreateInviteInput,
   type InviteResult,
-  type CompleteInviteInput,
+  type RevokeInviteError,
   type InviteContext,
 } from "./invite.js";
 
 export {
   initiateReset,
-  verifyResetToken,
+  verifyResetCode,
   resetPassword,
   changePassword,
+  adminSetPassword,
   type ResetRequestResult,
   type ResetContext,
+  type AdminSetPasswordInput,
+  type AdminSetPasswordError,
+  type AdminSetPasswordResult,
 } from "./password.js";

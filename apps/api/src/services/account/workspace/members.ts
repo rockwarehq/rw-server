@@ -8,6 +8,7 @@ import {
   type Permission,
 } from "@rw/auth/iam/index";
 import { findSystemRole } from "@rw/auth/iam/roles";
+import { logEvent } from "@rw/services/audit/index";
 
 const USER_ROLE_ASSIGNMENT_PERMISSIONS: readonly Permission[] = ["user:write", "user:admin"];
 
@@ -262,12 +263,82 @@ export async function addMember(workspaceId: string, userId: string, roleId: str
   });
 }
 
-export async function removeMember(workspaceId: string, userId: string) {
-  await prisma.$transaction(async (tx) => {
-    await tx.workspaceMembership.delete({
-      where: { userId_workspaceId: { userId, workspaceId } },
-    });
+export type RemoveMemberError = "MEMBER_NOT_FOUND" | "LAST_OWNER";
+
+export async function removeMember(
+  workspaceId: string,
+  userId: string,
+  opts?: { actorId?: string; ipAddress?: string; userAgent?: string },
+): Promise<{ success: true } | { success: false; error: RemoveMemberError }> {
+  const membership = await prisma.workspaceMembership.findUnique({
+    where: { userId_workspaceId: { userId, workspaceId } },
+    select: {
+      id: true,
+      user: { select: { id: true, email: true, status: true } },
+      roleAssignments: {
+        where: { siteId: null },
+        select: { role: { select: { isSystem: true, scope: true, permissions: true } } },
+      },
+    },
   });
+
+  if (!membership) {
+    return { success: false, error: "MEMBER_NOT_FOUND" };
+  }
+
+  // Removing the last owner would strand the workspace (same guard as
+  // updateRole).
+  const targetIsOwner = membership.roleAssignments.some((assignment) => isOwnerRole(assignment.role));
+  if (targetIsOwner) {
+    const remainingOwner = await prisma.workspaceMembership.findFirst({
+      where: {
+        workspaceId,
+        userId: { not: userId },
+        user: { status: "ACTIVE", systemRole: null },
+        roleAssignments: {
+          some: {
+            siteId: null,
+            role: {
+              isSystem: true,
+              scope: "WORKSPACE",
+              permissions: { has: OWNER_PERMISSION },
+            },
+          },
+        },
+      },
+      select: { id: true },
+    });
+    if (!remainingOwner) {
+      return { success: false, error: "LAST_OWNER" };
+    }
+  }
+
+  // A pending invitee whose only membership this is has never had an account
+  // outside the invite - removing them here is revoking the invite, so delete
+  // the user entirely and free the email for re-invites.
+  if (membership.user.status === "PENDING") {
+    const otherMemberships = await prisma.workspaceMembership.count({
+      where: { userId, workspaceId: { not: workspaceId } },
+    });
+    if (otherMemberships === 0) {
+      await prisma.user.delete({ where: { id: userId } });
+      await logEvent({
+        action: "INVITE_REVOKED",
+        userId,
+        actorId: opts?.actorId,
+        workspaceId,
+        ipAddress: opts?.ipAddress,
+        userAgent: opts?.userAgent,
+        metadata: { email: membership.user.email, via: "removeMember" },
+      });
+      return { success: true };
+    }
+  }
+
+  await prisma.workspaceMembership.delete({
+    where: { userId_workspaceId: { userId, workspaceId } },
+  });
+  return { success: true };
 }
 
 /**
@@ -422,6 +493,10 @@ export async function listMembers(workspaceId: string) {
           lastName: true,
           status: true,
           lastLoginAt: true,
+          invitedBy: true,
+          invitedAt: true,
+          inviteTokenExpiry: true,
+          mustChangePassword: true,
         },
       },
       roleAssignments: {
@@ -443,10 +518,14 @@ export async function listMembers(workspaceId: string) {
     orderBy: { joinedAt: "asc" },
   });
 
-  return members.map((m) => ({
-    ...m,
-    roles: m.roleAssignments.map((assignment) => assignment.role),
-  }));
+  return members.map((m) => {
+    const { inviteTokenExpiry, ...userRest } = m.user;
+    return {
+      ...m,
+      user: { ...userRest, inviteExpiry: inviteTokenExpiry },
+      roles: m.roleAssignments.map((assignment) => assignment.role),
+    };
+  });
 }
 
 export async function getUserWorkspaces(userId: string): Promise<WorkspaceMembership[]> {
