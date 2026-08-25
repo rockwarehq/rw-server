@@ -96,7 +96,7 @@ export async function list(filter: ListUsersFilter = {}) {
 export async function getMe(userId: string, workspaceId?: string, siteId?: string) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, email: true, status: true, systemRole: true },
+    select: { id: true, email: true, status: true, systemRole: true, mustChangePassword: true },
   });
   if (!user) return null;
 
@@ -114,7 +114,7 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
       ...(site ? { siteId: site.id } : {}),
     });
     return {
-      user: { id: user.id, email: user.email, status: user.status },
+      user: { id: user.id, email: user.email, status: user.status, mustChangePassword: user.mustChangePassword },
       employee: null,
       workspace,
       site,

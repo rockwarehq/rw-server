@@ -1,4 +1,4 @@
-import { getDefaultFromAddress } from "@rw/runtime/email";
+import { getAppBaseUrl, getDefaultFromAddress } from "@rw/runtime/email";
 import { getEmailClient, isEmailEnabled } from "@rw/runtime/email";
 import {
   createAlertEmailHtml,
@@ -11,14 +11,30 @@ import {
 
 interface SendInviteParams {
   to: string;
-  inviteToken: string;
+  temporaryPassword: string;
+  /** Validated http(s) origin the email should link to, if known. */
+  appUrl?: string;
   inviterName?: string;
   workspaceName?: string;
+  expiresInDays: number;
+}
+
+/** Return the origin of a well-formed http(s) URL, else undefined. */
+export function validHttpOrigin(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    return url.origin;
+  } catch {
+    return undefined;
+  }
 }
 
 interface SendResetParams {
   to: string;
-  resetToken: string;
+  resetCode: string;
+  expiresInMinutes: number;
 }
 
 interface SendAlertParams {
@@ -34,10 +50,14 @@ interface SendResult {
 }
 
 export async function sendInviteEmail(params: SendInviteParams): Promise<SendResult> {
-  const { to, inviteToken, inviterName, workspaceName } = params;
+  const { to, temporaryPassword, inviterName, workspaceName, expiresInDays } = params;
+  // Request-derived origin wins; fall back to the deployment's base URL.
+  const appUrl = params.appUrl ?? validHttpOrigin(getAppBaseUrl());
 
   if (!isEmailEnabled()) {
-    console.log(`[EMAIL DISABLED] Would send invite to ${to} with token: ${inviteToken}`);
+    // Never log the temporary password - it is a long-lived credential and
+    // the inviting admin already receives it in the API response.
+    console.log(`[EMAIL DISABLED] Would send invite to ${to} (temporary password withheld from logs)`);
     return { success: true, messageId: "disabled" };
   }
 
@@ -51,8 +71,22 @@ export async function sendInviteEmail(params: SendInviteParams): Promise<SendRes
       from: getDefaultFromAddress(),
       to,
       subject: inviterName ? `${inviterName} invited you to Rockware` : "You're invited to Rockware",
-      html: createInviteEmailHtml({ recipientEmail: to, inviteToken, inviterName, workspaceName }),
-      text: createInviteEmailText({ recipientEmail: to, inviteToken, inviterName, workspaceName }),
+      html: createInviteEmailHtml({
+        recipientEmail: to,
+        temporaryPassword,
+        appUrl,
+        inviterName,
+        workspaceName,
+        expiresInDays,
+      }),
+      text: createInviteEmailText({
+        recipientEmail: to,
+        temporaryPassword,
+        appUrl,
+        inviterName,
+        workspaceName,
+        expiresInDays,
+      }),
     });
 
     if (error) {
@@ -113,10 +147,10 @@ export async function sendAlertEmail(params: SendAlertParams): Promise<SendResul
 }
 
 export async function sendPasswordResetEmail(params: SendResetParams): Promise<SendResult> {
-  const { to, resetToken } = params;
+  const { to, resetCode, expiresInMinutes } = params;
 
   if (!isEmailEnabled()) {
-    console.log(`[EMAIL DISABLED] Would send password reset to ${to} with token: ${resetToken}`);
+    console.log(`[EMAIL DISABLED] Would send password reset to ${to} with code: ${resetCode}`);
     return { success: true, messageId: "disabled" };
   }
 
@@ -130,8 +164,16 @@ export async function sendPasswordResetEmail(params: SendResetParams): Promise<S
       from: getDefaultFromAddress(),
       to,
       subject: "Reset your Rockware password",
-      html: createResetEmailHtml({ recipientEmail: to, resetToken }),
-      text: createResetEmailText({ recipientEmail: to, resetToken }),
+      html: createResetEmailHtml({
+        recipientEmail: to,
+        resetCode,
+        expiresInMinutes,
+      }),
+      text: createResetEmailText({
+        recipientEmail: to,
+        resetCode,
+        expiresInMinutes,
+      }),
     });
 
     if (error) {

@@ -7,26 +7,31 @@ enum UserStatus {
 model User {
   id           String     @id @default(uuid()) @db.Uuid
   email        String     @unique
-  passwordHash String? // Null until invite completed
+  passwordHash String? // Null until invited/registered
   firstName    String? // Depricated - use employee profile
   lastName     String? // Depricated - use employee profile
   status       UserStatus @default(PENDING)
 
-  // Invite flow - tokens stored as SHA256 hashes
-  inviteTokenHash   String?   @unique
+  // Invite flow - invitees receive a temporary password (bcrypt in
+  // passwordHash) and must change it at first login. inviteTokenExpiry
+  // bounds how long an unaccepted invite can still log in.
   inviteTokenExpiry DateTime? @db.Timestamptz(3)
-  inviteAttempts    Int       @default(0) // Brute-force protection
   invitedBy         String?   @db.Uuid
   invitedAt         DateTime? @db.Timestamptz(3)
 
-  // Password reset - tokens stored as SHA256 hashes
-  resetTokenHash   String?   @unique
+  // Password reset - short emailed codes stored as SHA256 hashes.
+  // Codes are looked up by email, so the hash needs no unique index.
+  resetTokenHash   String?
   resetTokenExpiry DateTime? @db.Timestamptz(3)
   resetAttempts    Int       @default(0) // Brute-force protection
 
   // Login lockout
   failedLoginAttempts Int       @default(0)
   lockedUntil         DateTime? @db.Timestamptz(3)
+
+  // Set when an admin issues a temporary password. While true, the API
+  // blocks everything except password change and session endpoints.
+  mustChangePassword Boolean @default(false)
 
   // Internal Rockware staff marker. When set, permissions resolve from code
   // (SYSTEM_ROLE_PERMISSIONS) and the user must not hold WorkspaceMembership

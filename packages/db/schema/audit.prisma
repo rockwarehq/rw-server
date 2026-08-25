@@ -5,6 +5,7 @@ enum AuditAction {
   INVITE_COMPLETED
   INVITE_FAILED
   INVITE_EXPIRED
+  INVITE_REVOKED
 
   // Password reset
   PASSWORD_RESET_REQUESTED
@@ -22,6 +23,7 @@ enum AuditAction {
 
   // Account changes
   PASSWORD_CHANGED
+  PASSWORD_ADMIN_RESET
   USER_DISABLED
   USER_ENABLED
 

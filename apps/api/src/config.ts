@@ -133,8 +133,9 @@ export const emailConfig = {
 
 export const securityConfig = {
   // Token expiry
-  inviteTokenExpiryMs: 7 * 24 * 60 * 60 * 1000, // 7 days
-  resetTokenExpiryMs: 60 * 60 * 1000, // 1 hour
+  inviteExpiryMs: 7 * 24 * 60 * 60 * 1000, // 7 days - window in which an invited user can log in with the temporary password
+  resetCodeExpiryMs: 15 * 60 * 1000, // 15 minutes — short-lived typed code
+  resetCodeLength: 6, // Digits in the emailed reset code
 
   // Brute-force protection
   maxTokenAttempts: 5, // Invalidate token after this many failed attempts

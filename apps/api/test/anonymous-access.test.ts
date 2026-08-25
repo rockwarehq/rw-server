@@ -28,10 +28,9 @@ const PUBLIC_REST_ROUTES = new Set(
     "POST /auth/display/login",
     "POST /auth/display/refresh",
     "POST /auth/display/logout",
-    // invite/reset token flows — user cannot authenticate yet
-    "POST /users/invite/verify",
-    "POST /users/invite/complete",
+    // reset code flows — user cannot authenticate yet
     "POST /users/password/forgot",
+    "POST /users/password/verify",
     "POST /users/password/reset",
     // gateway bootstrap: exchanges serial + claim code for a token
     "POST /edge/claim",

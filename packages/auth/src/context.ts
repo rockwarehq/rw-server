@@ -42,6 +42,9 @@ export interface IAMContext extends BaseIAMContext {
     firstName: string | null;
     lastName: string | null;
     status: string;
+    // When true, the API blocks everything except password change and
+    // session endpoints (enforced by the auth plugin).
+    mustChangePassword?: boolean;
   };
   display?: {
     id: string;

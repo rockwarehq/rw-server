@@ -53,9 +53,8 @@ export const PUBLIC_REST_ROUTES: ReadonlySet<string> = new Set(
     "POST /auth/display/login",
     "POST /auth/display/refresh",
     "POST /auth/display/logout",
-    "POST /users/invite/verify",
-    "POST /users/invite/complete",
     "POST /users/password/forgot",
+    "POST /users/password/verify",
     "POST /users/password/reset",
     "POST /edge/claim",
     "POST /edge/connect",
@@ -85,6 +84,7 @@ export const SELF_SERVICE_REST_ROUTES: ReadonlySet<string> = new Set(
     // in-service permission checks (invite.ts / members.ts enforce
     // user:write + owner escalation internally)
     "POST /users/invite",
+    "DELETE /users/invite/:id",
     "PUT /workspaces/:id/members/:userId",
   ].map((s) => s.toUpperCase()),
 );
