@@ -128,10 +128,12 @@ async function getActiveJobLogsForRange(stationId: string, rangeStart: Date, ran
       startTime: Date;
       endTime: Date | null;
       standardCycle: number | null;
+      standardQuantity: number | null;
     }>
   >`
     SELECT id, "stationId", "jobId", "jobVersionId", "startTime", "endTime",
-           "standardCycle"::float8 AS "standardCycle"
+           "standardCycle"::float8 AS "standardCycle",
+           "standardQuantity"::float8 AS "standardQuantity"
     FROM "StationJobLog"
     WHERE "stationId" = ${stationId}
       AND "startTime" < ${rangeEnd}
@@ -148,10 +150,12 @@ async function getActiveJobLogsForRange(stationId: string, rangeStart: Date, ran
     itemsPerCycleMap.set(jobId, ipc);
   }
 
+  // Expected qty/cycle = standardQuantity (null = discrete = 1) × job-product quantities.
   return logs.map((log) => ({
     ...log,
     standardCycle: log.standardCycle != null ? Number(log.standardCycle) : null,
-    itemsPerCycle: itemsPerCycleMap.get(log.jobId) ?? 1,
+    itemsPerCycle:
+      (log.standardQuantity != null ? Number(log.standardQuantity) : 1) * (itemsPerCycleMap.get(log.jobId) ?? 1),
   }));
 }
 
@@ -396,6 +400,18 @@ async function recomputeJobBucketsForRange(
   }
 }
 
+// Open StationJobLog probe + effective-standard fallback, shared by both
+// bucket paths. The COALESCE is gated on standardQuantity so a stale discrete
+// snapshot (standard removed after assignment) is never resurrected — only
+// rate-configured runs, which have no JobVersion.standardCycle, use the log.
+const OPEN_JOB_LOG_LATERAL = Prisma.sql`
+      LEFT JOIN LATERAL (
+        SELECT "standardCycle", "standardQuantity" FROM "StationJobLog"
+        WHERE "stationId" = s.id AND "endTime" IS NULL
+        ORDER BY "startTime" DESC LIMIT 1
+      ) sjl ON true`;
+const EFFECTIVE_STANDARD_CYCLE = Prisma.sql`COALESCE(jb."standardCycle", CASE WHEN sjl."standardQuantity" IS NOT NULL THEN sjl."standardCycle" END)::float8`;
+
 // ── Cycle increment data ─────────────────────────────────────────
 
 /** Data needed to atomically increment count KPIs for a single cycle. */
@@ -501,16 +517,19 @@ export async function processDirtyBuckets(
         currentJobId: string | null;
         currentJobName: string | null;
         standardCycle: number | null;
+        standardQuantity: number | null;
       }>
     >`
       SELECT s.id AS "stationId",
              s."workcenterId",
              s."currentJobId",
              jb.name AS "currentJobName",
-             jb."standardCycle"::float8 AS "standardCycle"
+             ${EFFECTIVE_STANDARD_CYCLE} AS "standardCycle",
+             sjl."standardQuantity"::float8 AS "standardQuantity"
       FROM "Station" s
       LEFT JOIN "Job" j ON j.id = s."currentJobId"
       LEFT JOIN "JobVersion" jb ON jb.id = j."currentVersionId"
+      ${OPEN_JOB_LOG_LATERAL}
       WHERE s.id IN (${Prisma.join(stationIdSqlArray)})
     `;
     const stationInfoMap = new Map(stationInfoRows.map((r) => [r.stationId, r]));
@@ -581,10 +600,10 @@ export async function processDirtyBuckets(
         const currentJobName = stationInfo?.currentJobName ?? null;
         const standardCycleSeconds = stationInfo?.standardCycle ?? null;
 
-        // Use batch-fetched items-per-cycle
+        // Expected qty/cycle = standardQuantity (null = discrete = 1) × job-product quantities.
         let itemsPerCycle = 1;
         if (currentJobId) {
-          itemsPerCycle = ipcMap.get(currentJobId) ?? 1;
+          itemsPerCycle = (ipcMap.get(currentJobId) ?? 1) * (stationInfo?.standardQuantity ?? 1);
         }
 
         const durations = await computeDurationsForBucket(
@@ -1033,10 +1052,11 @@ export async function updateTimeBased(
   >`
     SELECT s."currentJobId",
            jb.name AS "currentJobName",
-           jb."standardCycle"::float8 AS "jobStandardCycle"
+           ${EFFECTIVE_STANDARD_CYCLE} AS "jobStandardCycle"
     FROM "Station" s
     LEFT JOIN "Job" j ON j.id = s."currentJobId"
     LEFT JOIN "JobVersion" jb ON jb.id = j."currentVersionId"
+    ${OPEN_JOB_LOG_LATERAL}
     WHERE s.id = ${stationId}
   `;
   const currentJobId = stationJobRows3[0]?.currentJobId ?? null;

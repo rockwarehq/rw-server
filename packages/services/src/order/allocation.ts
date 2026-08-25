@@ -11,6 +11,9 @@ type TransactionClient = Prisma.TransactionClient;
  * Allocate a newly created InventoryItem to the highest-priority open order
  * for the given product. Called inside the cycle-completion transaction.
  *
+ * `quantity` (default 1) spills across orders when autoComplete is on,
+ * matching the old one-call-per-unit flow.
+ *
  * Side effects:
  * - Creates an OrderInventoryAllocation record
  * - Increments OrderLineItem.completedQuantity
@@ -23,7 +26,10 @@ export async function allocateInventory(
   siteId: string,
   productId: string,
   inventoryItemId: string,
+  quantity = 1,
 ) {
+  const allocQuantity = quantity;
+  if (!Number.isFinite(allocQuantity) || allocQuantity <= 0) return;
   const txRaw = tx as unknown as { $queryRaw: typeof prisma.$queryRaw; $executeRaw: typeof prisma.$executeRaw };
 
   // Bring any stale line-item statuses into agreement with their quantities.
@@ -74,7 +80,10 @@ export async function allocateInventory(
     ),
     eligible AS (
       SELECT o.id AS "orderId", o.status AS "orderStatus", o.sequence AS "orderSequence",
-             oli.id AS "lineItemId", oli."completedQuantity", oli."targetQuantity", oli."scrapQuantity"
+             oli.id AS "lineItemId",
+             oli."completedQuantity"::float8 AS "completedQuantity",
+             oli."targetQuantity"::float8 AS "targetQuantity",
+             oli."scrapQuantity"::float8 AS "scrapQuantity"
       FROM "Order" o
       JOIN "OrderLineItem" oli ON oli."orderId" = o.id AND oli."productId" = ${productId}::uuid
       WHERE o."siteId" = ${siteId}::uuid
@@ -106,18 +115,23 @@ export async function allocateInventory(
   } = rows[0];
   if (!lineItemId) return;
 
-  const newCompleted = completedQuantity + 1;
+  // Cap at the remaining target when autoComplete; the spill recurses and re-runs eligibility.
+  const remainingToTarget = Math.max(0, targetQuantity - (completedQuantity - scrapQuantity));
+  const take = autoComplete && remainingToTarget > 0 ? Math.min(allocQuantity, remainingToTarget) : allocQuantity;
+  const spill = allocQuantity - take;
+
+  const newCompleted = completedQuantity + take;
   const newStatus = newCompleted - scrapQuantity >= targetQuantity ? "COMPLETED" : "IN_PROGRESS";
 
   // Create allocation + increment completed + transition order in parallel-safe sequential raw SQL
   await txRaw.$executeRaw`
     INSERT INTO "OrderInventoryAllocation" (id, "inventoryItemId", "orderLineItemId", quantity, "createdAt")
-    VALUES (gen_random_uuid(), ${inventoryItemId}::uuid, ${lineItemId}::uuid, 1, NOW())
+    VALUES (gen_random_uuid(), ${inventoryItemId}::uuid, ${lineItemId}::uuid, ${take}, NOW())
   `;
 
   await txRaw.$executeRaw`
     UPDATE "OrderLineItem"
-    SET "completedQuantity" = "completedQuantity" + 1,
+    SET "completedQuantity" = "completedQuantity" + ${take},
         status = ${newStatus}::"LineItemStatus",
         "updatedAt" = NOW()
     WHERE id = ${lineItemId}::uuid
@@ -155,6 +169,11 @@ export async function allocateInventory(
         UPDATE "Order" SET status = 'COMPLETED', "updatedAt" = NOW() WHERE id = ${orderId}::uuid
       `;
     }
+  }
+
+  // Terminates: each level allocates ≥ 1 or returns at the guards above.
+  if (spill > 0) {
+    await allocateInventory(tx, siteId, productId, inventoryItemId, spill);
   }
 }
 
@@ -200,8 +219,9 @@ export async function deductScrap(siteId: string, productId: string, quantity: n
     if (!order || order.lineItems.length === 0) return;
 
     const lineItem = order.lineItems[0];
-    const newScrap = lineItem.scrapQuantity + quantity;
-    const goodCount = lineItem.completedQuantity - newScrap;
+    const completed = Number(lineItem.completedQuantity);
+    const newScrap = Number(lineItem.scrapQuantity) + quantity;
+    const goodCount = completed - newScrap;
 
     // Create negative allocation for audit trail
     await tx.orderInventoryAllocation.create({
@@ -214,8 +234,8 @@ export async function deductScrap(siteId: string, productId: string, quantity: n
 
     // Update line item quantities — completedQuantity (total produced) stays unchanged
     let newStatus: "PENDING" | "IN_PROGRESS" | "COMPLETED" = "IN_PROGRESS";
-    if (lineItem.completedQuantity === 0) newStatus = "PENDING";
-    else if (goodCount >= lineItem.targetQuantity) newStatus = "COMPLETED";
+    if (completed === 0) newStatus = "PENDING";
+    else if (goodCount >= Number(lineItem.targetQuantity)) newStatus = "COMPLETED";
 
     await tx.orderLineItem.update({
       where: { id: lineItem.id },
@@ -232,7 +252,9 @@ export async function deductScrap(siteId: string, productId: string, quantity: n
         select: { completedQuantity: true, targetQuantity: true, scrapQuantity: true },
       });
 
-      const stillFulfilled = allLineItems.every((li) => li.completedQuantity - li.scrapQuantity >= li.targetQuantity);
+      const stillFulfilled = allLineItems.every(
+        (li) => Number(li.completedQuantity) - Number(li.scrapQuantity) >= Number(li.targetQuantity),
+      );
 
       if (!stillFulfilled) {
         await tx.order.update({

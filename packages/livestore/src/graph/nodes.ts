@@ -4,6 +4,7 @@ import type { Prisma } from "@rw/db";
 import { normalizeGraphTypeToken, parseGraphTypeRef } from "../catalog/graph-types.js";
 
 import { SYSTEM_ENTITY_KEYS, systemEntityCatalogEntryByKey } from "@rw/services/entity/registry";
+import { resolveEffectiveStandards } from "@rw/services/facility/station/effective-standards";
 import { publishGraphDefinitionEvent } from "./definition-events.js";
 import { activeHookIdsForProperties } from "./hooks.js";
 import * as nodeTypes from "./node-types.js";
@@ -344,21 +345,40 @@ async function resolveSystemEntityRecord(
       include: { currentVersion: true },
     });
     if (!station) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
-    // Items per cycle mirrors inventory.createFromCycle: sum of active
-    // JobProduct quantities on the current job — the count of InventoryItems
-    // each completed cycle actually creates.
+    // Items per cycle mirrors inventory.createFromCycle: standard quantity per
+    // cycle (snapshotted on the open StationJobLog; 1 for discrete) × the sum
+    // of active JobProduct quantities — the item quantity each cycle creates.
     let itemsPerCycle: number | null = null;
+    // Effective standards for the running job (job override beats station
+    // default, rate beats typed quantity) — the "current actuals", in the
+    // engine's canonical form: seconds and station units.
+    let currentSecondsPerUnit: number | null = null;
+    let currentStandardQuantity: number | null = null;
+    let currentStandardCycleSeconds: number | null = null;
     if (station.currentJobId) {
-      const jobProducts = await prisma.jobProduct.findMany({
-        where: {
-          jobId: station.currentJobId,
-          deletedAt: null,
-          currentVersion: { isActive: true },
-          product: { currentVersionId: { not: null } },
-        },
-        select: { currentVersion: { select: { quantity: true } } },
-      });
-      itemsPerCycle = jobProducts.reduce((sum, jp) => sum + (jp.currentVersion?.quantity ?? 1), 0);
+      const [jobProducts, openJobLog, effective] = await Promise.all([
+        prisma.jobProduct.findMany({
+          where: {
+            jobId: station.currentJobId,
+            deletedAt: null,
+            currentVersion: { isActive: true },
+            product: { currentVersionId: { not: null } },
+          },
+          select: { currentVersion: { select: { quantity: true } } },
+        }),
+        prisma.stationJobLog.findFirst({
+          where: { stationId: station.id, endTime: null },
+          orderBy: { startTime: "desc" },
+          select: { standardQuantity: true },
+        }),
+        resolveEffectiveStandards(prisma, station.id, station.currentJobId),
+      ]);
+      const productSum = jobProducts.reduce((sum, jp) => sum + (jp.currentVersion?.quantity ?? 1), 0);
+      const standardQuantity = openJobLog?.standardQuantity != null ? Number(openJobLog.standardQuantity) : 1;
+      itemsPerCycle = standardQuantity * productSum;
+      currentSecondsPerUnit = effective.secondsPerUnit;
+      currentStandardQuantity = effective.standardQuantity;
+      currentStandardCycleSeconds = effective.standardCycleSeconds;
     }
     // Live status is derived from the open state-log row, not a Station column.
     const openState = await prisma.stationStateLog.findFirst({
@@ -390,6 +410,9 @@ async function resolveSystemEntityRecord(
         workcenter: station.workcenterId,
         currentJob: station.currentJobId,
         itemsPerCycle,
+        currentSecondsPerUnit,
+        currentStandardQuantity,
+        currentStandardCycleSeconds,
         status: openState ? (openState.status ?? openState.state) : null,
         statusReasonId: openState?.statusReasonId ?? null,
         statusReason: openState?.statusReason?.name ?? null,
@@ -400,6 +423,8 @@ async function resolveSystemEntityRecord(
           ? {
               ...station.currentVersion,
               standardCycle: station.currentVersion.standardCycle?.toNumber() ?? null,
+              standardQuantity: station.currentVersion.standardQuantity?.toNumber() ?? null,
+              standardRate: station.currentVersion.standardRate?.toNumber() ?? null,
               downtimeDetect: station.currentVersion.downtimeDetect?.toNumber() ?? null,
               slowDetect: station.currentVersion.slowDetect?.toNumber() ?? null,
             }
@@ -427,7 +452,12 @@ async function resolveSystemEntityRecord(
         products: job.jobProducts.map((row) => row.productId),
         tools: job.tools.map((row) => row.toolId),
         currentVersion: job.currentVersion
-          ? { ...job.currentVersion, standardCycle: job.currentVersion.standardCycle?.toNumber() ?? null }
+          ? {
+              ...job.currentVersion,
+              standardCycle: job.currentVersion.standardCycle?.toNumber() ?? null,
+              standardQuantity: job.currentVersion.standardQuantity?.toNumber() ?? null,
+              standardRate: job.currentVersion.standardRate?.toNumber() ?? null,
+            }
           : null,
       },
     };

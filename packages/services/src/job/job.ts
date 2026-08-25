@@ -14,7 +14,11 @@ export interface CreateJobInput {
   labelIds?: string[];
   name: string;
   description?: string;
-  standardCycle?: number;
+  standardCycle?: number | null;
+  standardRate?: number | null;
+  standardRateUnit?: string;
+  standardRatePeriod?: "SECOND" | "MINUTE" | "HOUR";
+  standardQuantity?: number | null;
   productsPerCycle?: number;
   attrs?: Record<string, unknown>;
 }
@@ -22,7 +26,11 @@ export interface CreateJobInput {
 export interface UpdateJobInput {
   name?: string;
   description?: string;
-  standardCycle?: number;
+  standardCycle?: number | null;
+  standardRate?: number | null;
+  standardRateUnit?: string;
+  standardRatePeriod?: "SECOND" | "MINUTE" | "HOUR";
+  standardQuantity?: number | null;
   productsPerCycle?: number;
   attrs?: Record<string, unknown>;
   /** Replaces the record's whole label list with this one (same-site labels only). */
@@ -79,7 +87,19 @@ export interface UpdateItemInput {
  * Create a new job with initial version (version 1)
  */
 export async function create(input: CreateJobInput) {
-  const { siteId, labelIds, name, description, standardCycle, productsPerCycle, attrs } = input;
+  const {
+    siteId,
+    labelIds,
+    name,
+    description,
+    standardCycle,
+    standardRate,
+    standardRateUnit,
+    standardRatePeriod,
+    standardQuantity,
+    productsPerCycle,
+    attrs,
+  } = input;
 
   // Verify site exists
   const site = await prisma.site.findUnique({
@@ -116,6 +136,10 @@ export async function create(input: CreateJobInput) {
         name,
         description: description ?? null,
         standardCycle: standardCycle ?? null,
+        standardRate: standardRate ?? null,
+        standardRateUnit: standardRateUnit ?? "",
+        standardRatePeriod: standardRatePeriod ?? "MINUTE",
+        standardQuantity: standardQuantity ?? null,
         productsPerCycle: productsPerCycle ?? 1,
         attrs: attrs ?? {},
       },
@@ -311,7 +335,18 @@ export async function getById(id: string) {
  * Update job (creates new version version)
  */
 export async function update(id: string, input: UpdateJobInput) {
-  const { name, description, standardCycle, productsPerCycle, attrs, labelIds } = input;
+  const {
+    name,
+    description,
+    standardCycle,
+    standardRate,
+    standardRateUnit,
+    standardRatePeriod,
+    standardQuantity,
+    productsPerCycle,
+    attrs,
+    labelIds,
+  } = input;
 
   // Get current job with version
   const current = await prisma.job.findUnique({
@@ -360,6 +395,10 @@ export async function update(id: string, input: UpdateJobInput) {
         name: name ?? currentVersion.name,
         description: description !== undefined ? description : currentVersion.description,
         standardCycle: standardCycle !== undefined ? standardCycle : currentVersion.standardCycle,
+        standardRate: standardRate !== undefined ? standardRate : currentVersion.standardRate,
+        standardRateUnit: standardRateUnit !== undefined ? standardRateUnit : currentVersion.standardRateUnit,
+        standardRatePeriod: standardRatePeriod !== undefined ? standardRatePeriod : currentVersion.standardRatePeriod,
+        standardQuantity: standardQuantity !== undefined ? standardQuantity : currentVersion.standardQuantity,
         productsPerCycle: productsPerCycle !== undefined ? productsPerCycle : currentVersion.productsPerCycle,
         attrs: attrs !== undefined ? attrs : (currentVersion.attrs as Record<string, unknown>),
       },
@@ -386,7 +425,16 @@ export async function update(id: string, input: UpdateJobInput) {
     entityId: job.id,
     siteId: job.siteId,
     workspaceId: current.site.workspaceId,
-    changedFields: Object.entries({ name, description, standardCycle, productsPerCycle })
+    changedFields: Object.entries({
+      name,
+      description,
+      standardCycle,
+      standardRate,
+      standardRateUnit,
+      standardRatePeriod,
+      standardQuantity,
+      productsPerCycle,
+    })
       .filter(([, value]) => value !== undefined)
       .map(([key]) => key),
   });
@@ -394,20 +442,11 @@ export async function update(id: string, input: UpdateJobInput) {
   // Mid-run edits: stations running this job carry its name/standard cycle in
   // the shift-bucket mirror — refresh them so livestore doesn't wait for the
   // next job change. (itemsPerCycle is driven by JobProduct edits, not here.)
-  if (name !== undefined || standardCycle !== undefined) {
-    refreshStationsRunningJob(
-      id,
-      {
-        name,
-        standardCycleSeconds:
-          standardCycle !== undefined
-            ? job.currentVersion?.standardCycle != null
-              ? Number(job.currentVersion.standardCycle)
-              : null
-            : undefined,
-      },
-      new Date(),
-    ).catch((err) => {
+  const standardsChanged = [standardCycle, standardRate, standardRateUnit, standardRatePeriod, standardQuantity].some(
+    (v) => v !== undefined,
+  );
+  if (name !== undefined || standardsChanged) {
+    refreshStationsRunningJob(id, { name, standardsChanged }, new Date()).catch((err) => {
       console.error(`[job.update] refreshStationsRunningJob failed for job ${id}:`, err);
     });
   }

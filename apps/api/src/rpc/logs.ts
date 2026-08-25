@@ -1472,7 +1472,7 @@ export const logonLogSearch = authRequired.input(logonLogSearchInputSchema).hand
 // ============================================================================
 // Part Log search (aggregated, paginated)
 //
-// Per Date × Shift × Machine × Part: totalProduction (from InventoryItem count),
+// Per Date × Shift × Machine × Part: totalProduction (sum of InventoryItem.quantity),
 // totalDefect (sum of ItemDispositionLog.quantity), totalGood (production − defect).
 // Mirrors the aggregation conventions used by badItems in metric-bucket compute:
 // every non-deleted disposition row contributes to defect regardless of kind.
@@ -1625,6 +1625,7 @@ export const partLogSearch = authRequired.input(partLogSearchInputSchema).handle
       },
     },
     select: {
+      quantity: true,
       cycle: { select: { end: true, start: true, stationId: true } },
       productVersion: { select: { name: true, sku: true } },
     },
@@ -1658,7 +1659,8 @@ export const partLogSearch = authRequired.input(partLogSearchInputSchema).handle
       };
       aggMap.set(key, entry);
     }
-    entry.totalProduction += 1;
+    // SUM(quantity), not row count: legacy rows default to 1.
+    entry.totalProduction += Number(item.quantity);
     if (entry.partSku == null && partSku != null) entry.partSku = partSku;
   }
 

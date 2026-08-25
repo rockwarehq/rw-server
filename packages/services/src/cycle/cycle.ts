@@ -17,6 +17,13 @@ import { enqueueDetection, prepareDetection, type PreparedDetection } from "../f
 import { batchedMetricsUpdate } from "../metrics/batcher.js";
 import { incrementHourCounts } from "../metrics/cascade.js";
 import { trackReplayedCycle } from "./replay.js";
+import {
+  quantityWasSlow,
+  resolveCycleActuals,
+  resolveStandards,
+  type CycleStamp,
+  type ResolvedStandards,
+} from "./standards.js";
 
 export interface StartCycleInput {
   stationId: string;
@@ -34,16 +41,26 @@ export interface StartCycleInput {
   replayed?: boolean;
   /** Livestore hook-event id that produced this cycle. */
   sourceEventId?: string;
-  /** Optional quantity carried by the cycle event (e.g. wire length per
-   *  cycle). Stamped on every InventoryItem created for the cycle; items
-   *  default to 1 when absent. */
+  /** Measured quantity carried by the cycle event; resolved per cycle mode — see cycle/standards.ts. */
   quantity?: number;
+}
+
+type CycleItems = Array<{ id: string; productId: string; quantity: number }>;
+
+function sumItemQuantities(items: CycleItems): number {
+  return items.reduce((sum, item) => sum + item.quantity, 0);
+}
+
+async function allocateItems(tx: Prisma.TransactionClient, siteId: string, items: CycleItems): Promise<void> {
+  for (const { id, productId, quantity } of items) {
+    await allocateInventory(tx, siteId, productId, id, quantity);
+  }
 }
 
 /** Result from all strategy functions — unified so post-commit publishes can share one connection. */
 interface StrategyResult {
   cycle: { id: string; start: Date; end: Date | null };
-  items: Array<{ id: string; productId: string }>;
+  items: CycleItems;
   /** Populated only when a state-log row actually closed (period model: most cycles close nothing). */
   closedEntry: { startTime: Date; endTime: Date; state: "UP" | "DOWN" } | null;
   /** Open status after the cycle ("UP" or "SLOW"), or null when the
@@ -89,7 +106,7 @@ export async function complete(input: StartCycleInput) {
     if (existing) return { data: existing, alreadyRecorded: true as const };
   }
 
-  // ── Single CTE: validate station + job + fetch tools + items-per-cycle ──
+  // ── Single CTE: validate station + job + fetch tools + standards config ──
   const setupRows = await prisma.$queryRaw<
     Array<{
       siteId: string;
@@ -97,9 +114,19 @@ export async function complete(input: StartCycleInput) {
       currentVersionId: string | null;
       standardCycle: number | null;
       slowDetect: number | null;
+      cycleMode: string | null;
+      stationStandardQuantity: number | null;
+      stationQuantityUnit: string | null;
+      stationStandardCycle: number | null;
+      stationStandardRate: number | null;
+      stationStandardRateUnit: string | null;
+      stationStandardRatePeriod: string | null;
+      standardRate: number | null;
+      standardRateUnit: string | null;
+      standardRatePeriod: string | null;
+      jobStandardQuantity: number | null;
       jobToolIds: string[];
       toolVersionIds: string[];
-      itemsPerCycle: number;
     }>
   >`
     WITH
@@ -109,7 +136,18 @@ export async function complete(input: StartCycleInput) {
         j."siteId" AS "jobSiteId",
         j."currentVersionId",
         jb."standardCycle"::float8 AS "standardCycle",
-        sb."slowDetect"::float8 AS "slowDetect"
+        sb."slowDetect"::float8 AS "slowDetect",
+        sb."cycleMode"::text AS "cycleMode",
+        sb."standardQuantity"::float8 AS "stationStandardQuantity",
+        sb."quantityUnit" AS "stationQuantityUnit",
+        sb."standardCycle"::float8 AS "stationStandardCycle",
+        sb."standardRate"::float8 AS "stationStandardRate",
+        sb."standardRateUnit" AS "stationStandardRateUnit",
+        sb."standardRatePeriod"::text AS "stationStandardRatePeriod",
+        jb."standardRate"::float8 AS "standardRate",
+        jb."standardRateUnit" AS "standardRateUnit",
+        jb."standardRatePeriod"::text AS "standardRatePeriod",
+        jb."standardQuantity"::float8 AS "jobStandardQuantity"
       FROM "Station" s
       JOIN "Job" j ON j.id = ${jobId}
       LEFT JOIN "JobVersion" jb ON jb.id = j."currentVersionId"
@@ -121,22 +159,16 @@ export async function complete(input: StartCycleInput) {
       FROM "JobTool" jt
       JOIN "Tool" t ON t.id = jt."toolId"
       WHERE jt."jobId" = ${jobId}::uuid AND jt."deletedAt" IS NULL AND jt."isActive" = true
-    ),
-    products AS (
-      SELECT COALESCE(SUM(jpb.quantity), 1)::int AS total
-      FROM "JobProduct" jp
-      JOIN "JobProductVersion" jpb ON jpb.id = jp."currentVersionId"
-      WHERE jp."jobId" = ${jobId}
-        AND jp."deletedAt" IS NULL
-        AND jpb."isActive" = true
     )
     SELECT s.*,
            COALESCE(array_agg(DISTINCT t.id) FILTER (WHERE t.id IS NOT NULL), '{}') AS "jobToolIds",
-           COALESCE(array_agg(DISTINCT t."toolVersionId") FILTER (WHERE t."toolVersionId" IS NOT NULL), '{}') AS "toolVersionIds",
-           (SELECT total FROM products) AS "itemsPerCycle"
+           COALESCE(array_agg(DISTINCT t."toolVersionId") FILTER (WHERE t."toolVersionId" IS NOT NULL), '{}') AS "toolVersionIds"
     FROM setup s
     LEFT JOIN tools t ON true
-    GROUP BY s."siteId", s."jobSiteId", s."currentVersionId", s."standardCycle", s."slowDetect"
+    GROUP BY s."siteId", s."jobSiteId", s."currentVersionId", s."standardCycle", s."slowDetect",
+             s."cycleMode", s."stationStandardQuantity", s."stationQuantityUnit", s."stationStandardCycle",
+             s."stationStandardRate", s."stationStandardRateUnit", s."stationStandardRatePeriod",
+             s."standardRate", s."standardRateUnit", s."standardRatePeriod", s."jobStandardQuantity"
   `;
   const t1 = Date.now();
 
@@ -153,14 +185,31 @@ export async function complete(input: StartCycleInput) {
   }
 
   const siteId = setup.siteId;
-  const standardCycleSeconds = setup.standardCycle;
   const slowFraction = setup.slowDetect;
-  const itemsPerCycle = setup.itemsPerCycle ?? 1;
+
+  const std = resolveStandards({
+    cycleMode: setup.cycleMode,
+    stationStandardQuantity: setup.stationStandardQuantity,
+    stationQuantityUnit: setup.stationQuantityUnit,
+    stationStandardCycle: setup.stationStandardCycle,
+    stationStandardRate: setup.stationStandardRate,
+    stationStandardRateUnit: setup.stationStandardRateUnit,
+    stationStandardRatePeriod: setup.stationStandardRatePeriod,
+    jobStandardCycle: setup.standardCycle,
+    jobStandardRate: setup.standardRate,
+    jobStandardRateUnit: setup.standardRateUnit,
+    jobStandardRatePeriod: setup.standardRatePeriod,
+    jobStandardQuantity: setup.jobStandardQuantity,
+  });
+  const standardCycleSeconds = std.standardCycleSeconds;
+  const cycleStamp = resolveCycleActuals(std, quantity ?? null);
 
   let slowThresholdSeconds: number | undefined;
   if (standardCycleSeconds != null && standardCycleSeconds > 0 && slowFraction != null && slowFraction > 0) {
     slowThresholdSeconds = standardCycleSeconds * (1 + slowFraction);
   }
+  // Interval mode: slow is a quantity shortfall, not lateness.
+  const slowByQuantity = quantityWasSlow(std, cycleStamp.quantity, slowFraction);
 
   const versionConnects: VersionConnects = {
     jobVersionId: setup.currentVersionId,
@@ -169,12 +218,13 @@ export async function complete(input: StartCycleInput) {
   };
 
   // ── Execute strategy (single transaction handles ALL DB writes) ──
-  const idealCycleIncrement = standardCycleSeconds != null ? Math.round(standardCycleSeconds) : 0;
+  // Earned standard — for DISCRETE identical to the old standardCycle round.
+  const idealCycleIncrement = cycleStamp.standardCycle != null ? Math.round(cycleStamp.standardCycle) : 0;
 
   const result = replayed
     ? keepOpen
-      ? await completeOpenCloseReplay(stationId, siteId, timestamp, jobId, versionConnects, sourceEventId, quantity)
-      : await completeImmediateReplay(stationId, siteId, timestamp, jobId, versionConnects, sourceEventId, quantity)
+      ? await completeOpenCloseReplay(stationId, siteId, timestamp, jobId, versionConnects, sourceEventId, cycleStamp)
+      : await completeImmediateReplay(stationId, siteId, timestamp, jobId, versionConnects, sourceEventId, cycleStamp)
     : keepOpen
       ? await completeOpenClose(
           stationId,
@@ -185,7 +235,9 @@ export async function complete(input: StartCycleInput) {
           idealCycleIncrement,
           sourceEventId,
           slowThresholdSeconds,
-          quantity,
+          cycleStamp,
+          slowByQuantity,
+          std,
         )
       : await completeImmediate(
           stationId,
@@ -196,7 +248,9 @@ export async function complete(input: StartCycleInput) {
           idealCycleIncrement,
           sourceEventId,
           slowThresholdSeconds,
-          quantity,
+          cycleStamp,
+          slowByQuantity,
+          std,
         );
 
   // Null strategy result = lost the sourceEventId insert race to a concurrent
@@ -208,7 +262,7 @@ export async function complete(input: StartCycleInput) {
     return { data: existing, alreadyRecorded: true as const };
   }
 
-  const { cycle, items, closedEntry, newStatus, statusChanged, stationCtx, detectionPrepared } = result;
+  const { cycle, closedEntry, newStatus, statusChanged, stationCtx, detectionPrepared } = result;
   const t2 = Date.now();
 
   // Material-shift flush is NOT triggered per cycle. The 60s minute tick
@@ -271,10 +325,6 @@ export async function complete(input: StartCycleInput) {
     stationId,
     siteId,
     timestamp: cycleEnd,
-    itemsCount: items.length,
-    standardCycleSeconds: standardCycleSeconds ?? null,
-    itemsPerCycle,
-    cycleDurationSeconds,
     closedEntry: closedEntry ? { startTime: closedEntry.startTime, endTime: closedEntry.endTime } : undefined,
   });
 
@@ -301,8 +351,10 @@ async function completeImmediate(
   versionConnects: VersionConnects,
   idealCycleIncrement: number,
   sourceEventId: string | null,
-  slowThresholdSeconds?: number,
-  quantity?: number,
+  slowThresholdSeconds: number | undefined,
+  stamp: CycleStamp,
+  slowByQuantity: boolean,
+  std: ResolvedStandards,
 ): Promise<StrategyResult | null> {
   return prisma.$transaction(async (tx) => {
     // Per-station advisory lock as its own statement BEFORE the prev-cycle
@@ -330,12 +382,16 @@ async function completeImmediate(
         ORDER BY "end" DESC LIMIT 1
       ),
       new_cycle AS (
-        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", "siteId", "stationId", "jobVersionId", "sourceEventId", attrs, "createdAt", "updatedAt")
+        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", quantity, "quantityUnit", "standardCycle", "standardQuantity", "siteId", "stationId", "jobVersionId", "sourceEventId", attrs, "createdAt", "updatedAt")
         VALUES (
           gen_random_uuid(),
           COALESCE((SELECT "end" FROM prev), ${timestamp}),
           ${timestamp},
           'GOOD',
+          ${stamp.quantity},
+          ${stamp.quantityUnit},
+          ${stamp.standardCycle},
+          ${stamp.standardQuantity},
           ${siteId},
           ${stationId},
           ${versionConnects.jobVersionId},
@@ -394,10 +450,11 @@ async function completeImmediate(
     // (SLOW→RUNNING, DOWN→RUNNING, slow fallback) — most cycles write nothing.
     const cycleDurationSeconds = (timestamp.getTime() - cycle.start.getTime()) / 1000;
     const isSlow =
-      cycleDurationSeconds > 0 &&
-      slowThresholdSeconds != null &&
-      slowThresholdSeconds > 0 &&
-      cycleDurationSeconds > slowThresholdSeconds;
+      (cycleDurationSeconds > 0 &&
+        slowThresholdSeconds != null &&
+        slowThresholdSeconds > 0 &&
+        cycleDurationSeconds > slowThresholdSeconds) ||
+      slowByQuantity;
     const transition = await applyCycleCompleteTransition(tx, stationId, timestamp, {
       cycleWasSlow: isSlow,
       cycleStart: cycle.start,
@@ -405,20 +462,18 @@ async function completeImmediate(
       openRow,
     });
 
-    const items = await inventory.createFromCycle(tx, cycle.id, jobId, quantity);
+    const items = await inventory.createFromCycle(tx, cycle.id, jobId, stamp);
 
     // Order allocation — was previously fire-and-forget on the global prisma
     // client, now runs serially inside the tx so the whole completion is one
     // connection checkout. Failure rolls the cycle back, matching the new
     // atomicity contract.
-    for (const { id, productId } of items) {
-      await allocateInventory(tx, siteId, productId, id);
-    }
+    await allocateItems(tx, siteId, items);
 
     // Live-publish & detection-schedule data — read inside the tx so the
     // post-commit fire-and-forget block holds no DB connection.
     const stationCtx = await loadStationMetricContext(tx, stationId);
-    const detectionPrepared = await prepareDetection(tx, stationId, jobId);
+    const detectionPrepared = await prepareDetection(tx, stationId, jobId, std);
 
     // HOUR-only count increment — fast single UPDATE on one row.
     // SHIFT/DAY/duration/parent/job rollups are deferred to 5s combined tick.
@@ -429,7 +484,7 @@ async function completeImmediate(
       siteId,
       timestamp,
       1,
-      items.length,
+      Math.round(sumItemQuantities(items)),
       idealCycleIncrement,
       totalCycleIncrement,
     );
@@ -456,8 +511,10 @@ async function completeOpenClose(
   versionConnects: VersionConnects,
   idealCycleIncrement: number,
   sourceEventId: string | null,
-  slowThresholdSeconds?: number,
-  quantity?: number,
+  slowThresholdSeconds: number | undefined,
+  stamp: CycleStamp,
+  slowByQuantity: boolean,
+  std: ResolvedStandards,
 ): Promise<StrategyResult | null> {
   return prisma
     .$transaction(async (tx) => {
@@ -469,17 +526,18 @@ async function completeOpenClose(
         select: { id: true, start: true },
       });
 
-      let items: Array<{ id: string; productId: string }> = [];
+      let items: CycleItems = [];
 
       if (openCycles.length > 0) {
         const itemArrays = await Promise.all(
-          openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId, quantity)),
+          openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId, stamp)),
         );
         items = itemArrays.flat();
 
+        // The closing event's quantity/earned-standard belong to the cycle being closed.
         await tx.cycle.updateMany({
           where: { stationId, end: null },
-          data: { end: timestamp },
+          data: { end: timestamp, ...stamp },
         });
       } else {
         const hasPrevious = await tx.cycle.findFirst({
@@ -493,13 +551,14 @@ async function completeOpenClose(
               start: timestamp,
               end: timestamp,
               cycleStatus: "GOOD",
+              ...stamp,
               siteId,
               stationId,
               ...versionConnects,
             },
           });
 
-          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId, quantity);
+          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId, stamp);
         }
       }
 
@@ -507,11 +566,12 @@ async function completeOpenClose(
       const cycleDurationSeconds =
         openCycles.length > 0 ? (timestamp.getTime() - openCycles[0].start.getTime()) / 1000 : null;
       const isSlow =
-        cycleDurationSeconds != null &&
-        cycleDurationSeconds > 0 &&
-        slowThresholdSeconds != null &&
-        slowThresholdSeconds > 0 &&
-        cycleDurationSeconds > slowThresholdSeconds;
+        (cycleDurationSeconds != null &&
+          cycleDurationSeconds > 0 &&
+          slowThresholdSeconds != null &&
+          slowThresholdSeconds > 0 &&
+          cycleDurationSeconds > slowThresholdSeconds) ||
+        slowByQuantity;
       const transition = await applyCycleCompleteTransition(tx, stationId, timestamp, {
         cycleWasSlow: isSlow,
         cycleStart: openCycles[0]?.start ?? timestamp,
@@ -543,18 +603,25 @@ async function completeOpenClose(
       });
 
       // Order allocation — moved inside the tx; see completeImmediate.
-      for (const { id, productId } of items) {
-        await allocateInventory(tx, siteId, productId, id);
-      }
+      await allocateItems(tx, siteId, items);
 
       const stationCtx = await loadStationMetricContext(tx, stationId);
-      const detectionPrepared = await prepareDetection(tx, stationId, jobId);
+      const detectionPrepared = await prepareDetection(tx, stationId, jobId, std);
 
       // Match the pre-refactor open/close call: HOUR increment was driven off
       // the NEW open cycle whose start = end = timestamp, so totalCycleSeconds
       // contribution per call is 0 on this path. Duration KPIs come from
       // batchDurationRollup on the 5s combined tick, not this per-cycle bump.
-      await incrementHourCounts(tx, stationId, siteId, timestamp, 1, items.length, idealCycleIncrement, 0);
+      await incrementHourCounts(
+        tx,
+        stationId,
+        siteId,
+        timestamp,
+        1,
+        Math.round(sumItemQuantities(items)),
+        idealCycleIncrement,
+        0,
+      );
 
       return {
         cycle: newCycle,
@@ -581,7 +648,7 @@ async function completeImmediateReplay(
   jobId: string,
   versionConnects: VersionConnects,
   sourceEventId: string | null,
-  quantity?: number,
+  stamp: CycleStamp,
 ): Promise<StrategyResult | null> {
   return prisma.$transaction(async (tx) => {
     // Cross-process serialization, before the prev read — see completeImmediate.
@@ -600,12 +667,16 @@ async function completeImmediateReplay(
         ORDER BY "end" DESC LIMIT 1
       ),
       new_cycle AS (
-        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", "siteId", "stationId", "jobVersionId", "sourceEventId", attrs, "createdAt", "updatedAt")
+        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", quantity, "quantityUnit", "standardCycle", "standardQuantity", "siteId", "stationId", "jobVersionId", "sourceEventId", attrs, "createdAt", "updatedAt")
         VALUES (
           gen_random_uuid(),
           COALESCE((SELECT "end" FROM prev), ${timestamp}),
           ${timestamp},
           'GOOD',
+          ${stamp.quantity},
+          ${stamp.quantityUnit},
+          ${stamp.standardCycle},
+          ${stamp.standardQuantity},
           ${siteId},
           ${stationId},
           ${versionConnects.jobVersionId},
@@ -640,13 +711,11 @@ async function completeImmediateReplay(
       await tx.$executeRaw`INSERT INTO "_CycleToJobTool" ("A", "B") VALUES ${values} ON CONFLICT DO NOTHING`;
     }
 
-    const items = await inventory.createFromCycle(tx, cycle.id, jobId, quantity);
+    const items = await inventory.createFromCycle(tx, cycle.id, jobId, stamp);
 
     // Order allocation — replayed cycles allocate too; replay path otherwise
     // skips state transitions, detection, and metrics.
-    for (const { id, productId } of items) {
-      await allocateInventory(tx, siteId, productId, id);
-    }
+    await allocateItems(tx, siteId, items);
 
     return {
       cycle,
@@ -669,7 +738,7 @@ async function completeOpenCloseReplay(
   jobId: string,
   versionConnects: VersionConnects,
   sourceEventId: string | null,
-  quantity?: number,
+  stamp: CycleStamp,
 ): Promise<StrategyResult | null> {
   return prisma
     .$transaction(async (tx) => {
@@ -681,17 +750,17 @@ async function completeOpenCloseReplay(
         select: { id: true, start: true },
       });
 
-      let items: Array<{ id: string; productId: string }> = [];
+      let items: CycleItems = [];
 
       if (openCycles.length > 0) {
         const itemArrays = await Promise.all(
-          openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId, quantity)),
+          openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId, stamp)),
         );
         items = itemArrays.flat();
 
         await tx.cycle.updateMany({
           where: { stationId, end: null },
-          data: { end: timestamp },
+          data: { end: timestamp, ...stamp },
         });
       } else {
         const hasPrevious = await tx.cycle.findFirst({
@@ -705,13 +774,14 @@ async function completeOpenCloseReplay(
               start: timestamp,
               end: timestamp,
               cycleStatus: "GOOD",
+              ...stamp,
               siteId,
               stationId,
               ...versionConnects,
             },
           });
 
-          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId, quantity);
+          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId, stamp);
         }
       }
 
@@ -727,9 +797,7 @@ async function completeOpenCloseReplay(
         },
       });
 
-      for (const { id, productId } of items) {
-        await allocateInventory(tx, siteId, productId, id);
-      }
+      await allocateItems(tx, siteId, items);
 
       return {
         cycle: newCycle,

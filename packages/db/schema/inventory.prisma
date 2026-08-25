@@ -43,7 +43,7 @@ model Order {
   priority              Int          @default(0)
   notes                 String?
   poNumber              String?
-  defaultTargetQuantity Int          @default(1)
+  defaultTargetQuantity Decimal      @default(1) @db.Decimal(18, 4)
   startDate             DateTime?    @db.Timestamptz(3)
   dueDate               DateTime?    @db.Timestamptz(3)
 
@@ -67,9 +67,9 @@ model Order {
 
 model OrderLineItem {
   id                String         @id @default(uuid()) @db.Uuid
-  targetQuantity    Int
-  completedQuantity Int            @default(0)
-  scrapQuantity     Int            @default(0)
+  targetQuantity    Decimal        @db.Decimal(18, 4)
+  completedQuantity Decimal        @default(0) @db.Decimal(18, 4)
+  scrapQuantity     Decimal        @default(0) @db.Decimal(18, 4)
   status            LineItemStatus @default(PENDING)
 
   orderId String @db.Uuid
@@ -88,8 +88,8 @@ model OrderLineItem {
 }
 
 model OrderInventoryAllocation {
-  id       String @id @default(uuid()) @db.Uuid
-  quantity Int    @default(1)
+  id       String  @id @default(uuid()) @db.Uuid
+  quantity Decimal @default(1) @db.Decimal(18, 4)
 
   inventoryItemId String?        @db.Uuid
   inventoryItem   InventoryItem? @relation(fields: [inventoryItemId], references: [id])

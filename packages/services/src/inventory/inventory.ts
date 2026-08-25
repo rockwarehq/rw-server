@@ -20,19 +20,18 @@ export interface ListInventoryFilter {
 }
 
 /**
- * Create inventory items for a completed cycle.
- *
- * Resolves current version IDs at close time and creates InventoryItems for each
- * active JobProduct on the given job.  The quantity field on the current
- * JobProductVersion determines how many identical items are created per JobProduct.
- * Accepts a transaction client so the caller can wrap cycle-close + inventory
- * creation in a single atomic operation.
- *
- * `quantity` is the optional per-item quantity carried by the cycle event
- * (e.g. wire length per cycle); it is stamped on every row created for this
- * cycle and defaults to 1. It does NOT change how many rows are created.
+ * Create inventory items for a completed cycle: ONE row per active JobProduct,
+ * with quantity = the cycle quantity (stamp.quantity, default 1) × the JobProduct
+ * quantity, and the station's unit stamped verbatim. All item accounting
+ * downstream is SUM(quantity), never row counts. Accepts a transaction client
+ * so cycle-close + inventory creation stay atomic.
  */
-export async function createFromCycle(tx: TransactionClient, cycleId: string, jobId: string, quantity?: number) {
+export async function createFromCycle(
+  tx: TransactionClient,
+  cycleId: string,
+  jobId: string,
+  stamp?: { quantity: number | null; quantityUnit: string },
+) {
   // Fetch active JobProducts with version refs in a single raw query
   const jobProducts = await (tx as unknown as { $queryRaw: typeof prisma.$queryRaw }).$queryRaw<
     Array<{
@@ -82,31 +81,27 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
 
   const txRaw = tx as unknown as { $queryRaw: typeof prisma.$queryRaw; $executeRaw: typeof prisma.$executeRaw };
 
-  // Build flat list of items to insert
-  const itemSpecs: Array<{
-    productId: string;
-    currentVersionId: string;
-    productVersionId: string;
-    toolVersionId: string | null;
-    toolCavityVersionId: string | null;
-    materialVersionIds: string[];
-  }> = [];
-  for (const jp of jobProducts) {
-    for (let i = 0; i < jp.quantity; i++) {
-      itemSpecs.push(jp);
-    }
+  // Non-positive product quantities produce nothing (as the old one-row-per-unit loop did).
+  const quantity = stamp?.quantity;
+  const cycleQuantity = quantity != null && Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
+  const unit = stamp?.quantityUnit ?? "";
+  const itemSpecs = jobProducts
+    .filter((jp) => jp.quantity > 0)
+    .map((jp) => ({ ...jp, itemQuantity: cycleQuantity * jp.quantity }));
+
+  if (itemSpecs.length === 0) {
+    return [];
   }
 
   // Batch INSERT all inventory items in one query
-  const itemQuantity = quantity != null && Number.isFinite(quantity) ? quantity : 1;
   const insertValues = Prisma.join(
     itemSpecs.map(
       (s) =>
-        Prisma.sql`(gen_random_uuid(), ${cycleId}::uuid, ${s.currentVersionId}::uuid, ${s.productVersionId}::uuid, ${s.toolVersionId}::uuid, ${s.toolCavityVersionId}::uuid, ${itemQuantity}, NOW(), NOW())`,
+        Prisma.sql`(gen_random_uuid(), ${cycleId}::uuid, ${s.currentVersionId}::uuid, ${s.productVersionId}::uuid, ${s.toolVersionId}::uuid, ${s.toolCavityVersionId}::uuid, ${s.itemQuantity}, ${unit}, NOW(), NOW())`,
     ),
   );
   const itemRows = await txRaw.$queryRaw<Array<{ id: string }>>`
-    INSERT INTO "InventoryItem" (id, "cycleId", "jobProductVersionId", "productVersionId", "toolVersionId", "toolCavityVersionId", quantity, "createdAt", "updatedAt")
+    INSERT INTO "InventoryItem" (id, "cycleId", "jobProductVersionId", "productVersionId", "toolVersionId", "toolCavityVersionId", quantity, "quantityUnit", "createdAt", "updatedAt")
     VALUES ${insertValues}
     RETURNING id
   `;
@@ -169,8 +164,9 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
         cs."stationId"         AS "stationId",
         pb."productId"         AS "productId",
         mb."materialId"        AS "materialId",
-        SUM(pmb.weight)        AS "qty",
-        COUNT(DISTINCT ii.id)::int AS "itemCount",
+        -- weight × quantity: rows carry quantity, not one row per unit
+        SUM(pmb.weight * ii.quantity) AS "qty",
+        ROUND(SUM(ii.quantity))::int  AS "itemCount",
         pmb."weightUnits"      AS "pmUnit",
         mbc."weightUnits"      AS "materialUnit"
       FROM "_InventoryItemToProductMaterialVersion" x
@@ -187,7 +183,12 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
       GROUP BY cs."siteId", cs."shiftInstanceId", cs."stationId", pb."productId", mb."materialId", pmb."weightUnits", mbc."weightUnits"
     `;
 
-    if (want.length === 0) return itemRows.map((row, i) => ({ id: row.id, productId: itemSpecs[i].productId }));
+    if (want.length === 0)
+      return itemRows.map((row, i) => ({
+        id: row.id,
+        productId: itemSpecs[i].productId,
+        quantity: itemSpecs[i].itemQuantity,
+      }));
 
     // For each (shift, station, job, product, material) scope: get-or-create
     // the staging row and bump its quantity + itemCount. Ledger is untouched.
@@ -258,7 +259,11 @@ export async function createFromCycle(tx: TransactionClient, cycleId: string, jo
     }
   }
 
-  return itemRows.map((row, i) => ({ id: row.id, productId: itemSpecs[i].productId }));
+  return itemRows.map((row, i) => ({
+    id: row.id,
+    productId: itemSpecs[i].productId,
+    quantity: itemSpecs[i].itemQuantity,
+  }));
 }
 
 // ============================================================================

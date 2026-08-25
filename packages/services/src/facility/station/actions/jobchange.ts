@@ -11,6 +11,7 @@ import {
   splitOpenStateEntryForJobChange,
 } from "../state.js";
 import type { StationActionDefinition } from "./types.js";
+import { resolveEffectiveStandards } from "../effective-standards.js";
 
 interface JobChangeInput {
   jobId?: string;
@@ -42,7 +43,7 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
           siteId: true,
           currentVersionId: true,
           currentVersion: {
-            select: { standardCycle: true, name: true },
+            select: { name: true },
           },
         },
       });
@@ -125,9 +126,11 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
         data: { currentJobId: newJobId },
       });
 
-      // ── Create new StationJobLog if assigning a job ─────────────
+      // ── Create new StationJobLog snapshotting the effective standards ──
+      let effectiveStandardCycle: number | null = null;
       if (newJobId && job) {
-        const standardCycle = job.currentVersion?.standardCycle ?? null;
+        const std = await resolveEffectiveStandards(tx, stationId, newJobId);
+        effectiveStandardCycle = std.standardCycleSeconds;
 
         await tx.stationJobLog.create({
           data: {
@@ -136,7 +139,9 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
             // biome-ignore lint/style/noNonNullAssertion: throws above (line 55-57) if job.currentVersionId is null; narrowing lost across closure
             jobVersionId: job.currentVersionId!,
             startTime: timestamp,
-            standardCycle,
+            standardCycle: std.standardCycleSeconds,
+            standardQuantity: std.standardQuantity,
+            quantityUnit: std.quantityUnit,
           },
         });
       }
@@ -144,10 +149,10 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
       // Keep state-log entries job-homogeneous under the period model.
       await splitOpenStateEntryForJobChange(tx, stationId, timestamp, job?.currentVersionId ?? null);
 
-      return { station, closedLogs };
+      return { station, closedLogs, effectiveStandardCycle };
     });
 
-    const { station, closedLogs } = result;
+    const { station, closedLogs, effectiveStandardCycle } = result;
 
     publishEntityEvent({
       action: "updated",
@@ -155,7 +160,13 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
       entityId: station.id,
       siteId: station.siteId,
       workspaceId: station.site.workspaceId,
-      changedFields: ["currentJobId", "itemsPerCycle"],
+      changedFields: [
+        "currentJobId",
+        "itemsPerCycle",
+        "currentSecondsPerUnit",
+        "currentStandardQuantity",
+        "currentStandardCycleSeconds",
+      ],
     });
 
     // ── Fire-and-forget side effects after the transaction commits ──
@@ -183,9 +194,7 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
       publishStationCurrentJobMetric(stationId, job.currentVersion?.name ?? null, timestamp).catch((err) => {
         console.error(`[job.change] publishStationCurrentJobMetric failed for station ${stationId}:`, err);
       });
-      const standardCycleSeconds =
-        job.currentVersion?.standardCycle != null ? Number(job.currentVersion.standardCycle) : null;
-      publishStationStandardCycleMetric(stationId, standardCycleSeconds, timestamp).catch((err) => {
+      publishStationStandardCycleMetric(stationId, effectiveStandardCycle, timestamp).catch((err) => {
         console.error(`[job.change] publishStationStandardCycleMetric failed for station ${stationId}:`, err);
       });
     } else {

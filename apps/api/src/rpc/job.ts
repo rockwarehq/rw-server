@@ -88,7 +88,11 @@ const jobCreateInputSchema = z.object({
   labelIds: z.array(z.uuid()).max(50).optional(),
   name: z.string().min(1),
   description: z.string().optional(),
-  standardCycle: z.number().positive().optional(),
+  standardCycle: z.number().positive().nullable().optional(),
+  standardRate: z.number().positive().nullable().optional(),
+  standardRateUnit: z.string().optional(),
+  standardRatePeriod: z.enum(["SECOND", "MINUTE", "HOUR"]).optional(),
+  standardQuantity: z.number().positive().nullable().optional(),
   productsPerCycle: z.number().int().positive().optional(),
   attrs: z.record(z.string(), z.unknown()).optional(),
 });
@@ -99,7 +103,12 @@ const jobUpdateInputSchema = z.object({
   labelIds: z.array(z.uuid()).max(50).optional(),
   name: z.string().min(1).optional(),
   description: z.string().optional(),
-  standardCycle: z.number().positive().optional(),
+  // Nullable so switching a job to rate entry can clear the typed seconds.
+  standardCycle: z.number().positive().nullable().optional(),
+  standardRate: z.number().positive().nullable().optional(),
+  standardRateUnit: z.string().optional(),
+  standardRatePeriod: z.enum(["SECOND", "MINUTE", "HOUR"]).optional(),
+  standardQuantity: z.number().positive().nullable().optional(),
   productsPerCycle: z.number().int().positive().optional(),
   attrs: z.record(z.string(), z.unknown()).optional(),
 });

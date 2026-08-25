@@ -4,6 +4,8 @@ import {
   scheduleDetection as enqueueDetectionJob,
   cancelDetection as dequeueDetection,
 } from "../../queues/station-detection.js";
+import { resolveEffectiveStandards } from "./effective-standards.js";
+import type { ResolvedStandards } from "../../cycle/standards.js";
 
 type TransactionClient = Prisma.TransactionClient;
 
@@ -25,8 +27,9 @@ export async function prepareDetection(
   client: TransactionClient | typeof prisma,
   stationId: string,
   jobId: string,
+  standards?: ResolvedStandards,
 ): Promise<PreparedDetection> {
-  const [stationWithVersion, jobWithVersion] = await Promise.all([
+  const [stationWithVersion, std] = await Promise.all([
     client.stationVersion.findFirst({
       where: {
         station: { id: stationId },
@@ -39,19 +42,12 @@ export async function prepareDetection(
         downtimeDetectUnit: true,
       },
     }),
-    client.jobVersion.findFirst({
-      where: {
-        job: { id: jobId },
-        currentOfJob: { isNot: null },
-      },
-      select: {
-        standardCycle: true,
-      },
-    }),
+    // Callers on the cycle hot path pass pre-resolved standards to skip the re-query.
+    standards ?? resolveEffectiveStandards(client, stationId, jobId),
   ]);
 
   const version = stationWithVersion;
-  const standardCycleSeconds = jobWithVersion?.standardCycle ? Number(jobWithVersion.standardCycle) : null;
+  const standardCycleSeconds = std.standardCycleSeconds;
 
   if (!version || standardCycleSeconds == null || standardCycleSeconds <= 0) {
     return { stationId, cancel: true };

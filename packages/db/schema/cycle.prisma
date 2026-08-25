@@ -15,6 +15,16 @@ model Cycle {
   equipmentStart DateTime? @db.Timestamptz(3)
   equipmentEnd   DateTime? @db.Timestamptz(3)
 
+  /// Actual quantity this cycle: measured from the event, else the standard quantity; null = discrete.
+  quantity     Decimal? @db.Decimal(18, 4)
+  quantityUnit String   @default("")
+
+  /// Earned standard (s) snapshotted at record time — the cycle is self-contained for KPI math.
+  standardCycle Decimal? @db.Decimal(10, 2)
+
+  /// Expected quantity this cycle (pulse size, or rate × interval).
+  standardQuantity Decimal? @db.Decimal(18, 4)
+
   attrs Json @default("{}")
 
   // Livestore hook-event id that produced this cycle — unique so a
