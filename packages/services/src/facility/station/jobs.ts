@@ -157,7 +157,13 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
     entityId: station.id,
     siteId: station.siteId,
     workspaceId: station.site.workspaceId,
-    changedFields: ["currentJobId", "itemsPerCycle"],
+    changedFields: [
+      "currentJobId",
+      "itemsPerCycle",
+      "currentSecondsPerUnit",
+      "currentStandardQuantity",
+      "currentStandardCycleSeconds",
+    ],
   });
 
   // Fire-and-forget side effects after the transaction commits

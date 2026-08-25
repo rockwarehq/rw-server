@@ -8,7 +8,10 @@ const NEW_WINDOW = "33333333-3333-4333-8333-333333333333";
 
 const symbol = (id: string) => `p_${id.replaceAll("-", "_")}`;
 
-vi.mock("@rw/db", () => ({
+vi.mock("@rw/db", async (importOriginal) => ({
+  // Real Prisma namespace: transitive imports (lib/units/weight.ts) construct
+  // Prisma.Decimal at module load.
+  Prisma: (await importOriginal<typeof import("@rw/db")>()).Prisma,
   default: {
     site: { findUnique: vi.fn(async () => ({ id: "site-1", workspaceId: "ws-1" })) },
     graphNode: {

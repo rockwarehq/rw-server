@@ -774,6 +774,13 @@ export async function refreshStationsRunningJob(
     if (changes.standardsChanged) {
       const std = await resolveEffectiveStandards(prisma, id, jobId);
       await publishStationStandardCycleMetric(id, std.standardCycleSeconds, observedAt);
+      const ctx = await loadStationMetricContext(prisma, id);
+      if (ctx)
+        publishStationStatusEntityEvent(ctx, [
+          "currentSecondsPerUnit",
+          "currentStandardQuantity",
+          "currentStandardCycleSeconds",
+        ]);
     } else if (changes.standardCycleSeconds !== undefined) {
       await publishStationStandardCycleMetric(id, changes.standardCycleSeconds, observedAt);
     }
