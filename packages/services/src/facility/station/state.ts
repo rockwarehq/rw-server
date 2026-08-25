@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import prisma from "@rw/db";
+import { resolveEffectiveStandards } from "./effective-standards.js";
 import type { Prisma } from "@rw/db";
 import { publishMetricValueChange } from "../../rpc/metrics-bus.js";
 import { publishStationShiftContext } from "../../metrics/graph-context.js";
@@ -755,7 +756,13 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
 // (see station/jobs.ts). `undefined` means the field didn't change; `null` clears it.
 export async function refreshStationsRunningJob(
   jobId: string,
-  changes: { name?: string | null; standardCycleSeconds?: number | null; itemsPerCycleChanged?: boolean },
+  changes: {
+    name?: string | null;
+    standardCycleSeconds?: number | null;
+    /** Any standards input changed — re-resolve the effective standard per station. */
+    standardsChanged?: boolean;
+    itemsPerCycleChanged?: boolean;
+  },
   observedAt: Date,
 ): Promise<void> {
   const stations = await prisma.station.findMany({
@@ -764,7 +771,10 @@ export async function refreshStationsRunningJob(
   });
   for (const { id } of stations) {
     if (changes.name !== undefined) await publishStationCurrentJobMetric(id, changes.name, observedAt);
-    if (changes.standardCycleSeconds !== undefined) {
+    if (changes.standardsChanged) {
+      const std = await resolveEffectiveStandards(prisma, id, jobId);
+      await publishStationStandardCycleMetric(id, std.standardCycleSeconds, observedAt);
+    } else if (changes.standardCycleSeconds !== undefined) {
       await publishStationStandardCycleMetric(id, changes.standardCycleSeconds, observedAt);
     }
     if (changes.itemsPerCycleChanged) {

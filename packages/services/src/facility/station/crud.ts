@@ -10,6 +10,12 @@ export interface CreateStationInput {
   workcenterId?: string;
   // Config fields (stored on StationVersion)
   standardCycle?: number;
+  cycleMode?: "DISCRETE" | "QUANTITY_PER_CYCLE" | "QUANTITY_PER_INTERVAL";
+  standardQuantity?: number | null;
+  quantityUnit?: string;
+  standardRate?: number | null;
+  standardRateUnit?: string;
+  standardRatePeriod?: "SECOND" | "MINUTE" | "HOUR";
   downtimeDetect?: number;
   downtimeDetectUnit?: "SECONDS";
   slowDetect?: number;
@@ -25,6 +31,12 @@ export interface UpdateStationInput {
   attrs?: Record<string, unknown>;
   // Config fields (stored on StationVersion)
   standardCycle?: number | null;
+  cycleMode?: "DISCRETE" | "QUANTITY_PER_CYCLE" | "QUANTITY_PER_INTERVAL";
+  standardQuantity?: number | null;
+  quantityUnit?: string;
+  standardRate?: number | null;
+  standardRateUnit?: string;
+  standardRatePeriod?: "SECOND" | "MINUTE" | "HOUR";
   downtimeDetect?: number | null;
   downtimeDetectUnit?: "SECONDS";
   slowDetect?: number | null;
@@ -70,6 +82,12 @@ const stationInclude = {
 /** Config field keys that belong on StationVersion */
 const VERSION_FIELDS = [
   "standardCycle",
+  "cycleMode",
+  "standardQuantity",
+  "quantityUnit",
+  "standardRate",
+  "standardRateUnit",
+  "standardRatePeriod",
   "downtimeDetect",
   "downtimeDetectUnit",
   "slowDetect",
@@ -112,6 +130,12 @@ export async function create(input: CreateStationInput) {
     siteId,
     workcenterId,
     standardCycle,
+    cycleMode,
+    standardQuantity,
+    quantityUnit,
+    standardRate,
+    standardRateUnit,
+    standardRatePeriod,
     downtimeDetect,
     downtimeDetectUnit,
     slowDetect,
@@ -188,6 +212,12 @@ export async function create(input: CreateStationInput) {
           stationId: s.id,
           version: 1,
           standardCycle: standardCycle ?? null,
+          cycleMode: cycleMode ?? "DISCRETE",
+          standardQuantity: standardQuantity ?? null,
+          quantityUnit: quantityUnit ?? "",
+          standardRate: standardRate ?? null,
+          standardRateUnit: standardRateUnit ?? "",
+          standardRatePeriod: standardRatePeriod ?? "MINUTE",
           downtimeDetect: downtimeDetect ?? null,
           downtimeDetectUnit: downtimeDetectUnit ?? "SECONDS",
           slowDetect: slowDetect ?? null,
@@ -311,6 +341,12 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
     description,
     attrs,
     standardCycle,
+    cycleMode,
+    standardQuantity,
+    quantityUnit,
+    standardRate,
+    standardRateUnit,
+    standardRatePeriod,
     downtimeDetect,
     downtimeDetectUnit,
     slowDetect,
@@ -363,6 +399,12 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
   // Check if any version config fields are being updated
   const versionInput = {
     standardCycle,
+    cycleMode,
+    standardQuantity,
+    quantityUnit,
+    standardRate,
+    standardRateUnit,
+    standardRatePeriod,
     downtimeDetect,
     downtimeDetectUnit,
     slowDetect,
@@ -391,6 +433,13 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
           stationId: id,
           version: nextVersion,
           standardCycle: standardCycle !== undefined ? standardCycle : (oldVersion?.standardCycle ?? null),
+          cycleMode: cycleMode !== undefined ? cycleMode : (oldVersion?.cycleMode ?? "DISCRETE"),
+          standardQuantity: standardQuantity !== undefined ? standardQuantity : (oldVersion?.standardQuantity ?? null),
+          quantityUnit: quantityUnit !== undefined ? quantityUnit : (oldVersion?.quantityUnit ?? ""),
+          standardRate: standardRate !== undefined ? standardRate : (oldVersion?.standardRate ?? null),
+          standardRateUnit: standardRateUnit !== undefined ? standardRateUnit : (oldVersion?.standardRateUnit ?? ""),
+          standardRatePeriod:
+            standardRatePeriod !== undefined ? standardRatePeriod : (oldVersion?.standardRatePeriod ?? "MINUTE"),
           downtimeDetect: downtimeDetect !== undefined ? downtimeDetect : (oldVersion?.downtimeDetect ?? null),
           downtimeDetectUnit:
             downtimeDetectUnit !== undefined ? downtimeDetectUnit : (oldVersion?.downtimeDetectUnit ?? "SECONDS"),
