@@ -32,18 +32,6 @@ export async function importWorkcenters(prisma: PrismaClient, idMap: IdMap, site
   const result = await batchUpsert(
     rows,
     async (row) => {
-      // Resolve processTypeId from the IdMap (populated by importProcessTypes).
-      // New dumps expose `GroupID`; older dumps used `Process` for the same
-      // value — accept either so legacy dumps still import.
-      const processGroup = row.GroupID || row.Process;
-      let processTypeId: string | null = null;
-      if (processGroup) {
-        processTypeId = idMap.get("processType", processGroup) ?? null;
-        if (!processTypeId) {
-          log.warn(`Process group "${processGroup}" not found in IdMap for workcenter "${row.name}" — setting to null`);
-        }
-      }
-
       // Can't use upsert with the composite unique (siteId, parentId, name)
       // because parentId is nullable and Prisma requires a string value.
       // Use findFirst + create/update instead, with a case-insensitive name
@@ -58,7 +46,6 @@ export async function importWorkcenters(prisma: PrismaClient, idMap: IdMap, site
           where: { id: existing.id },
           data: {
             description: nullable(row.Description),
-            processTypeId,
           },
         });
       } else {
@@ -66,7 +53,6 @@ export async function importWorkcenters(prisma: PrismaClient, idMap: IdMap, site
           data: {
             name: row.name,
             description: nullable(row.Description),
-            processTypeId,
             siteId,
           },
         });

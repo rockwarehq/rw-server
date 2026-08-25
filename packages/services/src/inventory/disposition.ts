@@ -91,7 +91,7 @@ export async function getById(id: string) {
     include: {
       itemDispositionReasons: {
         where: { deletedAt: null },
-        select: { id: true, name: true, processTypeId: true },
+        select: { id: true, name: true },
         orderBy: { name: "asc" },
       },
       _count: { select: { itemDispositionReasons: true } },

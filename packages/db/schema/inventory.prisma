@@ -128,6 +128,7 @@ model Product {
 
   materials          ProductMaterial[]
   materialAltGroups  ProductMaterialAltGroup[]
+  labels             Label[]
   materialShiftUsage MaterialShiftUsage[]
   jobProducts        JobProduct[]
   workOrders         WorkOrder[]
@@ -176,9 +177,10 @@ model Material {
   currentVersion MaterialVersion?  @relation("MaterialCurrent", fields: [currentVersionId], references: [id])
   versions       MaterialVersion[] @relation("MaterialVersions")
 
-  products      ProductMaterial[]
-  ledgerEntries MaterialLedgerEntry[]
-  shiftUsage    MaterialShiftUsage[]
+  products        ProductMaterial[]
+  ledgerEntries   MaterialLedgerEntry[]
+  shiftUsage      MaterialShiftUsage[]
+  labels          Label[]
 
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
@@ -382,8 +384,7 @@ model ItemDispositionReason {
   siteId String @db.Uuid
   site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
-  processTypeId String?      @db.Uuid
-  processType   ProcessType? @relation(fields: [processTypeId], references: [id], onDelete: SetNull)
+  labels Label[]
 
   itemDispositions    ItemDisposition[]    @relation("DispositionReasonDispositions")
   itemDispositionLogs ItemDispositionLog[]

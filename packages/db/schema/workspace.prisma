@@ -83,13 +83,11 @@ model Site {
   shiftPattern           ShiftPattern[]
   shiftAssignment        ShiftAssignment[]
   shiftInstances         ShiftInstance[]
-  stationClassifications StationClassification[]
-  processTypes           ProcessType[]
+  labels                 Label[]
   statusReasons          StatusReason[]
   metricBuckets          MetricBucket[]
   metricBucketLogs       MetricBucketLog[]
   toolStatuses           ToolStatus[]
-  toolClassifications    ToolClassification[]
   toolLocations          ToolLocation[]
   dashboards             Dashboard[]
   displays               Display[]
@@ -121,29 +119,6 @@ model Site {
   @@index([workspaceId])
 }
 
-model ProcessType {
-  id          String  @id @default(uuid()) @db.Uuid
-  name        String
-  description String?
-
-  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
-  deletedAt  DateTime? @db.Timestamptz(3)
-  archivedAt DateTime? @db.Timestamptz(3)
-
-  siteId String @db.Uuid
-  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
-
-  workcenters            Workcenter[]
-  stationVersions        StationVersion[]
-  statusReasons          StatusReason[]
-  jobs                   Job[]
-  itemDispositionReasons ItemDispositionReason[]
-
-  @@unique([siteId, name])
-  @@index([siteId])
-}
-
 /// Assignment (implicit m2m): links site-wide status reasons to Workcenters and Stations
 model StatusReason {
   id            String  @id @default(uuid()) @db.Uuid
@@ -160,7 +135,7 @@ model StatusReason {
   categoryId String?         @db.Uuid
   category   StatusCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
-  processTypes ProcessType[]
+  labels       Label[]
   stateLogs    StationStateLog[]
   workcenters  Workcenter[]
   stations     Station[]

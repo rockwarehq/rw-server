@@ -1,6 +1,7 @@
 import * as device from "./device.js";
 import * as site from "./site.js";
 import * as workcenter from "./workcenter.js";
+import * as label from "./label.js";
 import * as station from "./station.js";
 import * as events from "./events.js";
 import * as metrics from "./metrics.js";
@@ -11,7 +12,6 @@ import * as dashboard from "./dashboard.js";
 import * as savedViewRpc from "./saved-view.js";
 import * as display from "./display.js";
 import * as document from "./document.js";
-import * as processType from "./process-type.js";
 import * as statusCategory from "./status-category.js";
 import * as statusReason from "./status-reason.js";
 import * as shift from "./shift.js";
@@ -188,6 +188,13 @@ export const router = {
     move: workcenter.move,
     delete: workcenter.remove,
   },
+  label: {
+    create: label.create,
+    list: label.list,
+    get: label.get,
+    update: label.update,
+    delete: label.remove,
+  },
   station: {
     create: station.create,
     list: station.list,
@@ -212,6 +219,9 @@ export const router = {
     assignDowntimeReason: station.assignDowntimeReason,
     changeJob: station.changeJob,
     listStateLogs: station.listStateLogs,
+    // Label filters
+    setLabelFilter: station.setLabelFilter,
+    listLabelFilters: station.listLabelFilters,
   },
   material: {
     create: inventory.materialCreate,
@@ -323,13 +333,6 @@ export const router = {
     unlink: document.unlink,
     listForTarget: document.listForTarget,
     listForDisplayContext: document.listForDisplayContext,
-  },
-  processType: {
-    create: processType.create,
-    list: processType.list,
-    get: processType.get,
-    update: processType.update,
-    delete: processType.remove,
   },
   statusCategory: {
     create: statusCategory.create,

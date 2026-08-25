@@ -6,7 +6,7 @@ import { findSystemRole } from "@rw/auth/iam/roles";
 import { seedSystemRoles } from "./systemRoles.js";
 import config from "./config.js";
 import { IdMap, setDataFile, setDevSeed } from "./utils.js";
-import { importProcessTypes } from "./importProcessTypes.js";
+import { importLabels } from "./importLabels.js";
 import { importWorkcenters } from "./importWorkcenters.js";
 import { importProducts } from "./importProducts.js";
 import { importMaterials } from "./importMaterials.js";
@@ -395,7 +395,7 @@ async function main() {
   console.log("── Legacy Data Import ───────────────────────────────────");
   console.log();
 
-  await importProcessTypes(prisma, idMap, site.id);
+  await importLabels(prisma, idMap, site.id);
   await importWorkcenters(prisma, idMap, site.id);
   await importProducts(prisma, idMap, site.id);
   await importMaterials(prisma, idMap, site.id);

@@ -47,20 +47,22 @@ const reasonCreateInputSchema = z.object({
   siteId: z.uuid(),
   name: z.string().min(1),
   itemDispositionIds: z.array(z.uuid()).optional(),
-  processTypeId: z.uuid().optional(),
+  labelIds: z.array(z.uuid()).max(50).optional(),
 });
 
 const reasonUpdateInputSchema = z.object({
   id: z.uuid(),
   name: z.string().min(1).optional(),
   itemDispositionIds: z.array(z.uuid()).optional(),
-  processTypeId: z.uuid().nullable().optional(),
+  // Replaces the code's whole label list with this one.
+  labelIds: z.array(z.uuid()).max(50).optional(),
 });
 
 const reasonListInputSchema = z.object({
   siteId: z.uuid().optional(),
   itemDispositionId: z.uuid().optional(),
-  processTypeId: z.uuid().optional(),
+  // Only return codes that have at least one of these labels.
+  labelIds: z.array(z.uuid()).max(50).optional(),
   name: z.string().optional(),
   limit: z.number().min(0).default(50),
   offset: z.number().min(0).default(0),

@@ -85,8 +85,8 @@ export async function importStations(prisma: PrismaClient, idMap: IdMap, siteId:
         assignedJobIds.add(currentJobId);
       }
 
-      // Resolve processTypeId for the station version
-      const processTypeId = idMap.get("processType", row.ProcessType) ?? null;
+      // The legacy process group becomes a label on the station.
+      const groupLabelId = idMap.get("label", row.ProcessType) ?? null;
 
       // Station has @@unique([siteId, name]); use findFirst with a
       // case-insensitive name match so re-imports treat e.g. "ARB35" / "arb35"
@@ -102,7 +102,11 @@ export async function importStations(prisma: PrismaClient, idMap: IdMap, siteId:
         // Update station-level fields
         await prisma.station.update({
           where: { id: existing.id },
-          data: { workcenterId, currentJobId },
+          data: {
+            workcenterId,
+            currentJobId,
+            ...(groupLabelId ? { labels: { connect: [{ id: groupLabelId }] } } : {}),
+          },
         });
 
         const version = existing.currentVersion;
@@ -116,7 +120,6 @@ export async function importStations(prisma: PrismaClient, idMap: IdMap, siteId:
               downtimeDetect,
               slowDetect,
               inLineCalculations,
-              processTypeId,
               stationId: existing.id,
             },
           });
@@ -129,8 +132,7 @@ export async function importStations(prisma: PrismaClient, idMap: IdMap, siteId:
             (version.standardCycle !== null ? Number(version.standardCycle) : null) !== standardCycle ||
             (version.downtimeDetect !== null ? Number(version.downtimeDetect) : null) !== downtimeDetect ||
             (version.slowDetect !== null ? Number(version.slowDetect) : null) !== slowDetect ||
-            version.inLineCalculations !== inLineCalculations ||
-            version.processTypeId !== processTypeId;
+            version.inLineCalculations !== inLineCalculations;
 
           if (changed) {
             await prisma.stationVersion.update({
@@ -140,7 +142,6 @@ export async function importStations(prisma: PrismaClient, idMap: IdMap, siteId:
                 downtimeDetect,
                 slowDetect,
                 inLineCalculations,
-                processTypeId,
               },
             });
           }
@@ -155,6 +156,7 @@ export async function importStations(prisma: PrismaClient, idMap: IdMap, siteId:
             siteId,
             workcenterId,
             currentJobId,
+            ...(groupLabelId ? { labels: { connect: [{ id: groupLabelId }] } } : {}),
           },
         });
 
@@ -165,7 +167,6 @@ export async function importStations(prisma: PrismaClient, idMap: IdMap, siteId:
             downtimeDetect,
             slowDetect,
             inLineCalculations,
-            processTypeId,
             stationId: station.id,
           },
         });

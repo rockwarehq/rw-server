@@ -19,7 +19,7 @@ model Tool {
   toolLocationId String?       @unique @db.Uuid
   toolLocation   ToolLocation? @relation(fields: [toolLocationId], references: [id], onDelete: SetNull)
 
-  classifications ToolClassification[]
+  labels Label[]
 
   toolCavities ToolCavity[]
   jobs         JobTool[]
@@ -107,25 +107,21 @@ model Job {
   currentVersion JobVersion?  @relation("JobCurrent", fields: [currentVersionId], references: [id])
   versions       JobVersion[] @relation("JobVersions")
 
-  tools       JobTool[]
-  jobProducts JobProduct[]
-  orders      WorkOrder[]
+  tools           JobTool[]
+  jobProducts     JobProduct[]
+  orders          WorkOrder[]
+  labels Label[]
 
   currentOfStations  Station[]            @relation("StationCurrentJob")
   stationJobs        StationJob[]
   stationJobLogs     StationJobLog[]
   materialShiftUsage MaterialShiftUsage[]
 
-  // Process type (optional, single)
-  processTypeId String?      @db.Uuid
-  processType   ProcessType? @relation(fields: [processTypeId], references: [id], onDelete: SetNull)
-
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
   deletedAt  DateTime? @db.Timestamptz(3)
   archivedAt DateTime? @db.Timestamptz(3)
 
-  @@index([processTypeId])
 }
 
 enum StandardCycleUnit {
@@ -223,11 +219,6 @@ model JobProductVersion {
   @@index([jobProductId])
 }
 
-enum ToolClassificationType {
-  MACHINE_SPEC
-  GROUP
-}
-
 model ToolStatus {
   id   String @id @default(uuid()) @db.Uuid
   name String
@@ -235,25 +226,6 @@ model ToolStatus {
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   deletedAt  DateTime? @db.Timestamptz(3)
   archivedAt DateTime? @db.Timestamptz(3)
-
-  siteId String @db.Uuid
-  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
-
-  tools Tool[]
-
-  @@unique([siteId, name])
-  @@index([siteId])
-}
-
-/// Assignment (implicit m2m): links Classifications to Tools
-model ToolClassification {
-  id    String                 @id @default(uuid()) @db.Uuid
-  name  String
-  type  ToolClassificationType
-  attrs Json                   @default("{}")
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   siteId String @db.Uuid
   site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)

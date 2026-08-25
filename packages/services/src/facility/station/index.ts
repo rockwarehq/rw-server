@@ -62,3 +62,10 @@ export {
 } from "./state-detection.js";
 
 export { changeJob } from "./jobs.js";
+
+export {
+  setLabelFilter,
+  listLabelFilters,
+  getFilterLabelIds,
+  type SetLabelFilterInput,
+} from "./label-filter.js";

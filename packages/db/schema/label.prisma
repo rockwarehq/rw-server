@@ -1,0 +1,64 @@
+/// One shared list of labels per site. Users put labels on jobs, tools,
+/// products, materials, stations, status/downtime codes, and scrap codes —
+/// to organize, to filter lists, and to slice reports. A record can carry
+/// many labels and a label can be on many records, so groups can overlap:
+/// adding up totals per label can count the same record twice (ADR-0011).
+/// Labels replaced the old "process groups" (ProcessType) and the never-used
+/// ToolClassification/StationClassification tables.
+model Label {
+  id   String @id @default(uuid()) @db.Uuid
+  name String
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  jobs                   Job[]
+  tools                  Tool[]
+  products               Product[]
+  materials              Material[]
+  stations               Station[]
+  statusReasons          StatusReason[]
+  itemDispositionReasons ItemDispositionReason[]
+  labelFilters           LabelFilter[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}
+
+/// What kind of item a filter narrows.
+enum LabelFilterTarget {
+  JOB
+  TOOL
+  STATUS_REASON
+  DISPOSITION_REASON
+}
+
+/// A filter one item defines against another kind of item. Example: a
+/// station's JOB filter says "only jobs with at least one of these labels
+/// can run here"; its STATUS_REASON filter narrows the downtime codes the
+/// operator screen offers. No row for a target = everything is eligible.
+///
+/// v1: only stations own filters. When another item needs to own filters
+/// later, it gets its own owner column on this table (one owner set per
+/// row) — real foreign keys, not a loose ownerType/ownerId pair.
+model LabelFilter {
+  id String @id @default(uuid()) @db.Uuid
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  target LabelFilterTarget
+
+  /// The criteria: a filtered item must carry at least one of these labels.
+  /// The service requires at least one label per filter row.
+  labels Label[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([stationId, target])
+  @@index([stationId])
+}

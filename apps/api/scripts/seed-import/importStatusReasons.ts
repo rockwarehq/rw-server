@@ -42,8 +42,8 @@ export async function importStatusReasons(prisma: PrismaClient, idMap: IdMap, si
         }
       }
 
-      // Resolve processType for the m2m link (DTGroupID = process type name)
-      const processTypeId = row.DTGroupID ? (idMap.get("processType", row.DTGroupID) ?? null) : null;
+      // The legacy downtime group (DTGroupID) becomes a label on the code.
+      const groupLabelId = row.DTGroupID ? (idMap.get("label", row.DTGroupID) ?? null) : null;
 
       const isPlannedDown = row.isPlannedDown === "1";
 
@@ -59,7 +59,7 @@ export async function importStatusReasons(prisma: PrismaClient, idMap: IdMap, si
             data: {
               isPlannedDown,
               categoryId,
-              processTypes: processTypeId ? { set: [{ id: processTypeId }] } : undefined,
+              labels: groupLabelId ? { set: [{ id: groupLabelId }] } : undefined,
             },
           })
         : await prisma.statusReason.create({
@@ -68,7 +68,7 @@ export async function importStatusReasons(prisma: PrismaClient, idMap: IdMap, si
               isPlannedDown,
               categoryId,
               siteId,
-              processTypes: processTypeId ? { connect: [{ id: processTypeId }] } : undefined,
+              labels: groupLabelId ? { connect: [{ id: groupLabelId }] } : undefined,
             },
           });
 

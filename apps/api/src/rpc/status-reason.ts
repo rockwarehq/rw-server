@@ -14,6 +14,7 @@ const createInputSchema = z.object({
   name: z.string().min(1),
   isPlannedDown: z.boolean().optional(),
   categoryId: z.uuid().nullable().optional(),
+  labelIds: z.array(z.uuid()).max(50).optional(),
 });
 
 const updateInputSchema = z.object({
@@ -21,6 +22,8 @@ const updateInputSchema = z.object({
   name: z.string().min(1).optional(),
   isPlannedDown: z.boolean().optional(),
   categoryId: z.uuid().nullable().optional(),
+  // Replaces the code's whole label list with this one.
+  labelIds: z.array(z.uuid()).max(50).optional(),
 });
 
 const idInputSchema = z.object({
@@ -30,6 +33,8 @@ const idInputSchema = z.object({
 const listInputSchema = z.object({
   siteId: z.uuid().optional(),
   categoryId: z.uuid().optional(),
+  // Only return codes that have at least one of these labels.
+  labelIds: z.array(z.uuid()).max(50).optional(),
   name: z.string().optional(),
   limit: z.number().min(0).default(50),
   offset: z.number().min(0).default(0),
