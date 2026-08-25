@@ -1,4 +1,4 @@
-import prisma from "@rw/db";
+import type prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
 import { resolveStandards, type ResolvedStandards } from "../../cycle/standards.js";
 import { decimalToNumber } from "../../metrics/sync.js";

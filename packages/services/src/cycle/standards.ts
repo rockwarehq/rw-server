@@ -70,8 +70,7 @@ export function resolveStandards(cfg: StandardsConfig): ResolvedStandards {
       // Derive time-per-unit from the config when no rate was entered, so
       // earned time and quantity-slow still work.
       secondsPerUnit:
-        perUnit ??
-        (intervalSeconds != null && standardQuantity != null ? intervalSeconds / standardQuantity : null),
+        perUnit ?? (intervalSeconds != null && standardQuantity != null ? intervalSeconds / standardQuantity : null),
       mode,
     };
   }
@@ -128,11 +127,7 @@ export function resolveCycleActuals(std: ResolvedStandards, measuredQuantity: nu
 }
 
 /** Interval-mode slow = quantity shortfall (a slow line still emits on the clock). */
-export function quantityWasSlow(
-  std: ResolvedStandards,
-  quantity: number | null,
-  slowFraction: number | null,
-): boolean {
+export function quantityWasSlow(std: ResolvedStandards, quantity: number | null, slowFraction: number | null): boolean {
   if (std.mode !== "QUANTITY_PER_INTERVAL") return false;
   if (quantity == null || std.standardQuantity == null) return false;
   if (slowFraction == null || slowFraction <= 0) return false;

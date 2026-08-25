@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  quantityWasSlow,
-  resolveCycleActuals,
-  resolveStandards,
-  type StandardsConfig,
-} from "./standards.js";
+import { quantityWasSlow, resolveCycleActuals, resolveStandards, type StandardsConfig } from "./standards.js";
 
 const base: StandardsConfig = {
   cycleMode: "DISCRETE",

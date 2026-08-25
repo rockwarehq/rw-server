@@ -262,7 +262,7 @@ export async function complete(input: StartCycleInput) {
     return { data: existing, alreadyRecorded: true as const };
   }
 
-  const { cycle, items, closedEntry, newStatus, statusChanged, stationCtx, detectionPrepared } = result;
+  const { cycle, closedEntry, newStatus, statusChanged, stationCtx, detectionPrepared } = result;
   const t2 = Date.now();
 
   // Material-shift flush is NOT triggered per cycle. The 60s minute tick
@@ -612,7 +612,16 @@ async function completeOpenClose(
       // the NEW open cycle whose start = end = timestamp, so totalCycleSeconds
       // contribution per call is 0 on this path. Duration KPIs come from
       // batchDurationRollup on the 5s combined tick, not this per-cycle bump.
-      await incrementHourCounts(tx, stationId, siteId, timestamp, 1, Math.round(sumItemQuantities(items)), idealCycleIncrement, 0);
+      await incrementHourCounts(
+        tx,
+        stationId,
+        siteId,
+        timestamp,
+        1,
+        Math.round(sumItemQuantities(items)),
+        idealCycleIncrement,
+        0,
+      );
 
       return {
         cycle: newCycle,

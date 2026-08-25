@@ -408,11 +408,7 @@ export async function update(id: string, input: UpdateJobInput) {
     (v) => v !== undefined,
   );
   if (name !== undefined || standardsChanged) {
-    refreshStationsRunningJob(
-      id,
-      { name, standardsChanged },
-      new Date(),
-    ).catch((err) => {
+    refreshStationsRunningJob(id, { name, standardsChanged }, new Date()).catch((err) => {
       console.error(`[job.update] refreshStationsRunningJob failed for job ${id}:`, err);
     });
   }
