@@ -418,6 +418,8 @@ const downtimeLogSearchInputSchema = z.object({
   siteId: z.uuid(),
   workCenterId: z.uuid().optional(),
   stationId: z.uuid().optional(),
+  // Only downtime whose code has at least one of these labels.
+  labelIds: z.array(z.uuid()).max(50).optional(),
   startDate: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD")
@@ -512,6 +514,19 @@ export const downtimeLogSearch = authRequired
       startTime: { lt: rangeEnd },
       endTime: { gt: rangeStart },
     };
+
+    // Label filter: resolve labels to the codes that carry them, then filter
+    // rows by those codes (same expand-to-id-list pattern as workcenter above).
+    if (input.labelIds && input.labelIds.length > 0) {
+      const reasons = await prisma.statusReason.findMany({
+        where: { siteId: input.siteId, labels: { some: { id: { in: input.labelIds } } } },
+        select: { id: true },
+      });
+      if (reasons.length === 0) {
+        return { data: [], total: 0 };
+      }
+      downtimeWhere.statusReasonId = { in: reasons.map((r) => r.id) };
+    }
 
     const entrySelect = {
       id: true,
@@ -672,6 +687,8 @@ const dispositionLogSearchInputSchema = z.object({
   siteId: z.uuid(),
   workCenterId: z.uuid().optional(),
   stationId: z.uuid().optional(),
+  // Only scrap whose code has at least one of these labels.
+  labelIds: z.array(z.uuid()).max(50).optional(),
   startDate: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD")
@@ -696,6 +713,18 @@ export const dispositionLogSearch = authRequired
       siteId: input.siteId,
       deletedAt: null,
     };
+
+    // Label filter: resolve labels to the codes that carry them.
+    if (input.labelIds && input.labelIds.length > 0) {
+      const reasons = await prisma.itemDispositionReason.findMany({
+        where: { siteId: input.siteId, labels: { some: { id: { in: input.labelIds } } } },
+        select: { id: true },
+      });
+      if (reasons.length === 0) {
+        return { data: [], total: 0 };
+      }
+      where.dispositionReasonId = { in: reasons.map((r) => r.id) };
+    }
 
     // Scope by station or workcenter
     if (input.stationId) {
@@ -1063,6 +1092,8 @@ const cycleSearchInputSchema = z.object({
   siteId: z.uuid(),
   workCenterId: z.uuid().optional(),
   stationId: z.uuid().optional(),
+  // Only cycles whose job has at least one of these labels.
+  labelIds: z.array(z.uuid()).max(50).optional(),
   startDate: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD")
@@ -1117,6 +1148,20 @@ export const cycleSearch = authRequired.input(cycleSearchInputSchema).handler(as
 
   if (stationIds.length === 0) {
     return { data: [], total: 0 };
+  }
+
+  // Label filter: resolve labels to the jobs that carry them; the CTE joins
+  // JobVersion, so jb."jobId" is available to filter on.
+  let jobLabelFragment = Prisma.empty;
+  if (input.labelIds && input.labelIds.length > 0) {
+    const jobs = await prisma.job.findMany({
+      where: { siteId: input.siteId, labels: { some: { id: { in: input.labelIds } } } },
+      select: { id: true },
+    });
+    if (jobs.length === 0) {
+      return { data: [], total: 0 };
+    }
+    jobLabelFragment = Prisma.sql`AND jb."jobId" = ANY(${jobs.map((j) => j.id)}::uuid[])`;
   }
 
   // Default to last 7 days when no startDate is supplied. The previous
@@ -1200,6 +1245,7 @@ export const cycleSearch = authRequired.input(cycleSearchInputSchema).handler(as
         AND c.start >= ${rangeStart}::timestamptz
         AND c.start <  ${rangeEnd}::timestamptz
         AND c."stationId" = ANY(${stationIds}::uuid[])
+        ${jobLabelFragment}
     )
     SELECT
       a.*,

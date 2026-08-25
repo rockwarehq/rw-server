@@ -7,17 +7,23 @@ export interface CreateStatusReasonInput {
   isPlannedDown?: boolean;
   categoryId?: string | null;
   siteId: string;
+  /** Labels to put on this code. They must come from the same site's list. */
+  labelIds?: string[];
 }
 
 export interface UpdateStatusReasonInput {
   name?: string;
   isPlannedDown?: boolean;
   categoryId?: string | null;
+  /** Replaces the code's whole label list with this one (same-site labels only). */
+  labelIds?: string[];
 }
 
 export interface ListStatusReasonsFilter {
   siteId?: string;
   categoryId?: string;
+  /** Only return codes that have at least one of these labels. */
+  labelIds?: string[];
   name?: string;
   limit?: number;
   offset?: number;
@@ -27,7 +33,7 @@ export interface ListStatusReasonsFilter {
  * Create a new status reason
  */
 export async function create(input: CreateStatusReasonInput) {
-  const { name, isPlannedDown, categoryId, siteId } = input;
+  const { name, isPlannedDown, categoryId, siteId, labelIds } = input;
 
   const site = await prisma.site.findUnique({
     where: { id: siteId },
@@ -64,17 +70,26 @@ export async function create(input: CreateStatusReasonInput) {
     }
   }
 
+  if (labelIds && labelIds.length > 0) {
+    const found = await prisma.label.count({ where: { id: { in: labelIds }, siteId } });
+    if (found !== labelIds.length) {
+      return { error: "One or more labels not found for this site", code: "LABEL_NOT_FOUND" };
+    }
+  }
+
   const reason = await prisma.statusReason.create({
     data: {
       name,
       isPlannedDown: isPlannedDown ?? false,
       categoryId: categoryId ?? null,
       siteId,
+      ...(labelIds?.length ? { labels: { connect: labelIds.map((id) => ({ id })) } } : {}),
     },
     include: {
       category: {
         select: { id: true, name: true },
       },
+      labels: { select: { id: true, name: true } },
     },
   });
 
@@ -93,7 +108,7 @@ export async function create(input: CreateStatusReasonInput) {
  * List status reasons with optional filtering
  */
 export async function list(filter: ListStatusReasonsFilter = {}) {
-  const { siteId, categoryId, name, limit = 50, offset = 0 } = filter;
+  const { siteId, categoryId, labelIds, name, limit = 50, offset = 0 } = filter;
 
   const where: Record<string, unknown> = { archivedAt: null };
 
@@ -109,6 +124,10 @@ export async function list(filter: ListStatusReasonsFilter = {}) {
     where.name = { contains: name, mode: "insensitive" };
   }
 
+  if (labelIds && labelIds.length > 0) {
+    where.labels = { some: { id: { in: labelIds } } };
+  }
+
   const [reasons, total] = await Promise.all([
     prisma.statusReason.findMany({
       where,
@@ -116,6 +135,7 @@ export async function list(filter: ListStatusReasonsFilter = {}) {
         category: {
           select: { id: true, name: true },
         },
+        labels: { select: { id: true, name: true } },
       },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
       skip: Number(offset),
@@ -142,6 +162,7 @@ export async function getById(id: string) {
       category: {
         select: { id: true, name: true },
       },
+      labels: { select: { id: true, name: true } },
     },
   });
 
@@ -156,7 +177,7 @@ export async function getById(id: string) {
  * Update status reason
  */
 export async function update(id: string, input: UpdateStatusReasonInput) {
-  const { name, isPlannedDown, categoryId } = input;
+  const { name, isPlannedDown, categoryId, labelIds } = input;
 
   const current = await prisma.statusReason.findUnique({
     where: { id },
@@ -195,10 +216,18 @@ export async function update(id: string, input: UpdateStatusReasonInput) {
     }
   }
 
+  if (labelIds && labelIds.length > 0) {
+    const found = await prisma.label.count({ where: { id: { in: labelIds }, siteId: current.siteId } });
+    if (found !== labelIds.length) {
+      return { error: "One or more labels not found for this site", code: "LABEL_NOT_FOUND" };
+    }
+  }
+
   const updateData: Record<string, unknown> = {};
   if (name !== undefined) updateData.name = name;
   if (isPlannedDown !== undefined) updateData.isPlannedDown = isPlannedDown;
   if (categoryId !== undefined) updateData.categoryId = categoryId;
+  if (labelIds !== undefined) updateData.labels = { set: labelIds.map((lid) => ({ id: lid })) };
 
   const reason = await prisma.statusReason.update({
     where: { id },
@@ -207,6 +236,7 @@ export async function update(id: string, input: UpdateStatusReasonInput) {
       category: {
         select: { id: true, name: true },
       },
+      labels: { select: { id: true, name: true } },
     },
   });
 

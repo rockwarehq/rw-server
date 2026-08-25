@@ -345,6 +345,9 @@
                         "lastName": {
                           "type": "string",
                           "nullable": true
+                        },
+                        "mustChangePassword": {
+                          "type": "boolean"
                         }
                       }
                     }
@@ -892,6 +895,9 @@
                             "ACTIVE",
                             "DISABLED"
                           ]
+                        },
+                        "mustChangePassword": {
+                          "type": "boolean"
                         }
                       }
                     },
@@ -1387,6 +1393,12 @@
                   "siteId": {
                     "type": "string",
                     "format": "uuid"
+                  },
+                  "firstName": {
+                    "type": "string"
+                  },
+                  "lastName": {
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -1421,8 +1433,23 @@
                         },
                         "status": {
                           "type": "string"
+                        },
+                        "firstName": {
+                          "type": [
+                            "null",
+                            "string"
+                          ]
+                        },
+                        "lastName": {
+                          "type": [
+                            "null",
+                            "string"
+                          ]
                         }
                       }
+                    },
+                    "temporaryPassword": {
+                      "type": "string"
                     },
                     "expiresAt": {
                       "type": "string",
@@ -1484,30 +1511,27 @@
         }
       }
     },
-    "/users/invite/verify": {
-      "post": {
+    "/users/invite/{id}": {
+      "delete": {
         "tags": [
           "users"
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "token": {
-                    "type": "string",
-                    "minLength": 1
-                  }
-                },
-                "required": [
-                  "token"
-                ]
-              }
-            }
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
           }
-        },
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Default Response",
@@ -1516,94 +1540,8 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "valid": {
+                    "success": {
                       "type": "boolean"
-                    },
-                    "user": {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "type": "string",
-                          "format": "uuid"
-                        },
-                        "email": {
-                          "type": "string"
-                        }
-                      }
-                    },
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/users/invite/complete": {
-      "post": {
-        "tags": [
-          "users"
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "token": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "password": {
-                    "type": "string",
-                    "minLength": 12
-                  },
-                  "firstName": {
-                    "type": "string"
-                  },
-                  "lastName": {
-                    "type": "string"
-                  },
-                  "employeeNumber": {
-                    "type": "string",
-                    "nullable": true
-                  },
-                  "badgeNumber": {
-                    "type": "string",
-                    "nullable": true
-                  },
-                  "pin": {
-                    "type": "string",
-                    "minLength": 4,
-                    "maxLength": 8
-                  }
-                },
-                "required": [
-                  "token",
-                  "password"
-                ]
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "format": "uuid"
-                    },
-                    "email": {
-                      "type": "string"
                     }
                   }
                 }
@@ -1619,12 +1557,66 @@
                   "properties": {
                     "error": {
                       "type": "string"
-                    },
-                    "details": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
                     }
                   }
                 }
@@ -1677,6 +1669,54 @@
         }
       }
     },
+    "/users/password/verify": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "code": {
+                    "type": "string",
+                    "minLength": 6
+                  }
+                },
+                "required": [
+                  "email",
+                  "code"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "valid": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/users/password/reset": {
       "post": {
         "tags": [
@@ -1689,9 +1729,13 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "token": {
+                  "email": {
                     "type": "string",
-                    "minLength": 1
+                    "format": "email"
+                  },
+                  "code": {
+                    "type": "string",
+                    "minLength": 6
                   },
                   "password": {
                     "type": "string",
@@ -1699,7 +1743,8 @@
                   }
                 },
                 "required": [
-                  "token",
+                  "email",
+                  "code",
                   "password"
                 ]
               }
@@ -2328,6 +2373,142 @@
                   "properties": {
                     "error": {
                       "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/{id}/password": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "minLength": 12
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "temporary",
+                      "permanent"
+                    ],
+                    "default": "temporary"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "mustChangePassword": {
+                      "type": "boolean"
+                    },
+                    "temporaryPassword": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "details": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 }
@@ -3188,6 +3369,30 @@
                               "string"
                             ],
                             "format": "date-time"
+                          },
+                          "invitedBy": {
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "format": "uuid"
+                          },
+                          "invitedAt": {
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "format": "date-time"
+                          },
+                          "inviteExpiry": {
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "format": "date-time"
+                          },
+                          "mustChangePassword": {
+                            "type": "boolean"
                           }
                         }
                       },
@@ -3416,6 +3621,30 @@
                             "string"
                           ],
                           "format": "date-time"
+                        },
+                        "invitedBy": {
+                          "type": [
+                            "null",
+                            "string"
+                          ],
+                          "format": "uuid"
+                        },
+                        "invitedAt": {
+                          "type": [
+                            "null",
+                            "string"
+                          ],
+                          "format": "date-time"
+                        },
+                        "inviteExpiry": {
+                          "type": [
+                            "null",
+                            "string"
+                          ],
+                          "format": "date-time"
+                        },
+                        "mustChangePassword": {
+                          "type": "boolean"
                         }
                       }
                     },
@@ -3664,6 +3893,30 @@
                             "string"
                           ],
                           "format": "date-time"
+                        },
+                        "invitedBy": {
+                          "type": [
+                            "null",
+                            "string"
+                          ],
+                          "format": "uuid"
+                        },
+                        "invitedAt": {
+                          "type": [
+                            "null",
+                            "string"
+                          ],
+                          "format": "date-time"
+                        },
+                        "inviteExpiry": {
+                          "type": [
+                            "null",
+                            "string"
+                          ],
+                          "format": "date-time"
+                        },
+                        "mustChangePassword": {
+                          "type": "boolean"
                         }
                       }
                     },
@@ -3814,6 +4067,115 @@
           }
         }
       },
+      "delete": {
+        "tags": [
+          "workspaces"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "name": "userId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/{id}/members/{userId}/site-access": {
       "delete": {
         "tags": [
           "workspaces"

@@ -50,6 +50,7 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
         currentVersion: {
           select: { name: true },
         },
+        labels: { select: { id: true } },
       },
     });
 
@@ -80,6 +81,10 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
         workcenterId: true,
         site: { select: { workspaceId: true } },
         workcenter: { select: { name: true } },
+        labelFilters: {
+          where: { target: "JOB" },
+          select: { labels: { select: { id: true } } },
+        },
       },
     });
 
@@ -89,6 +94,21 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
 
     if (job && job.siteId !== station.siteId) {
       return { error: "Job and station must belong to the same site" as const, code: "SITE_MISMATCH" as const };
+    }
+
+    // If the station has a job filter, the job must carry at least one of
+    // the filter's labels. No filter = every job is eligible. A filter with
+    // no labels (only possible via direct DB writes) is ignored, not a
+    // block-everything rule.
+    const jobFilter = station.labelFilters[0];
+    if (job && jobFilter && jobFilter.labels.length > 0) {
+      const allowed = new Set(jobFilter.labels.map((l) => l.id));
+      if (!job.labels.some((l) => allowed.has(l.id))) {
+        return {
+          error: "The station's job filter does not allow this job" as const,
+          code: "LABEL_FILTER_MISMATCH" as const,
+        };
+      }
     }
 
     const previousJobId = station.currentJobId;

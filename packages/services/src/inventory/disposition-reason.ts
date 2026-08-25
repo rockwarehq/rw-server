@@ -5,19 +5,22 @@ export interface CreateDispositionReasonInput {
   name: string;
   siteId: string;
   itemDispositionIds?: string[];
-  processTypeId?: string;
+  /** Labels to put on this code. They must come from the same site's list. */
+  labelIds?: string[];
 }
 
 export interface UpdateDispositionReasonInput {
   name?: string;
   itemDispositionIds?: string[];
-  processTypeId?: string | null;
+  /** Replaces the code's whole label list with this one (same-site labels only). */
+  labelIds?: string[];
 }
 
 export interface ListDispositionReasonsFilter {
   siteId?: string;
   itemDispositionId?: string;
-  processTypeId?: string;
+  /** Only return codes that have at least one of these labels. */
+  labelIds?: string[];
   name?: string;
   limit?: number;
   offset?: number;
@@ -47,7 +50,7 @@ async function validateDispositionLinks(itemDispositionIds: string[], siteId: st
 }
 
 export async function create(input: CreateDispositionReasonInput) {
-  const { name, siteId, itemDispositionIds, processTypeId } = input;
+  const { name, siteId, itemDispositionIds, labelIds } = input;
 
   const site = await prisma.site.findUnique({
     where: { id: siteId },
@@ -74,19 +77,10 @@ export async function create(input: CreateDispositionReasonInput) {
     return dispositionLinks;
   }
 
-  // Validate process type if provided
-  if (processTypeId) {
-    const processType = await prisma.processType.findUnique({
-      where: { id: processTypeId },
-      select: { id: true, siteId: true, deletedAt: true },
-    });
-
-    if (!processType || processType.deletedAt) {
-      return { error: "Process type not found", code: "PROCESS_TYPE_NOT_FOUND" };
-    }
-
-    if (processType.siteId !== siteId) {
-      return { error: "Process type must belong to the same site", code: "SITE_MISMATCH" };
+  if (labelIds && labelIds.length > 0) {
+    const found = await prisma.label.count({ where: { id: { in: labelIds }, siteId } });
+    if (found !== labelIds.length) {
+      return { error: "One or more labels not found for this site", code: "LABEL_NOT_FOUND" };
     }
   }
 
@@ -96,11 +90,11 @@ export async function create(input: CreateDispositionReasonInput) {
       siteId,
       itemDispositions:
         dispositionLinks.data.length > 0 ? { connect: dispositionLinks.data.map((id) => ({ id })) } : undefined,
-      processTypeId: processTypeId ?? null,
+      ...(labelIds?.length ? { labels: { connect: labelIds.map((id) => ({ id })) } } : {}),
     },
     include: {
       itemDispositions: { select: { id: true, name: true }, orderBy: { name: "asc" } },
-      processType: { select: { id: true, name: true } },
+      labels: { select: { id: true, name: true } },
     },
   });
 
@@ -108,21 +102,24 @@ export async function create(input: CreateDispositionReasonInput) {
 }
 
 export async function list(filter: ListDispositionReasonsFilter = {}) {
-  const { siteId, itemDispositionId, processTypeId, name, limit = 50, offset = 0 } = filter;
+  const { siteId, itemDispositionId, labelIds, name, limit = 50, offset = 0 } = filter;
 
   const where: Prisma.ItemDispositionReasonWhereInput = { deletedAt: null };
 
   if (siteId) where.siteId = siteId;
   if (itemDispositionId) where.itemDispositions = { some: { id: itemDispositionId } };
-  if (processTypeId) where.processTypeId = processTypeId;
   if (name) where.name = { contains: name, mode: "insensitive" };
+
+  if (labelIds && labelIds.length > 0) {
+    where.labels = { some: { id: { in: labelIds } } };
+  }
 
   const [reasons, total] = await Promise.all([
     prisma.itemDispositionReason.findMany({
       where,
       include: {
         itemDispositions: { select: { id: true, name: true }, orderBy: { name: "asc" } },
-        processType: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true } },
       },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
       skip: Number(offset),
@@ -144,7 +141,7 @@ export async function getById(id: string) {
     where: { id },
     include: {
       itemDispositions: { select: { id: true, name: true }, orderBy: { name: "asc" } },
-      processType: { select: { id: true, name: true } },
+      labels: { select: { id: true, name: true } },
     },
   });
 
@@ -156,7 +153,7 @@ export async function getById(id: string) {
 }
 
 export async function update(id: string, input: UpdateDispositionReasonInput) {
-  const { name, itemDispositionIds, processTypeId } = input;
+  const { name, itemDispositionIds, labelIds } = input;
 
   const current = await prisma.itemDispositionReason.findUnique({
     where: { id },
@@ -184,34 +181,24 @@ export async function update(id: string, input: UpdateDispositionReasonInput) {
     return dispositionLinks;
   }
 
-  if (processTypeId !== undefined && processTypeId !== null) {
-    const processType = await prisma.processType.findUnique({
-      where: { id: processTypeId },
-      select: { id: true, siteId: true, deletedAt: true },
-    });
-
-    if (!processType || processType.deletedAt) {
-      return { error: "Process type not found", code: "PROCESS_TYPE_NOT_FOUND" };
-    }
-
-    if (processType.siteId !== current.siteId) {
-      return { error: "Process type must belong to the same site", code: "SITE_MISMATCH" };
+  if (labelIds && labelIds.length > 0) {
+    const found = await prisma.label.count({ where: { id: { in: labelIds }, siteId: current.siteId } });
+    if (found !== labelIds.length) {
+      return { error: "One or more labels not found for this site", code: "LABEL_NOT_FOUND" };
     }
   }
 
   const updateData: Prisma.ItemDispositionReasonUpdateInput = {};
   if (name !== undefined) updateData.name = name;
   if (dispositionLinks) updateData.itemDispositions = { set: dispositionLinks.data.map((id) => ({ id })) };
-  if (processTypeId !== undefined) {
-    updateData.processType = processTypeId ? { connect: { id: processTypeId } } : { disconnect: true };
-  }
+  if (labelIds !== undefined) updateData.labels = { set: labelIds.map((lid) => ({ id: lid })) };
 
   const reason = await prisma.itemDispositionReason.update({
     where: { id },
     data: updateData,
     include: {
       itemDispositions: { select: { id: true, name: true }, orderBy: { name: "asc" } },
-      processType: { select: { id: true, name: true } },
+      labels: { select: { id: true, name: true } },
     },
   });
 

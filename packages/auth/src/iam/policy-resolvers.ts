@@ -22,9 +22,9 @@ export const RESOLVERS = {
   // ── direct siteId column ────────────────────────────────────────────
   station: (id: string) => prisma.station.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   workcenter: (id: string) => prisma.workcenter.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  label: (id: string) => prisma.label.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   order: (id: string) => prisma.order.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   customer: (id: string) => prisma.customer.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  processType: (id: string) => prisma.processType.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   statusReason: (id: string) => prisma.statusReason.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   statusCategory: (id: string) =>
     prisma.statusCategory.findUnique({ where: { id }, select: { siteId: true } }).then(one),

@@ -82,7 +82,7 @@
 --   Tool         -> ToolVersion         (name, pmLimit, pmWarn)
 --   ToolCavity   -> ToolCavityVersion   (name, position)
 --   Job          -> JobVersion          (name, description, standardCycle)
---   Station      -> StationVersion      (standardCycle, downtimeDetect, slowDetect, inLineCalculations, processTypeId)
+--   Station      -> StationVersion      (standardCycle, downtimeDetect, slowDetect, inLineCalculations)
 --   JobProduct   -> JobProductVersion   (isActive, quantity)
 --
 -- ID MAPPING (IdMap)
@@ -112,13 +112,13 @@ print '//Site comes from /prisma/seed/import/config.ts'
 -- ==========================================================================
 -- 1. ProcessType
 -- ==========================================================================
--- Prisma model:   ProcessType (in workcenter.prisma — referenced but defined elsewhere)
--- Importer:       prisma/seed/import/importProcessTypes.ts
+-- Prisma model:   Label (legacy process groups become labels)
+-- Importer:       prisma/seed/import/importLabels.ts
 -- SQL Server tbl: tblConfigProcess
--- IdMap key:       "processType" keyed by name
+-- IdMap key:       "label" keyed by name
 -- Prisma upsert:  unique constraint = (siteId, name)
 --
--- Used by:  Workcenter.processTypeId, StationVersion.processTypeId, Job.processTypeId
+-- Used by:  Label attachments (the legacy process groups become labels)
 --
 -- Interface fields expected:
 --   name:        string  -> ProcessName
@@ -226,14 +226,14 @@ SELECt PN as [product],materialID as material, [weight],[unit] as weightUnits FR
 --                 composite unique @@unique([siteId, parentId, name])
 --
 -- Resolves FKs via IdMap:
---   GroupID -> idMap.get("processType", row.GroupID)
+--   GroupID -> idMap.get("label", row.GroupID)
 --
 -- Used by:  Station.workcenterId (joined via PXID)
 --
 -- Interface fields expected:
 --   PXID:        string -> PXID         (line identifier, used as IdMap key)
 --   name:        string -> Title1
---   GroupID:     string -> GroupID      (processType name for IdMap lookup)
+--   GroupID:     string -> GroupID      (label name for IdMap lookup)
 --   Description: string -> Description
 -- --------------------------------------------------------------------------
 print '=== Workcenter ==='
@@ -248,18 +248,18 @@ Select PXID,Title1 as [name],Process,Description from tblConfigLine
 -- SQL Server tbl: tblConfigSN1
 -- IdMap key:       "station" keyed by name (SN1)
 -- Prisma upsert:  unique constraint = (siteId, name)
--- Version fields:    standardCycle, downtimeDetect, slowDetect, inLineCalculations, processTypeId
+-- Version fields:    standardCycle, downtimeDetect, slowDetect, inLineCalculations
 --
 -- Resolves FKs via IdMap:
 --   PXID        -> idMap.get("workcenter", row.PXID)    — workcenter linkage
 --   currentJob  -> idMap.get("job", row.currentJob)     — if not found, set to null
---   ProcessType -> idMap.get("processType", row.ProcessType) — stored in StationVersion
+--   ProcessType -> idMap.get("label", row.ProcessType) — attached as a station label
 --
 -- Station-level fields (on Station table, NOT in version):
 --   name, workcenterId, currentJobId
 --
 -- StationVersion fields (versioned):
---   standardCycle, downtimeDetect, slowDetect, inLineCalculations, processTypeId
+--   standardCycle, downtimeDetect, slowDetect, inLineCalculations
 --
 -- Interface fields expected:
 --   PXID:               string -> PXID              (workcenter line ID for IdMap lookup)
@@ -334,7 +334,7 @@ Select distinct ToolId,CavityID from tblConfigJob_Cavity
 -- IdMap key:       "job" keyed by name (JobId)
 -- Lookup:         finds existing by (siteId, currentVersion.name, deletedAt=null)
 -- Version fields:    name, description, standardCycle
--- Non-version:       processTypeId (hard-coded to "MOLD" in importer)
+-- Non-version:       MOLD label (hard-coded in importer)
 --
 -- The importer also creates JobTool records:
 --   For each production job (not in ["MAINT","OPEN","SCHED DOWN","TOOLING"]),
@@ -420,7 +420,7 @@ select FTTypeID as [name], ABS(active) as isActive from tblConfigFTType
 --
 -- Resolves FKs via IdMap:
 --   categoryId   -> idMap.get("statusCategory", row.statusCategoryName)
---   processTypes -> idMap.get("processType", row.DTGroupID)  (implicit m2m)
+--   labels       -> idMap.get("label", row.DTGroupID)  (implicit m2m)
 --
 -- Used by:  StationStateLog.statusReasonId
 --
@@ -463,7 +463,7 @@ select 'SCRAP' as [name]
 -- Prisma upsert:  unique constraint = (siteId, name)
 --
 -- Resolves FKs via IdMap:
---   processTypeId -> idMap.get("processType", row.ProcessName)
+--   label attach -> idMap.get("label", row.ProcessName)
 --
 -- Used by:  ItemDispositionLog.dispositionReasonId
 --
@@ -565,7 +565,7 @@ select NameID, NameTypeId as Role, [Password] as PIN, [Number] as EmployeeID fro
 -- ==========================================================================
 -- Legacy table            -> New Prisma model(s)          -> Data file section
 -- ----------------------     ---------------------------     -----------------
--- tblConfigProcess        -> ProcessType                  -> ProcessType
+-- tblConfigProcess        -> Label                        -> ProcessType
 -- tblConfigPN             -> Product, ProductVersion         -> Product
 -- tblConfigMaterial       -> Material, MaterialVersion       -> Material
 -- tblConfigPN_Material    -> ProductMaterial               -> ProductMaterial

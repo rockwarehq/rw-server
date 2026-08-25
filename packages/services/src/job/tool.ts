@@ -9,6 +9,8 @@ import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 
 export interface CreateToolInput {
   siteId: string;
+  /** Labels to put on this record. They must come from the same site's list. */
+  labelIds?: string[];
   name: string;
   description?: string;
   cavityCount?: number;
@@ -22,10 +24,14 @@ export interface UpdateToolInput {
   pmLimit?: number | null;
   pmWarn?: number | null;
   attrs?: Record<string, unknown>;
+  /** Replaces the record's whole label list with this one (same-site labels only). */
+  labelIds?: string[];
 }
 
 export interface ListToolsFilter {
   siteId?: string;
+  /** Only return tools that have at least one of these labels. */
+  labelIds?: string[];
   name?: string;
   limit?: number;
   offset?: number;
@@ -54,7 +60,7 @@ export interface UpdateCavityInput {
  * Create a new tool with initial version (version 1)
  */
 export async function create(input: CreateToolInput) {
-  const { siteId, name, description, cavityCount, attrs } = input;
+  const { siteId, labelIds, name, description, cavityCount, attrs } = input;
 
   // Verify site exists
   const site = await prisma.site.findUnique({
@@ -66,11 +72,21 @@ export async function create(input: CreateToolInput) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
 
+  if (labelIds && labelIds.length > 0) {
+    const found = await prisma.label.count({ where: { id: { in: labelIds }, siteId } });
+    if (found !== labelIds.length) {
+      return { error: "One or more labels not found for this site", code: "LABEL_NOT_FOUND" };
+    }
+  }
+
   // Create tool and initial version in transaction
   const tool = await prisma.$transaction(async (tx) => {
     // 1. Create Tool entity
     const t = await tx.tool.create({
-      data: { siteId },
+      data: {
+        siteId,
+        ...(labelIds?.length ? { labels: { connect: labelIds.map((id) => ({ id })) } } : {}),
+      },
     });
 
     // 2. Create initial ToolVersion (version 1)
@@ -92,6 +108,7 @@ export async function create(input: CreateToolInput) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true } },
         _count: { select: { toolCavities: true, jobs: true, versions: true } },
       },
     });
@@ -112,7 +129,7 @@ export async function create(input: CreateToolInput) {
  * List tools with optional filtering
  */
 export async function list(filter: ListToolsFilter = {}) {
-  const { siteId, name, limit = 50, offset = 0 } = filter;
+  const { siteId, labelIds, name, limit = 50, offset = 0 } = filter;
 
   const where: Prisma.ToolWhereInput = {
     deletedAt: null,
@@ -120,6 +137,10 @@ export async function list(filter: ListToolsFilter = {}) {
 
   if (siteId) {
     where.siteId = siteId;
+  }
+
+  if (labelIds && labelIds.length > 0) {
+    where.labels = { some: { id: { in: labelIds } } };
   }
 
   // Filter by current version fields
@@ -135,6 +156,7 @@ export async function list(filter: ListToolsFilter = {}) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true } },
         _count: { select: { toolCavities: true, jobs: true, versions: true } },
       },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
@@ -168,6 +190,7 @@ export async function getById(id: string) {
         },
         orderBy: { createdAt: "asc" },
       },
+      labels: { select: { id: true, name: true } },
       _count: { select: { toolCavities: true, jobs: true, versions: true } },
     },
   });
@@ -187,7 +210,7 @@ export async function getById(id: string) {
  * Update tool (creates new version version)
  */
 export async function update(id: string, input: UpdateToolInput) {
-  const { name, description, cavityCount, pmLimit, pmWarn, attrs } = input;
+  const { name, description, cavityCount, pmLimit, pmWarn, attrs, labelIds } = input;
 
   // Get current tool with version
   const current = await prisma.tool.findUnique({
@@ -205,6 +228,15 @@ export async function update(id: string, input: UpdateToolInput) {
 
   if (!current.currentVersion) {
     return { error: "Tool has no current version", code: "NO_CURRENT_VERSION" };
+  }
+
+  if (labelIds && labelIds.length > 0) {
+    const found = await prisma.label.count({
+      where: { id: { in: labelIds }, siteId: current.siteId },
+    });
+    if (found !== labelIds.length) {
+      return { error: "One or more labels not found for this site", code: "LABEL_NOT_FOUND" };
+    }
   }
 
   const currentVersion = current.currentVersion;
@@ -237,10 +269,14 @@ export async function update(id: string, input: UpdateToolInput) {
 
     return tx.tool.update({
       where: { id },
-      data: { currentVersionId: version.id },
+      data: {
+        currentVersionId: version.id,
+        ...(labelIds !== undefined ? { labels: { set: labelIds.map((cid) => ({ id: cid })) } } : {}),
+      },
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true } },
         _count: { select: { toolCavities: true, jobs: true, versions: true } },
       },
     });

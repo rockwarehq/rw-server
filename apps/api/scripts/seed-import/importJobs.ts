@@ -31,10 +31,10 @@ export async function importJobs(prisma: PrismaClient, idMap: IdMap, siteId: str
 
   log.info(`Found ${rows.length} rows to import`);
 
-  // All jobs get processTypeId = MOLD
-  const processTypeId = idMap.get("processType", "MOLD") ?? null;
-  if (!processTypeId) {
-    log.warn("ProcessType 'MOLD' not found in IdMap — jobs will have no processType");
+  // All legacy jobs get the MOLD label (the old process group).
+  const moldLabelId = idMap.get("label", "MOLD") ?? null;
+  if (!moldLabelId) {
+    log.warn("Label 'MOLD' not found in IdMap — jobs will have no label");
   }
 
   const result = await batchUpsert(
@@ -77,10 +77,10 @@ export async function importJobs(prisma: PrismaClient, idMap: IdMap, siteId: str
             },
           });
         }
-        if (existing.processTypeId !== processTypeId) {
+        if (moldLabelId) {
           await prisma.job.update({
             where: { id: existing.id },
-            data: { processTypeId },
+            data: { labels: { connect: [{ id: moldLabelId }] } },
           });
         }
 
@@ -88,7 +88,7 @@ export async function importJobs(prisma: PrismaClient, idMap: IdMap, siteId: str
       } else {
         // Create new job + version v1
         const job = await prisma.job.create({
-          data: { siteId, processTypeId },
+          data: { siteId, ...(moldLabelId ? { labels: { connect: [{ id: moldLabelId }] } } : {}) },
         });
 
         const version = await prisma.jobVersion.create({

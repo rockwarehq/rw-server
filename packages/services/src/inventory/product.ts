@@ -11,6 +11,8 @@ import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 
 export interface CreateProductInput {
   siteId: string;
+  /** Labels to put on this record. They must come from the same site's list. */
+  labelIds?: string[];
   sku: string;
   name?: string;
   description?: string;
@@ -30,10 +32,14 @@ export interface UpdateProductInput {
   weightUnits?: WeightUnit;
   itemCost?: number | null;
   attrs?: Record<string, unknown>;
+  /** Replaces the record's whole label list with this one (same-site labels only). */
+  labelIds?: string[];
 }
 
 export interface ListProductsFilter {
   siteId?: string;
+  /** Only return products that have at least one of these labels. */
+  labelIds?: string[];
   /** Free-text search across sku and name (case-insensitive contains, OR) */
   q?: string;
   sku?: string;
@@ -89,7 +95,7 @@ export interface AddPictureInput {
  * Create a new product with initial version (version 1)
  */
 export async function create(input: CreateProductInput) {
-  const { siteId, sku, name, description, externalSku, weight, weightUnits, itemCost, attrs } = input;
+  const { siteId, labelIds, sku, name, description, externalSku, weight, weightUnits, itemCost, attrs } = input;
 
   // Verify site exists
   const site = await prisma.site.findUnique({
@@ -101,11 +107,21 @@ export async function create(input: CreateProductInput) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
 
+  if (labelIds && labelIds.length > 0) {
+    const found = await prisma.label.count({ where: { id: { in: labelIds }, siteId } });
+    if (found !== labelIds.length) {
+      return { error: "One or more labels not found for this site", code: "LABEL_NOT_FOUND" };
+    }
+  }
+
   // Create product and initial version in transaction
   const product = await prisma.$transaction(async (tx) => {
     // 1. Create Product entity
     const p = await tx.product.create({
-      data: { siteId },
+      data: {
+        siteId,
+        ...(labelIds?.length ? { labels: { connect: labelIds.map((id) => ({ id })) } } : {}),
+      },
     });
 
     // 2. Create initial ProductVersion (version 1)
@@ -131,6 +147,7 @@ export async function create(input: CreateProductInput) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true } },
         _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
       },
     });
@@ -151,11 +168,25 @@ export async function create(input: CreateProductInput) {
  * List products with optional filtering
  */
 export async function list(filter: ListProductsFilter = {}) {
-  const { siteId, q, sku, name, includeArchived = false, archivedOnly = false, limit = 50, offset = 0 } = filter;
+  const {
+    siteId,
+    labelIds,
+    q,
+    sku,
+    name,
+    includeArchived = false,
+    archivedOnly = false,
+    limit = 50,
+    offset = 0,
+  } = filter;
 
   const where: Prisma.ProductWhereInput = {
     deletedAt: null,
   };
+
+  if (labelIds && labelIds.length > 0) {
+    where.labels = { some: { id: { in: labelIds } } };
+  }
 
   // Archive filtering
   if (archivedOnly) {
@@ -189,6 +220,7 @@ export async function list(filter: ListProductsFilter = {}) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true } },
         _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
       },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
@@ -231,6 +263,7 @@ export async function getById(id: string) {
       pictures: {
         orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
       },
+      labels: { select: { id: true, name: true } },
       _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
     },
   });
@@ -273,7 +306,7 @@ export async function getById(id: string) {
  * Update product (creates new version version)
  */
 export async function update(id: string, input: UpdateProductInput) {
-  const { sku, name, description, externalSku, weight, weightUnits, itemCost, attrs } = input;
+  const { sku, name, description, externalSku, weight, weightUnits, itemCost, attrs, labelIds } = input;
 
   // Get current product with version
   const current = await prisma.product.findUnique({
@@ -291,6 +324,15 @@ export async function update(id: string, input: UpdateProductInput) {
 
   if (!current.currentVersion) {
     return { error: "Product has no current version", code: "NO_CURRENT_VERSION" };
+  }
+
+  if (labelIds && labelIds.length > 0) {
+    const found = await prisma.label.count({
+      where: { id: { in: labelIds }, siteId: current.siteId },
+    });
+    if (found !== labelIds.length) {
+      return { error: "One or more labels not found for this site", code: "LABEL_NOT_FOUND" };
+    }
   }
 
   const currentVersion = current.currentVersion;
@@ -323,10 +365,14 @@ export async function update(id: string, input: UpdateProductInput) {
 
     return tx.product.update({
       where: { id },
-      data: { currentVersionId: version.id },
+      data: {
+        currentVersionId: version.id,
+        ...(labelIds !== undefined ? { labels: { set: labelIds.map((cid) => ({ id: cid })) } } : {}),
+      },
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true } },
         _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
       },
     });

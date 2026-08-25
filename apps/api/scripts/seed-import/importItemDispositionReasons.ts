@@ -37,12 +37,12 @@ export async function importItemDispositionReasons(prisma: PrismaClient, idMap: 
   const result = await batchUpsert(
     rows,
     async (row) => {
-      // Resolve processTypeId from the IdMap (populated by importProcessTypes)
-      let processTypeId: string | null = null;
+      // The legacy process group becomes a label on the code.
+      let groupLabelId: string | null = null;
       if (row.ProcessName) {
-        processTypeId = idMap.get("processType", row.ProcessName) ?? null;
-        if (!processTypeId) {
-          log.warn(`ProcessType "${row.ProcessName}" not found in IdMap for reason "${row.name}" — setting to null`);
+        groupLabelId = idMap.get("label", row.ProcessName) ?? null;
+        if (!groupLabelId) {
+          log.warn(`Label "${row.ProcessName}" not found in IdMap for reason "${row.name}" — skipping label`);
         }
       }
 
@@ -55,7 +55,7 @@ export async function importItemDispositionReasons(prisma: PrismaClient, idMap: 
         record = await prisma.itemDispositionReason.update({
           where: { id: existing.id },
           data: {
-            processType: processTypeId ? { connect: { id: processTypeId } } : { disconnect: true },
+            labels: groupLabelId ? { set: [{ id: groupLabelId }] } : undefined,
             itemDispositions: { set: dispositionIds },
           },
         });
@@ -64,7 +64,7 @@ export async function importItemDispositionReasons(prisma: PrismaClient, idMap: 
           data: {
             name: row.name,
             site: { connect: { id: siteId } },
-            processType: processTypeId ? { connect: { id: processTypeId } } : undefined,
+            labels: groupLabelId ? { connect: [{ id: groupLabelId }] } : undefined,
             itemDispositions: dispositionIds.length > 0 ? { connect: dispositionIds } : undefined,
           },
         });

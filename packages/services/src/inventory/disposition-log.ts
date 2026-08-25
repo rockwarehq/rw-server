@@ -40,13 +40,7 @@ export interface ListDispositionLogsFilter {
 const logInclude = {
   station: { select: { id: true, name: true } },
   itemDisposition: { select: { id: true, name: true } },
-  dispositionReason: {
-    select: {
-      id: true,
-      name: true,
-      processType: { select: { id: true, name: true } },
-    },
-  },
+  dispositionReason: { select: { id: true, name: true } },
   productVersion: { select: { id: true, version: true, name: true, sku: true } },
   stationVersion: { select: { id: true, version: true } },
   toolVersion: { select: { id: true, version: true, name: true } },
@@ -94,6 +88,7 @@ async function validateDispositionReasonPair(
   siteId: string,
   itemDispositionId: string | null | undefined,
   dispositionReasonId: string | null | undefined,
+  stationId?: string,
 ) {
   if (!itemDispositionId && !dispositionReasonId) {
     return { data: { itemDispositionId: null, dispositionReasonId: null } };
@@ -125,6 +120,7 @@ async function validateDispositionReasonPair(
       id: true,
       siteId: true,
       deletedAt: true,
+      labels: { select: { id: true } },
       itemDispositions: {
         where: { id: itemDispositionId },
         select: { id: true },
@@ -146,6 +142,24 @@ async function validateDispositionReasonPair(
       error: "Disposition reason is not linked to this disposition",
       code: "DISPOSITION_REASON_NOT_LINKED",
     };
+  }
+
+  // If the station filters scrap codes, the reason must pass the filter.
+  if (stationId) {
+    const stationFilter = await prisma.labelFilter.findUnique({
+      where: { stationId_target: { stationId, target: "DISPOSITION_REASON" } },
+      select: { labels: { select: { id: true } } },
+    });
+    // An empty filter (only possible via direct DB writes) is ignored.
+    if (stationFilter && stationFilter.labels.length > 0) {
+      const allowed = new Set(stationFilter.labels.map((l) => l.id));
+      if (!reason.labels.some((l) => allowed.has(l.id))) {
+        return {
+          error: "The station's scrap-code filter does not allow this reason",
+          code: "LABEL_FILTER_MISMATCH",
+        };
+      }
+    }
   }
 
   return { data: { itemDispositionId, dispositionReasonId } };
@@ -286,7 +300,12 @@ export async function create(input: CreateDispositionLogInput) {
     return { error: "Station must belong to the specified site", code: "SITE_MISMATCH" };
   }
 
-  const dispositionPair = await validateDispositionReasonPair(siteId, itemDispositionId, dispositionReasonId);
+  const dispositionPair = await validateDispositionReasonPair(
+    siteId,
+    itemDispositionId,
+    dispositionReasonId,
+    stationId,
+  );
   if ("error" in dispositionPair) {
     return dispositionPair;
   }
@@ -423,6 +442,7 @@ export async function update(id: string, input: UpdateDispositionLogInput) {
     current.siteId,
     nextItemDispositionId,
     nextDispositionReasonId,
+    current.stationId,
   );
   if ("error" in dispositionPair) {
     return dispositionPair;

@@ -22,8 +22,7 @@ const shiftViewConfigSchema = z.object({
   // save selections, not resolved stations, so they stay correct as station
   // attributes change.
   stationIds: z.array(z.uuid()).nullable(),
-  processTypeIds: z.array(z.uuid()).nullable(),
-  classificationIds: z.array(z.uuid()).nullable(),
+  labelIds: z.array(z.uuid()).nullable(),
   stationsLayout: z.enum(["list", "cards"]),
   chartMode: z.enum(["production", "oee"]),
   showChart: z.boolean(),

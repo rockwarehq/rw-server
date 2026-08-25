@@ -20,6 +20,7 @@ const userSchema = {
     email: { type: "string", format: "email" },
     firstName: { type: "string", nullable: true },
     lastName: { type: "string", nullable: true },
+    mustChangePassword: { type: "boolean" },
   },
 } as const satisfies JSONSchema;
 
