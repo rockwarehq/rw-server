@@ -24,6 +24,7 @@ import { MetricsContext } from "../metrics/context.js";
 import { jobEntityId } from "../metrics/cascade.js";
 import { scheduleShiftChanges } from "./shift-change.js";
 import { flushAllExpiredShiftUsage } from "../inventory/material-shift-flush.js";
+import { resolveEffectiveStandards } from "../facility/station/effective-standards.js";
 
 const REDIS_URL = process.env.REDIS_URL;
 
@@ -231,12 +232,11 @@ export async function runMetricBucketEnsureTick(): Promise<{ checked: number; ar
         siteId: string;
         jobId: string;
         jobVersionId: string;
-        standardCycle: number | null;
         jobName: string;
       }>
     >`
       SELECT s.id AS "stationId", s."siteId", s."currentJobId" AS "jobId",
-             j."currentVersionId" AS "jobVersionId", jb."standardCycle"::float8 AS "standardCycle",
+             j."currentVersionId" AS "jobVersionId",
              COALESCE(jb.name, '') AS "jobName"
       FROM "Station" s
       JOIN "Job" j ON j.id = s."currentJobId"
@@ -251,9 +251,10 @@ export async function runMetricBucketEnsureTick(): Promise<{ checked: number; ar
     `;
 
     for (const station of stationsNeedingLog) {
+      const std = await resolveEffectiveStandards(prisma, station.stationId, station.jobId);
       await prisma.$executeRaw`
-        INSERT INTO "StationJobLog" (id, "stationId", "jobId", "jobVersionId", "startTime", "standardCycle", "createdAt", "updatedAt")
-        VALUES (gen_random_uuid(), ${station.stationId}::uuid, ${station.jobId}::uuid, ${station.jobVersionId}::uuid, ${now}, ${station.standardCycle}, NOW(), NOW())
+        INSERT INTO "StationJobLog" (id, "stationId", "jobId", "jobVersionId", "startTime", "standardCycle", "standardQuantity", "quantityUnit", "createdAt", "updatedAt")
+        VALUES (gen_random_uuid(), ${station.stationId}::uuid, ${station.jobId}::uuid, ${station.jobVersionId}::uuid, ${now}, ${std.standardCycleSeconds}, ${std.standardQuantity}, ${std.quantityUnit}, NOW(), NOW())
       `;
       console.log(
         `[metric-bucket-ensure] Reconciled missing StationJobLog for station ${station.stationId}, job ${station.jobId}`,

@@ -132,15 +132,28 @@ enum StandardCycleUnit {
   SECONDS
 }
 
+enum RatePeriod {
+  SECOND
+  MINUTE
+  HOUR
+}
+
 model JobVersion {
-  id                String            @id @default(uuid()) @db.Uuid
-  version           Int
-  name              String
-  description       String?
-  standardCycle     Decimal?          @db.Decimal(10, 2)
-  standardCycleUnit StandardCycleUnit @default(SECONDS)
-  productsPerCycle  Int               @default(1)
-  attrs             Json              @default("{}")
+  id                 String            @id @default(uuid()) @db.Uuid
+  version            Int
+  name               String
+  description        String?
+  standardCycle      Decimal?          @db.Decimal(10, 2)
+  standardCycleUnit  StandardCycleUnit @default(SECONDS)
+  /// Customer-entered standard as a rate (e.g. 50 ft per MINUTE). Entry format
+  /// only — the server derives standardCycle (s) and downstream reads only that.
+  standardRate       Decimal?          @db.Decimal(18, 4)
+  standardRateUnit   String            @default("")
+  standardRatePeriod RatePeriod        @default(MINUTE)
+  /// Per-job override of StationVersion.standardQuantity; null = inherit.
+  standardQuantity   Decimal?          @db.Decimal(18, 4)
+  productsPerCycle   Int               @default(1)
+  attrs              Json              @default("{}")
 
   jobId String @db.Uuid
   job   Job    @relation("JobVersions", fields: [jobId], references: [id])

@@ -205,7 +205,8 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
     ),
     active_job AS (
       SELECT sjl."jobId", sjl."jobVersionId", sjl."startTime" AS job_start,
-             sjl."endTime" AS job_end, sjl."standardCycle"::float8 AS std_cycle
+             sjl."endTime" AS job_end, sjl."standardCycle"::float8 AS std_cycle,
+             sjl."standardQuantity"::float8 AS standard_quantity
       FROM "StationJobLog" sjl, params p
       WHERE sjl."stationId" = p.station_id
         AND sjl."startTime" < p.hour_end
@@ -215,7 +216,8 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
     job_meta AS (
       SELECT aj.*,
         COALESCE((SELECT jb.name FROM "JobVersion" jb WHERE jb.id = aj."jobVersionId"), '') AS job_name,
-        COALESCE((SELECT SUM(jpb.quantity)::int FROM "JobProduct" jp JOIN "JobProductVersion" jpb ON jpb.id = jp."currentVersionId" WHERE jp."jobId" = aj."jobId" AND jp."deletedAt" IS NULL AND jpb."isActive" = true), 1) AS items_per_cycle,
+        -- expected qty/cycle = standardQuantity (null = discrete = 1) × job-product quantities
+        ROUND(COALESCE(aj.standard_quantity, 1) * COALESCE((SELECT SUM(jpb.quantity)::int FROM "JobProduct" jp JOIN "JobProductVersion" jpb ON jpb.id = jp."currentVersionId" WHERE jp."jobId" = aj."jobId" AND jp."deletedAt" IS NULL AND jpb."isActive" = true), 1))::int AS items_per_cycle,
         COALESCE((SELECT mb.path FROM "MetricBucket" mb WHERE mb."entityType" = 'STATION' AND mb."entityId" = (SELECT station_id FROM params) AND mb.granularity = 'HOUR' AND mb."startTime" = (SELECT hour_start FROM params) LIMIT 1), 'site.' || (SELECT site_id FROM params) || '.station.' || (SELECT station_id FROM params)) || '.job.' || aj."jobId" AS job_path,
         md5((SELECT station_id FROM params)::text || ':job:' || aj."jobId"::text)::uuid AS job_entity_id
       FROM active_job aj
@@ -247,8 +249,10 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
     cycle_stats AS (
       SELECT
         COUNT(*)::int AS total_cycles,
-        COALESCE(SUM((SELECT COUNT(*)::int FROM "InventoryItem" ii WHERE ii."cycleId" = c.id)), 0)::int AS total_items,
-        COALESCE(SUM(CASE WHEN jm.std_cycle > 0 THEN ROUND(jm.std_cycle)::int ELSE 0 END), 0)::int AS ideal_cycle_seconds,
+        -- SUM(quantity), not COUNT(*): legacy rows default to 1
+        ROUND(COALESCE(SUM((SELECT COALESCE(SUM(ii.quantity), 0) FROM "InventoryItem" ii WHERE ii."cycleId" = c.id)), 0))::int AS total_items,
+        -- prefer the cycle's earned-standard snapshot; fall back to the job-log snapshot
+        COALESCE(SUM(CASE WHEN c."standardCycle" IS NOT NULL THEN ROUND(c."standardCycle")::int WHEN jm.std_cycle > 0 THEN ROUND(jm.std_cycle)::int ELSE 0 END), 0)::int AS ideal_cycle_seconds,
         COALESCE(SUM(EXTRACT(EPOCH FROM (c."end" - c.start))::int), 0)::int AS total_cycle_seconds
       FROM "Cycle" c
       JOIN "JobVersion" jbc ON jbc.id = c."jobVersionId"
@@ -517,15 +521,20 @@ export async function syncExpectedCyclesFromJobs(stationId: string, siteId: stri
            AND jb2."entityId" = md5((SELECT station_id FROM params)::text || ':job:' || (SELECT s."currentJobId" FROM "Station" s WHERE s.id = (SELECT station_id FROM params))::text)::uuid
          LIMIT 1) AS current_std_cycle
       FROM "MetricBucket" jb
-      JOIN "StationJobLog" sjl ON sjl."jobId" = jb."currentJobId"
-        AND sjl."stationId" = (SELECT station_id FROM params)
-        AND sjl."startTime" < (SELECT hour_start FROM params) + INTERVAL '1 hour'
-        AND (sjl."endTime" > (SELECT hour_start FROM params) OR sjl."endTime" IS NULL)
       WHERE jb."entityType" = 'JOB'
         AND jb.granularity = 'HOUR'
         AND jb."startTime" = (SELECT hour_start FROM params)
         AND jb."siteId" = ${siteId}::uuid
-        AND jb."entityId" = md5((SELECT station_id FROM params)::text || ':job:' || sjl."jobId"::text)::uuid
+        AND jb."entityId" = md5((SELECT station_id FROM params)::text || ':job:' || jb."currentJobId"::text)::uuid
+        -- Semi-join, not JOIN: several logs for the same job in one hour
+        -- (re-assignment) must not multiply the bucket into the sum.
+        AND EXISTS (
+          SELECT 1 FROM "StationJobLog" sjl
+          WHERE sjl."jobId" = jb."currentJobId"
+            AND sjl."stationId" = (SELECT station_id FROM params)
+            AND sjl."startTime" < (SELECT hour_start FROM params) + INTERVAL '1 hour'
+            AND (sjl."endTime" > (SELECT hour_start FROM params) OR sjl."endTime" IS NULL)
+        )
     )
     UPDATE "MetricBucket" mb
     SET "expectedCycles" = js.expected_cycles,
@@ -1106,15 +1115,20 @@ export async function syncExpectedCyclesFromJobsBatch(stationIds: string[], time
         COALESCE(SUM(jb."elapsedExpectedCycles"), 0)::int AS elapsed_expected_cycles,
         COALESCE(SUM(jb."elapsedExpectedItems"), 0)::int AS elapsed_expected_items
       FROM target_bucket tb
-      LEFT JOIN "StationJobLog" sjl ON sjl."stationId" = tb.station_id
-        AND sjl."startTime" < tb.hour_start + INTERVAL '1 hour'
-        AND (sjl."endTime" > tb.hour_start OR sjl."endTime" IS NULL)
+      -- DISTINCT jobs, not raw logs: several logs for the same job in one
+      -- hour (re-assignment) must not multiply the bucket into the sum.
+      LEFT JOIN LATERAL (
+        SELECT DISTINCT sjl."jobId" FROM "StationJobLog" sjl
+        WHERE sjl."stationId" = tb.station_id
+          AND sjl."startTime" < tb.hour_start + INTERVAL '1 hour'
+          AND (sjl."endTime" > tb.hour_start OR sjl."endTime" IS NULL)
+      ) jl ON true
       LEFT JOIN "MetricBucket" jb ON jb."entityType" = 'JOB'::"BucketEntityType"
         AND jb.granularity = 'HOUR'::"BucketGranularity"
         AND jb."startTime" = tb.hour_start
         AND jb."siteId" = tb.site_id
-        AND jb."currentJobId" = sjl."jobId"
-        AND jb."entityId" = md5(tb.station_id::text || ':job:' || sjl."jobId"::text)::uuid
+        AND jb."currentJobId" = jl."jobId"
+        AND jb."entityId" = md5(tb.station_id::text || ':job:' || jl."jobId"::text)::uuid
       GROUP BY tb.station_id, tb.site_id, tb.current_job_id, tb.hour_start
     )
     UPDATE "MetricBucket" mb

@@ -24,13 +24,13 @@ const createInputSchema = z.object({
   startDate: z.coerce.date().optional(),
   dueDate: z.coerce.date().optional(),
   priority: z.number().int().min(0).max(3).default(0),
-  defaultTargetQuantity: z.number().int().min(1).default(1),
+  defaultTargetQuantity: z.number().positive().default(1),
   notes: z.string().optional(),
   lineItems: z
     .array(
       z.object({
         productId: z.uuid(),
-        targetQuantity: z.number().int().min(1),
+        targetQuantity: z.number().positive(),
       }),
     )
     .optional(),
@@ -44,7 +44,7 @@ const updateInputSchema = z.object({
   startDate: z.coerce.date().nullable().optional(),
   dueDate: z.coerce.date().nullable().optional(),
   priority: z.number().int().min(0).max(3).optional(),
-  defaultTargetQuantity: z.number().int().min(1).optional(),
+  defaultTargetQuantity: z.number().positive().optional(),
   notes: z.string().nullable().optional(),
 });
 
@@ -67,12 +67,12 @@ const transitionStatusInputSchema = z.object({
 const addLineItemInputSchema = z.object({
   orderId: z.uuid(),
   productId: z.uuid(),
-  targetQuantity: z.number().int().min(1),
+  targetQuantity: z.number().positive(),
 });
 
 const updateLineItemInputSchema = z.object({
   id: z.uuid(),
-  targetQuantity: z.number().int().min(1).optional(),
+  targetQuantity: z.number().positive().optional(),
 });
 
 const removeLineItemInputSchema = z.object({ id: z.uuid() });

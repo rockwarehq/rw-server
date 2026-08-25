@@ -46,6 +46,19 @@ enum StationStatus {
   DOWN
 }
 
+/// DISCRETE: each event is one cycle whose duration is measured against the
+/// standard cycle; item counts come from job products. QUANTITY_PER_CYCLE:
+/// same math, but the machine emits a pulse every `cycleQuantity` units
+/// (e.g. an encoder firing every 100 feet) and the job's standard is entered
+/// as a rate. QUANTITY_PER_INTERVAL: events arrive on a fixed clock of
+/// `standardCycle` seconds and the produced quantity is the variable,
+/// measured against the expected quantity (rate × interval).
+enum CycleMode {
+  DISCRETE
+  QUANTITY_PER_CYCLE
+  QUANTITY_PER_INTERVAL
+}
+
 enum DowntimeDetectUnit {
   SECONDS
 }
@@ -216,6 +229,15 @@ model StationVersion {
   version Int
 
   standardCycle         Decimal?           @db.Decimal(10, 2)
+  cycleMode             CycleMode          @default(DISCRETE)
+  /// Standard quantity per cycle event (e.g. encoder fires every 100 ft); null = discrete.
+  standardQuantity      Decimal?           @db.Decimal(18, 4)
+  /// The station's canonical unit for all quantities (standards, actuals, inventory).
+  quantityUnit          String             @default("")
+  /// Station default rate (e.g. 100 rivets per MINUTE); JobVersion rate overrides.
+  standardRate          Decimal?           @db.Decimal(18, 4)
+  standardRateUnit      String             @default("")
+  standardRatePeriod    RatePeriod         @default(MINUTE)
   inLineCalculations    Boolean            @default(false)
   inStationCalculations Boolean            @default(false)
   downtimeDetect        Decimal?           @db.Decimal(10, 2)
@@ -279,6 +301,9 @@ model StationJobLog {
   endTime           DateTime? @db.Timestamptz(3) // null = currently running
   /// Standard cycle time (seconds) snapshotted from the job version at assignment time.
   standardCycle     Decimal?  @db.Decimal(10, 2)
+  /// Effective standard quantity per cycle snapshotted at assignment.
+  standardQuantity  Decimal?  @db.Decimal(18, 4)
+  quantityUnit      String    @default("")
   /// Watermark for incremental bucket accumulation. The background worker
   /// advances this on each tick so only the delta since the last tick is processed.
   lastAccumulatedAt DateTime? @db.Timestamptz(3)

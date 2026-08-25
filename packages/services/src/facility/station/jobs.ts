@@ -8,6 +8,7 @@ import {
   splitOpenStateEntryForJobChange,
 } from "./state.js";
 import { publishEntityEvent } from "../../entity/events.js";
+import { resolveEffectiveStandards } from "./effective-standards.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 
 type ChangeJobResult =
@@ -47,7 +48,7 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
         deletedAt: true,
         currentVersionId: true,
         currentVersion: {
-          select: { standardCycle: true, name: true },
+          select: { name: true },
         },
       },
     });
@@ -117,9 +118,11 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
       data: { currentJobId: newJobId },
     });
 
-    // Create a new StationJobLog entry
+    // Create a new StationJobLog entry snapshotting the effective standards.
+    let effectiveStandardCycle: number | null = null;
     if (newJobId && job) {
-      const standardCycle = job.currentVersion?.standardCycle ?? null;
+      const std = await resolveEffectiveStandards(tx, stationId, newJobId);
+      effectiveStandardCycle = std.standardCycleSeconds;
 
       await tx.stationJobLog.create({
         data: {
@@ -128,7 +131,9 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
           // biome-ignore lint/style/noNonNullAssertion: returns NO_CURRENT_VERSION above (line 47-49) if job.currentVersionId is null; narrowing lost across closure
           jobVersionId: job.currentVersionId!,
           startTime: timestamp,
-          standardCycle,
+          standardCycle: std.standardCycleSeconds,
+          standardQuantity: std.standardQuantity,
+          quantityUnit: std.quantityUnit,
         },
       });
     }
@@ -136,7 +141,7 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
     // Keep state-log entries job-homogeneous under the period model.
     await splitOpenStateEntryForJobChange(tx, stationId, timestamp, job?.currentVersionId ?? null);
 
-    return { station, previousJobId, openLogs };
+    return { station, previousJobId, openLogs, effectiveStandardCycle };
   });
 
   if ("error" in result) {
@@ -144,7 +149,7 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
     return { error: result.error!, code: result.code! };
   }
 
-  const { station, previousJobId, openLogs } = result;
+  const { station, previousJobId, openLogs, effectiveStandardCycle } = result;
 
   publishEntityEvent({
     action: "updated",
@@ -176,9 +181,7 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
     publishStationCurrentJobMetric(stationId, job.currentVersion?.name ?? null, timestamp).catch((err) => {
       console.error(`[changeJob] publishStationCurrentJobMetric failed for station ${stationId}:`, err);
     });
-    const standardCycleSeconds =
-      job.currentVersion?.standardCycle != null ? Number(job.currentVersion.standardCycle) : null;
-    publishStationStandardCycleMetric(stationId, standardCycleSeconds, timestamp).catch((err) => {
+    publishStationStandardCycleMetric(stationId, effectiveStandardCycle, timestamp).catch((err) => {
       console.error(`[changeJob] publishStationStandardCycleMetric failed for station ${stationId}:`, err);
     });
   } else {

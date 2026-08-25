@@ -473,6 +473,8 @@ async function queryAndTallyCycles(
   // Two-query approach: fetch cycles, then batch-fetch inventory counts
   // only for matched cycle IDs.  This avoids a subquery that aggregates
   // the entire InventoryItem table.
+  // Cycles stamped since the mode work carry their own earned standardCycle;
+  // older rows fall back to the JobVersion join.
   const cycles = jobFilter
     ? await prisma.$queryRaw<
         Array<{
@@ -481,10 +483,12 @@ async function queryAndTallyCycles(
           end: Date | null;
           cycleStatus: string;
           standardCycle: number | null;
+          ownStandardCycle: number | null;
         }>
       >`
         SELECT c."id", c."start", c."end", c."cycleStatus",
-               jb."standardCycle"::float8 AS "standardCycle"
+               jb."standardCycle"::float8 AS "standardCycle",
+               c."standardCycle"::float8 AS "ownStandardCycle"
         FROM "Cycle" c
         JOIN "JobVersion" jb ON jb."id" = c."jobVersionId"
         WHERE c."stationId" = ${stationId}::uuid
@@ -501,10 +505,12 @@ async function queryAndTallyCycles(
           end: Date | null;
           cycleStatus: string;
           standardCycle: number | null;
+          ownStandardCycle: number | null;
         }>
       >`
         SELECT c."id", c."start", c."end", c."cycleStatus",
-               jb."standardCycle"::float8 AS "standardCycle"
+               jb."standardCycle"::float8 AS "standardCycle",
+               c."standardCycle"::float8 AS "ownStandardCycle"
         FROM "Cycle" c
         LEFT JOIN "JobVersion" jb ON jb."id" = c."jobVersionId"
         WHERE c."stationId" = ${stationId}::uuid
@@ -514,13 +520,14 @@ async function queryAndTallyCycles(
           AND c."deletedAt" IS NULL
       `;
 
-  // Batch-count inventory items scoped to only the matched cycles.
+  // Batch-sum inventory quantities scoped to only the matched cycles.
   // Uses the InventoryItem(cycleId) index — touches only relevant rows.
+  // SUM(quantity), not COUNT(*): legacy rows default to 1.
   const cycleIds = cycles.map((c) => c.id);
   const itemCounts =
     cycleIds.length > 0
-      ? await prisma.$queryRaw<Array<{ cycleId: string; count: bigint }>>`
-          SELECT "cycleId", COUNT(*)::bigint AS "count"
+      ? await prisma.$queryRaw<Array<{ cycleId: string; count: number }>>`
+          SELECT "cycleId", COALESCE(SUM(quantity), 0)::float8 AS "count"
           FROM "InventoryItem"
           WHERE "cycleId" = ANY(${cycleIds}::uuid[])
           GROUP BY "cycleId"
@@ -539,9 +546,10 @@ async function queryAndTallyCycles(
     const items = countMap.get(c.id) ?? 0;
     totalItems += items;
 
-    // For job buckets, use the job's standardCycle consistently.
-    // For station buckets, use each cycle's own version snapshot.
-    if (jobFilter?.standardCycle != null) {
+    // Per-cycle earned snapshot first, then job snapshot, then version join.
+    if (c.ownStandardCycle != null) {
+      idealCycleSeconds += Number(c.ownStandardCycle);
+    } else if (jobFilter?.standardCycle != null) {
       idealCycleSeconds += jobFilter.standardCycle;
     } else {
       const stdCycle = c.standardCycle ? Number(c.standardCycle) : 0;
@@ -558,7 +566,8 @@ async function queryAndTallyCycles(
   }
 
   const totalCycleSeconds = Math.round(totalCycleMs / 1000);
-  return { totalCycles, totalItems, idealCycleSeconds, totalCycleSeconds };
+  // totalItems is a quantity sum — round into the Int KPI.
+  return { totalCycles, totalItems: Math.round(totalItems), idealCycleSeconds, totalCycleSeconds };
 }
 
 // ── State log query and tally ────────────────────────────────────

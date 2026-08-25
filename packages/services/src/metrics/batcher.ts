@@ -51,14 +51,6 @@ export interface MetricsUpdateRequest {
   siteId: string;
   /** Timestamp of the cycle completion (cycle.end or fallback). */
   timestamp: Date;
-  /** Number of inventory items produced by this cycle. */
-  itemsCount: number;
-  /** Standard cycle time in seconds from the job version (for idealCycleSeconds). Null if unknown. */
-  standardCycleSeconds: number | null;
-  /** Number of items produced per cycle for this job (for expectedItems). */
-  itemsPerCycle: number;
-  /** Actual cycle duration in seconds (start to end, clipped to bucket). */
-  cycleDurationSeconds: number;
   /** If a state entry was closed during the cycle, recompute its full range. */
   closedEntry?: {
     startTime: Date;
