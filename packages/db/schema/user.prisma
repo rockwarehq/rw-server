@@ -10,6 +10,7 @@ model User {
   passwordHash String? // Null until invited/registered
   firstName    String? // Depricated - use employee profile
   lastName     String? // Depricated - use employee profile
+  avatarKey    String? // S3 key for the account avatar; null = initials fallback
   status       UserStatus @default(PENDING)
 
   // Invite flow - invitees receive a temporary password (bcrypt in

@@ -3,6 +3,7 @@
 
 export * as crud from "./crud.js";
 export * as andonRules from "./andon-rules.js";
+export * as logo from "./logo.js";
 
 // Re-export commonly used functions at top level for convenience
 export {
@@ -15,6 +16,13 @@ export {
   update,
   remove,
   type CreateSiteInput,
-  type UpdateSiteInput,
-  type ListSitesFilter,
 } from "./crud.js";
+
+export {
+  createLogoUpload,
+  removeLogo,
+  resolveLogoUrl,
+  type CreateLogoUploadInput,
+} from "./logo.js";
+
+export type { UpdateSiteInput, ListSitesFilter } from "./crud.js";

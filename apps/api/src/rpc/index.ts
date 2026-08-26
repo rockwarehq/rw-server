@@ -172,6 +172,8 @@ export const router = {
     deviceTree: site.deviceTree,
     update: site.update,
     delete: site.remove,
+    uploadLogo: site.uploadLogo,
+    removeLogo: site.removeLogo,
     andonRules: {
       list: siteAndonRules.list,
       create: siteAndonRules.create,

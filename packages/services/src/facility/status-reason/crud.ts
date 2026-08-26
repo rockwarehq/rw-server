@@ -89,7 +89,7 @@ export async function create(input: CreateStatusReasonInput) {
       category: {
         select: { id: true, name: true },
       },
-      labels: { select: { id: true, name: true } },
+      labels: { select: { id: true, name: true, color: true } },
     },
   });
 
@@ -135,7 +135,7 @@ export async function list(filter: ListStatusReasonsFilter = {}) {
         category: {
           select: { id: true, name: true },
         },
-        labels: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true, color: true } },
       },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
       skip: Number(offset),
@@ -162,7 +162,7 @@ export async function getById(id: string) {
       category: {
         select: { id: true, name: true },
       },
-      labels: { select: { id: true, name: true } },
+      labels: { select: { id: true, name: true, color: true } },
     },
   });
 
@@ -236,7 +236,7 @@ export async function update(id: string, input: UpdateStatusReasonInput) {
       category: {
         select: { id: true, name: true },
       },
-      labels: { select: { id: true, name: true } },
+      labels: { select: { id: true, name: true, color: true } },
     },
   });
 

@@ -30,6 +30,24 @@ const updateMeBodySchema = {
   },
 } as const satisfies JSONSchema;
 
+const avatarUploadBodySchema = {
+  type: "object",
+  properties: {
+    filename: { type: "string", minLength: 1 },
+    contentType: { type: "string", minLength: 1 },
+    size: { type: "number", minimum: 1 },
+  },
+  required: ["filename", "contentType", "size"],
+} as const satisfies JSONSchema;
+
+const avatarUploadResponseSchema = {
+  type: "object",
+  properties: {
+    uploadUrl: { type: "string" },
+    key: { type: "string" },
+  },
+} as const satisfies JSONSchema;
+
 const changePasswordBodySchema = {
   type: "object",
   properties: {
@@ -181,6 +199,9 @@ const getMeResponseSchema = {
         email: { type: "string", format: "email" },
         status: { type: "string", enum: ["PENDING", "ACTIVE", "DISABLED"] },
         mustChangePassword: { type: "boolean" },
+        firstName: { type: "string", nullable: true },
+        lastName: { type: "string", nullable: true },
+        avatarUrl: { type: "string", nullable: true },
       },
     },
     employee: employeeProfileSchema,
@@ -347,6 +368,65 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
         return reply.status(400).send({ error: result.error, details: result.details });
       }
       return reply.status(400).send({ error: result.error });
+    },
+  });
+
+  // Start an avatar upload for the current user: validates, stores the new
+  // avatarKey, and returns a presigned PUT URL. A failed storage PUT should
+  // be rolled back client-side via DELETE /users/me/avatar.
+  fastify.route({
+    method: "POST",
+    url: "/me/avatar",
+    preHandler: [fastify.verifyAccessToken],
+    schema: {
+      tags: ["users"],
+      security: [{ bearerAuth: [] }],
+      body: avatarUploadBodySchema,
+      response: {
+        200: avatarUploadResponseSchema,
+        400: errorSchema,
+        401: errorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const userId = request.iam?.id;
+      if (!userId) {
+        return reply.status(401).send({ error: "Unauthorized" });
+      }
+
+      const result = await user.createAvatarUpload(userId, request.body);
+      if (result.error !== undefined) {
+        return reply.status(400).send({ error: result.error });
+      }
+      return result.data;
+    },
+  });
+
+  // Remove the current user's avatar (idempotent)
+  fastify.route({
+    method: "DELETE",
+    url: "/me/avatar",
+    preHandler: [fastify.verifyAccessToken],
+    schema: {
+      tags: ["users"],
+      security: [{ bearerAuth: [] }],
+      response: {
+        200: successResponseSchema,
+        400: errorSchema,
+        401: errorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const userId = request.iam?.id;
+      if (!userId) {
+        return reply.status(401).send({ error: "Unauthorized" });
+      }
+
+      const result = await user.removeAvatar(userId);
+      if (result.error !== undefined) {
+        return reply.status(400).send({ error: result.error });
+      }
+      return { success: true };
     },
   });
 

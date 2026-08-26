@@ -16,7 +16,7 @@ export interface SetLabelFilterInput {
 }
 
 const filterInclude = {
-  labels: { select: { id: true, name: true } },
+  labels: { select: { id: true, name: true, color: true } },
 } as const;
 
 export async function setLabelFilter(input: SetLabelFilterInput) {

@@ -147,7 +147,7 @@ export async function create(input: CreateProductInput) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        labels: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true, color: true } },
         _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
       },
     });
@@ -220,7 +220,7 @@ export async function list(filter: ListProductsFilter = {}) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        labels: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true, color: true } },
         _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
       },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
@@ -263,7 +263,7 @@ export async function getById(id: string) {
       pictures: {
         orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
       },
-      labels: { select: { id: true, name: true } },
+      labels: { select: { id: true, name: true, color: true } },
       _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
     },
   });
@@ -372,7 +372,7 @@ export async function update(id: string, input: UpdateProductInput) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        labels: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true, color: true } },
         _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
       },
     });

@@ -4,6 +4,7 @@
 export * as crud from "./crud.js";
 export * as invite from "./invite.js";
 export * as password from "./password.js";
+export * as avatar from "./avatar.js";
 
 // Re-export commonly used functions at top level for convenience
 export {
@@ -33,6 +34,13 @@ export {
   type RevokeInviteError,
   type InviteContext,
 } from "./invite.js";
+
+export {
+  createAvatarUpload,
+  removeAvatar,
+  resolveAvatarUrl,
+  type CreateAvatarUploadInput,
+} from "./avatar.js";
 
 export {
   initiateReset,

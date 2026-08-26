@@ -75,7 +75,7 @@ const stationInclude = {
   // resolve a picker: find the target's filter, pass its label ids to the
   // list endpoint (no filter row = call the list with no labelIds).
   labelFilters: {
-    select: { target: true, labels: { select: { id: true, name: true } } },
+    select: { target: true, labels: { select: { id: true, name: true, color: true } } },
   },
   currentJob: {
     select: {
