@@ -118,7 +118,7 @@ export async function create(input: CreateMaterialInput) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        labels: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true, color: true } },
         _count: { select: { products: true, versions: true } },
       },
     });
@@ -183,7 +183,7 @@ export async function list(filter: ListMaterialsFilter = {}) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        labels: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true, color: true } },
         _count: { select: { products: true, versions: true } },
       },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
@@ -219,7 +219,7 @@ export async function getById(id: string) {
           },
         },
       },
-      labels: { select: { id: true, name: true } },
+      labels: { select: { id: true, name: true, color: true } },
       _count: { select: { products: true, versions: true } },
     },
   });
@@ -307,7 +307,7 @@ export async function update(id: string, input: UpdateMaterialInput) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        labels: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true, color: true } },
         _count: { select: { products: true, versions: true } },
       },
     });

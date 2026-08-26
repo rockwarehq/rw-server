@@ -108,7 +108,7 @@ export async function create(input: CreateToolInput) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        labels: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true, color: true } },
         _count: { select: { toolCavities: true, jobs: true, versions: true } },
       },
     });
@@ -156,7 +156,7 @@ export async function list(filter: ListToolsFilter = {}) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        labels: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true, color: true } },
         _count: { select: { toolCavities: true, jobs: true, versions: true } },
       },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
@@ -190,7 +190,7 @@ export async function getById(id: string) {
         },
         orderBy: { createdAt: "asc" },
       },
-      labels: { select: { id: true, name: true } },
+      labels: { select: { id: true, name: true, color: true } },
       _count: { select: { toolCavities: true, jobs: true, versions: true } },
     },
   });
@@ -276,7 +276,7 @@ export async function update(id: string, input: UpdateToolInput) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        labels: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true, color: true } },
         _count: { select: { toolCavities: true, jobs: true, versions: true } },
       },
     });

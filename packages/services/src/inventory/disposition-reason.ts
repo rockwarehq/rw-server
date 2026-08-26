@@ -94,7 +94,7 @@ export async function create(input: CreateDispositionReasonInput) {
     },
     include: {
       itemDispositions: { select: { id: true, name: true }, orderBy: { name: "asc" } },
-      labels: { select: { id: true, name: true } },
+      labels: { select: { id: true, name: true, color: true } },
     },
   });
 
@@ -119,7 +119,7 @@ export async function list(filter: ListDispositionReasonsFilter = {}) {
       where,
       include: {
         itemDispositions: { select: { id: true, name: true }, orderBy: { name: "asc" } },
-        labels: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true, color: true } },
       },
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
       skip: Number(offset),
@@ -141,7 +141,7 @@ export async function getById(id: string) {
     where: { id },
     include: {
       itemDispositions: { select: { id: true, name: true }, orderBy: { name: "asc" } },
-      labels: { select: { id: true, name: true } },
+      labels: { select: { id: true, name: true, color: true } },
     },
   });
 
@@ -198,7 +198,7 @@ export async function update(id: string, input: UpdateDispositionReasonInput) {
     data: updateData,
     include: {
       itemDispositions: { select: { id: true, name: true }, orderBy: { name: "asc" } },
-      labels: { select: { id: true, name: true } },
+      labels: { select: { id: true, name: true, color: true } },
     },
   });
 

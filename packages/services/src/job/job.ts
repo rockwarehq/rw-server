@@ -152,7 +152,7 @@ export async function create(input: CreateJobInput) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        labels: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true, color: true } },
         _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
       },
     });
@@ -245,7 +245,7 @@ export async function list(filter: ListJobsFilter = {}) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        labels: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true, color: true } },
         _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
       },
       ...pagination,
@@ -270,7 +270,7 @@ export async function getById(id: string) {
     include: {
       currentVersion: true,
       site: { select: { id: true, name: true } },
-      labels: { select: { id: true, name: true } },
+      labels: { select: { id: true, name: true, color: true } },
       tools: {
         where: { deletedAt: null },
         include: {
@@ -413,7 +413,7 @@ export async function update(id: string, input: UpdateJobInput) {
       include: {
         currentVersion: true,
         site: { select: { id: true, name: true } },
-        labels: { select: { id: true, name: true } },
+        labels: { select: { id: true, name: true, color: true } },
         _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
       },
     });
