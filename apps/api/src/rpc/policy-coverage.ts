@@ -74,6 +74,8 @@ export const SELF_SERVICE_REST_ROUTES: ReadonlySet<string> = new Set(
     "GET /users/me",
     "PUT /users/me",
     "PUT /users/me/password",
+    "POST /users/me/avatar",
+    "DELETE /users/me/avatar",
     // token minting — membership/site access verified by the auth service
     "POST /auth/switch-workspace",
     "POST /auth/switch-site",

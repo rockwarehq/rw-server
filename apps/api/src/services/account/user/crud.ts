@@ -3,6 +3,7 @@ import type { UserStatus } from "@rw/db";
 import { getEffectivePermissions, listAccessibleSites, type Permission } from "@rw/auth/iam/index";
 import { logEvent } from "@rw/services/audit/index";
 import { getWorkspaceAccessSummaries } from "../workspace/members.js";
+import { resolveAvatarUrl } from "./avatar.js";
 
 export interface CreateUserInput {
   email: string;
@@ -96,9 +97,28 @@ export async function list(filter: ListUsersFilter = {}) {
 export async function getMe(userId: string, workspaceId?: string, siteId?: string) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, email: true, status: true, systemRole: true, mustChangePassword: true },
+    select: {
+      id: true,
+      email: true,
+      status: true,
+      systemRole: true,
+      mustChangePassword: true,
+      firstName: true,
+      lastName: true,
+      avatarKey: true,
+    },
   });
   if (!user) return null;
+
+  const userView = {
+    id: user.id,
+    email: user.email,
+    status: user.status,
+    mustChangePassword: user.mustChangePassword,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    avatarUrl: await resolveAvatarUrl(user.avatarKey),
+  };
 
   // Rockware-staff users hold no memberships: build the view from the token's
   // workspace context and the code-resolved permission bundle.
@@ -114,7 +134,7 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
       ...(site ? { siteId: site.id } : {}),
     });
     return {
-      user: { id: user.id, email: user.email, status: user.status, mustChangePassword: user.mustChangePassword },
+      user: userView,
       employee: null,
       workspace,
       site,
@@ -156,7 +176,7 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
 
   if (!membership) {
     return {
-      user,
+      user: userView,
       employee: null,
       workspace: null,
       site: null,
@@ -181,7 +201,7 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
     }));
 
   return {
-    user,
+    user: userView,
     employee: membership.employee?.version
       ? {
           id: membership.employee.id,
