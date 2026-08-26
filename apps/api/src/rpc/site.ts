@@ -6,6 +6,7 @@ import { Principal } from "../auth/index.js";
 import { authorize, authorizeAccessibleSites } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
 import { throwServiceError, unwrap } from "./errors.js";
+import { storageConfig } from "../config.js";
 
 // ============================================================================
 // Input Schemas
@@ -55,7 +56,13 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
   // Site directory: the sanctioned cross-site surface (site picker/admin).
   const scope = grant(await authorizeAccessibleSites(context.iam, { permission: "facility:read" }));
-  return site.list({ ...input, workspaceId: scope.workspaceId, siteIds: scope.siteIds });
+  const result = await site.list({ ...input, workspaceId: scope.workspaceId, siteIds: scope.siteIds });
+  return {
+    ...result,
+    data: await Promise.all(
+      result.data.map(async (s) => ({ ...s, logoUrl: await site.resolveLogoUrl(s.attrs) })),
+    ),
+  };
 });
 
 /**
@@ -71,7 +78,7 @@ export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ i
     throw new ORPCError("NOT_FOUND", { message: "Site not found" });
   }
   if (result.error !== undefined) throwServiceError(result);
-  return result.data;
+  return { ...result.data, logoUrl: await site.resolveLogoUrl(result.data.attrs) };
 });
 
 const treeInputSchema = z.object({
@@ -146,6 +153,46 @@ export const remove = authRequired.input(idInputSchema).handler(async ({ input, 
   // HAS_WORKCENTERS / HAS_GATEWAYS / HAS_DATASOURCES map to CONFLICT via the shared table
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
+});
+
+const uploadLogoInputSchema = z.object({
+  id: z.uuid(),
+  filename: z.string().min(1),
+  contentType: z.string().refine((ct) => storageConfig.allowedContentTypes.includes(ct), {
+    message: `Content type must be one of: ${storageConfig.allowedContentTypes.join(", ")}`,
+  }),
+  size: z
+    .number()
+    .int()
+    .positive()
+    .max(storageConfig.maxFileSizeBytes, {
+      message: `File size must not exceed ${storageConfig.maxFileSizeBytes / (1024 * 1024)}MB`,
+    }),
+});
+
+/**
+ * Start a site logo upload — writes attrs.logo and returns a presigned PUT
+ * URL. Replaces any existing logo; callers roll back a failed PUT via
+ * removeLogo.
+ */
+export const uploadLogo = authRequired.input(uploadLogoInputSchema).handler(async ({ input, context }) => {
+  const { id, ...upload } = input;
+  const scope = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: id } }),
+  );
+
+  return unwrap(await site.createLogoUpload(id, upload, scope.workspaceId));
+});
+
+/**
+ * Remove the site logo (idempotent)
+ */
+export const removeLogo = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  const scope = grant(
+    await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.id } }),
+  );
+
+  return unwrap(await site.removeLogo(input.id, scope.workspaceId));
 });
 
 const siteIdInputSchema = z.object({
