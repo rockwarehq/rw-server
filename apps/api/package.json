@@ -14,6 +14,7 @@
   "scripts": {
     "build": "tsc -b",
     "start": "node dist/main.js",
+    "predev": "lsof -ti TCP:30000 -sTCP:LISTEN | xargs kill 2>/dev/null || true",
     "dev": "tsx watch src/main.ts",
     "dev:cycle-simulator": "tsx scripts/dev-cycle-simulator.ts",
     "db:seed": "tsx src/seed.ts",
