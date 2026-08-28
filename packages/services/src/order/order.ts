@@ -45,11 +45,15 @@ export interface UpdateOrderInput {
   notes?: string | null;
 }
 
+export type OrderSortKey = "orderNumber" | "customer" | "status" | "dueDate" | "createdAt";
+
 export interface ListOrdersFilter {
   siteId?: string;
   status?: OrderStatus | OrderStatus[];
   customerId?: string;
   search?: string;
+  sortBy?: OrderSortKey;
+  sortDir?: "asc" | "desc";
   limit?: number;
   offset?: number;
 }
@@ -334,7 +338,7 @@ export async function create(input: CreateOrderInput) {
 }
 
 export async function list(filter: ListOrdersFilter = {}) {
-  const { siteId, status, customerId, search, limit = 200, offset = 0 } = filter;
+  const { siteId, status, customerId, search, sortBy, sortDir = "asc", limit = 200, offset = 0 } = filter;
 
   const where: Prisma.OrderWhereInput = { deletedAt: null };
 
@@ -362,13 +366,32 @@ export async function list(filter: ListOrdersFilter = {}) {
     ];
   }
 
+  // Default order is the queue (sequence, then recency); explicit sorts apply
+  // across the whole result set, before pagination.
+  const orderBy: Prisma.OrderOrderByWithRelationInput[] = (() => {
+    switch (sortBy) {
+      case "orderNumber":
+        return [{ orderNumber: sortDir }];
+      case "customer":
+        return [{ customer: { name: sortDir } }, { orderNumber: "asc" }];
+      case "status":
+        return [{ status: sortDir }, { orderNumber: "asc" }];
+      case "dueDate":
+        return [{ dueDate: { sort: sortDir, nulls: "last" } }, { orderNumber: "asc" }];
+      case "createdAt":
+        return [{ createdAt: sortDir }];
+      default:
+        return [{ sequence: { sort: "asc", nulls: "last" } }, { createdAt: "desc" }];
+    }
+  })();
+
   const [orders, total] = await Promise.all([
     prisma.order.findMany({
       where,
       include: orderInclude,
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
       skip: Number(offset),
-      orderBy: [{ sequence: { sort: "asc", nulls: "last" } }, { createdAt: "desc" }],
+      orderBy,
     }),
     prisma.order.count({ where }),
   ]);
