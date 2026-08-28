@@ -52,6 +52,9 @@ export const RESOLVERS = {
   integrationTrigger: (id: string) =>
     prisma.integrationTrigger.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   siteAndonRule: (id: string) => prisma.siteAndonRule.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  call: (id: string) => prisma.call.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  callDefinition: (id: string) =>
+    prisma.callDefinition.findUnique({ where: { id }, select: { siteId: true } }).then(one),
 
   // ── nullable siteId column (null => anySite rule in policy.ts) ─────
   gateway: (id: string) => prisma.gateway.findUnique({ where: { id }, select: { siteId: true } }).then(one),

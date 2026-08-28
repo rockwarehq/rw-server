@@ -117,6 +117,8 @@ model Site {
   savedViews             SavedView[]
   integrations           Integration[]
   integrationTriggers    IntegrationTrigger[]
+  callDefinitions        CallDefinition[]
+  calls                  Call[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId])

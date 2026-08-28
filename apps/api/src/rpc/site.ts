@@ -66,9 +66,7 @@ export const list = authRequired.input(listInputSchema).handler(async ({ input, 
   const result = await site.list({ ...input, workspaceId: scope.workspaceId, siteIds: scope.siteIds });
   return {
     ...result,
-    data: await Promise.all(
-      result.data.map(async (s) => ({ ...s, logoUrl: await site.resolveLogoUrl(s.attrs) })),
-    ),
+    data: await Promise.all(result.data.map(async (s) => ({ ...s, logoUrl: await site.resolveLogoUrl(s.attrs) }))),
   };
 });
 

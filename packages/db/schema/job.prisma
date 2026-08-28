@@ -24,6 +24,7 @@ model Tool {
   toolCavities ToolCavity[]
   jobs         JobTool[]
   jobProducts  JobProduct[]
+  calls        Call[]
 
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
@@ -116,6 +117,7 @@ model Job {
   stationJobs        StationJob[]
   stationJobLogs     StationJobLog[]
   materialShiftUsage MaterialShiftUsage[]
+  calls              Call[]
 
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
@@ -157,6 +159,7 @@ model JobVersion {
   currentOfJob Job?              @relation("JobCurrent")
   cycles       Cycle[]
   stateLogs    StationStateLog[]
+  calls        Call[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
