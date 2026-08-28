@@ -51,6 +51,8 @@ export interface ListOrdersFilter {
   siteId?: string;
   status?: OrderStatus | OrderStatus[];
   customerId?: string;
+  /** Only orders with a line item for this product. */
+  productId?: string;
   search?: string;
   sortBy?: OrderSortKey;
   sortDir?: "asc" | "desc";
@@ -338,7 +340,17 @@ export async function create(input: CreateOrderInput) {
 }
 
 export async function list(filter: ListOrdersFilter = {}) {
-  const { siteId, status, customerId, search, sortBy, sortDir = "asc", limit = 200, offset = 0 } = filter;
+  const {
+    siteId,
+    status,
+    customerId,
+    productId,
+    search,
+    sortBy,
+    sortDir = "asc",
+    limit = 200,
+    offset = 0,
+  } = filter;
 
   const where: Prisma.OrderWhereInput = { deletedAt: null };
 
@@ -356,6 +368,10 @@ export async function list(filter: ListOrdersFilter = {}) {
 
   if (customerId) {
     where.customerId = customerId;
+  }
+
+  if (productId) {
+    where.lineItems = { some: { productId } };
   }
 
   if (search) {

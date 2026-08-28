@@ -50,6 +50,7 @@ const listInputSchema = z.object({
   siteId: z.uuid().optional(),
   status: z.union([orderStatusEnum, z.array(orderStatusEnum)]).optional(),
   customerId: z.uuid().optional(),
+  productId: z.uuid().optional(),
   search: z.string().optional(),
   sortBy: z.enum(["orderNumber", "customer", "status", "dueDate", "createdAt"]).optional(),
   sortDir: z.enum(["asc", "desc"]).default("asc"),
