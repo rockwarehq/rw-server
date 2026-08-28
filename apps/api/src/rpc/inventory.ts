@@ -2,7 +2,7 @@ import { z } from "zod";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
-import { material, inventory, product, materialLedger, stockAdjustment } from "@rw/services/inventory/index";
+import { material, inventory, product, materialLedger, materialBalance, stockAdjustment } from "@rw/services/inventory/index";
 import { getProductStockSummary } from "@rw/services/order/coverage";
 import { storageConfig } from "../config.js";
 import { type CodeOverrides, throwServiceError, unwrap } from "./errors.js";
@@ -715,6 +715,25 @@ const stockAdjustmentListInputSchema = z.object({
   offset: z.number().min(0).default(0),
 });
 
+const adjustMaterialBaseFields = {
+  siteId: z.uuid(),
+  materialId: z.uuid(),
+  reference: z.string().max(255).optional(),
+  note: z.string().max(2000).optional(),
+};
+
+// Count-first reconciliation for materials, mirroring inventory.adjustStock:
+// "set" reconciles to a counted balance; "delta" applies a signed correction.
+// Both append an immutable ADJUSTMENT ledger entry in the canonical unit.
+const adjustMaterialStockInputSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("set"), countedQuantity: decimalInputSchema, ...adjustMaterialBaseFields }),
+  z.object({ mode: z.literal("delta"), delta: decimalInputSchema, ...adjustMaterialBaseFields }),
+]);
+
+const materialBalanceInputSchema = z.object({
+  materialId: z.uuid(),
+});
+
 // ============================================================================
 // Procedures - Material Ledger
 // ============================================================================
@@ -791,4 +810,35 @@ export const inventoryStockAdjustments = authRequired
       await authorizeList(context.iam, { permission: "product:read", requestedSiteId: input.siteId }),
     );
     return stockAdjustment.list({ ...input, ...scopeFilter(scope) });
+  });
+
+/**
+ * Manually adjust or reconcile a material's on-hand balance. Appends an
+ * immutable ADJUSTMENT ledger entry.
+ */
+export const materialLedgerAdjust = authRequired
+  .input(adjustMaterialStockInputSchema)
+  .handler(async ({ input, context }) => {
+    grant(await authorize(context.iam, { permission: "product:write", scope: { kind: "site", siteId: input.siteId } }));
+
+    const result = await materialLedger.adjust({
+      ...input,
+      performedByUserId: "id" in context.iam ? context.iam.id : null,
+    });
+    // Same pin as materialLedgerCreate: the material/site pairing is validated
+    // from the request payload, so SITE_MISMATCH is BAD_REQUEST here.
+    return unwrap(result, { overrides: { SITE_MISMATCH: "BAD_REQUEST", MATERIAL_DELETED: "NOT_FOUND" } });
+  });
+
+/**
+ * On-hand balance breakdown for a material (received / adjusted / consumed /
+ * balance, including unflushed shift usage).
+ */
+export const materialLedgerBalance = authRequired
+  .input(materialBalanceInputSchema)
+  .handler(async ({ input, context }) => {
+    grant(
+      await authorize(context.iam, { permission: "product:read", scope: { kind: "material", id: input.materialId } }),
+    );
+    return materialBalance.balance(input.materialId);
   });

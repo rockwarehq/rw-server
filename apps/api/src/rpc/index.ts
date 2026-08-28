@@ -238,6 +238,8 @@ export const router = {
     create: inventory.materialLedgerCreate,
     list: inventory.materialLedgerList,
     usage: inventory.materialLedgerUsage,
+    adjust: inventory.materialLedgerAdjust,
+    balance: inventory.materialLedgerBalance,
   },
   product: {
     // CRUD
