@@ -135,12 +135,49 @@ model ProductStock {
   produced   Decimal @default(0) @db.Decimal(18, 4)
   scrapped   Decimal @default(0) @db.Decimal(18, 4)
   consumed   Decimal @default(0) @db.Decimal(18, 4)
-  /// Seam for a future manual-corrections API; unused until then.
+  /// Backed by ProductStockAdjustment: SUM(delta) — rebuildable like the
+  /// other fact columns.
   adjustment Decimal @default(0) @db.Decimal(18, 4)
 
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@id([siteId, productId])
+}
+
+enum StockAdjustmentReason {
+  CYCLE_COUNT // physical count reconciliation
+  DAMAGE // damaged/lost stock written down
+  FOUND // stock discovered
+  INITIAL // opening balance at onboarding
+  OTHER
+}
+
+/// Append-only book of record for manual on-hand corrections. Each row is one
+/// immutable signed delta applied to ProductStock.adjustment in the same
+/// transaction. `resultingOnHand` snapshots the RAW (unclamped) on-hand after
+/// the delta — for count entries this equals the counted quantity.
+model ProductStockAdjustment {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  delta           Decimal @db.Decimal(18, 4)
+  resultingOnHand Decimal @db.Decimal(18, 4)
+
+  reason StockAdjustmentReason
+  note   String?
+
+  performedByUserId String? @db.Uuid
+  performedByUser   User?   @relation(fields: [performedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([siteId, productId, createdAt])
+  @@index([siteId, createdAt])
 }
 
 enum ConsumptionSource {
@@ -210,6 +247,7 @@ model Product {
   orderLineItems     OrderLineItem[]
   stock              ProductStock[]
   consumptions       OrderConsumption[]
+  stockAdjustments   ProductStockAdjustment[]
 
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)

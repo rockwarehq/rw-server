@@ -273,6 +273,8 @@ export const router = {
     get: inventory.inventoryGet,
     getByCycle: inventory.inventoryGetByCycle,
     productStock: inventory.productStock,
+    adjustStock: inventory.inventoryAdjustStock,
+    stockAdjustments: inventory.inventoryStockAdjustments,
   },
   tool: {
     create: job.toolCreate,

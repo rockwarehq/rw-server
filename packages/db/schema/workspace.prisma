@@ -103,6 +103,7 @@ model Site {
   fulfillmentOrders      Order[]                 @relation("SiteFulfillmentOrders")
   productStocks          ProductStock[]
   orderConsumptions      OrderConsumption[]
+  productStockAdjustments ProductStockAdjustment[]
   shiftComments          ShiftComment[]
   roleAssignments        RoleAssignment[]
   materialLedgerEntries  MaterialLedgerEntry[]

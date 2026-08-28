@@ -48,6 +48,7 @@ model User {
   refreshTokens         RefreshToken[]
   shiftComments         ShiftComment[]
   materialLedgerEntries MaterialLedgerEntry[]
+  productStockAdjustments ProductStockAdjustment[]
   apiTokensCreated      ApiToken[]
   savedViewsCreated     SavedView[]
 }

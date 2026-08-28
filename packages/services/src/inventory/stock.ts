@@ -9,9 +9,10 @@ type RawClient = { $queryRaw: typeof prisma.$queryRaw; $executeRaw: typeof prism
 // ============================================================================
 //
 // A derived cache of facts, updated in the SAME transaction as the fact it
-// reflects (cycle inventory creation, disposition deltas, order consumption).
-// Rebuildable at any time via rederiveProductStock; the facts themselves live
-// in InventoryItem, ItemDispositionLog, and OrderConsumption.
+// reflects (cycle inventory creation, disposition deltas, order consumption,
+// manual stock adjustments). Rebuildable at any time via rederiveProductStock;
+// the facts themselves live in InventoryItem, ItemDispositionLog,
+// OrderConsumption, and ProductStockAdjustment.
 
 export interface ProductStockRow {
   productId: string;
@@ -113,13 +114,13 @@ export async function getStock(
 
 /**
  * Rebuild ProductStock from facts (InventoryItem, ItemDispositionLog,
- * OrderConsumption). Idempotent; safe to run at any time. Used by the
- * post-deploy repair script and available for support.
+ * OrderConsumption, ProductStockAdjustment). Idempotent; safe to run at any
+ * time. Used by the post-deploy repair script and available for support.
  */
 export async function rederiveProductStock(siteId?: string): Promise<void> {
   await prisma.$transaction(async (tx) => {
     const txRaw = tx as unknown as RawClient;
-    // Preserve manual adjustments; recompute the three fact columns.
+    // All four columns are fact-backed: adjustment = SUM(ledger deltas).
     await txRaw.$executeRaw`
       WITH produced AS (
         SELECT cy."siteId", pv."productId", SUM(ii.quantity) AS total
@@ -144,32 +145,43 @@ export async function rederiveProductStock(siteId?: string): Promise<void> {
         WHERE (${siteId ?? null}::uuid IS NULL OR oc."siteId" = ${siteId ?? null}::uuid)
         GROUP BY oc."siteId", oc."productId"
       ),
+      adjusted AS (
+        SELECT sa."siteId", sa."productId", SUM(sa.delta) AS total
+        FROM "ProductStockAdjustment" sa
+        WHERE (${siteId ?? null}::uuid IS NULL OR sa."siteId" = ${siteId ?? null}::uuid)
+        GROUP BY sa."siteId", sa."productId"
+      ),
       merged AS (
-        SELECT COALESCE(p."siteId", s."siteId", c."siteId") AS "siteId",
-               COALESCE(p."productId", s."productId", c."productId") AS "productId",
+        SELECT COALESCE(p."siteId", s."siteId", c."siteId", a."siteId") AS "siteId",
+               COALESCE(p."productId", s."productId", c."productId", a."productId") AS "productId",
                COALESCE(p.total, 0) AS produced,
                COALESCE(s.total, 0) AS scrapped,
-               COALESCE(c.total, 0) AS consumed
+               COALESCE(c.total, 0) AS consumed,
+               COALESCE(a.total, 0) AS adjustment
         FROM produced p
         FULL OUTER JOIN scrapped s ON s."siteId" = p."siteId" AND s."productId" = p."productId"
         FULL OUTER JOIN consumed c
           ON c."siteId" = COALESCE(p."siteId", s."siteId")
          AND c."productId" = COALESCE(p."productId", s."productId")
+        FULL OUTER JOIN adjusted a
+          ON a."siteId" = COALESCE(p."siteId", s."siteId", c."siteId")
+         AND a."productId" = COALESCE(p."productId", s."productId", c."productId")
       )
-      INSERT INTO "ProductStock" ("siteId", "productId", produced, scrapped, consumed, "updatedAt")
-      SELECT "siteId", "productId", produced, scrapped, consumed, NOW() FROM merged
+      INSERT INTO "ProductStock" ("siteId", "productId", produced, scrapped, consumed, adjustment, "updatedAt")
+      SELECT "siteId", "productId", produced, scrapped, consumed, adjustment, NOW() FROM merged
       ON CONFLICT ("siteId", "productId")
       DO UPDATE SET produced = EXCLUDED.produced,
                     scrapped = EXCLUDED.scrapped,
                     consumed = EXCLUDED.consumed,
+                    adjustment = EXCLUDED.adjustment,
                     "updatedAt" = NOW()
     `;
     // Zero out rows whose facts have entirely disappeared (rare: deletions).
     await txRaw.$executeRaw`
       UPDATE "ProductStock" ps
-      SET produced = 0, scrapped = 0, consumed = 0, "updatedAt" = NOW()
+      SET produced = 0, scrapped = 0, consumed = 0, adjustment = 0, "updatedAt" = NOW()
       WHERE (${siteId ?? null}::uuid IS NULL OR ps."siteId" = ${siteId ?? null}::uuid)
-        AND (produced <> 0 OR scrapped <> 0 OR consumed <> 0)
+        AND (produced <> 0 OR scrapped <> 0 OR consumed <> 0 OR adjustment <> 0)
         AND NOT EXISTS (
           SELECT 1 FROM "InventoryItem" ii
           JOIN "Cycle" cy ON cy.id = ii."cycleId"
@@ -184,6 +196,10 @@ export async function rederiveProductStock(siteId?: string): Promise<void> {
         AND NOT EXISTS (
           SELECT 1 FROM "OrderConsumption" oc
           WHERE oc."siteId" = ps."siteId" AND oc."productId" = ps."productId"
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM "ProductStockAdjustment" sa
+          WHERE sa."siteId" = ps."siteId" AND sa."productId" = ps."productId"
         )
     `;
   });
