@@ -1,0 +1,116 @@
+enum CallSeverity {
+  INFORMATION
+  ALERT
+  WARNING
+}
+
+enum CallSource {
+  MANUAL
+  SYSTEM
+}
+
+/// Admin-defined, per-site catalog of shop-floor calls (Request Maintenance,
+/// Call Supervisor, ...). Presentation is severity-driven; no colors stored.
+model CallDefinition {
+  id          String       @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  severity    CallSeverity @default(INFORMATION)
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  calls Call[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}
+
+/// One raised call at a station. closedAt IS NULL = active.
+model Call {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  definitionId String         @db.Uuid
+  definition   CallDefinition @relation(fields: [definitionId], references: [id], onDelete: Restrict)
+
+  /// Severity snapshotted from the definition at open time.
+  severity CallSeverity
+
+  // At most one open call per (station, definition): partial unique index on
+  // (stationId, definitionId) WHERE open — hand-written in the calls
+  // migration, not representable here.
+
+  // ── Dimension snapshots (star pattern for BI), captured at open time ──
+  // toolId/productId are set only when the job has exactly one active
+  // tool/product; multi-tool/product jobs dimension through jobId instead.
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id], onDelete: SetNull)
+
+  jobId String? @db.Uuid
+  job   Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  jobVersionId String?     @db.Uuid
+  jobVersion   JobVersion? @relation(fields: [jobVersionId], references: [id])
+
+  stationVersionId String?         @db.Uuid
+  stationVersion   StationVersion? @relation(fields: [stationVersionId], references: [id])
+
+  toolId String? @db.Uuid
+  tool   Tool?   @relation(fields: [toolId], references: [id], onDelete: SetNull)
+
+  productId String?  @db.Uuid
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  // Version snapshots for point-in-time names/attributes (plain columns,
+  // StationJobLog precedent — version rows are append-only).
+  toolVersionId    String? @db.Uuid
+  productVersionId String? @db.Uuid
+
+  /// Business date of the shift the call opened in (from the shift instance).
+  businessDate DateTime? @db.Date
+
+  openedAt DateTime  @default(now()) @db.Timestamptz(3)
+  closedAt DateTime? @db.Timestamptz(3)
+
+  source     CallSource
+  sourceType String? // programmatic origin discriminator, e.g. "station.down"
+  sourceRef  String? // free-form correlation id (alarm id, state-log id, ...)
+  message    String?
+
+  openedByEmployeeId        String?   @db.Uuid
+  openedByEmployee          Employee? @relation("CallOpenedBy", fields: [openedByEmployeeId], references: [id], onDelete: SetNull)
+  openedByEmployeeVersionId String?   @db.Uuid
+
+  closedByEmployeeId        String?   @db.Uuid
+  closedByEmployee          Employee? @relation("CallClosedBy", fields: [closedByEmployeeId], references: [id], onDelete: SetNull)
+  closedByEmployeeVersionId String?   @db.Uuid
+  closeMessage              String?
+
+  shiftInstanceId String?        @db.Uuid
+  shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([siteId, closedAt])
+  @@index([siteId, businessDate])
+  @@index([stationId, closedAt])
+  @@index([stationId, openedAt])
+  @@index([definitionId])
+  @@index([shiftInstanceId])
+  @@index([workcenterId])
+  @@index([jobId])
+  @@index([toolId])
+  @@index([productId])
+}

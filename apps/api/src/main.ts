@@ -33,6 +33,7 @@ import { registerReplayReconcileWorker, stopReplayReconcileWorker } from "@rw/se
 import { recoverReplayWindows, cleanup as cleanupReplay } from "@rw/services/cycle/replay";
 import { startGraphDefinitionPublisher } from "./nats/graph-definition-publisher.js";
 import { startEntityEventPublisher } from "./nats/entity-event-publisher.js";
+import { startCallEventPublisher } from "./nats/call-event-publisher.js";
 import { startCommandBus } from "./nats/command-bus.js";
 import { rootLogger } from "./logger.js";
 import { Redis } from "ioredis";
@@ -43,6 +44,7 @@ let cleanupBridge: (() => Promise<void>) | null = null;
 let cleanupMetricsBridge: (() => Promise<void>) | null = null;
 let cleanupGraphDefinitionPublisher: (() => Promise<void>) | null = null;
 let cleanupEntityEventPublisher: (() => Promise<void>) | null = null;
+let cleanupCallEventPublisher: (() => Promise<void>) | null = null;
 let cleanupCommandBus: (() => Promise<void>) | null = null;
 
 let readinessRedis: Redis | null = null;
@@ -91,6 +93,7 @@ async function main() {
   cleanupMetricsBridge = await initMetricsBridge("both");
   cleanupGraphDefinitionPublisher = await startGraphDefinitionPublisher();
   cleanupEntityEventPublisher = await startEntityEventPublisher();
+  cleanupCallEventPublisher = await startCallEventPublisher();
   cleanupCommandBus = await startCommandBus();
 
   // Producer-side queues that HTTP/RPC handlers enqueue against. These
@@ -123,6 +126,7 @@ async function shutdown() {
   if (cleanupMetricsBridge) await cleanupMetricsBridge();
   if (cleanupGraphDefinitionPublisher) await cleanupGraphDefinitionPublisher();
   if (cleanupEntityEventPublisher) await cleanupEntityEventPublisher();
+  if (cleanupCallEventPublisher) await cleanupCallEventPublisher();
   if (cleanupCommandBus) await cleanupCommandBus();
   if (readinessRedis) readinessRedis.disconnect();
   const { createPrismaClient: getClient } = await import("@rw/db");
