@@ -2,6 +2,7 @@ import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
+import { computeCoverage, isQueueStatus } from "./coverage.js";
 
 // ============================================================================
 // Types
@@ -9,9 +10,12 @@ import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 
 type OrderStatus = "DRAFT" | "OPEN" | "IN_PROGRESS" | "ON_HOLD" | "COMPLETED" | "CANCELLED";
 
+// The single source of truth for Order.status: every transition — user-driven
+// or the auto-complete rule — goes through transitionStatus. Production never
+// writes to orders; IN_PROGRESS is a user-set "we're working on this" marker.
 const STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   DRAFT: ["OPEN", "CANCELLED"],
-  OPEN: ["COMPLETED", "ON_HOLD", "CANCELLED"],
+  OPEN: ["IN_PROGRESS", "COMPLETED", "ON_HOLD", "CANCELLED"],
   IN_PROGRESS: ["ON_HOLD", "COMPLETED", "CANCELLED"],
   ON_HOLD: ["OPEN", "IN_PROGRESS", "CANCELLED"],
   COMPLETED: [],
@@ -26,7 +30,6 @@ export interface CreateOrderInput {
   poNumber?: string;
   startDate?: Date;
   dueDate?: Date;
-  priority?: number;
   defaultTargetQuantity?: number;
   notes?: string;
   lineItems?: { productId: string; targetQuantity: number }[];
@@ -38,7 +41,6 @@ export interface UpdateOrderInput {
   poNumber?: string | null;
   startDate?: Date | null;
   dueDate?: Date | null;
-  priority?: number;
   defaultTargetQuantity?: number;
   notes?: string | null;
 }
@@ -70,6 +72,105 @@ const orderInclude = {
     orderBy: { createdAt: "asc" as const },
   },
 };
+
+// Detail reads additionally carry the consumption history — the durable record
+// of what completing the order actually took from stock.
+const orderDetailInclude = {
+  ...orderInclude,
+  consumptions: {
+    orderBy: { createdAt: "desc" as const },
+    select: {
+      id: true,
+      quantity: true,
+      source: true,
+      orderLineItemId: true,
+      productId: true,
+      createdByUserId: true,
+      createdAt: true,
+    },
+  },
+};
+
+// ============================================================================
+// Coverage decoration
+// ============================================================================
+
+interface CoverableLineItem {
+  id: string;
+  productId: string;
+  targetQuantity: Prisma.Decimal | number;
+}
+
+interface CoverableOrder {
+  id: string;
+  siteId: string;
+  status: string;
+  lineItems: CoverableLineItem[];
+}
+
+/**
+ * Decorate orders with computed coverage: per line `coveredQuantity` /
+ * `remainingQuantity`, per order `coveragePct` / `isFullyCovered`. Only
+ * OPEN/IN_PROGRESS orders sit in the coverage queue; other statuses get nulls.
+ * Orders may span sites (owner listings) — coverage is computed per site.
+ */
+async function attachCoverage<T extends CoverableOrder>(orders: T[]) {
+  const productIdsBySite = new Map<string, Set<string>>();
+  for (const order of orders) {
+    if (!isQueueStatus(order.status)) continue;
+    let set = productIdsBySite.get(order.siteId);
+    if (!set) {
+      set = new Set();
+      productIdsBySite.set(order.siteId, set);
+    }
+    for (const li of order.lineItems) set.add(li.productId);
+  }
+
+  const coverageBySite = new Map<string, Awaited<ReturnType<typeof computeCoverage>>>();
+  for (const [siteId, productIds] of productIdsBySite) {
+    coverageBySite.set(siteId, await computeCoverage(siteId, [...productIds]));
+  }
+
+  return orders.map((order) => {
+    if (!isQueueStatus(order.status)) {
+      return {
+        ...order,
+        coveragePct: null as number | null,
+        isFullyCovered: null as boolean | null,
+        lineItems: order.lineItems.map((li) => ({
+          ...li,
+          coveredQuantity: null as number | null,
+          remainingQuantity: null as number | null,
+        })),
+      };
+    }
+
+    const coverage = coverageBySite.get(order.siteId);
+    let totalTarget = 0;
+    let totalCovered = 0;
+    const lineItems = order.lineItems.map((li) => {
+      const target = Number(li.targetQuantity);
+      const line = coverage?.byLineItem.get(li.id);
+      const covered = line?.coveredQuantity ?? 0;
+      totalTarget += target;
+      totalCovered += covered;
+      return {
+        ...li,
+        coveredQuantity: covered as number | null,
+        remainingQuantity: (line?.remainingQuantity ?? Math.max(target - covered, 0)) as number | null,
+      };
+    });
+
+    const coveragePct =
+      totalTarget > 0 ? Math.min(100, Math.round((totalCovered / totalTarget) * 1000) / 10) : 0;
+    return {
+      ...order,
+      lineItems,
+      coveragePct: coveragePct as number | null,
+      isFullyCovered: (order.lineItems.length > 0 && totalCovered >= totalTarget) as boolean | null,
+    };
+  });
+}
 
 // ============================================================================
 // Helpers
@@ -272,20 +373,21 @@ export async function list(filter: ListOrdersFilter = {}) {
     prisma.order.count({ where }),
   ]);
 
-  return { data: orders, total, limit: Number(limit), offset: Number(offset) };
+  return { data: await attachCoverage(orders), total, limit: Number(limit), offset: Number(offset) };
 }
 
 export async function get(id: string) {
   const order = await prisma.order.findUnique({
     where: { id },
-    include: orderInclude,
+    include: orderDetailInclude,
   });
 
   if (!order || order.deletedAt) {
     return { error: "Order not found", code: "ORDER_NOT_FOUND" };
   }
 
-  return { data: order };
+  const [withCoverage] = await attachCoverage([order]);
+  return { data: withCoverage };
 }
 
 export async function update(id: string, input: UpdateOrderInput) {
@@ -298,22 +400,10 @@ export async function update(id: string, input: UpdateOrderInput) {
     return { error: "Order not found", code: "ORDER_NOT_FOUND" };
   }
 
-  // Terminal statuses: no edits at all
+  // Terminal statuses: no edits at all. Everything else is fully editable —
+  // production no longer writes to orders, so there is nothing to protect.
   if (order.status === "COMPLETED" || order.status === "CANCELLED") {
     return { error: "Cannot edit completed or cancelled orders", code: "NOT_EDITABLE" };
-  }
-
-  // Check if order has any allocations
-  const allocationCount = await prisma.orderInventoryAllocation.count({
-    where: { orderLineItem: { orderId: id } },
-  });
-  const hasAllocations = allocationCount > 0;
-
-  if (hasAllocations) {
-    // Only notes can be updated when order has allocations
-    input = { notes: input.notes };
-  } else if (order.status !== "DRAFT" && order.status !== "OPEN") {
-    return { error: "Can only edit orders in DRAFT or OPEN status", code: "NOT_EDITABLE" };
   }
 
   if (input.orderNumber) {
@@ -378,7 +468,15 @@ export async function remove(id: string) {
 // Status Transitions
 // ============================================================================
 
-export async function transitionStatus(id: string, targetStatus: OrderStatus) {
+export interface TransitionStatusOptions {
+  /** Allow completing an order whose coverage is below 100% — consumes what is available. */
+  allowPartial?: boolean;
+  /** Who initiated a completion; stamped on OrderConsumption rows. */
+  source?: "MANUAL" | "AUTO";
+  userId?: string | null;
+}
+
+export async function transitionStatus(id: string, targetStatus: OrderStatus, opts: TransitionStatusOptions = {}) {
   const order = await prisma.order.findUnique({
     where: { id },
     select: {
@@ -404,6 +502,12 @@ export async function transitionStatus(id: string, targetStatus: OrderStatus) {
       error: `Cannot transition from ${currentStatus} to ${targetStatus}`,
       code: "INVALID_TRANSITION",
     };
+  }
+
+  // Completion is the one transition with side effects: it consumes covered
+  // stock and writes the durable OrderConsumption record.
+  if (targetStatus === "COMPLETED") {
+    return completeOrder(order.id, order.siteId, order.site.workspaceId, opts);
   }
 
   const updateData: Record<string, unknown> = { status: targetStatus };
@@ -445,6 +549,125 @@ export async function transitionStatus(id: string, targetStatus: OrderStatus) {
   return { data: updated };
 }
 
+/**
+ * Complete an order, consuming covered stock. Runs in one transaction:
+ * re-validates the transition (a concurrent complete — user vs auto-complete
+ * rule — loses with INVALID_TRANSITION), locks the ProductStock rows in
+ * productId order (the same order applyProduction upserts in), consumes
+ * min(target, available) per line, and records OrderConsumption rows.
+ * When any line is short and `allowPartial` is false, returns
+ * PARTIAL_COVERAGE and writes nothing.
+ */
+async function completeOrder(
+  orderId: string,
+  siteId: string,
+  workspaceId: string,
+  opts: TransitionStatusOptions,
+) {
+  const { allowPartial = false, source = "MANUAL", userId = null } = opts;
+
+  const result = await prisma.$transaction(async (tx) => {
+    const fresh = await tx.order.findUnique({
+      where: { id: orderId },
+      select: {
+        status: true,
+        deletedAt: true,
+        lineItems: { select: { id: true, productId: true, targetQuantity: true } },
+      },
+    });
+    if (!fresh || fresh.deletedAt) {
+      return { error: "Order not found", code: "ORDER_NOT_FOUND" } as const;
+    }
+    const status = fresh.status as OrderStatus;
+    if (!(STATUS_TRANSITIONS[status] ?? []).includes("COMPLETED")) {
+      return { error: `Cannot transition from ${status} to COMPLETED`, code: "INVALID_TRANSITION" } as const;
+    }
+
+    const productIds = [...new Set(fresh.lineItems.map((li) => li.productId))].sort();
+
+    const txRaw = tx as unknown as { $queryRaw: typeof prisma.$queryRaw };
+    const stockRows =
+      productIds.length > 0
+        ? await txRaw.$queryRaw<Array<{ productId: string; available: number }>>`
+            SELECT "productId",
+                   GREATEST(produced - scrapped - consumed + adjustment, 0)::float8 AS available
+            FROM "ProductStock"
+            WHERE "siteId" = ${siteId}::uuid AND "productId" = ANY(${productIds}::uuid[])
+            ORDER BY "productId"
+            FOR UPDATE
+          `
+        : [];
+    const availableByProduct = new Map(stockRows.map((row) => [row.productId, row.available]));
+
+    const takes = fresh.lineItems.map((li) => {
+      const target = Number(li.targetQuantity);
+      const available = availableByProduct.get(li.productId) ?? 0;
+      const take = Math.min(target, available);
+      availableByProduct.set(li.productId, available - take);
+      return { lineItemId: li.id, productId: li.productId, target, take };
+    });
+
+    const shortCount = takes.filter((t) => t.take < t.target).length;
+    if (shortCount > 0 && !allowPartial) {
+      return {
+        error: `Order is not fully covered by stock (${shortCount} line${shortCount === 1 ? "" : "s"} short)`,
+        code: "PARTIAL_COVERAGE",
+      } as const;
+    }
+
+    const consuming = takes.filter((t) => t.take > 0);
+    if (consuming.length > 0) {
+      await tx.orderConsumption.createMany({
+        data: consuming.map((t) => ({
+          siteId,
+          orderId,
+          orderLineItemId: t.lineItemId,
+          productId: t.productId,
+          quantity: t.take,
+          source,
+          createdByUserId: userId,
+        })),
+      });
+      for (const t of consuming) {
+        await tx.productStock.update({
+          where: { siteId_productId: { siteId, productId: t.productId } },
+          data: { consumed: { increment: t.take } },
+        });
+      }
+    }
+
+    const updated = await tx.order.update({
+      where: { id: orderId },
+      data: { status: "COMPLETED" },
+      include: orderDetailInclude,
+    });
+    return { data: updated, consumedProducts: consuming.map((t) => t.productId) };
+  });
+
+  if ("error" in result) return result;
+
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Order,
+    entityId: orderId,
+    siteId,
+    workspaceId,
+    changedFields: ["status"],
+  });
+  for (const productId of new Set(result.consumedProducts)) {
+    publishEntityEvent({
+      action: "updated",
+      entityKey: SYSTEM_ENTITY_KEYS.Product,
+      entityId: productId,
+      siteId,
+      workspaceId,
+      changedFields: ["stock"],
+    });
+  }
+
+  return { data: result.data };
+}
+
 // ============================================================================
 // Line Items
 // ============================================================================
@@ -459,11 +682,8 @@ export async function addLineItem(orderId: string, input: { productId: string; t
     return { error: "Order not found", code: "ORDER_NOT_FOUND" };
   }
 
-  const allocationCount = await prisma.orderInventoryAllocation.count({
-    where: { orderLineItem: { orderId } },
-  });
-  if (allocationCount > 0) {
-    return { error: "Cannot modify line items on an order with allocations", code: "HAS_ALLOCATIONS" };
+  if (order.status === "COMPLETED" || order.status === "CANCELLED") {
+    return { error: "Cannot modify line items on a completed or cancelled order", code: "NOT_EDITABLE" };
   }
 
   const existing = await prisma.orderLineItem.findUnique({
@@ -518,7 +738,7 @@ export async function updateLineItem(lineItemId: string, input: { targetQuantity
       id: true,
       orderId: true,
       productId: true,
-      order: { select: { siteId: true, site: { select: { workspaceId: true } } } },
+      order: { select: { siteId: true, status: true, site: { select: { workspaceId: true } } } },
     },
   });
 
@@ -526,11 +746,8 @@ export async function updateLineItem(lineItemId: string, input: { targetQuantity
     return { error: "Line item not found", code: "LINE_ITEM_NOT_FOUND" };
   }
 
-  const allocationCount = await prisma.orderInventoryAllocation.count({
-    where: { orderLineItem: { orderId: lineItem.orderId } },
-  });
-  if (allocationCount > 0) {
-    return { error: "Cannot modify line items on an order with allocations", code: "HAS_ALLOCATIONS" };
+  if (lineItem.order.status === "COMPLETED" || lineItem.order.status === "CANCELLED") {
+    return { error: "Cannot modify line items on a completed or cancelled order", code: "NOT_EDITABLE" };
   }
 
   const updated = await prisma.orderLineItem.update({
@@ -573,7 +790,7 @@ export async function removeLineItem(lineItemId: string) {
       id: true,
       orderId: true,
       productId: true,
-      order: { select: { siteId: true, site: { select: { workspaceId: true } } } },
+      order: { select: { siteId: true, status: true, site: { select: { workspaceId: true } } } },
     },
   });
 
@@ -581,11 +798,8 @@ export async function removeLineItem(lineItemId: string) {
     return { error: "Line item not found", code: "LINE_ITEM_NOT_FOUND" };
   }
 
-  const allocationCount = await prisma.orderInventoryAllocation.count({
-    where: { orderLineItem: { orderId: lineItem.orderId } },
-  });
-  if (allocationCount > 0) {
-    return { error: "Cannot modify line items on an order with allocations", code: "HAS_ALLOCATIONS" };
+  if (lineItem.order.status === "COMPLETED" || lineItem.order.status === "CANCELLED") {
+    return { error: "Cannot modify line items on a completed or cancelled order", code: "NOT_EDITABLE" };
   }
 
   await prisma.orderLineItem.delete({
@@ -616,11 +830,16 @@ export async function removeLineItem(lineItemId: string) {
 // Reorder (drag-and-drop sequence)
 // ============================================================================
 
-export async function reorder(_siteId: string, orderedIds: string[]) {
+export async function reorder(siteId: string, orderedIds: string[]) {
+  // Every id must be a live order in the authorized site — the RPC authorizes
+  // on siteId, so unverified ids would let a caller resequence other sites.
   const orders = await prisma.order.findMany({
-    where: { id: { in: orderedIds } },
+    where: { id: { in: orderedIds }, siteId, deletedAt: null },
     select: { id: true, siteId: true, site: { select: { workspaceId: true } } },
   });
+  if (orders.length !== new Set(orderedIds).size) {
+    return { error: "One or more orders were not found in this site", code: "ORDER_NOT_FOUND" };
+  }
   await prisma.$transaction(
     orderedIds.map((id, index) =>
       prisma.order.update({

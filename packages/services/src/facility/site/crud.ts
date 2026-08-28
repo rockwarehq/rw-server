@@ -168,7 +168,7 @@ export async function update(id: string, input: UpdateSiteInput, workspaceId?: s
   // Get current site
   const current = await prisma.site.findUnique({
     where: { id },
-    select: { id: true, workspaceId: true },
+    select: { id: true, workspaceId: true, attrs: true },
   });
 
   if (!current) {
@@ -184,7 +184,16 @@ export async function update(id: string, input: UpdateSiteInput, workspaceId?: s
   if (name !== undefined) updateData.name = name;
   if (description !== undefined) updateData.description = description;
   if (timezone !== undefined) updateData.timezone = timezone;
-  if (attrs !== undefined) updateData.attrs = attrs;
+  if (attrs !== undefined) {
+    // Shallow-merge instead of replace: attrs is shared by unrelated features
+    // (logo, order settings), so a caller must not clobber keys it didn't
+    // send. Sending `null` for a key deletes it.
+    const merged = { ...((current.attrs ?? {}) as Record<string, unknown>), ...attrs };
+    for (const [key, value] of Object.entries(attrs)) {
+      if (value === null) delete merged[key];
+    }
+    updateData.attrs = merged;
+  }
 
   const site = await prisma.site.update({
     where: { id },

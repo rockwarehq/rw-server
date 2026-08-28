@@ -101,6 +101,8 @@ model Site {
   employeeSiteAccess     EmployeeSiteAccess[]
   customers              Customer[]
   fulfillmentOrders      Order[]                 @relation("SiteFulfillmentOrders")
+  productStocks          ProductStock[]
+  orderConsumptions      OrderConsumption[]
   shiftComments          ShiftComment[]
   roleAssignments        RoleAssignment[]
   materialLedgerEntries  MaterialLedgerEntry[]

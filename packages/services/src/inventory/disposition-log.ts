@@ -1,6 +1,20 @@
 import prisma from "@rw/db";
 import { updateDispositionBadItems } from "@rw/services/metrics/recalc";
-import { deductScrap } from "@rw/services/order/allocation";
+import { publishEntityEvent } from "../entity/events.js";
+import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
+import { applyScrapDelta } from "./stock.js";
+
+/** Post-commit refresh hint: dispositions change the product's on-hand stock. */
+function publishStockEvent(siteId: string, workspaceId: string, productId: string): void {
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Product,
+    entityId: productId,
+    siteId,
+    workspaceId,
+    changedFields: ["stock"],
+  });
+}
 
 export interface CreateDispositionLogInput {
   siteId: string;
@@ -262,9 +276,8 @@ export async function record(input: RecordDispositionLogInput) {
     ...passthrough,
   });
 
-  // Order deduction is handled inside create() (via the resolved productVersion),
-  // so we must not call deductScrap again here or scrap would be double-counted
-  // against the order line item.
+  // The stock scrap delta is applied inside create() (via the resolved
+  // productVersion), so this wrapper must not apply it again.
   return result;
 }
 
@@ -289,7 +302,7 @@ export async function create(input: CreateDispositionLogInput) {
   // Validate station exists and belongs to site
   const station = await prisma.station.findUnique({
     where: { id: stationId },
-    select: { id: true, siteId: true },
+    select: { id: true, siteId: true, site: { select: { workspaceId: true } } },
   });
 
   if (!station) {
@@ -320,27 +333,33 @@ export async function create(input: CreateDispositionLogInput) {
     return { error: "Product version not found", code: "PRODUCT_VERSION_NOT_FOUND" };
   }
 
-  const log = await prisma.itemDispositionLog.create({
-    data: {
-      siteId,
-      stationId,
-      workcenterId: workcenterId ?? null,
-      quantity: quantity ?? 1,
-      itemDispositionId: dispositionPair.data.itemDispositionId,
-      dispositionReasonId: dispositionPair.data.dispositionReasonId,
-      cycleId: cycleId ?? null,
-      shiftInstanceId: shiftInstanceId ?? null,
-      productVersionId,
-      stationVersionId: stationVersionId ?? null,
-      jobProductVersionId: jobProductVersionId ?? null,
-      toolVersionId: toolVersionId ?? null,
-      toolCavityVersionId: toolCavityVersionId ?? null,
-      productMaterialVersions:
-        productMaterialVersionIds && productMaterialVersionIds.length > 0
-          ? { connect: productMaterialVersionIds.map((id) => ({ id })) }
-          : undefined,
-    },
-    include: logInclude,
+  // Log write + stock scrap delta stay atomic: scrap only ever affects
+  // inventory (never orders), and the aggregate must match the fact.
+  const log = await prisma.$transaction(async (tx) => {
+    const created = await tx.itemDispositionLog.create({
+      data: {
+        siteId,
+        stationId,
+        workcenterId: workcenterId ?? null,
+        quantity: quantity ?? 1,
+        itemDispositionId: dispositionPair.data.itemDispositionId,
+        dispositionReasonId: dispositionPair.data.dispositionReasonId,
+        cycleId: cycleId ?? null,
+        shiftInstanceId: shiftInstanceId ?? null,
+        productVersionId,
+        stationVersionId: stationVersionId ?? null,
+        jobProductVersionId: jobProductVersionId ?? null,
+        toolVersionId: toolVersionId ?? null,
+        toolCavityVersionId: toolCavityVersionId ?? null,
+        productMaterialVersions:
+          productMaterialVersionIds && productMaterialVersionIds.length > 0
+            ? { connect: productMaterialVersionIds.map((id) => ({ id })) }
+            : undefined,
+      },
+      include: logInclude,
+    });
+    await applyScrapDelta(tx, siteId, productVersion.productId, quantity ?? 1);
+    return created;
   });
 
   // Trigger metric recalculation for badItems
@@ -348,12 +367,7 @@ export async function create(input: CreateDispositionLogInput) {
     console.error(`[disposition-log] Failed to update badItems metrics for station ${stationId}:`, err);
   });
 
-  // Deduct from the highest-priority order for this product
-  if (productVersion?.productId) {
-    deductScrap(siteId, productVersion.productId, quantity ?? 1).catch((err) => {
-      console.error(`[disposition-log] Failed to deduct from order for product ${productVersion.productId}:`, err);
-    });
-  }
+  publishStockEvent(siteId, station.site.workspaceId, productVersion.productId);
 
   return { data: log };
 }
@@ -429,6 +443,8 @@ export async function update(id: string, input: UpdateDispositionLogInput) {
       quantity: true,
       itemDispositionId: true,
       dispositionReasonId: true,
+      site: { select: { workspaceId: true } },
+      productVersion: { select: { productId: true } },
     },
   });
 
@@ -453,18 +469,26 @@ export async function update(id: string, input: UpdateDispositionLogInput) {
   if (itemDispositionId !== undefined) updateData.itemDispositionId = itemDispositionId;
   if (dispositionReasonId !== undefined) updateData.dispositionReasonId = dispositionReasonId;
 
-  const log = await prisma.itemDispositionLog.update({
-    where: { id },
-    data: updateData,
-    include: logInclude,
+  const quantityDelta = quantity !== undefined ? quantity - current.quantity : 0;
+
+  const log = await prisma.$transaction(async (tx) => {
+    const updated = await tx.itemDispositionLog.update({
+      where: { id },
+      data: updateData,
+      include: logInclude,
+    });
+    if (quantityDelta !== 0) {
+      await applyScrapDelta(tx, current.siteId, current.productVersion.productId, quantityDelta);
+    }
+    return updated;
   });
 
   // If quantity changed, trigger metric recalc with delta
-  if (quantity !== undefined && quantity !== current.quantity) {
-    const delta = quantity - current.quantity;
-    updateDispositionBadItems(current.stationId, current.siteId, log.createdAt, delta).catch((err) => {
+  if (quantityDelta !== 0) {
+    updateDispositionBadItems(current.stationId, current.siteId, log.createdAt, quantityDelta).catch((err) => {
       console.error(`[disposition-log] Failed to update badItems metrics for station ${current.stationId}:`, err);
     });
+    publishStockEvent(current.siteId, current.site.workspaceId, current.productVersion.productId);
   }
 
   return { data: log };
@@ -473,22 +497,36 @@ export async function update(id: string, input: UpdateDispositionLogInput) {
 export async function remove(id: string) {
   const log = await prisma.itemDispositionLog.findUnique({
     where: { id },
-    select: { id: true, stationId: true, siteId: true, quantity: true, deletedAt: true, createdAt: true },
+    select: {
+      id: true,
+      stationId: true,
+      siteId: true,
+      quantity: true,
+      deletedAt: true,
+      createdAt: true,
+      site: { select: { workspaceId: true } },
+      productVersion: { select: { productId: true } },
+    },
   });
 
   if (!log || log.deletedAt) {
     return { error: "Disposition log not found", code: "DISPOSITION_LOG_NOT_FOUND" };
   }
 
-  await prisma.itemDispositionLog.update({
-    where: { id },
-    data: { deletedAt: new Date() },
+  await prisma.$transaction(async (tx) => {
+    await tx.itemDispositionLog.update({
+      where: { id },
+      data: { deletedAt: new Date() },
+    });
+    await applyScrapDelta(tx, log.siteId, log.productVersion.productId, -log.quantity);
   });
 
   // Subtract the removed quantity from metrics
   updateDispositionBadItems(log.stationId, log.siteId, log.createdAt, -log.quantity).catch((err) => {
     console.error(`[disposition-log] Failed to update badItems metrics for station ${log.stationId}:`, err);
   });
+
+  publishStockEvent(log.siteId, log.site.workspaceId, log.productVersion.productId);
 
   return { success: true };
 }

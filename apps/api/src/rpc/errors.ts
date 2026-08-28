@@ -65,6 +65,9 @@ const EXACT: Record<string, OrpcErrorCode> = {
   STATION_EVENT_DISABLED: "CONFLICT",
   DOCUMENT_PENDING: "CONFLICT",
   INVALID_PARENT: "CONFLICT",
+  // Completing an order with coverage < 100% needs explicit confirmation
+  // (retry with allowPartial: true).
+  PARTIAL_COVERAGE: "CONFLICT",
 
   EXECUTION_ENQUEUE_FAILED: "INTERNAL_SERVER_ERROR",
   INTERNAL_SERVER_ERROR: "INTERNAL_SERVER_ERROR",

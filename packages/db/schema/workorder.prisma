@@ -5,6 +5,10 @@ enum WorkOrderStatus {
   CANCELLED
 }
 
+/// DEPRECATED — ghost table with zero write paths: nothing ever creates a
+/// WorkOrder and Cycle.orderId is never set. Unrelated to the fulfillment
+/// Order model. Scheduled for removal in a future cleanup migration (after
+/// confirming production row counts are 0).
 model WorkOrder {
   id          String          @id @default(uuid()) @db.Uuid
   orderNumber String

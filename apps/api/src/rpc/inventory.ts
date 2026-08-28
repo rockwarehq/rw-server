@@ -3,6 +3,7 @@ import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
 import { material, inventory, product, materialLedger } from "@rw/services/inventory/index";
+import { getProductStockSummary } from "@rw/services/order/coverage";
 import { storageConfig } from "../config.js";
 import { type CodeOverrides, throwServiceError, unwrap } from "./errors.js";
 
@@ -38,6 +39,11 @@ const idInputSchema = z.object({
 
 const cycleIdInputSchema = z.object({
   cycleId: z.uuid(),
+});
+
+const productStockInputSchema = z.object({
+  siteId: z.uuid(),
+  productIds: z.array(z.uuid()).min(1).max(200),
 });
 
 // ============================================================================
@@ -112,6 +118,16 @@ export const inventoryGetByCycle = authRequired.input(cycleIdInputSchema).handle
   grant(await authorize(context.iam, { permission: "product:read", scope: { kind: "cycle", id: input.cycleId } }));
 
   return unwrap(await inventory.getByCycle(input.cycleId));
+});
+
+/**
+ * Per-product on-hand stock summary (produced/scrapped/consumed/available)
+ * plus open-order demand and covered demand.
+ */
+export const productStock = authRequired.input(productStockInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "product:read", scope: { kind: "site", siteId: input.siteId } }));
+
+  return getProductStockSummary(input.siteId, input.productIds);
 });
 
 // ============================================================================

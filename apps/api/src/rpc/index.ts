@@ -174,6 +174,8 @@ export const router = {
     delete: site.remove,
     uploadLogo: site.uploadLogo,
     removeLogo: site.removeLogo,
+    getSettings: site.getSettings,
+    updateSettings: site.updateSettings,
     andonRules: {
       list: siteAndonRules.list,
       create: siteAndonRules.create,
@@ -270,6 +272,7 @@ export const router = {
     list: inventory.inventoryList,
     get: inventory.inventoryGet,
     getByCycle: inventory.inventoryGetByCycle,
+    productStock: inventory.productStock,
   },
   tool: {
     create: job.toolCreate,
