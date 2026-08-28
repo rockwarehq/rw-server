@@ -42,6 +42,8 @@ model Employee {
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   logonSessions StationLogonSession[]
+  openedCalls   Call[]                @relation("CallOpenedBy")
+  closedCalls   Call[]                @relation("CallClosedBy")
 
   @@index([workspaceId, status])
 }

@@ -35,6 +35,8 @@ export const SYSTEM_ENTITY_KEYS = {
   ShiftInstance: `${SYSTEM_ENTITY_NAMESPACE}.shiftInstance`,
   StatusReason: `${SYSTEM_ENTITY_NAMESPACE}.statusReason`,
   StatusCategory: `${SYSTEM_ENTITY_NAMESPACE}.statusCategory`,
+  Call: `${SYSTEM_ENTITY_NAMESPACE}.call`,
+  CallDefinition: `${SYSTEM_ENTITY_NAMESPACE}.callDefinition`,
   Point: "datasource.point",
 } as const;
 

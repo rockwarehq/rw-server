@@ -14,6 +14,7 @@ import * as display from "./display.js";
 import * as document from "./document.js";
 import * as statusCategory from "./status-category.js";
 import * as statusReason from "./status-reason.js";
+import * as callRpc from "./call.js";
 import * as shift from "./shift.js";
 import * as disposition from "./disposition.js";
 import * as pointValue from "./point-value.js";
@@ -349,6 +350,20 @@ export const router = {
     get: statusReason.get,
     update: statusReason.update,
     delete: statusReason.remove,
+  },
+  callDefinition: {
+    create: callRpc.definitionCreate,
+    list: callRpc.definitionList,
+    get: callRpc.definitionGet,
+    update: callRpc.definitionUpdate,
+    archive: callRpc.definitionArchive,
+  },
+  call: {
+    open: callRpc.open,
+    close: callRpc.close,
+    get: callRpc.get,
+    listActive: callRpc.listActive,
+    search: callRpc.search,
   },
   shift: {
     current: shift.current,

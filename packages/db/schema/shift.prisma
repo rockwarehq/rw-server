@@ -222,6 +222,7 @@ model ShiftInstance {
   logonSessions       StationLogonSession[]
   shiftComments       ShiftComment[]
   materialShiftUsage  MaterialShiftUsage[]
+  calls               Call[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 

@@ -356,6 +356,8 @@ const NOT_FOUND_MESSAGES: Record<ResolvableSiteRef["kind"], string> = {
   customer: "Customer not found",
   statusReason: "Status reason not found",
   statusCategory: "Status category not found",
+  call: "Call not found",
+  callDefinition: "Call definition not found",
   disposition: "Disposition not found",
   dispositionReason: "Disposition reason not found",
   dispositionLog: "Disposition log not found",
