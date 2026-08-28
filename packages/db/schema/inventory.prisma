@@ -40,6 +40,9 @@ model Order {
   status                OrderStatus  @default(DRAFT)
   previousStatus        OrderStatus?
   sequence              Int?
+  /// DEPRECATED — never read by server logic; queue `sequence` is the only
+  /// ordering truth. Accepted-and-ignored by the API; dropped in a future
+  /// cleanup migration.
   priority              Int          @default(0)
   notes                 String?
   poNumber              String?
@@ -53,7 +56,8 @@ model Order {
   customerId String?   @db.Uuid
   customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
 
-  lineItems OrderLineItem[]
+  lineItems    OrderLineItem[]
+  consumptions OrderConsumption[]
 
   createdAt DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt DateTime  @updatedAt @db.Timestamptz(3)
@@ -66,10 +70,16 @@ model Order {
 }
 
 model OrderLineItem {
-  id                String         @id @default(uuid()) @db.Uuid
-  targetQuantity    Decimal        @db.Decimal(18, 4)
-  completedQuantity Decimal        @default(0) @db.Decimal(18, 4)
-  scrapQuantity     Decimal        @default(0) @db.Decimal(18, 4)
+  id             String  @id @default(uuid()) @db.Uuid
+  targetQuantity Decimal @db.Decimal(18, 4)
+
+  /// DEPRECATED — frozen legacy allocation counter (total produced incl. scrap).
+  /// No longer written; fulfillment is computed coverage + OrderConsumption.
+  /// Dropped in a future cleanup migration.
+  completedQuantity Decimal @default(0) @db.Decimal(18, 4)
+  /// DEPRECATED — frozen legacy allocation counter. See completedQuantity.
+  scrapQuantity     Decimal @default(0) @db.Decimal(18, 4)
+  /// DEPRECATED — frozen denormalized view of the legacy counters.
   status            LineItemStatus @default(PENDING)
 
   orderId String @db.Uuid
@@ -78,7 +88,8 @@ model OrderLineItem {
   productId String  @db.Uuid
   product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
 
-  allocations OrderInventoryAllocation[]
+  allocations  OrderInventoryAllocation[]
+  consumptions OrderConsumption[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -87,6 +98,10 @@ model OrderLineItem {
   @@index([productId])
 }
 
+/// DEPRECATED — frozen ledger of the retired automatic allocation engine.
+/// No writes since the inventory-first cutover; kept for history and dropped
+/// in a future cleanup migration. Fulfillment is now computed coverage
+/// (ProductStock vs open-order demand) + OrderConsumption at completion.
 model OrderInventoryAllocation {
   id       String  @id @default(uuid()) @db.Uuid
   quantity Decimal @default(1) @db.Decimal(18, 4)
@@ -101,6 +116,102 @@ model OrderInventoryAllocation {
 
   @@index([orderLineItemId])
   @@index([inventoryItemId])
+}
+
+/// Per-(site, product) on-hand aggregate. A derived cache of facts:
+/// produced (InventoryItem) − scrapped (ItemDispositionLog) − consumed
+/// (OrderConsumption) + adjustment (manual corrections). Every writer updates
+/// it in the same transaction as the underlying fact, and it is rebuildable at
+/// any time via the stock re-derivation script.
+/// Available-to-promise = GREATEST(produced − scrapped − consumed + adjustment, 0),
+/// clamped at read time; raw negatives stay visible for diagnostics.
+model ProductStock {
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  produced   Decimal @default(0) @db.Decimal(18, 4)
+  scrapped   Decimal @default(0) @db.Decimal(18, 4)
+  consumed   Decimal @default(0) @db.Decimal(18, 4)
+  /// Backed by ProductStockAdjustment: SUM(delta) — rebuildable like the
+  /// other fact columns.
+  adjustment Decimal @default(0) @db.Decimal(18, 4)
+
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@id([siteId, productId])
+}
+
+enum StockAdjustmentReason {
+  CYCLE_COUNT // physical count reconciliation
+  DAMAGE // damaged/lost stock written down
+  FOUND // stock discovered
+  INITIAL // opening balance at onboarding
+  OTHER
+}
+
+/// Append-only book of record for manual on-hand corrections. Each row is one
+/// immutable signed delta applied to ProductStock.adjustment in the same
+/// transaction. `resultingOnHand` snapshots the RAW (unclamped) on-hand after
+/// the delta — for count entries this equals the counted quantity.
+model ProductStockAdjustment {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  delta           Decimal @db.Decimal(18, 4)
+  resultingOnHand Decimal @db.Decimal(18, 4)
+
+  reason StockAdjustmentReason
+  note   String?
+
+  performedByUserId String? @db.Uuid
+  performedByUser   User?   @relation(fields: [performedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([siteId, productId, createdAt])
+  @@index([siteId, createdAt])
+}
+
+enum ConsumptionSource {
+  MANUAL // a user completed the order
+  AUTO // the site auto-complete rule completed it
+  BACKFILL // migrated from legacy allocation history
+}
+
+/// The durable fulfillment record: written once per line item when an order is
+/// completed, recording how much stock the completion consumed. Aggregate-only
+/// by design — per-unit provenance lives on InventoryItem (cycle → station/job),
+/// and explicit item-level linkage is deferred to the scheduling module.
+model OrderConsumption {
+  id       String            @id @default(uuid()) @db.Uuid
+  quantity Decimal           @db.Decimal(18, 4)
+  source   ConsumptionSource
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  orderId String @db.Uuid
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  orderLineItemId String        @db.Uuid
+  orderLineItem   OrderLineItem @relation(fields: [orderLineItemId], references: [id], onDelete: Cascade)
+
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  createdByUserId String?  @db.Uuid
+  createdAt       DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([orderId])
+  @@index([siteId, productId])
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +245,9 @@ model Product {
   workOrders         WorkOrder[]
   pictures           ProductPicture[]
   orderLineItems     OrderLineItem[]
+  stock              ProductStock[]
+  consumptions       OrderConsumption[]
+  stockAdjustments   ProductStockAdjustment[]
   calls              Call[]
 
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
@@ -448,6 +562,7 @@ model ItemDispositionLog {
   productMaterialVersions ProductMaterialVersion[]
 
   @@index([stationId, createdAt])
+  @@index([siteId, productVersionId])
 }
 
 // ---------------------------------------------------------------------------

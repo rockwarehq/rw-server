@@ -175,6 +175,8 @@ export const router = {
     delete: site.remove,
     uploadLogo: site.uploadLogo,
     removeLogo: site.removeLogo,
+    getSettings: site.getSettings,
+    updateSettings: site.updateSettings,
     andonRules: {
       list: siteAndonRules.list,
       create: siteAndonRules.create,
@@ -237,6 +239,8 @@ export const router = {
     create: inventory.materialLedgerCreate,
     list: inventory.materialLedgerList,
     usage: inventory.materialLedgerUsage,
+    adjust: inventory.materialLedgerAdjust,
+    balance: inventory.materialLedgerBalance,
   },
   product: {
     // CRUD
@@ -271,6 +275,9 @@ export const router = {
     list: inventory.inventoryList,
     get: inventory.inventoryGet,
     getByCycle: inventory.inventoryGetByCycle,
+    productStock: inventory.productStock,
+    adjustStock: inventory.inventoryAdjustStock,
+    stockAdjustments: inventory.inventoryStockAdjustments,
   },
   tool: {
     create: job.toolCreate,

@@ -1,7 +1,10 @@
 import prisma from "@rw/db";
 import { Prisma } from "@rw/db";
+import { publishEntityEvent } from "../entity/events.js";
+import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { inventory } from "../inventory/index.js";
-import { allocateInventory } from "../order/allocation.js";
+import { applyProduction } from "../inventory/stock.js";
+import { checkAutoComplete } from "../order/auto-complete.js";
 import {
   acquireStationLock,
   applyCycleCompleteTransition,
@@ -51,9 +54,27 @@ function sumItemQuantities(items: CycleItems): number {
   return items.reduce((sum, item) => sum + item.quantity, 0);
 }
 
-async function allocateItems(tx: Prisma.TransactionClient, siteId: string, items: CycleItems): Promise<void> {
-  for (const { id, productId, quantity } of items) {
-    await allocateInventory(tx, siteId, productId, id, quantity);
+/**
+ * Post-commit stock side effects: one Product `stock` refresh hint per
+ * distinct product, then the auto-complete rule (fire-and-forget — never
+ * awaited on the cycle path, never inside the tx).
+ */
+function publishStockEffects(siteId: string, workspaceId: string, items: CycleItems): void {
+  const productIds = [...new Set(items.map((item) => item.productId))];
+  for (const productId of productIds) {
+    publishEntityEvent({
+      action: "updated",
+      entityKey: SYSTEM_ENTITY_KEYS.Product,
+      entityId: productId,
+      siteId,
+      workspaceId,
+      changedFields: ["stock"],
+    });
+  }
+  if (productIds.length > 0) {
+    checkAutoComplete(siteId, productIds).catch((err) => {
+      console.error(`[cycle] order auto-complete check failed for site ${siteId}:`, err);
+    });
   }
 }
 
@@ -89,7 +110,7 @@ interface StrategyResult {
  * with `end = null`. The new cycle's `start` = timestamp. Inventory items
  * are deferred until this cycle is eventually closed by a future call.
  *
- * All DB work happens in a single transaction — including allocation,
+ * All DB work happens in a single transaction — including the stock upsert,
  * detection-prep reads, station-context load, and the HOUR-bucket count
  * increment — so each cycle completion checks out exactly one connection.
  * Redis publishes and BullMQ enqueues run only after the tx commits, so a
@@ -110,6 +131,7 @@ export async function complete(input: StartCycleInput) {
   const setupRows = await prisma.$queryRaw<
     Array<{
       siteId: string;
+      workspaceId: string;
       jobSiteId: string;
       currentVersionId: string | null;
       standardCycle: number | null;
@@ -133,6 +155,7 @@ export async function complete(input: StartCycleInput) {
     setup AS (
       SELECT
         s."siteId",
+        si."workspaceId",
         j."siteId" AS "jobSiteId",
         j."currentVersionId",
         jb."standardCycle"::float8 AS "standardCycle",
@@ -149,6 +172,7 @@ export async function complete(input: StartCycleInput) {
         jb."standardRatePeriod"::text AS "standardRatePeriod",
         jb."standardQuantity"::float8 AS "jobStandardQuantity"
       FROM "Station" s
+      JOIN "Site" si ON si.id = s."siteId"
       JOIN "Job" j ON j.id = ${jobId}
       LEFT JOIN "JobVersion" jb ON jb.id = j."currentVersionId"
       LEFT JOIN "StationVersion" sb ON sb."id" = s."currentVersionId"
@@ -165,7 +189,7 @@ export async function complete(input: StartCycleInput) {
            COALESCE(array_agg(DISTINCT t."toolVersionId") FILTER (WHERE t."toolVersionId" IS NOT NULL), '{}') AS "toolVersionIds"
     FROM setup s
     LEFT JOIN tools t ON true
-    GROUP BY s."siteId", s."jobSiteId", s."currentVersionId", s."standardCycle", s."slowDetect",
+    GROUP BY s."siteId", s."workspaceId", s."jobSiteId", s."currentVersionId", s."standardCycle", s."slowDetect",
              s."cycleMode", s."stationStandardQuantity", s."stationQuantityUnit", s."stationStandardCycle",
              s."stationStandardRate", s."stationStandardRateUnit", s."stationStandardRatePeriod",
              s."standardRate", s."standardRateUnit", s."standardRatePeriod", s."jobStandardQuantity"
@@ -272,6 +296,7 @@ export async function complete(input: StartCycleInput) {
   // Replayed cycles: skip state transitions, detection, and metrics.
   // Track the replay window and let the debounced reconciliation job handle it.
   if (replayed) {
+    publishStockEffects(siteId, setup.workspaceId, result.items);
     trackReplayedCycle(stationId, siteId, timestamp).catch((err) => {
       console.error(`[cycle] Failed to track replayed cycle for station ${stationId}:`, err);
     });
@@ -328,6 +353,8 @@ export async function complete(input: StartCycleInput) {
     closedEntry: closedEntry ? { startTime: closedEntry.startTime, endTime: closedEntry.endTime } : undefined,
   });
 
+  publishStockEffects(siteId, setup.workspaceId, result.items);
+
   const t3 = Date.now();
   console.log(
     `[cycle:timing] station=${stationId} setup=${t1 - t0}ms transaction=${t2 - t1}ms post=${t3 - t2}ms total=${t3 - t0}ms`,
@@ -339,7 +366,7 @@ export async function complete(input: StartCycleInput) {
 // ── Strategy: immediate (default) ────────────────────────────────
 // Insert a fully complete cycle with start + end. Inventory items
 // are created immediately on the new cycle. All DB work — cycle row,
-// state-log transition, inventory items, order allocation, detection
+// state-log transition, inventory items, stock upsert, detection
 // reads, station-context load, HOUR bucket count increment — runs in
 // one transaction.
 
@@ -416,7 +443,7 @@ async function completeImmediate(
     const row = cycleRows[0];
     // ON CONFLICT DO NOTHING on sourceEventId: a concurrent delivery already
     // recorded this event. The insert is the only write so far — bail before
-    // the M2M/transition/inventory/allocation/metric statements.
+    // the M2M/transition/inventory/stock/metric statements.
     if (!row) return null;
     const cycle = { id: row.cycle_id, start: row.cycle_start, end: row.cycle_end };
     // LEFT JOIN co-nullability: when state_id is non-null, all state_* columns are too.
@@ -464,12 +491,6 @@ async function completeImmediate(
 
     const items = await inventory.createFromCycle(tx, cycle.id, jobId, stamp);
 
-    // Order allocation — was previously fire-and-forget on the global prisma
-    // client, now runs serially inside the tx so the whole completion is one
-    // connection checkout. Failure rolls the cycle back, matching the new
-    // atomicity contract.
-    await allocateItems(tx, siteId, items);
-
     // Live-publish & detection-schedule data — read inside the tx so the
     // post-commit fire-and-forget block holds no DB connection.
     const stationCtx = await loadStationMetricContext(tx, stationId);
@@ -488,6 +509,10 @@ async function completeImmediate(
       idealCycleIncrement,
       totalCycleIncrement,
     );
+
+    // On-hand stock upsert — last in the tx to keep the per-product row-lock
+    // window minimal under cross-station same-product contention.
+    await applyProduction(tx, siteId, items);
 
     return {
       cycle,
@@ -602,9 +627,6 @@ async function completeOpenClose(
         },
       });
 
-      // Order allocation — moved inside the tx; see completeImmediate.
-      await allocateItems(tx, siteId, items);
-
       const stationCtx = await loadStationMetricContext(tx, stationId);
       const detectionPrepared = await prepareDetection(tx, stationId, jobId, std);
 
@@ -622,6 +644,9 @@ async function completeOpenClose(
         idealCycleIncrement,
         0,
       );
+
+      // On-hand stock upsert — last in the tx; see completeImmediate.
+      await applyProduction(tx, siteId, items);
 
       return {
         cycle: newCycle,
@@ -713,9 +738,9 @@ async function completeImmediateReplay(
 
     const items = await inventory.createFromCycle(tx, cycle.id, jobId, stamp);
 
-    // Order allocation — replayed cycles allocate too; replay path otherwise
-    // skips state transitions, detection, and metrics.
-    await allocateItems(tx, siteId, items);
+    // Stock facts are never skipped: replayed cycles update on-hand too, even
+    // though the replay path skips state transitions, detection, and metrics.
+    await applyProduction(tx, siteId, items);
 
     return {
       cycle,
@@ -797,7 +822,8 @@ async function completeOpenCloseReplay(
         },
       });
 
-      await allocateItems(tx, siteId, items);
+      // Stock facts are never skipped on replay; see completeImmediateReplay.
+      await applyProduction(tx, siteId, items);
 
       return {
         cycle: newCycle,

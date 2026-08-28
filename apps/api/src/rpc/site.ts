@@ -30,6 +30,13 @@ const idInputSchema = z.object({
   id: z.uuid(),
 });
 
+const updateSettingsInputSchema = z.object({
+  id: z.uuid(),
+  settings: z.object({
+    orderAutoComplete: z.boolean().optional(),
+  }),
+});
+
 const listInputSchema = z.object({
   name: z.string().optional(),
   limit: z.number().min(0).default(50),
@@ -123,6 +130,24 @@ export const tree = userOrDisplayRequired.input(treeInputSchema).handler(async (
   // No siteId, return the accessible-site tree (site directory surface)
   const scope = grant(await authorizeAccessibleSites(context.iam, { permission: "facility:read" }));
   return site.getTree(scope.workspaceId, scope.siteIds);
+});
+
+/**
+ * Read the typed site settings (fulfillment automation, …).
+ */
+export const getSettings = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.id } }));
+
+  return unwrap(await site.getSiteSettings(input.id));
+});
+
+/**
+ * Update typed site settings — merges only known keys into Site.attrs.
+ */
+export const updateSettings = authRequired.input(updateSettingsInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.id } }));
+
+  return unwrap(await site.updateSiteSettings(input.id, input.settings));
 });
 
 /**

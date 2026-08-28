@@ -2,7 +2,8 @@ import { z } from "zod";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
-import { material, inventory, product, materialLedger } from "@rw/services/inventory/index";
+import { material, inventory, product, materialLedger, materialBalance, stockAdjustment } from "@rw/services/inventory/index";
+import { getProductStockSummary } from "@rw/services/order/coverage";
 import { storageConfig } from "../config.js";
 import { type CodeOverrides, throwServiceError, unwrap } from "./errors.js";
 
@@ -38,6 +39,11 @@ const idInputSchema = z.object({
 
 const cycleIdInputSchema = z.object({
   cycleId: z.uuid(),
+});
+
+const productStockInputSchema = z.object({
+  siteId: z.uuid(),
+  productIds: z.array(z.uuid()).min(1).max(200),
 });
 
 // ============================================================================
@@ -112,6 +118,16 @@ export const inventoryGetByCycle = authRequired.input(cycleIdInputSchema).handle
   grant(await authorize(context.iam, { permission: "product:read", scope: { kind: "cycle", id: input.cycleId } }));
 
   return unwrap(await inventory.getByCycle(input.cycleId));
+});
+
+/**
+ * Per-product on-hand stock summary (produced/scrapped/consumed/available)
+ * plus open-order demand and covered demand.
+ */
+export const productStock = authRequired.input(productStockInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "product:read", scope: { kind: "site", siteId: input.siteId } }));
+
+  return getProductStockSummary(input.siteId, input.productIds);
 });
 
 // ============================================================================
@@ -673,6 +689,52 @@ const materialLedgerUsageInputSchema = z.object({
 });
 
 // ============================================================================
+// Input Schemas - Stock Adjustments
+// ============================================================================
+
+const stockAdjustmentReasonSchema = z.enum(["CYCLE_COUNT", "DAMAGE", "FOUND", "INITIAL", "OTHER"]);
+
+const adjustStockBaseFields = {
+  siteId: z.uuid(),
+  productId: z.uuid(),
+  reason: stockAdjustmentReasonSchema,
+  note: z.string().max(2000).optional(),
+};
+
+// Two entry modes: "set" reconciles to a counted on-hand value (the server
+// computes the delta under a row lock); "delta" applies a signed correction.
+const adjustStockInputSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("set"), countedQuantity: decimalInputSchema, ...adjustStockBaseFields }),
+  z.object({ mode: z.literal("delta"), delta: decimalInputSchema, ...adjustStockBaseFields }),
+]);
+
+const stockAdjustmentListInputSchema = z.object({
+  siteId: z.uuid().optional(),
+  productId: z.uuid().optional(),
+  limit: z.number().min(0).default(50),
+  offset: z.number().min(0).default(0),
+});
+
+const adjustMaterialBaseFields = {
+  siteId: z.uuid(),
+  materialId: z.uuid(),
+  reference: z.string().max(255).optional(),
+  note: z.string().max(2000).optional(),
+};
+
+// Count-first reconciliation for materials, mirroring inventory.adjustStock:
+// "set" reconciles to a counted balance; "delta" applies a signed correction.
+// Both append an immutable ADJUSTMENT ledger entry in the canonical unit.
+const adjustMaterialStockInputSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("set"), countedQuantity: decimalInputSchema, ...adjustMaterialBaseFields }),
+  z.object({ mode: z.literal("delta"), delta: decimalInputSchema, ...adjustMaterialBaseFields }),
+]);
+
+const materialBalanceInputSchema = z.object({
+  materialId: z.uuid(),
+});
+
+// ============================================================================
 // Procedures - Material Ledger
 // ============================================================================
 
@@ -713,4 +775,70 @@ export const materialLedgerUsage = authRequired
   .handler(async ({ input, context }) => {
     grant(await authorize(context.iam, { permission: "product:read", scope: { kind: "site", siteId: input.siteId } }));
     return materialLedger.usage(input);
+  });
+
+// ============================================================================
+// Procedures - Stock Adjustments
+// ============================================================================
+
+/**
+ * Manually adjust or reconcile a product's on-hand stock. Appends an
+ * immutable ProductStockAdjustment ledger row and updates the aggregate in
+ * one transaction.
+ */
+export const inventoryAdjustStock = authRequired
+  .input(adjustStockInputSchema)
+  .handler(async ({ input, context }) => {
+    grant(await authorize(context.iam, { permission: "product:write", scope: { kind: "site", siteId: input.siteId } }));
+
+    const result = await stockAdjustment.adjustStock({
+      ...input,
+      performedByUserId: "id" in context.iam ? context.iam.id : null,
+    });
+    // Like the material ledger: the product/site pairing is validated from the
+    // request payload, so SITE_MISMATCH is BAD_REQUEST here (not CONFLICT).
+    return unwrap(result, { overrides: { SITE_MISMATCH: "BAD_REQUEST" } });
+  });
+
+/**
+ * Adjustment history (append-only, newest first).
+ */
+export const inventoryStockAdjustments = authRequired
+  .input(stockAdjustmentListInputSchema)
+  .handler(async ({ input, context }) => {
+    const scope = grant(
+      await authorizeList(context.iam, { permission: "product:read", requestedSiteId: input.siteId }),
+    );
+    return stockAdjustment.list({ ...input, ...scopeFilter(scope) });
+  });
+
+/**
+ * Manually adjust or reconcile a material's on-hand balance. Appends an
+ * immutable ADJUSTMENT ledger entry.
+ */
+export const materialLedgerAdjust = authRequired
+  .input(adjustMaterialStockInputSchema)
+  .handler(async ({ input, context }) => {
+    grant(await authorize(context.iam, { permission: "product:write", scope: { kind: "site", siteId: input.siteId } }));
+
+    const result = await materialLedger.adjust({
+      ...input,
+      performedByUserId: "id" in context.iam ? context.iam.id : null,
+    });
+    // Same pin as materialLedgerCreate: the material/site pairing is validated
+    // from the request payload, so SITE_MISMATCH is BAD_REQUEST here.
+    return unwrap(result, { overrides: { SITE_MISMATCH: "BAD_REQUEST", MATERIAL_DELETED: "NOT_FOUND" } });
+  });
+
+/**
+ * On-hand balance breakdown for a material (received / adjusted / consumed /
+ * balance, including unflushed shift usage).
+ */
+export const materialLedgerBalance = authRequired
+  .input(materialBalanceInputSchema)
+  .handler(async ({ input, context }) => {
+    grant(
+      await authorize(context.iam, { permission: "product:read", scope: { kind: "material", id: input.materialId } }),
+    );
+    return materialBalance.balance(input.materialId);
   });

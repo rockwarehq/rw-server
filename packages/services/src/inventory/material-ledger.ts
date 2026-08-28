@@ -1,5 +1,19 @@
 import prisma from "@rw/db";
 import { Prisma, type MaterialLedgerKind, type WeightUnit } from "@rw/db";
+import { publishEntityEvent } from "../entity/events.js";
+import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
+
+/** Post-commit refresh hint: ledger writes change the material's on-hand stock. */
+function publishStockEvent(siteId: string, workspaceId: string, materialId: string): void {
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Material,
+    entityId: materialId,
+    siteId,
+    workspaceId,
+    changedFields: ["stock"],
+  });
+}
 
 export interface CreateLedgerEntryInput {
   siteId: string;
@@ -44,6 +58,7 @@ export async function create(input: CreateLedgerEntryInput) {
       siteId: true,
       deletedAt: true,
       currentVersion: { select: { weightUnits: true } },
+      site: { select: { workspaceId: true } },
     },
   });
 
@@ -98,7 +113,110 @@ export async function create(input: CreateLedgerEntryInput) {
     include: ledgerInclude,
   });
 
+  publishStockEvent(input.siteId, material.site.workspaceId, input.materialId);
+
   return { data: entry };
+}
+
+export interface AdjustMaterialStockInput {
+  siteId: string;
+  materialId: string;
+  reference?: string | null;
+  note?: string | null;
+  performedByUserId?: string | null;
+}
+
+export type AdjustMaterialStockMode =
+  | { mode: "set"; countedQuantity: number | string }
+  | { mode: "delta"; delta: number | string };
+
+/**
+ * Manually adjust or reconcile a material's on-hand balance (the stock
+ * reconciliation counterpart to ProductStockAdjustment). Appends an immutable
+ * signed ADJUSTMENT ledger entry; "set" mode computes the delta against the
+ * TRUE current balance (ledger sum minus unflushed shift usage) with the
+ * Material row locked, so a count lands exactly on the counted value. A
+ * zero-delta count is recorded (audit evidence); a zero manual delta is
+ * rejected.
+ */
+export async function adjust(input: AdjustMaterialStockInput & AdjustMaterialStockMode) {
+  const material = await prisma.material.findUnique({
+    where: { id: input.materialId },
+    select: {
+      id: true,
+      siteId: true,
+      deletedAt: true,
+      currentVersion: { select: { weightUnits: true } },
+      site: { select: { workspaceId: true } },
+    },
+  });
+
+  if (!material || material.deletedAt) {
+    return { error: "Material not found", code: "MATERIAL_NOT_FOUND" };
+  }
+  if (material.siteId !== input.siteId) {
+    return { error: "Material does not belong to the given site", code: "SITE_MISMATCH" };
+  }
+  const unit = material.currentVersion?.weightUnits ?? null;
+  if (!unit) {
+    return { error: "Material has no canonical unit; set one before adjusting stock", code: "NO_CANONICAL_UNIT" };
+  }
+
+  let requested: Prisma.Decimal;
+  if (input.mode === "set") {
+    requested = new Prisma.Decimal(input.countedQuantity);
+    if (requested.isNegative()) {
+      return { error: "Counted quantity cannot be negative", code: "INVALID_QUANTITY" };
+    }
+  } else {
+    requested = new Prisma.Decimal(input.delta);
+    if (requested.isZero()) {
+      return { error: "Adjustment delta must be non-zero", code: "INVALID_QUANTITY" };
+    }
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    const txRaw = tx as unknown as { $queryRaw: typeof prisma.$queryRaw };
+
+    // Serialize concurrent reconciles on this material. A concurrent shift
+    // flush can still land between read and insert — acceptable: a physical
+    // count is itself a point-in-time snapshot.
+    await txRaw.$queryRaw`SELECT id FROM "Material" WHERE id = ${input.materialId}::uuid FOR UPDATE`;
+
+    // True current balance: ledger sum minus unflushed staging (same math as
+    // material-balance.ts) — what the physical count is being compared to.
+    const rows = await txRaw.$queryRaw<Array<{ balance: string }>>`
+      SELECT (
+        COALESCE((SELECT SUM(quantity) FROM "MaterialLedgerEntry" WHERE "materialId" = ${input.materialId}::uuid), 0)
+        - COALESCE((SELECT SUM(quantity) FROM "MaterialShiftUsage" WHERE "materialId" = ${input.materialId}::uuid AND "flushedAt" IS NULL), 0)
+      )::text AS balance
+    `;
+    const currentBalance = new Prisma.Decimal(rows[0]?.balance ?? 0);
+
+    const delta = input.mode === "set" ? requested.minus(currentBalance) : requested;
+
+    const entry = await tx.materialLedgerEntry.create({
+      data: {
+        siteId: input.siteId,
+        materialId: input.materialId,
+        kind: "ADJUSTMENT",
+        quantity: delta,
+        unit,
+        reference: input.reference ?? null,
+        note: input.note ?? null,
+        performedByUserId: input.performedByUserId ?? null,
+      },
+      include: ledgerInclude,
+    });
+
+    return { entry, delta, resultingBalance: currentBalance.plus(delta) };
+  });
+
+  if (!result.delta.isZero()) {
+    publishStockEvent(input.siteId, material.site.workspaceId, input.materialId);
+  }
+
+  return { data: { entry: result.entry, resultingBalance: result.resultingBalance.toString() } };
 }
 
 export async function list(filter: ListLedgerEntriesFilter = {}) {
