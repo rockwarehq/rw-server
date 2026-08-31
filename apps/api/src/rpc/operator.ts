@@ -193,6 +193,7 @@ export const operatorLogon = displayRequired.input(logonInputSchema).handler(asy
   // Auto-create employee if auth returned null employeeId (new badge/employee ID)
   let employeeId = authResult.data.employeeId;
   let versionId = authResult.data.versionId;
+  let roleId = authResult.data.roleId;
 
   if (!employeeId && input.method !== "GENERIC") {
     const autoCreateResult = await crud.create({
@@ -204,6 +205,7 @@ export const operatorLogon = displayRequired.input(logonInputSchema).handler(asy
     });
     employeeId = autoCreateResult.data.id;
     versionId = autoCreateResult.data.versionId;
+    roleId = autoCreateResult.data.siteAccess[0]?.roleId ?? null;
   }
 
   // Single-logon enforcement: auto-logoff existing sessions before creating new one
@@ -242,6 +244,9 @@ export const operatorLogon = displayRequired.input(logonInputSchema).handler(asy
   return {
     session: session.data,
     activeSessions: activeSessions.data,
+    // The operator's site role — lets displays filter role-gated actions
+    // (e.g. which call definitions this operator may open).
+    roleId,
   };
 });
 

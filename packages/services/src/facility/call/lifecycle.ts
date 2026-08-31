@@ -1,5 +1,6 @@
 import prisma, { Prisma } from "@rw/db";
 import type { CallSeverity, CallSource } from "@rw/db";
+import { actorSiteRoleId, roleAllowed } from "../../employee/actor-role.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { publishCallEvent } from "./events.js";
@@ -34,6 +35,8 @@ export interface CloseCallInput {
   closeMessage?: string;
   closedByEmployeeId?: string;
   closedByUserId?: string;
+  /** Set by the rpc layer for calls:admin principals — skips answer-role restrictions. */
+  bypassAnswerRoles?: boolean;
 }
 
 export interface ListActiveCallsFilter {
@@ -215,6 +218,7 @@ export async function open(input: OpenCallInput): Promise<ServiceError | { data:
       name: true,
       severity: true,
       requireOpenMessage: true,
+      openRoles: { select: { id: true } },
       archivedAt: true,
       siteId: true,
       site: { select: { workspaceId: true } },
@@ -251,6 +255,19 @@ export async function open(input: OpenCallInput): Promise<ServiceError | { data:
 
   const resolved = await resolveEmployee(definition.site.workspaceId, input.openedByEmployeeId, input.openedByUserId);
   if ("error" in resolved) return resolved;
+
+  // SYSTEM opens bypass: automations aren't employees and must not be blocked.
+  if (input.source === "MANUAL" && definition.openRoles.length > 0) {
+    const roleId = await actorSiteRoleId(resolved.employeeId, definition.siteId);
+    if (
+      !roleAllowed(
+        roleId,
+        definition.openRoles.map((r) => r.id),
+      )
+    ) {
+      return { error: "Your role is not allowed to open this call", code: "OPEN_ROLE_RESTRICTED" };
+    }
+  }
 
   const existing = await findOpenCall(station.id, definition.id);
   if (existing) return { data: existing, deduped: true };
@@ -302,9 +319,11 @@ export async function close(input: CloseCallInput): Promise<ServiceError | { dat
     where: { id: input.id },
     select: {
       id: true,
+      siteId: true,
       closedAt: true,
       deletedAt: true,
       site: { select: { workspaceId: true } },
+      definition: { select: { answerRoles: { select: { id: true } } } },
     },
   });
   if (!call || call.deletedAt) {
@@ -316,6 +335,18 @@ export async function close(input: CloseCallInput): Promise<ServiceError | { dat
 
   const resolved = await resolveEmployee(call.site.workspaceId, input.closedByEmployeeId, input.closedByUserId);
   if ("error" in resolved) return resolved;
+
+  if (!input.bypassAnswerRoles && call.definition.answerRoles.length > 0) {
+    const roleId = await actorSiteRoleId(resolved.employeeId, call.siteId);
+    if (
+      !roleAllowed(
+        roleId,
+        call.definition.answerRoles.map((r) => r.id),
+      )
+    ) {
+      return { error: "Your role is not allowed to answer this call", code: "ANSWER_ROLE_RESTRICTED" };
+    }
+  }
 
   // Race-safe: only the update that observes the call still open wins.
   const result = await prisma.call.updateMany({

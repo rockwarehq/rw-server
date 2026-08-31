@@ -13,12 +13,16 @@ import { throwServiceError, unwrap } from "./errors.js";
 const severitySchema = z.enum(["INFORMATION", "ALERT", "WARNING"]);
 const sourceSchema = z.enum(["MANUAL", "SYSTEM"]);
 
+const roleIdsSchema = z.array(z.uuid()).max(100);
+
 const definitionCreateInputSchema = z.object({
   siteId: z.uuid(),
   name: z.string().min(1),
   description: z.string().optional(),
   severity: severitySchema.optional(),
   requireOpenMessage: z.boolean().optional(),
+  openRoleIds: roleIdsSchema.optional(),
+  answerRoleIds: roleIdsSchema.optional(),
 });
 
 const definitionUpdateInputSchema = z.object({
@@ -27,6 +31,9 @@ const definitionUpdateInputSchema = z.object({
   description: z.string().nullable().optional(),
   severity: severitySchema.optional(),
   requireOpenMessage: z.boolean().optional(),
+  // Whole-list replacement; [] clears the restriction.
+  openRoleIds: roleIdsSchema.optional(),
+  answerRoleIds: roleIdsSchema.optional(),
 });
 
 const definitionListInputSchema = z.object({
@@ -147,14 +154,16 @@ export const open = userOrDisplayRequired.input(openInputSchema).handler(async (
 export const close = userOrDisplayRequired.input(closeInputSchema).handler(async ({ input, context }) => {
   grant(await authorize(context.iam, { permission: "calls:write", scope: { kind: "call", id: input.id } }));
 
-  // Future answering restrictions (e.g. definition-level answerRoles) slot in
-  // here: resolve the acting employee, check against the definition, deny
-  // before calling the service.
+  // calls:admin bypasses definition answer-role restrictions so an office
+  // supervisor can always clear a stuck call (quiet check — no throw).
+  const admin = await authorize(context.iam, { permission: "calls:admin", scope: { kind: "call", id: input.id } });
+
   const result = await call.close({
     id: input.id,
     closeMessage: input.closeMessage,
     closedByEmployeeId: input.employeeId,
     closedByUserId: context.iam.principal === Principal.USER ? context.iam.id : undefined,
+    bypassAnswerRoles: admin.ok,
   });
   if ("error" in result) throwServiceError(result);
   return result.data;

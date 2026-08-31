@@ -21,6 +21,12 @@ model CallDefinition {
   /// automations can't silently fail to raise a call.
   requireOpenMessage Boolean @default(false)
 
+  /// Employee roles allowed to act on this call; an empty list means everyone.
+  /// openRoles gates manual opens only (SYSTEM opens bypass); answerRoles
+  /// gates answering/closing, with calls:admin principals bypassing.
+  openRoles   EmployeeRole[] @relation("CallDefinitionOpenRoles")
+  answerRoles EmployeeRole[] @relation("CallDefinitionAnswerRoles")
+
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
   archivedAt DateTime? @db.Timestamptz(3)

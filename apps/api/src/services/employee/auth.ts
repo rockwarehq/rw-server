@@ -24,6 +24,8 @@ export interface AuthResult {
   firstName: string;
   lastName: string;
   role: string;
+  /** The employee's site role — lets clients filter role-gated actions (e.g. call definitions). */
+  roleId: string | null;
   employeeNumber: string | null;
 }
 
@@ -104,6 +106,7 @@ async function authenticateGeneric(
       firstName,
       lastName,
       role: "Operator",
+      roleId: null,
       employeeNumber: null,
     },
   };
@@ -134,6 +137,7 @@ async function authenticateEmployeeId(
           firstName: credentials.employeeNumber,
           lastName: "",
           role: "Operator",
+          roleId: null,
           employeeNumber: credentials.employeeNumber,
         },
       };
@@ -156,6 +160,7 @@ async function authenticateEmployeeId(
       firstName: employee.version?.firstName ?? "",
       lastName: employee.version?.lastName ?? "",
       role: employee.siteAccess[0]?.role.name ?? "Operator",
+      roleId: employee.siteAccess[0]?.role.id ?? null,
       employeeNumber: employee.version?.employeeNumber ?? null,
     },
   };
@@ -208,6 +213,7 @@ async function authenticatePin(
       firstName: version.firstName,
       lastName: version.lastName,
       role: employee.siteAccess[0]?.role.name ?? "Operator",
+      roleId: employee.siteAccess[0]?.role.id ?? null,
       employeeNumber: version.employeeNumber,
     },
   };
@@ -237,6 +243,7 @@ async function authenticateBadge(
           firstName: credentials.badgeNumber,
           lastName: "",
           role: "Operator",
+          roleId: null,
           employeeNumber: null,
         },
       };
@@ -260,6 +267,7 @@ async function authenticateBadge(
       firstName: employee.version?.firstName ?? "",
       lastName: employee.version?.lastName ?? "",
       role: employee.siteAccess[0]?.role.name ?? "Operator",
+      roleId: employee.siteAccess[0]?.role.id ?? null,
       employeeNumber: employee.version?.employeeNumber ?? null,
     },
   };
@@ -284,7 +292,7 @@ async function resolveEmployee(siteId: string, credentials: AuthCredentials) {
         version: true,
         siteAccess: {
           where: { siteId },
-          include: { role: { select: { name: true } } },
+          include: { role: { select: { id: true, name: true } } },
         },
       },
     });

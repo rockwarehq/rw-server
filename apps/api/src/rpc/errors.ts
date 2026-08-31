@@ -40,6 +40,9 @@ const EXACT: Record<string, OrpcErrorCode> = {
   FORBIDDEN: "FORBIDDEN",
   WORKSPACE_MISMATCH: "FORBIDDEN",
   SITE_NOT_IN_WORKSPACE: "FORBIDDEN",
+  // Definition-level employee-role gates on the call lifecycle.
+  OPEN_ROLE_RESTRICTED: "FORBIDDEN",
+  ANSWER_ROLE_RESTRICTED: "FORBIDDEN",
 
   CONFLICT: "CONFLICT",
   // …while scope mismatches on live resources are conflicts by default
