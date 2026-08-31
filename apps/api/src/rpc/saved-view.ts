@@ -31,12 +31,19 @@ const shiftViewConfigSchema = z.object({
   stationPropertyVisibility: z.record(z.string(), z.boolean()),
 });
 
+// Station directory (stations page "list" tab): which live columns show, in
+// display order. Column ids are a client-side catalog, so plain strings.
+const stationsDirectoryConfigSchema = z.object({
+  columns: z.array(z.string().min(1)).max(50),
+});
+
 // One member per page that supports saved views.
 const pageConfigSchema = z.discriminatedUnion("page", [
   z.object({ page: z.literal("shift-view"), config: shiftViewConfigSchema }),
+  z.object({ page: z.literal("stations-directory"), config: stationsDirectoryConfigSchema }),
 ]);
 
-const pageSchema = z.enum(["shift-view"]);
+const pageSchema = z.enum(["shift-view", "stations-directory"]);
 const visibilitySchema = z.enum(["PRIVATE", "WORKSPACE"]);
 
 const createInputSchema = z
@@ -49,15 +56,24 @@ const createInputSchema = z
   })
   .and(pageConfigSchema);
 
-const updateInputSchema = z.object({
-  id: z.uuid(),
-  // Config updates re-validate against the page union.
-  page: pageSchema,
-  name: z.string().min(1).optional(),
-  description: z.string().nullish(),
-  visibility: visibilitySchema.optional(),
-  config: shiftViewConfigSchema.optional(),
-});
+// Config updates re-validate against the page union (config optional — a
+// rename-only update carries none).
+const updateConfigSchema = z.discriminatedUnion("page", [
+  z.object({ page: z.literal("shift-view"), config: shiftViewConfigSchema.optional() }),
+  z.object({
+    page: z.literal("stations-directory"),
+    config: stationsDirectoryConfigSchema.optional(),
+  }),
+]);
+
+const updateInputSchema = z
+  .object({
+    id: z.uuid(),
+    name: z.string().min(1).optional(),
+    description: z.string().nullish(),
+    visibility: visibilitySchema.optional(),
+  })
+  .and(updateConfigSchema);
 
 const listInputSchema = z.object({
   siteId: z.uuid(),
