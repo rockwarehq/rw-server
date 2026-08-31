@@ -239,6 +239,38 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
     expect(openRows).toBe(1);
   });
 
+  it("requireOpenMessage forces a message on manual opens; SYSTEM opens are exempt", async () => {
+    const def = await createDefinition({ name: "calls-test-req-msg", requireOpenMessage: true });
+
+    const noMessage = await rpcCall(server, "call/open", { stationId: stationA.id, definitionId: def.id }, faToken);
+    expect(noMessage.statusCode).toBe(400);
+
+    const blankMessage = await rpcCall(
+      server,
+      "call/open",
+      { stationId: stationA.id, definitionId: def.id, message: "   " },
+      faToken,
+    );
+    expect(blankMessage.statusCode).toBe(400);
+
+    const withMessage = await rpcCall(
+      server,
+      "call/open",
+      { stationId: stationA.id, definitionId: def.id, message: "leak at nozzle" },
+      faToken,
+    );
+    expect(withMessage.statusCode).toBe(200);
+    await rpcCall(server, "call/close", { id: (withMessage.json as CallJson).id }, faToken);
+
+    const systemOpen = await callService.open({
+      stationId: stationA.id,
+      definitionId: def.id,
+      source: "SYSTEM",
+      sourceType: "test.exempt",
+    });
+    expect("error" in systemOpen).toBe(false);
+  });
+
   it("programmatic open records SYSTEM source and origin context", async () => {
     const def = await createDefinition({ name: "calls-test-system" });
     const opened = await callService.open({

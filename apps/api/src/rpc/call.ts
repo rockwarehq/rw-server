@@ -18,6 +18,7 @@ const definitionCreateInputSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
   severity: severitySchema.optional(),
+  requireOpenMessage: z.boolean().optional(),
 });
 
 const definitionUpdateInputSchema = z.object({
@@ -25,6 +26,7 @@ const definitionUpdateInputSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().nullable().optional(),
   severity: severitySchema.optional(),
+  requireOpenMessage: z.boolean().optional(),
 });
 
 const definitionListInputSchema = z.object({

@@ -19,12 +19,14 @@ export interface CreateCallDefinitionInput {
   name: string;
   description?: string;
   severity?: CallSeverity;
+  requireOpenMessage?: boolean;
 }
 
 export interface UpdateCallDefinitionInput {
   name?: string;
   description?: string | null;
   severity?: CallSeverity;
+  requireOpenMessage?: boolean;
 }
 
 export interface ListCallDefinitionsFilter {
@@ -38,7 +40,7 @@ export interface ListCallDefinitionsFilter {
 export async function createDefinition(
   input: CreateCallDefinitionInput,
 ): Promise<ServiceError | { data: CallDefinition }> {
-  const { siteId, name, description, severity } = input;
+  const { siteId, name, description, severity, requireOpenMessage } = input;
 
   const site = await prisma.site.findUnique({
     where: { id: siteId },
@@ -63,6 +65,7 @@ export async function createDefinition(
         name,
         description: description ?? null,
         severity: severity ?? "INFORMATION",
+        requireOpenMessage: requireOpenMessage ?? false,
       },
     });
 
@@ -134,6 +137,7 @@ export async function updateDefinition(
   if (input.name !== undefined) updateData.name = input.name;
   if (input.description !== undefined) updateData.description = input.description;
   if (input.severity !== undefined) updateData.severity = input.severity;
+  if (input.requireOpenMessage !== undefined) updateData.requireOpenMessage = input.requireOpenMessage;
 
   try {
     const definition = await prisma.callDefinition.update({
