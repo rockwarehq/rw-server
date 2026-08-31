@@ -403,6 +403,18 @@ async function resolveSystemEntityRecord(
       lastCycle?.end != null
         ? Math.round(((lastCycle.end.getTime() - lastCycle.start.getTime()) / 1000) * 10) / 10
         : null;
+    // Calls, same derived pattern: open/close publishes entity.changes for
+    // these two fields (see facility/call/lifecycle.ts). callsUpdatedAt moves
+    // on every open AND close so subscribers see a change even when the open
+    // count doesn't move (one call closes as another opens).
+    const [openCallCount, lastCallChange] = await Promise.all([
+      prisma.call.count({ where: { stationId: station.id, closedAt: null, deletedAt: null } }),
+      prisma.call.findFirst({
+        where: { stationId: station.id, deletedAt: null },
+        orderBy: { updatedAt: "desc" },
+        select: { updatedAt: true },
+      }),
+    ]);
     return {
       data: {
         ...station,
@@ -417,6 +429,8 @@ async function resolveSystemEntityRecord(
         statusReasonId: openState?.statusReasonId ?? null,
         statusReason: openState?.statusReason?.name ?? null,
         statusStartAt: openState?.startTime ?? null,
+        openCallCount,
+        callsUpdatedAt: lastCallChange?.updatedAt ?? null,
         lastCycleSeconds,
         lastCycleCompletedAt: lastCycle?.end ?? null,
         currentVersion: station.currentVersion

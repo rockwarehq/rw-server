@@ -366,6 +366,26 @@ export const IMM_GRAPH_TYPE_NAMESPACE = {
           "number",
           19,
         ),
+        entityField(
+          "openCallCount",
+          "Open Calls",
+          "Number of open calls at the station",
+          "imm.station",
+          "$input.stationId",
+          "openCallCount",
+          "number",
+          20,
+        ),
+        entityField(
+          "callsUpdatedAt",
+          "Calls Updated",
+          "When a call at the station last opened or closed (change signal for call UIs)",
+          "imm.station",
+          "$input.stationId",
+          "callsUpdatedAt",
+          "date",
+          21,
+        ),
 
         // Mirrored counters (NATS metric subjects, SHIFT granularity)
         ...counterMetricFields(100),
