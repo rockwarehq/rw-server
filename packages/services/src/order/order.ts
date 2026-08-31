@@ -167,8 +167,7 @@ async function attachCoverage<T extends CoverableOrder>(orders: T[]) {
       };
     });
 
-    const coveragePct =
-      totalTarget > 0 ? Math.min(100, Math.round((totalCovered / totalTarget) * 1000) / 10) : 0;
+    const coveragePct = totalTarget > 0 ? Math.min(100, Math.round((totalCovered / totalTarget) * 1000) / 10) : 0;
     return {
       ...order,
       lineItems,
@@ -340,17 +339,7 @@ export async function create(input: CreateOrderInput) {
 }
 
 export async function list(filter: ListOrdersFilter = {}) {
-  const {
-    siteId,
-    status,
-    customerId,
-    productId,
-    search,
-    sortBy,
-    sortDir = "asc",
-    limit = 200,
-    offset = 0,
-  } = filter;
+  const { siteId, status, customerId, productId, search, sortBy, sortDir = "asc", limit = 200, offset = 0 } = filter;
 
   const where: Prisma.OrderWhereInput = { deletedAt: null };
 
@@ -597,12 +586,7 @@ export async function transitionStatus(id: string, targetStatus: OrderStatus, op
  * When any line is short and `allowPartial` is false, returns
  * PARTIAL_COVERAGE and writes nothing.
  */
-async function completeOrder(
-  orderId: string,
-  siteId: string,
-  workspaceId: string,
-  opts: TransitionStatusOptions,
-) {
+async function completeOrder(orderId: string, siteId: string, workspaceId: string, opts: TransitionStatusOptions) {
   const { allowPartial = false, source = "MANUAL", userId = null } = opts;
 
   const result = await prisma.$transaction(async (tx) => {
