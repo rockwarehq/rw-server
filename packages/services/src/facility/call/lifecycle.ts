@@ -193,6 +193,17 @@ function emitLifecycleEvents(call: CallRecord, action: "opened" | "closed", work
     workspaceId,
     ...(action === "closed" ? { changedFields: ["closedAt", "closedByEmployeeId", "closeMessage"] } : {}),
   });
+  // Station-scoped signal: the station entity's derived call fields
+  // (openCallCount / callsUpdatedAt) re-resolve off this event, which is what
+  // pushes call changes to dashboards over the livestore websocket.
+  publishEntityEvent({
+    action: "updated",
+    entityKey: SYSTEM_ENTITY_KEYS.Station,
+    entityId: call.stationId,
+    siteId: call.siteId,
+    workspaceId,
+    changedFields: ["openCallCount", "callsUpdatedAt"],
+  });
 }
 
 function findOpenCall(stationId: string, definitionId: string): Promise<CallRecord | null> {
