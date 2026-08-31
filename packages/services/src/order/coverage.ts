@@ -43,9 +43,7 @@ export async function computeCoverage(siteId: string, productIds: string[]): Pro
 
   const stock = await getStock(prisma, siteId, productIds);
 
-  const queue = await prisma.$queryRaw<
-    Array<{ lineItemId: string; productId: string; target: number }>
-  >`
+  const queue = await prisma.$queryRaw<Array<{ lineItemId: string; productId: string; target: number }>>`
     SELECT oli.id AS "lineItemId", oli."productId", oli."targetQuantity"::float8 AS target
     FROM "OrderLineItem" oli
     JOIN "Order" o ON o.id = oli."orderId"

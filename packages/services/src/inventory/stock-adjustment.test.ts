@@ -28,9 +28,8 @@ describe.skipIf(!process.env.DATABASE_URL)("stock adjustments", () => {
       data: { name: `StockAdj Test ${suffix}`, slug: `stock-adj-${suffix}` },
     });
     siteId = (await prisma.site.create({ data: { name: `StockAdj Site ${suffix}`, workspaceId: workspace.id } })).id;
-    otherSiteId = (
-      await prisma.site.create({ data: { name: `StockAdj Other ${suffix}`, workspaceId: workspace.id } })
-    ).id;
+    otherSiteId = (await prisma.site.create({ data: { name: `StockAdj Other ${suffix}`, workspaceId: workspace.id } }))
+      .id;
     userId = (
       await prisma.user.create({
         data: { email: `adjuster-${suffix}@test.local`, passwordHash: "x", firstName: "Adj", lastName: "User" },

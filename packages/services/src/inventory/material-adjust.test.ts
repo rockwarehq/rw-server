@@ -33,9 +33,8 @@ describe.skipIf(!process.env.DATABASE_URL)("material stock adjustments", () => {
       data: { name: `MatAdj Test ${suffix}`, slug: `mat-adj-${suffix}` },
     });
     siteId = (await prisma.site.create({ data: { name: `MatAdj Site ${suffix}`, workspaceId: workspace.id } })).id;
-    otherSiteId = (
-      await prisma.site.create({ data: { name: `MatAdj Other ${suffix}`, workspaceId: workspace.id } })
-    ).id;
+    otherSiteId = (await prisma.site.create({ data: { name: `MatAdj Other ${suffix}`, workspaceId: workspace.id } }))
+      .id;
     materialId = await createMaterial(siteId, "KG");
     unitlessMaterialId = await createMaterial(siteId, null);
   });
