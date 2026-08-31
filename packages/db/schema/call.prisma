@@ -17,6 +17,10 @@ model CallDefinition {
   description String?
   severity    CallSeverity @default(INFORMATION)
 
+  /// Manual opens must include a context message; SYSTEM opens are exempt so
+  /// automations can't silently fail to raise a call.
+  requireOpenMessage Boolean @default(false)
+
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
   archivedAt DateTime? @db.Timestamptz(3)

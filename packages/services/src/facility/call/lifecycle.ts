@@ -214,6 +214,7 @@ export async function open(input: OpenCallInput): Promise<ServiceError | { data:
       id: true,
       name: true,
       severity: true,
+      requireOpenMessage: true,
       archivedAt: true,
       siteId: true,
       site: { select: { workspaceId: true } },
@@ -221,6 +222,12 @@ export async function open(input: OpenCallInput): Promise<ServiceError | { data:
   });
   if (!definition || definition.archivedAt) {
     return { error: "Call definition not found", code: "DEFINITION_NOT_FOUND" };
+  }
+
+  // SYSTEM opens are exempt: an automation missing a message must not
+  // silently fail to raise the call.
+  if (input.source === "MANUAL" && definition.requireOpenMessage && !input.message?.trim()) {
+    return { error: "A message is required when opening this call", code: "MESSAGE_REQUIRED" };
   }
 
   const station = await prisma.station.findUnique({
