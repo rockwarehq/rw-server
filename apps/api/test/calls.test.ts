@@ -7,6 +7,7 @@ import { rpcCall } from "./helpers/rpc-call.js";
 
 const FA_EMAIL = "calls-fa@test.local";
 const READER_EMAIL = "calls-reader@test.local";
+const OFFICE_EMAIL = "calls-office@test.local";
 const PASSWORD = "calls-test-password-1";
 
 type CallJson = {
@@ -26,8 +27,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
   let stationA2: { id: string };
   let employeeId: string;
   let employeeVersionId: string;
+  let officeEmployeeId: string;
+  let roleOpsId: string;
+  let roleMaintId: string;
+  let roleSiteBId: string;
   let faToken: string;
   let readerToken: string;
+  let officeToken: string;
   let dimIds: {
     stationId: string;
     wcId: string;
@@ -75,10 +81,15 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
       where: { workspaceId_name_scope: { workspaceId, name: "Read-only User", scope: "SITE" } },
       select: { id: true },
     });
+    const officeRole = await prisma.role.findUniqueOrThrow({
+      where: { workspaceId_name_scope: { workspaceId, name: "Office User", scope: "SITE" } },
+      select: { id: true },
+    });
     const passwordHash = await hashPassword(PASSWORD);
     for (const { email, roleId } of [
       { email: FA_EMAIL, roleId: faRole.id },
       { email: READER_EMAIL, roleId: readerRole.id },
+      { email: OFFICE_EMAIL, roleId: officeRole.id },
     ]) {
       const u = await prisma.user.upsert({
         where: { email },
@@ -114,8 +125,43 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
       data: { employeeId },
     });
 
+    // Employee roles for the definition-level role gates: both employees hold
+    // "ops" at siteA; "maint" has no members; the siteB role tests cross-site
+    // rejection.
+    const roleFor = async (siteId: string, name: string) =>
+      (
+        await prisma.employeeRole.upsert({
+          where: { siteId_name: { siteId, name } },
+          update: {},
+          create: { siteId, name },
+          select: { id: true },
+        })
+      ).id;
+    roleOpsId = await roleFor(siteA.id, "calls-test-role-ops");
+    roleMaintId = await roleFor(siteA.id, "calls-test-role-maint");
+    roleSiteBId = await roleFor(siteB.id, "calls-test-role-b");
+    await prisma.employeeSiteAccess.upsert({
+      where: { employeeId_siteId: { employeeId, siteId: siteA.id } },
+      update: { roleId: roleOpsId, status: "ACTIVE" },
+      create: { employeeId, siteId: siteA.id, roleId: roleOpsId },
+    });
+
+    // The Office User gets its own employee (one membership per employee),
+    // also in the ops role — calls:write without calls:admin, so no bypass.
+    const officeEmployee = await prisma.employee.create({ data: { workspaceId }, select: { id: true } });
+    officeEmployeeId = officeEmployee.id;
+    await prisma.employeeSiteAccess.create({
+      data: { employeeId: officeEmployeeId, siteId: siteA.id, roleId: roleOpsId },
+    });
+    const officeUser = await prisma.user.findUniqueOrThrow({ where: { email: OFFICE_EMAIL }, select: { id: true } });
+    await prisma.workspaceMembership.update({
+      where: { userId_workspaceId: { userId: officeUser.id, workspaceId } },
+      data: { employeeId: officeEmployeeId },
+    });
+
     faToken = (await loginAs(server, FA_EMAIL, PASSWORD)).accessToken;
     readerToken = (await loginAs(server, READER_EMAIL, PASSWORD)).accessToken;
+    officeToken = (await loginAs(server, OFFICE_EMAIL, PASSWORD)).accessToken;
   }, 30_000);
 
   afterAll(async () => {
@@ -137,9 +183,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
       await prisma.product.delete({ where: { id: dimIds.product2Id } });
       await prisma.workcenter.delete({ where: { id: dimIds.wcId } });
     }
-    await prisma.workspaceMembership.updateMany({ where: { employeeId }, data: { employeeId: null } });
-    await prisma.employee.deleteMany({ where: { id: employeeId } });
-    await prisma.user.deleteMany({ where: { email: { in: [FA_EMAIL, READER_EMAIL] } } });
+    await prisma.workspaceMembership.updateMany({
+      where: { employeeId: { in: [employeeId, officeEmployeeId] } },
+      data: { employeeId: null },
+    });
+    await prisma.employee.deleteMany({ where: { id: { in: [employeeId, officeEmployeeId] } } });
+    await prisma.employeeRole.deleteMany({ where: { id: { in: [roleOpsId, roleMaintId, roleSiteBId] } } });
+    await prisma.user.deleteMany({ where: { email: { in: [FA_EMAIL, READER_EMAIL, OFFICE_EMAIL] } } });
     await prisma.station.deleteMany({ where: { id: { in: [stationA.id, stationA2.id] } } });
     await prisma.site.deleteMany({ where: { name: "Calls Site B" } });
     await server.close();
@@ -410,5 +460,80 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
 
     const other = await rpcCall(server, "call/listActive", { stationId: stationA2.id, severity: "ALERT" }, faToken);
     expect((other.json as { data: CallJson[] }).data.map((c) => c.id)).not.toContain((open.json as CallJson).id);
+  });
+
+  type DefRolesJson = {
+    id: string;
+    openRoles: Array<{ id: string; name: string }>;
+    answerRoles: Array<{ id: string; name: string }>;
+  };
+
+  it("definition role lists round-trip and reject roles from another site", async () => {
+    const created = await rpcCall(
+      server,
+      "callDefinition/create",
+      {
+        siteId: siteA.id,
+        name: "calls-test-roles-crud",
+        openRoleIds: [roleMaintId],
+        answerRoleIds: [roleMaintId, roleOpsId],
+      },
+      faToken,
+    );
+    expect(created.statusCode).toBe(200);
+    const def = created.json as DefRolesJson;
+    expect(def.openRoles.map((r) => r.id)).toEqual([roleMaintId]);
+    expect(def.answerRoles.map((r) => r.id).sort()).toEqual([roleMaintId, roleOpsId].sort());
+
+    // Whole-list replacement: [] clears the restriction back to "everyone".
+    const cleared = await rpcCall(server, "callDefinition/update", { id: def.id, openRoleIds: [] }, faToken);
+    expect(cleared.statusCode).toBe(200);
+    expect((cleared.json as DefRolesJson).openRoles).toEqual([]);
+
+    const crossSite = await rpcCall(server, "callDefinition/update", { id: def.id, answerRoleIds: [roleSiteBId] }, faToken);
+    expect(crossSite.statusCode).toBe(404);
+  });
+
+  it("openRoles gates manual opens by the actor's site role; SYSTEM opens bypass", async () => {
+    const def = await createDefinition({ name: "calls-test-open-gate", openRoleIds: [roleMaintId] });
+
+    // Both test employees hold the ops role, so manual opens are denied —
+    // calls:admin does NOT bypass the open gate.
+    const denied = await rpcCall(server, "call/open", { stationId: stationA.id, definitionId: def.id }, officeToken);
+    expect(denied.statusCode).toBe(403);
+    const deniedFa = await rpcCall(server, "call/open", { stationId: stationA.id, definitionId: def.id }, faToken);
+    expect(deniedFa.statusCode).toBe(403);
+
+    const systemOpen = await callService.open({
+      stationId: stationA.id,
+      definitionId: def.id,
+      source: "SYSTEM",
+      sourceType: "test.role-gate",
+    });
+    expect("error" in systemOpen).toBe(false);
+
+    const opsDef = await createDefinition({ name: "calls-test-open-gate-ops", openRoleIds: [roleOpsId] });
+    const allowed = await rpcCall(server, "call/open", { stationId: stationA2.id, definitionId: opsDef.id }, officeToken);
+    expect(allowed.statusCode).toBe(200);
+  });
+
+  it("answerRoles gates closing; calls:admin bypasses; unattributed actors are denied", async () => {
+    const def = await createDefinition({ name: "calls-test-answer-gate", answerRoleIds: [roleMaintId] });
+
+    const open = await rpcCall(server, "call/open", { stationId: stationA.id, definitionId: def.id }, officeToken);
+    expect(open.statusCode).toBe(200);
+    const callId = (open.json as CallJson).id;
+
+    // Office user holds the ops role, not maint → denied.
+    const denied = await rpcCall(server, "call/close", { id: callId }, officeToken);
+    expect(denied.statusCode).toBe(403);
+
+    // No resolvable employee at all is denied the same way.
+    const unattributed = await callService.close({ id: callId });
+    expect("error" in unattributed && unattributed.code).toBe("ANSWER_ROLE_RESTRICTED");
+
+    // FA also holds only the ops role, but calls:admin bypasses the gate.
+    const bypass = await rpcCall(server, "call/close", { id: callId }, faToken);
+    expect(bypass.statusCode).toBe(200);
   });
 });

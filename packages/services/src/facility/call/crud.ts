@@ -1,8 +1,14 @@
 import prisma, { Prisma } from "@rw/db";
-import type { CallDefinition, CallSeverity } from "@rw/db";
+import type { CallSeverity } from "@rw/db";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 
+const definitionInclude = {
+  openRoles: { select: { id: true, name: true }, orderBy: { name: "asc" } },
+  answerRoles: { select: { id: true, name: true }, orderBy: { name: "asc" } },
+} as const;
+
+type CallDefinitionRecord = Prisma.CallDefinitionGetPayload<{ include: typeof definitionInclude }>;
 type ServiceError = { error: string; code: string };
 
 const DUPLICATE_NAME: ServiceError = {
@@ -20,6 +26,10 @@ export interface CreateCallDefinitionInput {
   description?: string;
   severity?: CallSeverity;
   requireOpenMessage?: boolean;
+  /** Roles allowed to manually open; empty/omitted = everyone. */
+  openRoleIds?: string[];
+  /** Roles allowed to answer/close; empty/omitted = everyone. */
+  answerRoleIds?: string[];
 }
 
 export interface UpdateCallDefinitionInput {
@@ -27,6 +37,19 @@ export interface UpdateCallDefinitionInput {
   description?: string | null;
   severity?: CallSeverity;
   requireOpenMessage?: boolean;
+  /** Replaces the whole list; [] clears the restriction. */
+  openRoleIds?: string[];
+  answerRoleIds?: string[];
+}
+
+/** All ids must be employee roles of the definition's site. */
+async function validateRoleIds(siteId: string, roleIds: string[]): Promise<ServiceError | null> {
+  if (roleIds.length === 0) return null;
+  const count = await prisma.employeeRole.count({ where: { id: { in: roleIds }, siteId } });
+  if (count !== new Set(roleIds).size) {
+    return { error: "One or more employee roles not found for this site", code: "ROLE_NOT_FOUND" };
+  }
+  return null;
 }
 
 export interface ListCallDefinitionsFilter {
@@ -39,8 +62,8 @@ export interface ListCallDefinitionsFilter {
 
 export async function createDefinition(
   input: CreateCallDefinitionInput,
-): Promise<ServiceError | { data: CallDefinition }> {
-  const { siteId, name, description, severity, requireOpenMessage } = input;
+): Promise<ServiceError | { data: CallDefinitionRecord }> {
+  const { siteId, name, description, severity, requireOpenMessage, openRoleIds = [], answerRoleIds = [] } = input;
 
   const site = await prisma.site.findUnique({
     where: { id: siteId },
@@ -49,6 +72,9 @@ export async function createDefinition(
   if (!site) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
+
+  const roleError = await validateRoleIds(siteId, [...openRoleIds, ...answerRoleIds]);
+  if (roleError) return roleError;
 
   // Names are unique per site, archived rows included (archive/unarchive
   // name semantics are still to be decided).
@@ -66,7 +92,10 @@ export async function createDefinition(
         description: description ?? null,
         severity: severity ?? "INFORMATION",
         requireOpenMessage: requireOpenMessage ?? false,
+        openRoles: { connect: openRoleIds.map((id) => ({ id })) },
+        answerRoles: { connect: answerRoleIds.map((id) => ({ id })) },
       },
+      include: definitionInclude,
     });
 
     publishEntityEvent({
@@ -95,6 +124,7 @@ export async function listDefinitions(filter: ListCallDefinitionsFilter = {}) {
   const [definitions, total] = await Promise.all([
     prisma.callDefinition.findMany({
       where,
+      include: definitionInclude,
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
       skip: Number(offset),
       orderBy: { name: "asc" },
@@ -106,7 +136,7 @@ export async function listDefinitions(filter: ListCallDefinitionsFilter = {}) {
 }
 
 export async function getDefinitionById(id: string) {
-  const definition = await prisma.callDefinition.findUnique({ where: { id } });
+  const definition = await prisma.callDefinition.findUnique({ where: { id }, include: definitionInclude });
   if (!definition || definition.archivedAt) {
     return null;
   }
@@ -116,7 +146,7 @@ export async function getDefinitionById(id: string) {
 export async function updateDefinition(
   id: string,
   input: UpdateCallDefinitionInput,
-): Promise<ServiceError | { data: CallDefinition }> {
+): Promise<ServiceError | { data: CallDefinitionRecord }> {
   const current = await prisma.callDefinition.findUnique({
     where: { id },
     select: { id: true, siteId: true, archivedAt: true, site: { select: { workspaceId: true } } },
@@ -133,16 +163,25 @@ export async function updateDefinition(
     if (existing && existing.id !== id) return DUPLICATE_NAME;
   }
 
+  const roleError = await validateRoleIds(current.siteId, [
+    ...(input.openRoleIds ?? []),
+    ...(input.answerRoleIds ?? []),
+  ]);
+  if (roleError) return roleError;
+
   const updateData: Record<string, unknown> = {};
   if (input.name !== undefined) updateData.name = input.name;
   if (input.description !== undefined) updateData.description = input.description;
   if (input.severity !== undefined) updateData.severity = input.severity;
   if (input.requireOpenMessage !== undefined) updateData.requireOpenMessage = input.requireOpenMessage;
+  if (input.openRoleIds !== undefined) updateData.openRoles = { set: input.openRoleIds.map((id) => ({ id })) };
+  if (input.answerRoleIds !== undefined) updateData.answerRoles = { set: input.answerRoleIds.map((id) => ({ id })) };
 
   try {
     const definition = await prisma.callDefinition.update({
       where: { id },
       data: updateData,
+      include: definitionInclude,
     });
 
     publishEntityEvent({

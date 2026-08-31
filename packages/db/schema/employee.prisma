@@ -16,6 +16,9 @@ model EmployeeRole {
 
   siteAccess EmployeeSiteAccess[]
 
+  openCallDefinitions   CallDefinition[] @relation("CallDefinitionOpenRoles")
+  answerCallDefinitions CallDefinition[] @relation("CallDefinitionAnswerRoles")
+
   @@unique([siteId, name])
   @@index([siteId])
 }
