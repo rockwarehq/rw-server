@@ -47,7 +47,8 @@ model WorkspaceMembership {
   employeeId String?   @db.Uuid
   employee   Employee? @relation(fields: [employeeId], references: [id], onDelete: SetNull)
 
-  roleAssignments RoleAssignment[]
+  roleAssignments  RoleAssignment[]
+  workcenterGrants WorkcenterGrant[]
 
   @@unique([userId, workspaceId])
   @@unique([workspaceId, employeeId])

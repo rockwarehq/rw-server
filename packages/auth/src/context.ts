@@ -17,6 +17,7 @@ export type PrincipalType = (typeof Principal)[keyof typeof Principal];
 export interface IAMPermissionSnapshot {
   systemRole: string | null;
   assignments: Array<{ siteId: string | null; permissions: string[] }>;
+  workcenterGrants?: Array<{ workcenterId: string; siteId: string; access: string }>;
 }
 
 interface BaseIAMContext {

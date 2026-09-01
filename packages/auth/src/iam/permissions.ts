@@ -65,11 +65,68 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<SystemRole, ReadonlySet<Permission>
   ENGINEER: new Set(ALL_PERMISSIONS.filter((p) => p !== OWNER_PERMISSION)),
 };
 
+// ── Workcenter grants ────────────────────────────────────────────────────
+// GitHub-collaborator model: a WorkcenterGrant row gives a membership READ
+// or WRITE at one workcenter, independent of (and unioned with) any site
+// role. Site roles dominate for free: their permissions apply at every
+// workcenter, so max(site role, grant) is just set-union.
+
+export type WorkcenterAccessLevel = "READ" | "WRITE";
+
+// A grant confers these SITE-WIDE — data that is global in nature (jobs,
+// schedules, tools…), which anyone working a workcenter needs to see and,
+// with WRITE, update. Employee stays read-only even for WRITE.
+const WC_READ_GLOBAL: readonly Permission[] = [
+  "facility:read",
+  "job:read",
+  "schedule:read",
+  "tool:read",
+  "product:read",
+  "entity:read",
+  "graph:read",
+  "dashboard:read",
+  "employee:read",
+];
+
+export const WC_GRANT_GLOBAL_PERMISSIONS: Record<WorkcenterAccessLevel, readonly Permission[]> = {
+  READ: WC_READ_GLOBAL,
+  WRITE: [
+    ...WC_READ_GLOBAL,
+    "job:write",
+    "schedule:write",
+    "tool:write",
+    "product:write",
+    "entity:write",
+    "graph:write",
+    "dashboard:write",
+  ],
+};
+
+// A grant confers these ONLY at the granted workcenter — status, calls, and
+// facility config (stations, workcenter setup) are the workcenter's own.
+// settings/user/billing appear in neither map: those stay with plant admins.
+export const WC_GRANT_SCOPED_PERMISSIONS: Record<WorkcenterAccessLevel, readonly Permission[]> = {
+  READ: ["status:read", "calls:read"],
+  WRITE: ["status:read", "status:write", "calls:read", "calls:write", "facility:write"],
+};
+
+function workcenterAccessPermissions(access: string): {
+  global: readonly Permission[];
+  scoped: readonly Permission[];
+} {
+  const level = access as WorkcenterAccessLevel;
+  return {
+    global: WC_GRANT_GLOBAL_PERMISSIONS[level] ?? [],
+    scoped: WC_GRANT_SCOPED_PERMISSIONS[level] ?? [],
+  };
+}
+
 // ── Permission checks ────────────────────────────────────────────────────
 
 export interface PermissionContext {
   workspaceId: string;
   siteId?: string;
+  workcenterId?: string;
 }
 
 export type AccessibleSites = { all: true } | { all: false; siteIds: string[] };
@@ -90,6 +147,7 @@ export interface AccessibleSiteRef {
 export interface PermissionSnapshot {
   systemRole: string | null;
   assignments: Array<{ siteId: string | null; permissions: string[] }>;
+  workcenterGrants?: Array<{ workcenterId: string; siteId: string; access: string }>;
 }
 
 /** Load the snapshot for a user's membership. Null when the user is missing. */
@@ -105,14 +163,25 @@ export async function loadPermissionSnapshot(userId: string, workspaceId: string
     return { systemRole: user.systemRole, assignments: [] };
   }
 
-  const assignments = await prisma.roleAssignment.findMany({
-    where: { membership: { userId, workspaceId } },
-    select: { siteId: true, role: { select: { permissions: true } } },
-  });
+  const [assignments, grants] = await Promise.all([
+    prisma.roleAssignment.findMany({
+      where: { membership: { userId, workspaceId } },
+      select: { siteId: true, role: { select: { permissions: true } } },
+    }),
+    prisma.workcenterGrant.findMany({
+      where: { membership: { userId, workspaceId } },
+      select: { workcenterId: true, access: true, workcenter: { select: { siteId: true } } },
+    }),
+  ]);
 
   return {
     systemRole: null,
     assignments: assignments.map((a) => ({ siteId: a.siteId, permissions: a.role.permissions })),
+    workcenterGrants: grants.map((g) => ({
+      workcenterId: g.workcenterId,
+      siteId: g.workcenter.siteId,
+      access: g.access,
+    })),
   };
 }
 
@@ -121,13 +190,20 @@ function systemRolePermissions(systemRole: string): ReadonlySet<Permission> | un
 }
 
 /**
- * Pure evaluation of the permission set a snapshot grants at a site context.
+ * Pure evaluation of the permission set a snapshot grants at a context.
  *
  * - System users resolve from SYSTEM_ROLE_PERMISSIONS.
  * - Customer users union all workspace-level assignments plus site-scoped
  *   assignments matching `siteId`. Unknown permission strings are dropped.
+ * - Workcenter grants at `siteId` add their global permissions site-wide;
+ *   their workcenter-scoped permissions only when `workcenterId` matches
+ *   the grant. Site roles dominate automatically via the union.
  */
-export function snapshotEffectivePermissions(snapshot: PermissionSnapshot, siteId?: string): Set<Permission> {
+export function snapshotEffectivePermissions(
+  snapshot: PermissionSnapshot,
+  siteId?: string,
+  workcenterId?: string,
+): Set<Permission> {
   if (snapshot.systemRole) {
     return new Set(systemRolePermissions(snapshot.systemRole) ?? []);
   }
@@ -141,14 +217,31 @@ export function snapshotEffectivePermissions(snapshot: PermissionSnapshot, siteI
       }
     }
   }
+  for (const grantRow of snapshot.workcenterGrants ?? []) {
+    if (!siteId || grantRow.siteId !== siteId) continue;
+    const { global, scoped } = workcenterAccessPermissions(grantRow.access);
+    for (const p of global) out.add(p);
+    if (workcenterId && grantRow.workcenterId === workcenterId) {
+      for (const p of scoped) out.add(p);
+    }
+  }
   return out;
 }
 
-export function snapshotHasPermission(snapshot: PermissionSnapshot, permission: Permission, siteId?: string): boolean {
-  return snapshotEffectivePermissions(snapshot, siteId).has(permission);
+export function snapshotHasPermission(
+  snapshot: PermissionSnapshot,
+  permission: Permission,
+  siteId?: string,
+  workcenterId?: string,
+): boolean {
+  return snapshotEffectivePermissions(snapshot, siteId, workcenterId).has(permission);
 }
 
-/** Pure evaluation of which sites a snapshot grants `permission` at. */
+/**
+ * Pure evaluation of which sites a snapshot grants `permission` at.
+ * Workcenter-scoped grant permissions count as held at the grant's site
+ * (anySite semantics: held at ≥1 workcenter there).
+ */
 export function snapshotAccessibleSites(snapshot: PermissionSnapshot, permission: Permission): AccessibleSites {
   if (snapshot.systemRole) {
     return systemRolePermissions(snapshot.systemRole)?.has(permission) ? { all: true } : { all: false, siteIds: [] };
@@ -160,8 +253,31 @@ export function snapshotAccessibleSites(snapshot: PermissionSnapshot, permission
     if (assignment.siteId === null) return { all: true };
     siteIds.add(assignment.siteId);
   }
+  for (const grantRow of snapshot.workcenterGrants ?? []) {
+    const { global, scoped } = workcenterAccessPermissions(grantRow.access);
+    if (global.includes(permission) || scoped.includes(permission)) {
+      siteIds.add(grantRow.siteId);
+    }
+  }
 
   return { all: false, siteIds: [...siteIds] };
+}
+
+/** Workcenters (at `siteId`) whose grants confer `permission` — scoped or global. */
+export function snapshotWorkcentersWithPermission(
+  snapshot: PermissionSnapshot,
+  permission: Permission,
+  siteId: string,
+): string[] {
+  const out = new Set<string>();
+  for (const grantRow of snapshot.workcenterGrants ?? []) {
+    if (grantRow.siteId !== siteId) continue;
+    const { global, scoped } = workcenterAccessPermissions(grantRow.access);
+    if (scoped.includes(permission) || global.includes(permission)) {
+      out.add(grantRow.workcenterId);
+    }
+  }
+  return [...out];
 }
 
 /**
@@ -171,7 +287,7 @@ export function snapshotAccessibleSites(snapshot: PermissionSnapshot, permission
 export async function getEffectivePermissions(userId: string, ctx: PermissionContext): Promise<Set<Permission>> {
   const snapshot = await loadPermissionSnapshot(userId, ctx.workspaceId);
   if (!snapshot) return new Set();
-  return snapshotEffectivePermissions(snapshot, ctx.siteId);
+  return snapshotEffectivePermissions(snapshot, ctx.siteId, ctx.workcenterId);
 }
 
 export async function hasPermission(userId: string, permission: Permission, ctx: PermissionContext): Promise<boolean> {

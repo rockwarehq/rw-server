@@ -239,17 +239,31 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
 
   // Resolve the role/permission snapshot once; the site-claim check below
   // and every downstream policy evaluation share it instead of re-querying.
-  const permissionSnapshot: PermissionSnapshot = userResult.systemRole
-    ? { systemRole: userResult.systemRole, assignments: [] }
-    : {
-        systemRole: null,
-        assignments: (
-          await prisma.roleAssignment.findMany({
-            where: { membership: { userId: decodedToken.id, workspaceId: decodedToken.workspaceId } },
-            select: { siteId: true, role: { select: { permissions: true } } },
-          })
-        ).map((a) => ({ siteId: a.siteId, permissions: a.role.permissions })),
-      };
+  let permissionSnapshot: PermissionSnapshot;
+  if (userResult.systemRole) {
+    permissionSnapshot = { systemRole: userResult.systemRole, assignments: [] };
+  } else {
+    const membershipWhere = { userId: decodedToken.id, workspaceId: decodedToken.workspaceId };
+    const [assignments, workcenterGrants] = await Promise.all([
+      prisma.roleAssignment.findMany({
+        where: { membership: membershipWhere },
+        select: { siteId: true, role: { select: { permissions: true } } },
+      }),
+      prisma.workcenterGrant.findMany({
+        where: { membership: membershipWhere },
+        select: { workcenterId: true, access: true, workcenter: { select: { siteId: true } } },
+      }),
+    ]);
+    permissionSnapshot = {
+      systemRole: null,
+      assignments: assignments.map((a) => ({ siteId: a.siteId, permissions: a.role.permissions })),
+      workcenterGrants: workcenterGrants.map((g) => ({
+        workcenterId: g.workcenterId,
+        siteId: g.workcenter.siteId,
+        access: g.access,
+      })),
+    };
+  }
 
   if (decodedToken.siteId) {
     const access = snapshotAccessibleSites(permissionSnapshot, "facility:read");
