@@ -1,5 +1,6 @@
 import prisma from "@rw/db";
 import { hashPassword } from "@rw/auth/password";
+import { workcenter } from "@rw/services/facility/index";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
 import { rpcCall } from "./helpers/rpc-call.js";
@@ -238,6 +239,48 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
     it("site-scoped roles cannot create sites (workspace-level action)", async () => {
       const res = await rpcCall(server, "site/create", { name: "authz-should-not-exist" }, faToken);
       expect(res.statusCode).toBe(403);
+    });
+  });
+
+  describe("workcenter nesting is blocked", () => {
+    it("create ignores parentId (schema) and the service rejects it outright", async () => {
+      // RPC input schema no longer carries parentId — a stray field is
+      // stripped, so the created workcenter is top-level.
+      const created = await rpcCall(
+        server,
+        "workcenter/create",
+        { siteId: siteA.id, name: "authz-wc-flat", parentId: wcB.id },
+        faToken,
+      );
+      expect(created.statusCode).toBe(200);
+      const row = created.json as { id: string; parentId: string | null };
+      expect(row.parentId).toBeNull();
+
+      // Service-level guard for callers that bypass the RPC schema.
+      const rejected = await workcenter.create({ siteId: siteA.id, name: "authz-wc-nested", parentId: row.id });
+      expect("error" in rejected && rejected.code).toBe("WORKCENTER_NESTING_UNSUPPORTED");
+
+      await prisma.workcenter.delete({ where: { id: row.id } });
+    });
+
+    it("move accepts only parentId null; a target parent is rejected", async () => {
+      const parent = await prisma.workcenter.findFirstOrThrow({
+        where: { siteId: siteA.id, name: "authz-wc-a" },
+        select: { id: true },
+      });
+
+      const nested = await rpcCall(server, "workcenter/move", { id: parent.id, parentId: wcB.id }, faToken);
+      expect(nested.statusCode).toBe(400);
+      const child = await prisma.workcenter.create({
+        data: { siteId: siteA.id, name: "authz-wc-legacy-child", parentId: parent.id },
+        select: { id: true },
+      });
+      const flattened = await rpcCall(server, "workcenter/move", { id: child.id, parentId: null }, faToken);
+      expect(flattened.statusCode).toBe(200);
+      const after = await prisma.workcenter.findUniqueOrThrow({ where: { id: child.id }, select: { parentId: true } });
+      expect(after.parentId).toBeNull();
+
+      await prisma.workcenter.delete({ where: { id: child.id } });
     });
   });
 

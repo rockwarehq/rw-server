@@ -14,7 +14,6 @@ const createInputSchema = z.object({
   description: z.string().optional(),
   attrs: z.record(z.string(), z.unknown()).optional(),
   siteId: z.uuid(),
-  parentId: z.uuid().optional(),
 });
 
 const updateInputSchema = z.object({
@@ -28,9 +27,11 @@ const idInputSchema = z.object({
   id: z.uuid(),
 });
 
+// Nesting is unsupported; the only accepted move is to the top level
+// (parentId: null), kept so pre-existing trees can be flattened.
 const moveInputSchema = z.object({
   id: z.uuid(),
-  parentId: z.uuid().nullable(),
+  parentId: z.null(),
 });
 
 const listInputSchema = z.object({
