@@ -71,11 +71,23 @@ const inviteBodySchema = {
   type: "object",
   properties: {
     email: { type: "string", format: "email" },
-    // Role id for new invites. Required when creating a new invite, optional
-    // when resending an existing pending invite.
+    // Role id for new invites. New invites need a roleId, workcenterGrants,
+    // or both; resending an existing pending invite needs neither.
     roleId: { type: "string", format: "uuid" },
     // Required for site-scoped roles unless the caller's token has site context.
     siteId: { type: "string", format: "uuid" },
+    // Workcenter grants for the invitee (GitHub-collaborator style).
+    workcenterGrants: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          workcenterId: { type: "string", format: "uuid" },
+          access: { type: "string", enum: ["READ", "WRITE"] },
+        },
+        required: ["workcenterId", "access"],
+      },
+    },
     firstName: { type: "string" },
     lastName: { type: "string" },
   },
@@ -480,13 +492,14 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
 
-      const { email, roleId, siteId, firstName, lastName } = request.body;
+      const { email, roleId, siteId, workcenterGrants, firstName, lastName } = request.body;
       const result = await user.createInvite({
         email,
         inviterId,
         workspaceId,
         roleId,
         siteId,
+        workcenterGrants,
         fallbackSiteId: request.iam?.siteId,
         firstName,
         lastName,

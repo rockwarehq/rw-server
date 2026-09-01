@@ -37,9 +37,18 @@ export interface SitePermissionSummary {
   permissions: Permission[];
 }
 
+export interface WorkcenterGrantRef {
+  [x: string]: unknown;
+  id: string;
+  workcenterId: string;
+  access: "READ" | "WRITE";
+  workcenter: { id: string; name: string; siteId: string };
+}
+
 export interface WorkspaceAccessSummary {
   roles: RoleRef[];
   roleAssignments: RoleAssignmentRef[];
+  workcenterGrants: WorkcenterGrantRef[];
   access: {
     workspacePermissions: Permission[];
     sitePermissions: SitePermissionSummary[];
@@ -68,11 +77,12 @@ export interface WorkspaceMembership {
   slug: string;
   description: string | null;
   joinedAt: Date;
-  // Role names this user holds at workspace scope in this workspace. Empty
-  // only if something has gone wrong — every member should have at least one.
+  // Role names this user holds at workspace scope in this workspace. May be
+  // empty for members whose access comes only from workcenter grants.
   employee: EmployeeProfileSummary | null;
   roles: RoleRef[];
   roleAssignments: RoleAssignmentRef[];
+  workcenterGrants: WorkcenterGrantRef[];
   access: WorkspaceAccessSummary["access"];
 }
 
@@ -129,6 +139,12 @@ function buildWorkspaceAccessSummary(
       permissions: string[];
     };
   }>,
+  workcenterGrants: Array<{
+    id: string;
+    workcenterId: string;
+    access: "READ" | "WRITE";
+    workcenter: { id: string; name: string; siteId: string };
+  }> = [],
 ): WorkspaceAccessSummary {
   const workspacePermissions = new Set<Permission>();
   const sitePermissions = new Map<
@@ -171,9 +187,16 @@ function buildWorkspaceAccessSummary(
   const allSites = workspacePermissions.has("facility:read");
   const siteIds = allSites
     ? []
-    : sitePermissionSummaries
-        .filter((summary) => summary.permissions.includes("facility:read"))
-        .map((summary) => summary.siteId);
+    : [
+        ...new Set([
+          ...sitePermissionSummaries
+            .filter((summary) => summary.permissions.includes("facility:read"))
+            .map((summary) => summary.siteId),
+          // A workcenter grant confers facility:read at its site, so
+          // grant-only members surface under their plant in the UI.
+          ...workcenterGrants.map((grantRow) => grantRow.workcenter.siteId),
+        ]),
+      ];
 
   return {
     roles,
@@ -182,6 +205,12 @@ function buildWorkspaceAccessSummary(
       siteId: assignment.siteId,
       site: assignment.site,
       role: assignment.role,
+    })),
+    workcenterGrants: workcenterGrants.map((grantRow) => ({
+      id: grantRow.id,
+      workcenterId: grantRow.workcenterId,
+      access: grantRow.access,
+      workcenter: grantRow.workcenter,
     })),
     access: {
       workspacePermissions: sortPermissions(workspacePermissions),
@@ -215,20 +244,27 @@ export async function getWorkspaceAccessSummaries(
             },
             orderBy: { createdAt: "asc" },
           },
+          workcenterGrants: {
+            include: { workcenter: { select: { id: true, name: true, siteId: true } } },
+            orderBy: { createdAt: "asc" },
+          },
         },
       })
     : [];
 
-  const assignmentsByWorkspace = new Map<string, (typeof memberships)[number]["roleAssignments"]>();
+  const byWorkspace = new Map<string, (typeof memberships)[number]>();
   for (const membership of memberships) {
-    assignmentsByWorkspace.set(membership.workspaceId, membership.roleAssignments);
+    byWorkspace.set(membership.workspaceId, membership);
   }
 
   return new Map(
-    workspaceIds.map((workspaceId) => [
-      workspaceId,
-      buildWorkspaceAccessSummary(assignmentsByWorkspace.get(workspaceId) ?? []),
-    ]),
+    workspaceIds.map((workspaceId) => {
+      const membership = byWorkspace.get(workspaceId);
+      return [
+        workspaceId,
+        buildWorkspaceAccessSummary(membership?.roleAssignments ?? [], membership?.workcenterGrants ?? []),
+      ];
+    }),
   );
 }
 
@@ -363,6 +399,7 @@ export async function removeSiteAccess(
     select: {
       id: true,
       roleAssignments: { select: { id: true, siteId: true } },
+      workcenterGrants: { select: { id: true, workcenter: { select: { siteId: true } } } },
     },
   });
 
@@ -371,12 +408,18 @@ export async function removeSiteAccess(
   }
 
   const siteAssignments = membership.roleAssignments.filter((assignment) => assignment.siteId === siteId);
-  if (siteAssignments.length === 0) {
+  const siteGrants = membership.workcenterGrants.filter((grantRow) => grantRow.workcenter.siteId === siteId);
+  if (siteAssignments.length === 0 && siteGrants.length === 0) {
     return { success: false, error: "NO_SITE_ACCESS" };
   }
 
-  const remaining = membership.roleAssignments.length - siteAssignments.length;
+  const remaining =
+    membership.roleAssignments.length -
+    siteAssignments.length +
+    membership.workcenterGrants.length -
+    siteGrants.length;
   if (remaining === 0) {
+    // Membership grants cascade-delete with the membership row.
     const result = await removeMember(workspaceId, userId, opts);
     if (!result.success) {
       return result;
@@ -384,9 +427,10 @@ export async function removeSiteAccess(
     return { success: true, membershipRemoved: true };
   }
 
-  await prisma.roleAssignment.deleteMany({
-    where: { membershipId: membership.id, siteId },
-  });
+  await prisma.$transaction([
+    prisma.roleAssignment.deleteMany({ where: { membershipId: membership.id, siteId } }),
+    prisma.workcenterGrant.deleteMany({ where: { membershipId: membership.id, workcenter: { siteId } } }),
+  ]);
   return { success: true, membershipRemoved: false };
 }
 
@@ -563,6 +607,10 @@ export async function listMembers(workspaceId: string) {
         },
         orderBy: { createdAt: "asc" },
       },
+      workcenterGrants: {
+        include: { workcenter: { select: { id: true, name: true, siteId: true } } },
+        orderBy: { createdAt: "asc" },
+      },
     },
     orderBy: { joinedAt: "asc" },
   });
@@ -615,6 +663,10 @@ export async function getUserWorkspaces(userId: string): Promise<WorkspaceMember
         },
         orderBy: { createdAt: "asc" },
       },
+      workcenterGrants: {
+        include: { workcenter: { select: { id: true, name: true, siteId: true } } },
+        orderBy: { createdAt: "asc" },
+      },
     },
     orderBy: { joinedAt: "asc" },
   });
@@ -626,7 +678,7 @@ export async function getUserWorkspaces(userId: string): Promise<WorkspaceMember
     description: m.workspace.description,
     joinedAt: m.joinedAt,
     employee: m.employee,
-    ...buildWorkspaceAccessSummary(m.roleAssignments),
+    ...buildWorkspaceAccessSummary(m.roleAssignments, m.workcenterGrants),
   }));
 }
 

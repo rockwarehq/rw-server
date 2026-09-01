@@ -10,6 +10,7 @@
 
 export * as roles from "./roles.js";
 export * as assignments from "./assignments.js";
+export * as workcenterGrants from "./workcenter-grants.js";
 
 export {
   RESOURCES,

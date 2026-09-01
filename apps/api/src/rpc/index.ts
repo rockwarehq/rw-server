@@ -1,6 +1,7 @@
 import * as device from "./device.js";
 import * as site from "./site.js";
 import * as workcenter from "./workcenter.js";
+import * as workcenterGrant from "./workcenter-grant.js";
 import * as label from "./label.js";
 import * as station from "./station.js";
 import * as events from "./events.js";
@@ -194,6 +195,11 @@ export const router = {
     update: workcenter.update,
     move: workcenter.move,
     delete: workcenter.remove,
+  },
+  workcenterGrant: {
+    list: workcenterGrant.list,
+    upsert: workcenterGrant.upsert,
+    remove: workcenterGrant.remove,
   },
   label: {
     create: label.create,
