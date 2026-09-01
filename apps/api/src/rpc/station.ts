@@ -187,7 +187,14 @@ const triggerEventInputSchema = z
  * Create a new station
  */
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }));
+  // workcenterId lets a workcenter WRITE grant create stations in its own
+  // workcenter; without one the check is site-level (plant roles only).
+  grant(
+    await authorize(context.iam, {
+      permission: "facility:write",
+      scope: { kind: "site", siteId: input.siteId, workcenterId: input.workcenterId },
+    }),
+  );
 
   const result = await station.create(input);
   if (result.error !== undefined) throwServiceError(result);
@@ -241,6 +248,17 @@ export const move = authRequired.input(moveInputSchema).handler(async ({ input, 
   const scope = grant(
     await authorize(context.iam, { permission: "facility:write", scope: { kind: "station", id: input.id } }),
   );
+  // Moving INTO a workcenter also needs facility:write there — otherwise a
+  // workcenter grant could push stations into someone else's workcenter.
+  // No-op for plant roles (site-wide facility:write, query-free snapshot).
+  if (input.workcenterId) {
+    grant(
+      await authorize(context.iam, {
+        permission: "facility:write",
+        scope: { kind: "site", siteId: scope.siteId, workcenterId: input.workcenterId },
+      }),
+    );
+  }
 
   const result = await station.move(input.id, input.workcenterId, scope.workspaceId);
   if (result.error !== undefined) throwServiceError(result);

@@ -12,16 +12,27 @@ import prisma from "@rw/db";
 //
 // No soft-delete filtering here: services must keep producing their own
 // *_DELETED error codes after authorization (wire parity, ADR-0003).
+//
+// Kinds whose rows carry a workcenter binding also return `workcenterId`, so
+// workcenter grants can be evaluated (status/calls/facility-write scoping).
+// A row with workcenterId null (station directly under the site, call not
+// tied to a workcenter) evaluates site-level only — plant roles required.
 
-export type SiteRow = { siteId: string | null } | null;
+export type SiteRow = { siteId: string | null; workcenterId?: string | null } | null;
 
 const one = (row: { siteId: string | null } | null): SiteRow => row;
 const via = (row: { siteId: string | null } | null | undefined): SiteRow => (row ? { siteId: row.siteId } : null);
+const viaStation = (row: { siteId: string | null; workcenterId: string | null } | null | undefined): SiteRow =>
+  row ? { siteId: row.siteId, workcenterId: row.workcenterId } : null;
 
 export const RESOLVERS = {
   // ── direct siteId column ────────────────────────────────────────────
-  station: (id: string) => prisma.station.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  workcenter: (id: string) => prisma.workcenter.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  station: (id: string) =>
+    prisma.station.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
+  workcenter: (id: string) =>
+    prisma.workcenter
+      .findUnique({ where: { id }, select: { siteId: true } })
+      .then((r) => (r ? { siteId: r.siteId, workcenterId: id } : null)),
   label: (id: string) => prisma.label.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   order: (id: string) => prisma.order.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   customer: (id: string) => prisma.customer.findUnique({ where: { id }, select: { siteId: true } }).then(one),
@@ -32,7 +43,7 @@ export const RESOLVERS = {
   dispositionReason: (id: string) =>
     prisma.itemDispositionReason.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   dispositionLog: (id: string) =>
-    prisma.itemDispositionLog.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+    prisma.itemDispositionLog.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
   tool: (id: string) => prisma.tool.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   job: (id: string) => prisma.job.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   product: (id: string) => prisma.product.findUnique({ where: { id }, select: { siteId: true } }).then(one),
@@ -42,7 +53,8 @@ export const RESOLVERS = {
   shiftPattern: (id: string) => prisma.shiftPattern.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   shiftAssignment: (id: string) =>
     prisma.shiftAssignment.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  shiftComment: (id: string) => prisma.shiftComment.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  shiftComment: (id: string) =>
+    prisma.shiftComment.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
   employeeRole: (id: string) => prisma.employeeRole.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   cycle: (id: string) => prisma.cycle.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   graphNode: (id: string) => prisma.graphNode.findUnique({ where: { id }, select: { siteId: true } }).then(one),
@@ -52,7 +64,8 @@ export const RESOLVERS = {
   integrationTrigger: (id: string) =>
     prisma.integrationTrigger.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   siteAndonRule: (id: string) => prisma.siteAndonRule.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  call: (id: string) => prisma.call.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  call: (id: string) =>
+    prisma.call.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
   callDefinition: (id: string) =>
     prisma.callDefinition.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   productionMode: (id: string) =>
@@ -64,7 +77,8 @@ export const RESOLVERS = {
   // ── nullable siteId column (null => anySite rule in policy.ts) ─────
   gateway: (id: string) => prisma.gateway.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   datasource: (id: string) => prisma.datasource.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  display: (id: string) => prisma.display.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  display: (id: string) =>
+    prisma.display.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
   document: (id: string) => prisma.document.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   objectSchema: (id: string) => prisma.objectSchema.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   objectInstance: (id: string) =>
@@ -74,8 +88,8 @@ export const RESOLVERS = {
   // ── one hop through a required parent ───────────────────────────────
   stationStateLog: (id: string) =>
     prisma.stationStateLog
-      .findUnique({ where: { id }, select: { station: { select: { siteId: true } } } })
-      .then((r) => via(r?.station)),
+      .findUnique({ where: { id }, select: { station: { select: { siteId: true, workcenterId: true } } } })
+      .then((r) => viaStation(r?.station)),
   orderLineItem: (id: string) =>
     prisma.orderLineItem
       .findUnique({ where: { id }, select: { order: { select: { siteId: true } } } })

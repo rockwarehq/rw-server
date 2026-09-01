@@ -50,6 +50,8 @@ export interface CloseCallInput {
 export interface ListActiveCallsFilter {
   siteId?: string;
   workcenterId?: string;
+  /** Authz narrowing (workcenter grants): rows in these workcenters or with no workcenter. */
+  workcenterIds?: string[];
   stationId?: string;
   definitionId?: string;
   severity?: CallSeverity;
@@ -60,6 +62,8 @@ export interface ListActiveCallsFilter {
 export interface SearchCallsFilter {
   siteId: string;
   workcenterId?: string;
+  /** Authz narrowing (workcenter grants): rows in these workcenters or with no workcenter. */
+  workcenterIds?: string[];
   stationId?: string;
   definitionId?: string;
   severity?: CallSeverity;
@@ -294,7 +298,7 @@ export async function getById(id: string) {
 }
 
 export async function listActive(filter: ListActiveCallsFilter = {}) {
-  const { siteId, workcenterId, stationId, definitionId, severity, limit = 100, offset = 0 } = filter;
+  const { siteId, workcenterId, workcenterIds, stationId, definitionId, severity, limit = 100, offset = 0 } = filter;
 
   const where: Prisma.CallWhereInput = { closedAt: null, deletedAt: null };
   if (siteId) where.siteId = siteId;
@@ -302,6 +306,9 @@ export async function listActive(filter: ListActiveCallsFilter = {}) {
   if (definitionId) where.definitionId = definitionId;
   if (severity) where.severity = severity;
   if (workcenterId) where.workcenterId = workcenterId;
+  if (workcenterIds) {
+    where.AND = [{ OR: [{ workcenterId: { in: workcenterIds } }, { workcenterId: null }] }];
+  }
 
   const [calls, total] = await Promise.all([
     prisma.call.findMany({
@@ -321,6 +328,7 @@ export async function search(filter: SearchCallsFilter) {
   const {
     siteId,
     workcenterId,
+    workcenterIds,
     stationId,
     definitionId,
     severity,
@@ -340,6 +348,9 @@ export async function search(filter: SearchCallsFilter) {
   if (severity) where.severity = severity;
   if (source) where.source = source;
   if (workcenterId) where.workcenterId = workcenterId;
+  if (workcenterIds) {
+    where.AND = [{ OR: [{ workcenterId: { in: workcenterIds } }, { workcenterId: null }] }];
+  }
   if (status === "open") where.closedAt = null;
   if (status === "closed") where.closedAt = { not: null };
   if (openedFrom || openedTo) {

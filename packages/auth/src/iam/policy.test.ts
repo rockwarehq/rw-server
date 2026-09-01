@@ -415,6 +415,103 @@ describe("with a per-request permission snapshot", () => {
   });
 });
 
+describe("workcenter grants through the policy", () => {
+  const WC_1 = "11111111-1111-4111-8111-111111111111";
+  const WC_2 = "22222222-2222-4222-8222-222222222222";
+
+  const wcUser = (access: "READ" | "WRITE", overrides: Partial<UserIAMContext> = {}) =>
+    user({
+      permissionSnapshot: {
+        systemRole: null,
+        assignments: [],
+        workcenterGrants: [{ workcenterId: WC_1, siteId: SITE_A, access }],
+      },
+      ...overrides,
+    });
+
+  it("resolver workcenterId gates workcenter-scoped writes per workcenter", async () => {
+    const inGrantWc = buildPolicy({ resolveSiteRef: vi.fn(async () => ({ siteId: SITE_A, workcenterId: WC_1 })) });
+    const allowed = await inGrantWc.policy.authorize(wcUser("WRITE"), {
+      permission: "status:write",
+      scope: { kind: "station", id: STATION },
+    });
+    expect(allowed).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
+
+    const otherWc = buildPolicy({ resolveSiteRef: vi.fn(async () => ({ siteId: SITE_A, workcenterId: WC_2 })) });
+    const denied = await otherWc.policy.authorize(wcUser("WRITE"), {
+      permission: "status:write",
+      scope: { kind: "station", id: STATION },
+    });
+    expect(denied).toMatchObject({ ok: false, code: "FORBIDDEN", permission: "status:write" });
+  });
+
+  it("a workcenter-null resource evaluates site-level only: grant denied, site role allowed", async () => {
+    const { policy } = buildPolicy({ resolveSiteRef: vi.fn(async () => ({ siteId: SITE_A, workcenterId: null })) });
+    const denied = await policy.authorize(wcUser("WRITE"), {
+      permission: "status:write",
+      scope: { kind: "station", id: STATION },
+    });
+    expect(denied).toMatchObject({ ok: false, code: "FORBIDDEN" });
+
+    const siteRole = user({
+      permissionSnapshot: { systemRole: null, assignments: [{ siteId: SITE_A, permissions: ["status:write"] }] },
+    });
+    const allowed = await policy.authorize(siteRole, {
+      permission: "status:write",
+      scope: { kind: "station", id: STATION },
+    });
+    expect(allowed).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
+  });
+
+  it("global resources authorize site-wide from a grant (resolver returns no workcenterId)", async () => {
+    const { policy } = buildPolicy({ resolveSiteRef: vi.fn(async () => ({ siteId: SITE_A })) });
+    const allowed = await policy.authorize(wcUser("WRITE"), {
+      permission: "job:write",
+      scope: { kind: "job", id: STATION },
+    });
+    expect(allowed).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
+  });
+
+  it("a literal site ref accepts a target workcenterId (create flows)", async () => {
+    const { policy } = buildPolicy();
+    const allowed = await policy.authorize(wcUser("WRITE"), {
+      permission: "facility:write",
+      scope: { kind: "site", siteId: SITE_A, workcenterId: WC_1 },
+    });
+    expect(allowed).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
+
+    const wrongWc = await policy.authorize(wcUser("WRITE"), {
+      permission: "facility:write",
+      scope: { kind: "site", siteId: SITE_A, workcenterId: WC_2 },
+    });
+    expect(wrongWc).toMatchObject({ ok: false, code: "FORBIDDEN" });
+
+    const noWc = await policy.authorize(wcUser("WRITE"), {
+      permission: "facility:write",
+      scope: { kind: "site", siteId: SITE_A },
+    });
+    expect(noWc).toMatchObject({ ok: false, code: "FORBIDDEN" });
+  });
+
+  it("authorizeList narrows to granted workcenters when no site-wide hold exists", async () => {
+    const { policy } = buildPolicy();
+    const narrowed = await policy.authorizeList(wcUser("WRITE", { siteId: SITE_A }), { permission: "calls:read" });
+    expect(narrowed).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A, workcenterIds: [WC_1] });
+
+    // Site roles list without narrowing.
+    const siteRole = user({
+      permissionSnapshot: { systemRole: null, assignments: [{ siteId: SITE_A, permissions: ["calls:read"] }] },
+      siteId: SITE_A,
+    });
+    const wide = await policy.authorizeList(siteRole, { permission: "calls:read" });
+    expect(wide).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
+
+    // No grant at the requested site: plain FORBIDDEN.
+    const denied = await policy.authorizeList(wcUser("WRITE"), { permission: "calls:read", requestedSiteId: SITE_B });
+    expect(denied).toMatchObject({ ok: false, code: "FORBIDDEN" });
+  });
+});
+
 describe("scopeFilter / scopeWhere", () => {
   it("produce single-site fragments", () => {
     expect(scopeFilter({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A })).toEqual({
