@@ -74,15 +74,24 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
     });
 
     const faRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Factory Administrator", scope: "SITE" } },
+      where: { workspaceId_name_scope: { workspaceId, name: "Plant Admin", scope: "SITE" } },
       select: { id: true },
     });
     const readerRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Read-only User", scope: "SITE" } },
+      where: { workspaceId_name_scope: { workspaceId, name: "Plant Member", scope: "SITE" } },
       select: { id: true },
     });
-    const officeRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Office User", scope: "SITE" } },
+    // Custom role: calls:write without calls:admin, so definition role gates
+    // apply (Plant Admin holds calls:admin and would bypass answer gates).
+    const officeRole = await prisma.role.upsert({
+      where: { workspaceId_name_scope: { workspaceId, name: "calls-test-caller", scope: "SITE" } },
+      update: { permissions: ["facility:read", "calls:read", "calls:write"] },
+      create: {
+        workspaceId,
+        name: "calls-test-caller",
+        scope: "SITE",
+        permissions: ["facility:read", "calls:read", "calls:write"],
+      },
       select: { id: true },
     });
     const passwordHash = await hashPassword(PASSWORD);
@@ -146,7 +155,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
       create: { employeeId, siteId: siteA.id, roleId: roleOpsId },
     });
 
-    // The Office User gets its own employee (one membership per employee),
+    // The caller user gets its own employee (one membership per employee),
     // also in the ops role — calls:write without calls:admin, so no bypass.
     const officeEmployee = await prisma.employee.create({ data: { workspaceId }, select: { id: true } });
     officeEmployeeId = officeEmployee.id;
@@ -190,6 +199,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
     await prisma.employee.deleteMany({ where: { id: { in: [employeeId, officeEmployeeId] } } });
     await prisma.employeeRole.deleteMany({ where: { id: { in: [roleOpsId, roleMaintId, roleSiteBId] } } });
     await prisma.user.deleteMany({ where: { email: { in: [FA_EMAIL, READER_EMAIL, OFFICE_EMAIL] } } });
+    await prisma.role.deleteMany({ where: { name: "calls-test-caller", isSystem: false } });
     await prisma.station.deleteMany({ where: { id: { in: [stationA.id, stationA2.id] } } });
     await prisma.site.deleteMany({ where: { name: "Calls Site B" } });
     await server.close();

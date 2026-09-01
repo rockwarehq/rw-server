@@ -40,7 +40,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("employee domain authorization (
     employee = await prisma.employee.create({ data: { workspaceId }, select: { id: true } });
 
     const faRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Factory Administrator", scope: "SITE" } },
+      where: { workspaceId_name_scope: { workspaceId, name: "Plant Admin", scope: "SITE" } },
       select: { id: true },
     });
     const passwordHash = await hashPassword(PASSWORD);

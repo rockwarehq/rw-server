@@ -42,13 +42,26 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("notifications", () => {
 
     const roleFor = (name: string) =>
       prisma.role.findUniqueOrThrow({ where: { workspaceId_name_scope: { workspaceId, name, scope: "SITE" } }, select: { id: true } });
+    // Custom role: notifications:write without notifications:admin — Plant
+    // Member has no writes; Plant Admin's admin would pass the group gates.
+    const senderRole = await prisma.role.upsert({
+      where: { workspaceId_name_scope: { workspaceId, name: "notif-test-sender", scope: "SITE" } },
+      update: { permissions: ["facility:read", "notifications:read", "notifications:write"] },
+      create: {
+        workspaceId,
+        name: "notif-test-sender",
+        scope: "SITE",
+        permissions: ["facility:read", "notifications:read", "notifications:write"],
+      },
+      select: { id: true },
+    });
     const passwordHash = await hashPassword(PASSWORD);
     for (const { email, role } of [
-      { email: FA_EMAIL, role: "Factory Administrator" },
-      { email: READER_EMAIL, role: "Read-only User" },
-      { email: OFFICE_EMAIL, role: "Office User" },
+      { email: FA_EMAIL, role: "Plant Admin" },
+      { email: READER_EMAIL, role: "Plant Member" },
+      { email: OFFICE_EMAIL, role: null },
     ]) {
-      const { id: roleId } = await roleFor(role);
+      const { id: roleId } = role ? await roleFor(role) : senderRole;
       const u = await prisma.user.upsert({
         where: { email },
         update: {},
@@ -85,6 +98,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("notifications", () => {
     await prisma.notificationGroup.deleteMany({ where: { id: { in: groupIds } } });
     await prisma.employee.deleteMany({ where: { id: { in: [withEmailId, withoutEmailId] } } });
     await prisma.user.deleteMany({ where: { email: { in: [FA_EMAIL, READER_EMAIL, OFFICE_EMAIL] } } });
+    await prisma.role.deleteMany({ where: { name: "notif-test-sender", isSystem: false } });
     await server.close();
   });
 

@@ -127,7 +127,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("system-role user authentication
     const { assignments } = await import("@rw/auth/iam/index");
     const rockware = await prisma.site.findFirstOrThrow({ where: { name: "Rockware" }, select: { workspaceId: true } });
     const role = await prisma.role.findFirstOrThrow({
-      where: { workspaceId: rockware.workspaceId, name: "Read-only User" },
+      where: { workspaceId: rockware.workspaceId, name: "Plant Member" },
       select: { id: true },
     });
     await expect(assignments.assign({ userId: engineer.id, roleId: role.id, siteId: siteA.id })).rejects.toThrow();

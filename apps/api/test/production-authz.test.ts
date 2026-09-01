@@ -51,11 +51,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production domain authorization
       (await prisma.tool.create({ data: { siteId: siteB.id }, select: { id: true } }));
 
     const faRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Factory Administrator", scope: "SITE" } },
+      where: { workspaceId_name_scope: { workspaceId, name: "Plant Admin", scope: "SITE" } },
       select: { id: true },
     });
     const readerRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Read-only User", scope: "SITE" } },
+      where: { workspaceId_name_scope: { workspaceId, name: "Plant Member", scope: "SITE" } },
       select: { id: true },
     });
     const passwordHash = await hashPassword(PASSWORD);

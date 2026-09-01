@@ -35,11 +35,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("graph/entity/integration author
     });
 
     const faRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Factory Administrator", scope: "SITE" } },
+      where: { workspaceId_name_scope: { workspaceId, name: "Plant Admin", scope: "SITE" } },
       select: { id: true },
     });
     const officeRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Office User", scope: "SITE" } },
+      where: { workspaceId_name_scope: { workspaceId, name: "Plant Member", scope: "SITE" } },
       select: { id: true },
     });
     const passwordHash = await hashPassword(PASSWORD);
@@ -110,19 +110,21 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("graph/entity/integration author
     expect(res.statusCode).toBe(200);
   });
 
-  it("integration reads are settings:read (FA allowed); destructive ops stay settings:admin", async () => {
+  it("integration reads and destructive ops are open to Plant Admin (site superuser incl. settings:admin)", async () => {
     const list = await rpcCall(server, "integration/list", { siteId: siteA.id }, workspaceToken);
     expect(list.statusCode).toBe(200);
+    // Plant Admin now holds settings:admin — the permission gate passes and
+    // the nonexistent id falls through to NOT_FOUND instead of FORBIDDEN.
     const del = await rpcCall(
       server,
       "integration/delete",
       { id: "00000000-0000-4000-8000-000000000009", siteId: siteA.id },
       workspaceToken,
     );
-    expect(del.statusCode).toBe(403);
+    expect(del.statusCode).toBe(404);
   });
 
-  it("Office User can read but not configure the graph (engineering writes stripped)", async () => {
+  it("Plant Member can read but not configure the graph (engineering writes stripped)", async () => {
     const list = await rpcCall(server, "graph/node/list", { siteId: siteA.id }, officeToken);
     expect(list.statusCode).toBe(200);
     const create = await rpcCall(server, "graph/node/create", { siteId: siteA.id, name: "office-nope" }, officeToken);

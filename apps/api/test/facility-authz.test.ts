@@ -80,11 +80,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
     });
 
     const faRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId: workspace.id, name: "Factory Administrator", scope: "SITE" } },
+      where: { workspaceId_name_scope: { workspaceId: workspace.id, name: "Plant Admin", scope: "SITE" } },
       select: { id: true },
     });
     const readerRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId: workspace.id, name: "Read-only User", scope: "SITE" } },
+      where: { workspaceId_name_scope: { workspaceId: workspace.id, name: "Plant Member", scope: "SITE" } },
       select: { id: true },
     });
     const adminRole = await prisma.role.findUniqueOrThrow({
