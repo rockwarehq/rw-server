@@ -6,6 +6,28 @@ import { seedSystemRoles } from "./seed-system-roles.js";
 
 // Bootstrap a tenant database with the default workspace, RBAC system roles,
 // a Company Administrator user, and the default site + employee roles.
+
+// Every site gets exactly one system "Scrap" disposition: seeded, protected
+// (no rename/removal — see inventory/disposition.ts), and resolved by the
+// isSystem flag from scrap-all production modes. Imported sites adopt their
+// existing spelling (e.g. legacy "SCRAP") by flagging it in place.
+async function ensureScrapDisposition(siteId: string): Promise<void> {
+  const system = await prisma.itemDisposition.findFirst({
+    where: { siteId, isSystem: true, deletedAt: null },
+    select: { id: true },
+  });
+  if (system) return;
+
+  const existing = await prisma.itemDisposition.findFirst({
+    where: { siteId, name: { equals: "scrap", mode: "insensitive" }, deletedAt: null },
+    select: { id: true },
+  });
+  if (existing) {
+    await prisma.itemDisposition.update({ where: { id: existing.id }, data: { isSystem: true } });
+  } else {
+    await prisma.itemDisposition.create({ data: { siteId, name: "Scrap", isSystem: true } });
+  }
+}
 //
 // Idempotent (all upserts), so it is safe to re-run. Reads ADMIN_EMAIL /
 // ADMIN_PASSWORD from the environment (Fly secrets in production); falls back
@@ -22,14 +44,20 @@ async function seed() {
   const existingUsers = await prisma.user.count();
   if (existingUsers > 0) {
     // Role bundles are code-owned: refresh them for every workspace on every
-    // deploy so bundle changes reach live tenants (idempotent upserts). Only
-    // the rest of the bootstrap (admin user, site, employee roles) is skipped.
+    // deploy so bundle changes reach live tenants (idempotent upserts). The
+    // Scrap disposition is likewise guaranteed per site. Only the rest of the
+    // bootstrap (admin user, site, employee roles) is skipped.
     const workspaces = await prisma.workspace.findMany({ select: { id: true, name: true } });
     for (const ws of workspaces) {
       await seedSystemRoles(ws.id);
     }
+    const allSites = await prisma.site.findMany({ select: { id: true } });
+    for (const site of allSites) {
+      await ensureScrapDisposition(site.id);
+    }
     console.log(
-      `Seed: refreshed system roles for ${workspaces.length} workspace(s); ` +
+      `Seed: refreshed system roles for ${workspaces.length} workspace(s) and ` +
+        `Scrap dispositions for ${allSites.length} site(s); ` +
         `${existingUsers} user(s) already exist — skipping bootstrap.`,
     );
     return;
@@ -147,6 +175,7 @@ async function seed() {
         create: { siteId: site.id, name: roleName },
       });
     }
+    await ensureScrapDisposition(site.id);
     console.log(`Seeded ${defaultRoles.length} employee roles for site: ${site.name}`);
   }
 

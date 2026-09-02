@@ -47,6 +47,10 @@ model Cycle {
   jobVersionId String     @db.Uuid
   jobVersion   JobVersion @relation(fields: [jobVersionId], references: [id])
 
+  /// Production mode the station was in when the cycle recorded.
+  modeId String?         @db.Uuid
+  mode   ProductionMode? @relation(fields: [modeId], references: [id], onDelete: SetNull)
+
   toolVersions ToolVersion[]
 
   jobTools JobTool[]
@@ -64,4 +68,5 @@ model Cycle {
   @@index([stationId, deletedAt, end])
   @@index([jobVersionId])
   @@index([orderId])
+  @@index([modeId])
 }

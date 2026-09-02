@@ -1,0 +1,76 @@
+/// Admin-defined, per-site catalog of production modes (Trial, Scrap Trial, ...).
+/// A mode is a named bundle of behaviors applied while a station is forced into
+/// it; it overlays — never replaces — the derived Running/Slow/Down status.
+model ProductionMode {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+
+  /// Every cycle recorded during this mode dispositions its produced items as
+  /// scrap using the pair below; both ids are required when scrapAll is set.
+  scrapAll            Boolean                @default(false)
+  itemDispositionId   String?                @db.Uuid
+  itemDisposition     ItemDisposition?       @relation(fields: [itemDispositionId], references: [id], onDelete: SetNull)
+  dispositionReasonId String?                @db.Uuid
+  dispositionReason   ItemDispositionReason? @relation(fields: [dispositionReasonId], references: [id], onDelete: SetNull)
+
+  /// Downtime that BEGINS while this mode is active defaults to this reason
+  /// (instead of unassigned). Stamped by the down-transition write path, which
+  /// bypasses station STATUS_REASON label filters like other system writes;
+  /// operators can still reassign the block.
+  statusReasonId String?       @db.Uuid
+  statusReason   StatusReason? @relation(fields: [statusReasonId], references: [id], onDelete: SetNull)
+
+  /// Employee roles allowed to enter/exit this mode; empty = everyone.
+  roles EmployeeRole[] @relation("ProductionModeRoles")
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  logs                StationModeLog[]
+  cycles              Cycle[]
+  inventoryItems      InventoryItem[]
+  itemDispositionLogs ItemDispositionLog[]
+  stateLogs           StationStateLog[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}
+
+/// Audit trail: one row per stretch a station spent in a mode
+/// (StationJobLog pattern). endTime IS NULL = the station's active mode.
+model StationModeLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  modeId String         @db.Uuid
+  mode   ProductionMode @relation(fields: [modeId], references: [id], onDelete: Restrict)
+
+  startTime DateTime  @db.Timestamptz(3)
+  endTime   DateTime? @db.Timestamptz(3)
+
+  // At most one open entry per station: partial unique index on (stationId)
+  // WHERE open — hand-written in the production_modes migration.
+
+  startedByEmployeeId String?   @db.Uuid
+  startedByEmployee   Employee? @relation("ModeLogStartedBy", fields: [startedByEmployeeId], references: [id], onDelete: SetNull)
+  endedByEmployeeId   String?   @db.Uuid
+  endedByEmployee     Employee? @relation("ModeLogEndedBy", fields: [endedByEmployeeId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([stationId, startTime])
+  @@index([stationId, endTime])
+  @@index([siteId])
+  @@index([modeId])
+}

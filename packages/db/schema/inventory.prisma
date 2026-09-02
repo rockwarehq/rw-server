@@ -444,6 +444,10 @@ model InventoryItem {
   productMaterialVersions ProductMaterialVersion[]
   orderAllocations        OrderInventoryAllocation[]
 
+  /// Production mode the station was in when the item was created.
+  modeId String?         @db.Uuid
+  mode   ProductionMode? @relation(fields: [modeId], references: [id], onDelete: SetNull)
+
   createdAt DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt DateTime  @updatedAt @db.Timestamptz(3)
   deletedAt DateTime? @db.Timestamptz(3)
@@ -477,11 +481,17 @@ model ItemDisposition {
   id   String @id @default(uuid()) @db.Uuid
   name String
 
+  /// Seeded, protected disposition (the site's "Scrap") — cannot be renamed
+  /// or removed; scrap-all production modes resolve it by this flag. At most
+  /// one per site (partial unique index, hand-written in the migration).
+  isSystem Boolean @default(false)
+
   siteId String @db.Uuid
   site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
   itemDispositionReasons ItemDispositionReason[] @relation("DispositionReasonDispositions")
   itemDispositionLogs    ItemDispositionLog[]
+  productionModes        ProductionMode[]
 
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
@@ -503,6 +513,7 @@ model ItemDispositionReason {
 
   itemDispositions    ItemDisposition[]    @relation("DispositionReasonDispositions")
   itemDispositionLogs ItemDispositionLog[]
+  productionModes     ProductionMode[]
 
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
@@ -520,7 +531,9 @@ model ItemDispositionLog {
   updatedAt DateTime  @updatedAt @db.Timestamptz(3)
   deletedAt DateTime? @db.Timestamptz(3)
 
-  quantity Int @default(1)
+  /// Matches InventoryItem.quantity so continuous-mode fractional quantities
+  /// scrap exactly; the Int badItems bucket aggregate rounds at that boundary.
+  quantity Decimal @default(1) @db.Decimal(18, 4)
 
   siteId String @db.Uuid
   site   Site   @relation(fields: [siteId], references: [id])
@@ -561,8 +574,13 @@ model ItemDispositionLog {
 
   productMaterialVersions ProductMaterialVersion[]
 
+  /// Production mode the station was in when the disposition was logged.
+  modeId String?         @db.Uuid
+  mode   ProductionMode? @relation(fields: [modeId], references: [id], onDelete: SetNull)
+
   @@index([stationId, createdAt])
   @@index([siteId, productVersionId])
+  @@index([modeId])
 }
 
 // ---------------------------------------------------------------------------

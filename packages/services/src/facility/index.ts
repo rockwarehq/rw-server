@@ -8,4 +8,5 @@ export * as station from "@rw/services/facility/station/index";
 export * as statusCategory from "./status-category/index.js";
 export * as statusReason from "./status-reason/index.js";
 export * as call from "./call/index.js";
+export * as productionMode from "./production-mode/index.js";
 export * as shift from "./shift/index.js";

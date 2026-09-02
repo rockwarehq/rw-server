@@ -119,6 +119,8 @@ model Site {
   integrationTriggers    IntegrationTrigger[]
   callDefinitions        CallDefinition[]
   calls                  Call[]
+  productionModes        ProductionMode[]
+  stationModeLogs        StationModeLog[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId])
@@ -140,10 +142,11 @@ model StatusReason {
   categoryId String?         @db.Uuid
   category   StatusCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
-  labels       Label[]
-  stateLogs    StationStateLog[]
-  workcenters  Workcenter[]
-  stations     Station[]
+  labels          Label[]
+  stateLogs       StationStateLog[]
+  workcenters     Workcenter[]
+  stations        Station[]
+  productionModes ProductionMode[]
 
   @@unique([siteId, name])
   @@index([siteId])

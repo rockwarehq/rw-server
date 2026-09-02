@@ -81,7 +81,6 @@ const logRecordInputSchema = z.object({
   toolCavityId: z.uuid().optional(),
   quantity: z
     .number()
-    .int()
     .refine((q) => q !== 0, { message: "quantity must be non-zero" })
     .optional(),
   itemDispositionId: z.uuid(),
@@ -93,7 +92,7 @@ const logRecordInputSchema = z.object({
 const logCreateInputSchema = z.object({
   siteId: z.uuid(),
   stationId: z.uuid(),
-  quantity: z.number().int().min(1).optional(),
+  quantity: z.number().positive().optional(),
   itemDispositionId: z.uuid(),
   dispositionReasonId: z.uuid(),
   cycleId: z.uuid().optional(),
@@ -107,7 +106,7 @@ const logCreateInputSchema = z.object({
 
 const logUpdateInputSchema = z.object({
   id: z.uuid(),
-  quantity: z.number().int().min(1).optional(),
+  quantity: z.number().positive().optional(),
   itemDispositionId: z.uuid().nullable().optional(),
   dispositionReasonId: z.uuid().nullable().optional(),
 });
@@ -215,7 +214,7 @@ export const logRecord = userOrDisplayRequired.input(logRecordInputSchema).handl
   grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "station", id: input.stationId } }));
 
   const result = await dispositionLogService.record(input);
-  if ("error" in result && result.error) throwServiceError(result, dispositionLogOverrides);
+  if ("error" in result) throwServiceError(result, dispositionLogOverrides);
   return result.data;
 });
 
@@ -223,7 +222,7 @@ export const logCreate = authRequired.input(logCreateInputSchema).handler(async 
   grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "station", id: input.stationId } }));
 
   const result = await dispositionLogService.create(input);
-  if ("error" in result && result.error) throwServiceError(result, dispositionLogOverrides);
+  if ("error" in result) throwServiceError(result, dispositionLogOverrides);
   return result.data;
 });
 
@@ -243,7 +242,7 @@ export const logUpdate = authRequired.input(logUpdateInputSchema).handler(async 
 
   const { id, ...updateData } = input;
   const result = await dispositionLogService.update(id, updateData);
-  if ("error" in result && result.error) throwServiceError(result, dispositionLogOverrides);
+  if ("error" in result) throwServiceError(result, dispositionLogOverrides);
   return result.data;
 });
 

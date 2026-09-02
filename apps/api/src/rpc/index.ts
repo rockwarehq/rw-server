@@ -15,6 +15,7 @@ import * as document from "./document.js";
 import * as statusCategory from "./status-category.js";
 import * as statusReason from "./status-reason.js";
 import * as callRpc from "./call.js";
+import * as productionModeRpc from "./production-mode.js";
 import * as shift from "./shift.js";
 import * as disposition from "./disposition.js";
 import * as pointValue from "./point-value.js";
@@ -371,6 +372,16 @@ export const router = {
     get: callRpc.get,
     listActive: callRpc.listActive,
     search: callRpc.search,
+  },
+  productionMode: {
+    create: productionModeRpc.create,
+    list: productionModeRpc.list,
+    get: productionModeRpc.get,
+    update: productionModeRpc.update,
+    archive: productionModeRpc.archive,
+    force: productionModeRpc.force,
+    clear: productionModeRpc.clear,
+    listLogs: productionModeRpc.listLogs,
   },
   shift: {
     current: shift.current,

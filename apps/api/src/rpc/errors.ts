@@ -43,6 +43,8 @@ const EXACT: Record<string, OrpcErrorCode> = {
   // Definition-level employee-role gates on the call lifecycle.
   OPEN_ROLE_RESTRICTED: "FORBIDDEN",
   ANSWER_ROLE_RESTRICTED: "FORBIDDEN",
+  // Mode-level employee-role gate on production-mode force/clear.
+  MODE_ROLE_RESTRICTED: "FORBIDDEN",
 
   CONFLICT: "CONFLICT",
   // …while scope mismatches on live resources are conflicts by default

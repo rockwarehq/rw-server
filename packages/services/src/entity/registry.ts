@@ -37,6 +37,7 @@ export const SYSTEM_ENTITY_KEYS = {
   StatusCategory: `${SYSTEM_ENTITY_NAMESPACE}.statusCategory`,
   Call: `${SYSTEM_ENTITY_NAMESPACE}.call`,
   CallDefinition: `${SYSTEM_ENTITY_NAMESPACE}.callDefinition`,
+  ProductionMode: `${SYSTEM_ENTITY_NAMESPACE}.productionMode`,
   Point: "datasource.point",
 } as const;
 
@@ -159,6 +160,27 @@ export const SYSTEM_ENTITY_REGISTRY: readonly SystemEntitySpec[] = [
         label: "Status Start",
         type: "TIMESTAMP",
         description: "When the current status period began (open state-log entry start).",
+        sortOrder: 78,
+      },
+      {
+        name: "productionMode",
+        label: "Production Mode",
+        type: "TEXT",
+        description: "Name of the active production mode (open mode period); null when not in a mode.",
+        sortOrder: 78,
+      },
+      {
+        name: "productionModeId",
+        label: "Production Mode Id",
+        type: "TEXT",
+        description: "Id of the active production mode.",
+        sortOrder: 78,
+      },
+      {
+        name: "productionModeStartAt",
+        label: "Production Mode Start",
+        type: "TIMESTAMP",
+        description: "When the active production mode was forced.",
         sortOrder: 78,
       },
       {

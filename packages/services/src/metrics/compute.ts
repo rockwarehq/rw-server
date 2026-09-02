@@ -414,7 +414,7 @@ async function queryDispositionBadItems(
   jobFilter?: JobFilter,
 ): Promise<number> {
   if (jobFilter) {
-    const rows = await prisma.$queryRaw<Array<{ sum: bigint | null }>>`
+    const rows = await prisma.$queryRaw<Array<{ sum: unknown }>>`
       SELECT COALESCE(SUM(idl."quantity"), 0) AS "sum"
       FROM "ItemDispositionLog" idl
       WHERE idl."stationId" = ${stationId}::uuid
@@ -430,10 +430,11 @@ async function queryDispositionBadItems(
              WHERE jpb.id = idl."jobProductVersionId")
         ) = ${jobFilter.jobId}::uuid
     `;
-    return Number(rows[0]?.sum ?? 0);
+    // Fact quantities are Decimal; badItems is an Int aggregate — round here.
+    return Math.round(Number(rows[0]?.sum ?? 0));
   }
 
-  const rows = await prisma.$queryRaw<Array<{ sum: bigint | null }>>`
+  const rows = await prisma.$queryRaw<Array<{ sum: unknown }>>`
     SELECT COALESCE(SUM("quantity"), 0) AS "sum"
     FROM "ItemDispositionLog"
     WHERE "stationId" = ${stationId}::uuid
@@ -441,7 +442,7 @@ async function queryDispositionBadItems(
       AND "createdAt" < ${bucketEnd}
       AND "deletedAt" IS NULL
   `;
-  return Number(rows[0]?.sum ?? 0);
+  return Math.round(Number(rows[0]?.sum ?? 0));
 }
 
 // ── Cycle tally ─────────────────────────────────────────────────

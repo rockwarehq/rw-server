@@ -380,34 +380,33 @@ async function resolveSystemEntityRecord(
       currentStandardQuantity = effective.standardQuantity;
       currentStandardCycleSeconds = effective.standardCycleSeconds;
     }
-    // Live status is derived from the open state-log row, not a Station column.
-    const openState = await prisma.stationStateLog.findFirst({
-      where: { stationId: station.id, endTime: null, deletedAt: null },
-      orderBy: { startTime: "desc" },
-      select: {
-        state: true,
-        status: true,
-        statusReasonId: true,
-        startTime: true,
-        statusReason: { select: { name: true } },
-      },
-    });
-    // Last completed cycle, like status a derived value: cycle completion
-    // publishes entity.changes for these two fields (see station/state.ts).
-    const lastCycle = await prisma.cycle.findFirst({
-      where: { stationId: station.id, end: { not: null } },
-      orderBy: { end: "desc" },
-      select: { start: true, end: true },
-    });
-    const lastCycleSeconds =
-      lastCycle?.end != null
-        ? Math.round(((lastCycle.end.getTime() - lastCycle.start.getTime()) / 1000) * 10) / 10
-        : null;
-    // Calls, same derived pattern: open/close publishes entity.changes for
-    // these two fields (see facility/call/lifecycle.ts). callsUpdatedAt moves
-    // on every open AND close so subscribers see a change even when the open
-    // count doesn't move (one call closes as another opens).
-    const [openCallCount, lastCallChange] = await Promise.all([
+    // Derived live fields, each re-resolved off entity.changes published by
+    // its write path: status from the open state-log row (station/state.ts),
+    // production mode from the open mode-log row (production-mode/log.ts),
+    // last cycle from cycle completion, and the call fields from open/close
+    // (facility/call/lifecycle.ts — callsUpdatedAt moves on every open AND
+    // close so subscribers see a change even when the count doesn't move).
+    const [openState, openMode, lastCycle, openCallCount, lastCallChange] = await Promise.all([
+      prisma.stationStateLog.findFirst({
+        where: { stationId: station.id, endTime: null, deletedAt: null },
+        orderBy: { startTime: "desc" },
+        select: {
+          state: true,
+          status: true,
+          statusReasonId: true,
+          startTime: true,
+          statusReason: { select: { name: true } },
+        },
+      }),
+      prisma.stationModeLog.findFirst({
+        where: { stationId: station.id, endTime: null },
+        select: { modeId: true, startTime: true, mode: { select: { name: true } } },
+      }),
+      prisma.cycle.findFirst({
+        where: { stationId: station.id, end: { not: null } },
+        orderBy: { end: "desc" },
+        select: { start: true, end: true },
+      }),
       prisma.call.count({ where: { stationId: station.id, closedAt: null, deletedAt: null } }),
       prisma.call.findFirst({
         where: { stationId: station.id, deletedAt: null },
@@ -415,6 +414,10 @@ async function resolveSystemEntityRecord(
         select: { updatedAt: true },
       }),
     ]);
+    const lastCycleSeconds =
+      lastCycle?.end != null
+        ? Math.round(((lastCycle.end.getTime() - lastCycle.start.getTime()) / 1000) * 10) / 10
+        : null;
     return {
       data: {
         ...station,
@@ -429,6 +432,9 @@ async function resolveSystemEntityRecord(
         statusReasonId: openState?.statusReasonId ?? null,
         statusReason: openState?.statusReason?.name ?? null,
         statusStartAt: openState?.startTime ?? null,
+        productionMode: openMode?.mode.name ?? null,
+        productionModeId: openMode?.modeId ?? null,
+        productionModeStartAt: openMode?.startTime ?? null,
         openCallCount,
         callsUpdatedAt: lastCallChange?.updatedAt ?? null,
         lastCycleSeconds,

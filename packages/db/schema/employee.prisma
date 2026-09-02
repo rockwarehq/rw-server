@@ -18,6 +18,7 @@ model EmployeeRole {
 
   openCallDefinitions   CallDefinition[] @relation("CallDefinitionOpenRoles")
   answerCallDefinitions CallDefinition[] @relation("CallDefinitionAnswerRoles")
+  productionModes       ProductionMode[] @relation("ProductionModeRoles")
 
   @@unique([siteId, name])
   @@index([siteId])
@@ -47,6 +48,9 @@ model Employee {
   logonSessions StationLogonSession[]
   openedCalls   Call[]                @relation("CallOpenedBy")
   closedCalls   Call[]                @relation("CallClosedBy")
+
+  startedModeLogs StationModeLog[] @relation("ModeLogStartedBy")
+  endedModeLogs   StationModeLog[] @relation("ModeLogEndedBy")
 
   @@index([workspaceId, status])
 }

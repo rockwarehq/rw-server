@@ -7,6 +7,7 @@ export const RESOURCES = [
   "job", // jobs, work orders, cycles, dispositions
   "status", // status reasons + categories (downtime taxonomy)
   "calls", // shop-floor call definitions + call lifecycle
+  "modes", // production mode catalog + station force/clear
   "tool", // tools
   "product", // products, materials, process types
   "dashboard", // dashboards (saved views)
