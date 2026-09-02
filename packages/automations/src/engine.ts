@@ -66,7 +66,7 @@ export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
           );
         }
 
-        await versioned.run(inputs, { automation, event, eventId: event.id });
+        await versioned.run(inputs, { automation, event, eventId: event.id, actionIdx: idx });
         await recorder.recordAction({
           runId,
           automationId: automation.id,

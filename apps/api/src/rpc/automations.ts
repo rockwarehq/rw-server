@@ -86,13 +86,13 @@ export const getCatalog = authRequired
  * typo'd client calls).
  */
 export const listRefOptions = authRequired
-  .input(z.object({ source: z.string().min(1) }))
+  .input(z.object({ source: z.string().min(1), siteId: z.uuid().optional() }))
   .handler(async ({ input, context }) => {
     grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "anySite" } }));
 
     const fw = await getAutomationFramework();
     try {
-      return await fw.listRefOptions(input.source);
+      return await fw.listRefOptions(input.source, input.siteId ? { siteId: input.siteId } : {});
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new ORPCError("BAD_REQUEST", { message: msg });

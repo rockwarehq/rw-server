@@ -1,7 +1,19 @@
 import { type ActionHandler, type ActionRegistry, type ActionSchema, createActionRegistry } from "@rw/automations";
+import * as clearMode from "./clear-mode.js";
+import * as closeCall from "./close-call.js";
+import * as forceMode from "./force-mode.js";
+import * as notifyGroup from "./notify-group.js";
+import * as openCall from "./open-call.js";
 import * as sendAlert from "./send-alert.js";
 
-const modules: readonly { handler: ActionHandler }[] = [sendAlert] as const;
+const modules: readonly { handler: ActionHandler }[] = [
+  sendAlert,
+  notifyGroup,
+  openCall,
+  closeCall,
+  forceMode,
+  clearMode,
+] as const;
 
 /** Catalog view: strip `run` from each version so schemas are serializable + don't leak code. */
 function toActionSchema(h: ActionHandler): ActionSchema {

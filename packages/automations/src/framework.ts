@@ -48,6 +48,11 @@ export interface FireOptions {
   version?: string;
   /** The event that led to this one. Omit for a root event. */
   cause?: EventCause;
+  /**
+   * Use this as the event id instead of minting one. A bridge replaying a domain event passes the
+   * domain event's id so a redelivery produces the same automation event id (stable dedupe keys).
+   */
+  id?: string;
 }
 
 export interface FireResult {
@@ -186,7 +191,7 @@ export function createAutomationFramework(config: AutomationFrameworkConfig): Au
       // tracing (logs, audit rows, external systems) all line up. Uses the Web Crypto global
       // (`globalThis.crypto`) so the package stays isomorphic — works in Node 20+ and browsers
       // without a `node:crypto` import.
-      const id = globalThis.crypto.randomUUID();
+      const id = opts?.id ?? globalThis.crypto.randomUUID();
       const cause = opts?.cause;
       const event: AppEvent = {
         id,
