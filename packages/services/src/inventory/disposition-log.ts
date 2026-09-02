@@ -1,4 +1,4 @@
-import prisma from "@rw/db";
+import prisma, { Prisma } from "@rw/db";
 import { updateDispositionBadItems } from "@rw/services/metrics/recalc";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
@@ -76,6 +76,9 @@ const logInclude = {
   cycle: { select: { id: true } },
 };
 
+type DispositionLogRecord = Prisma.ItemDispositionLogGetPayload<{ include: typeof logInclude }>;
+type ServiceError = { error: string; code: string };
+
 // Extended include for list — resolves entity IDs from versions for UI aggregation
 const logListInclude = {
   ...logInclude,
@@ -98,12 +101,14 @@ export interface RecordDispositionLogInput {
   shiftInstanceId?: string;
 }
 
-async function validateDispositionReasonPair(
+export async function validateDispositionReasonPair(
   siteId: string,
   itemDispositionId: string | null | undefined,
   dispositionReasonId: string | null | undefined,
   stationId?: string,
-) {
+): Promise<
+  { error: string; code: string } | { data: { itemDispositionId: string | null; dispositionReasonId: string | null } }
+> {
   if (!itemDispositionId && !dispositionReasonId) {
     return { data: { itemDispositionId: null, dispositionReasonId: null } };
   }
@@ -184,7 +189,7 @@ async function validateDispositionReasonPair(
  * the current version snapshots for station, product, jobProduct,
  * tool, and toolCavity.
  */
-export async function record(input: RecordDispositionLogInput) {
+export async function record(input: RecordDispositionLogInput): Promise<ServiceError | { data: DispositionLogRecord }> {
   const { siteId, stationId, productId, jobId, toolCavityId, ...passthrough } = input;
 
   // Resolve station → stationVersionId
@@ -281,7 +286,7 @@ export async function record(input: RecordDispositionLogInput) {
   return result;
 }
 
-export async function create(input: CreateDispositionLogInput) {
+export async function create(input: CreateDispositionLogInput): Promise<ServiceError | { data: DispositionLogRecord }> {
   const {
     siteId,
     stationId,
@@ -372,6 +377,82 @@ export async function create(input: CreateDispositionLogInput) {
   return { data: log };
 }
 
+/**
+ * Bulk-scrap freshly created cycle items (production-mode scrapAll): one log
+ * row per inventory item, inside the caller's cycle transaction. Version
+ * snapshots come from the items themselves; the badItems metric bump is the
+ * caller's post-commit responsibility. Returns the total scrapped quantity.
+ */
+export async function autoScrapCycleItems(
+  tx: Prisma.TransactionClient,
+  input: {
+    siteId: string;
+    stationId: string;
+    modeId: string;
+    itemDispositionId: string;
+    dispositionReasonId: string;
+    items: Array<{
+      id: string;
+      cycleId: string;
+      productId: string;
+      quantity: number;
+      productVersionId: string;
+      jobProductVersionId: string | null;
+      toolVersionId: string | null;
+      toolCavityVersionId: string | null;
+    }>;
+  },
+): Promise<number> {
+  if (input.items.length === 0) return 0;
+
+  const now = new Date();
+  const station = await tx.station.findUniqueOrThrow({
+    where: { id: input.stationId },
+    select: { workcenterId: true, currentVersionId: true },
+  });
+  // Active shift: workcenter-scoped instance wins over the site-wide one.
+  const shiftWhere = { siteId: input.siteId, startTime: { lte: now }, endTime: { gt: now } };
+  const shift =
+    (station.workcenterId
+      ? await tx.shiftInstance.findFirst({
+          where: { ...shiftWhere, workCenterId: station.workcenterId },
+          select: { id: true },
+          orderBy: { startTime: "desc" },
+        })
+      : null) ??
+    (await tx.shiftInstance.findFirst({
+      where: { ...shiftWhere, workCenterId: null },
+      select: { id: true },
+      orderBy: { startTime: "desc" },
+    }));
+
+  const values = Prisma.join(
+    input.items.map(
+      (item) =>
+        Prisma.sql`(gen_random_uuid(), ${item.quantity}, ${input.siteId}::uuid, ${input.stationId}::uuid, ${station.workcenterId}::uuid, ${item.cycleId}::uuid, ${shift?.id ?? null}::uuid, ${input.itemDispositionId}::uuid, ${input.dispositionReasonId}::uuid, ${item.productVersionId}::uuid, ${station.currentVersionId}::uuid, ${item.jobProductVersionId}::uuid, ${item.toolVersionId}::uuid, ${item.toolCavityVersionId}::uuid, ${input.modeId}::uuid, NOW(), NOW())`,
+    ),
+  );
+  await tx.$executeRaw`
+    INSERT INTO "ItemDispositionLog"
+      (id, quantity, "siteId", "stationId", "workcenterId", "cycleId", "shiftInstanceId",
+       "itemDispositionId", "dispositionReasonId", "productVersionId", "stationVersionId",
+       "jobProductVersionId", "toolVersionId", "toolCavityVersionId", "modeId", "createdAt", "updatedAt")
+    VALUES ${values}
+  `;
+
+  const perProduct = new Map<string, number>();
+  for (const item of input.items) {
+    perProduct.set(item.productId, (perProduct.get(item.productId) ?? 0) + item.quantity);
+  }
+  let total = 0;
+  for (const [productId, qty] of perProduct) {
+    if (qty === 0) continue;
+    await applyScrapDelta(tx, input.siteId, productId, qty);
+    total += qty;
+  }
+  return total;
+}
+
 export async function list(filter: ListDispositionLogsFilter = {}) {
   const {
     siteId,
@@ -430,7 +511,10 @@ export async function getById(id: string) {
   return { data: log };
 }
 
-export async function update(id: string, input: UpdateDispositionLogInput) {
+export async function update(
+  id: string,
+  input: UpdateDispositionLogInput,
+): Promise<ServiceError | { data: DispositionLogRecord }> {
   const { quantity, itemDispositionId, dispositionReasonId } = input;
 
   const current = await prisma.itemDispositionLog.findUnique({
@@ -452,6 +536,7 @@ export async function update(id: string, input: UpdateDispositionLogInput) {
     return { error: "Disposition log not found", code: "DISPOSITION_LOG_NOT_FOUND" };
   }
 
+  const currentQuantity = Number(current.quantity);
   const nextItemDispositionId = itemDispositionId !== undefined ? itemDispositionId : current.itemDispositionId;
   const nextDispositionReasonId = dispositionReasonId !== undefined ? dispositionReasonId : current.dispositionReasonId;
   const dispositionPair = await validateDispositionReasonPair(
@@ -469,7 +554,7 @@ export async function update(id: string, input: UpdateDispositionLogInput) {
   if (itemDispositionId !== undefined) updateData.itemDispositionId = itemDispositionId;
   if (dispositionReasonId !== undefined) updateData.dispositionReasonId = dispositionReasonId;
 
-  const quantityDelta = quantity !== undefined ? quantity - current.quantity : 0;
+  const quantityDelta = quantity !== undefined ? quantity - currentQuantity : 0;
 
   const log = await prisma.$transaction(async (tx) => {
     const updated = await tx.itemDispositionLog.update({
@@ -518,11 +603,11 @@ export async function remove(id: string) {
       where: { id },
       data: { deletedAt: new Date() },
     });
-    await applyScrapDelta(tx, log.siteId, log.productVersion.productId, -log.quantity);
+    await applyScrapDelta(tx, log.siteId, log.productVersion.productId, -Number(log.quantity));
   });
 
   // Subtract the removed quantity from metrics
-  updateDispositionBadItems(log.stationId, log.siteId, log.createdAt, -log.quantity).catch((err) => {
+  updateDispositionBadItems(log.stationId, log.siteId, log.createdAt, -Number(log.quantity)).catch((err) => {
     console.error(`[disposition-log] Failed to update badItems metrics for station ${log.stationId}:`, err);
   });
 

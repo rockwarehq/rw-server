@@ -7,6 +7,7 @@ import { publishStationShiftContext } from "../../metrics/graph-context.js";
 import { updateTimeBased } from "../../metrics/recalc.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
+import { findOpenModeLog } from "../production-mode/open-log.js";
 
 type TransactionClient = Prisma.TransactionClient;
 
@@ -101,6 +102,8 @@ async function createStateEntry(
     status: "FAST" | "SLOW" | "UP" | "DOWN";
     blockId: string;
     jobVersionId?: string | null;
+    modeId?: string | null;
+    statusReasonId?: string | null;
   },
 ) {
   return client.stationStateLog.create({
@@ -111,6 +114,8 @@ async function createStateEntry(
       status: data.status,
       blockId: data.blockId,
       jobVersionId: data.jobVersionId ?? null,
+      modeId: data.modeId ?? null,
+      statusReasonId: data.statusReasonId ?? null,
     },
   });
 }
@@ -248,6 +253,20 @@ async function publishStationStatusReasonMetric(
   const ctx = await loadStationMetricContext(prisma, stationId);
   if (!ctx) return;
   publishStationStatusReasonMetricEvent(ctx, statusReasonId, observedAt);
+}
+
+function publishStationModeMetricEvent(ctx: StationMetricContext, modeName: string | null, observedAt: Date): void {
+  publishMetricValueChange({
+    siteId: ctx.siteId,
+    entityType: "STATION",
+    entityId: ctx.stationId,
+    metricKey: "productionMode",
+    sourceType: "live",
+    value: modeName,
+    observedAt,
+    entityName: ctx.name,
+    path: ctx.path,
+  });
 }
 
 function publishStationCurrentJobMetricEvent(
@@ -463,6 +482,8 @@ export async function applyCycleCompleteTransition(
     /** Start of the completed cycle (== previous cycle's end); backdates the SLOW fallback. */
     cycleStart: Date;
     jobVersionId?: string | null;
+    /** The station's active production mode, stamped on any row this opens. */
+    modeId?: string | null;
     openRow: CycleTransitionOpenRow | null;
   },
 ): Promise<CycleCompleteTransitionResult> {
@@ -476,6 +497,7 @@ export async function applyCycleCompleteTransition(
       status: "UP",
       blockId,
       jobVersionId: opts.jobVersionId,
+      modeId: opts.modeId,
     });
   };
 
@@ -529,27 +551,30 @@ export async function applyCycleCompleteTransition(
     status: "SLOW",
     blockId: openRow.blockId,
     jobVersionId: opts.jobVersionId,
+    modeId: opts.modeId,
   });
   return { newStatus: "SLOW", statusChanged: true, closedEntry: closed(slowStart) };
 }
 
 /**
- * Split the open state entry at a job change so entries stay
- * job-homogeneous: close the open row and continue it with the same
- * state/status/blockId/statusReasonId under the new job version. Caller
- * must hold the station advisory lock in `tx`.
+ * Split the open state entry when a homogeneity dimension (job, mode)
+ * changes, so each entry holds exactly one value per dimension: close the
+ * open row and continue it with the same state/status/blockId/statusReasonId
+ * under the patched value. Caller must hold the station advisory lock in `tx`.
  */
-export async function splitOpenStateEntryForJobChange(
+async function splitOpenStateEntry(
   tx: TransactionClient,
   stationId: string,
   timestamp: Date,
-  newJobVersionId: string | null,
+  patch: { jobVersionId?: string | null; modeId?: string | null },
 ): Promise<void> {
   const current = await findOpenStateEntry(tx, stationId);
-  if (!current || current.jobVersionId === newJobVersionId) return;
+  if (!current) return;
+  const keys = Object.keys(patch) as Array<keyof typeof patch>;
+  if (keys.every((key) => current[key] === patch[key])) return;
 
   if (current.startTime >= timestamp) {
-    await tx.stationStateLog.update({ where: { id: current.id }, data: { jobVersionId: newJobVersionId } });
+    await tx.stationStateLog.update({ where: { id: current.id }, data: patch });
     return;
   }
 
@@ -562,9 +587,29 @@ export async function splitOpenStateEntryForJobChange(
       status: current.status,
       blockId: current.blockId,
       statusReasonId: current.statusReasonId,
-      jobVersionId: newJobVersionId,
+      jobVersionId: current.jobVersionId,
+      modeId: current.modeId,
+      ...patch,
     },
   });
+}
+
+export async function splitOpenStateEntryForJobChange(
+  tx: TransactionClient,
+  stationId: string,
+  timestamp: Date,
+  newJobVersionId: string | null,
+): Promise<void> {
+  await splitOpenStateEntry(tx, stationId, timestamp, { jobVersionId: newJobVersionId });
+}
+
+export async function splitOpenStateEntryForModeChange(
+  tx: TransactionClient,
+  stationId: string,
+  timestamp: Date,
+  newModeId: string | null,
+): Promise<void> {
+  await splitOpenStateEntry(tx, stationId, timestamp, { modeId: newModeId });
 }
 
 /**
@@ -591,12 +636,14 @@ export async function transitionToSlow(stationId: string, timestamp: Date) {
     if (!current) {
       // No open entry — create a SLOW one (shouldn't normally happen)
       const blockId = randomUUID();
+      const mode = await findOpenModeLog(tx, stationId);
       const created = await createStateEntry(tx, {
         stationId,
         startTime: timestamp,
         state: "UP",
         status: "SLOW",
         blockId,
+        modeId: mode?.modeId,
       });
       return { entry: created, statusChanged: true };
     }
@@ -629,6 +676,7 @@ export async function transitionToSlow(stationId: string, timestamp: Date) {
         status: "SLOW",
         blockId: current.blockId,
         jobVersionId: current.jobVersionId,
+        modeId: current.modeId,
       },
     });
     return { entry: created, statusChanged: true };
@@ -673,6 +721,12 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
     });
     const jobVersionId = activeJob?.jobVersionId ?? null;
 
+    // Downtime that BEGINS under a production mode defaults to the mode's
+    // configured reason (bypassing station label filters, like other system
+    // writes). Operators can still reassign the block.
+    const mode = await findOpenModeLog(tx, stationId);
+    const defaultReasonId = mode?.statusReasonId ?? null;
+
     if (!current) {
       // No open entry — create a DOWN one
       const blockId = randomUUID();
@@ -683,6 +737,8 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
         status: "DOWN",
         blockId,
         jobVersionId,
+        modeId: mode?.modeId,
+        statusReasonId: defaultReasonId,
       });
       return { entry, convertedRange: null as { startTime: Date; endTime: Date } | null, statusChanged: true };
     }
@@ -711,13 +767,22 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
       });
       entry = await tx.stationStateLog.update({
         where: { id: current.id },
-        data: { state: "DOWN", status: "DOWN", blockId, jobVersionId },
+        data: { state: "DOWN", status: "DOWN", blockId, jobVersionId, statusReasonId: defaultReasonId },
       });
     } else {
       // Long-lived RUNNING entry — close it at the last cycle and continue as DOWN.
       await closeOpenStateEntries(tx, stationId, downStart);
       entry = await tx.stationStateLog.create({
-        data: { stationId, startTime: downStart, state: "DOWN", status: "DOWN", blockId, jobVersionId },
+        data: {
+          stationId,
+          startTime: downStart,
+          state: "DOWN",
+          status: "DOWN",
+          blockId,
+          jobVersionId,
+          modeId: current.modeId,
+          statusReasonId: defaultReasonId,
+        },
       });
     }
 
@@ -802,6 +867,7 @@ export {
   publishStationCurrentJobMetricEvent,
   publishStationLastCycleMetricEvent,
   publishStationStandardCycleMetricEvent,
+  publishStationModeMetricEvent,
 };
 
 // ── Split ────────────────────────────────────────────────────────
@@ -889,6 +955,7 @@ export async function splitDownEntry(entryId: string, splitAt: Date): Promise<Sp
         blockId: entry.blockId,
         statusReasonId: entry.statusReasonId,
         jobVersionId: entry.jobVersionId,
+        modeId: entry.modeId,
       },
     });
 

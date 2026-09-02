@@ -117,6 +117,7 @@ model Station {
   shiftComments       ShiftComment[]
   materialShiftUsage  MaterialShiftUsage[]
   calls               Call[]
+  modeLogs            StationModeLog[]
 
   @@unique([siteId, name])
   @@index([siteId])
@@ -147,6 +148,10 @@ model StationStateLog {
   status         StationStatus?
   statusReasonId String?        @db.Uuid
   statusReason   StatusReason?  @relation(fields: [statusReasonId], references: [id], onDelete: SetNull)
+
+  /// Production mode the station was in during this status period.
+  modeId String?         @db.Uuid
+  mode   ProductionMode? @relation(fields: [modeId], references: [id], onDelete: SetNull)
 
   @@index([stationId])
   @@index([stationId, endTime])

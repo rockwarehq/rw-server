@@ -31,6 +31,7 @@ export async function createFromCycle(
   cycleId: string,
   jobId: string,
   stamp?: { quantity: number | null; quantityUnit: string },
+  modeId?: string | null,
 ) {
   // Fetch active JobProducts with version refs in a single raw query
   const jobProducts = await (tx as unknown as { $queryRaw: typeof prisma.$queryRaw }).$queryRaw<
@@ -97,14 +98,27 @@ export async function createFromCycle(
   const insertValues = Prisma.join(
     itemSpecs.map(
       (s) =>
-        Prisma.sql`(gen_random_uuid(), ${cycleId}::uuid, ${s.currentVersionId}::uuid, ${s.productVersionId}::uuid, ${s.toolVersionId}::uuid, ${s.toolCavityVersionId}::uuid, ${s.itemQuantity}, ${unit}, NOW(), NOW())`,
+        Prisma.sql`(gen_random_uuid(), ${cycleId}::uuid, ${s.currentVersionId}::uuid, ${s.productVersionId}::uuid, ${s.toolVersionId}::uuid, ${s.toolCavityVersionId}::uuid, ${s.itemQuantity}, ${unit}, ${modeId ?? null}::uuid, NOW(), NOW())`,
     ),
   );
   const itemRows = await txRaw.$queryRaw<Array<{ id: string }>>`
-    INSERT INTO "InventoryItem" (id, "cycleId", "jobProductVersionId", "productVersionId", "toolVersionId", "toolCavityVersionId", quantity, "quantityUnit", "createdAt", "updatedAt")
+    INSERT INTO "InventoryItem" (id, "cycleId", "jobProductVersionId", "productVersionId", "toolVersionId", "toolCavityVersionId", quantity, "quantityUnit", "modeId", "createdAt", "updatedAt")
     VALUES ${insertValues}
     RETURNING id
   `;
+
+  // Returned shape carries the version refs so downstream in-tx consumers
+  // (mode auto-scrap) don't have to re-read the rows just written.
+  const createdItems = itemRows.map((row, i) => ({
+    id: row.id,
+    cycleId,
+    productId: itemSpecs[i].productId,
+    quantity: itemSpecs[i].itemQuantity,
+    productVersionId: itemSpecs[i].productVersionId,
+    jobProductVersionId: itemSpecs[i].currentVersionId,
+    toolVersionId: itemSpecs[i].toolVersionId,
+    toolCavityVersionId: itemSpecs[i].toolCavityVersionId,
+  }));
 
   // Batch INSERT all material version M2M relations in one query
   const matValues: Prisma.Sql[] = [];
@@ -183,12 +197,7 @@ export async function createFromCycle(
       GROUP BY cs."siteId", cs."shiftInstanceId", cs."stationId", pb."productId", mb."materialId", pmb."weightUnits", mbc."weightUnits"
     `;
 
-    if (want.length === 0)
-      return itemRows.map((row, i) => ({
-        id: row.id,
-        productId: itemSpecs[i].productId,
-        quantity: itemSpecs[i].itemQuantity,
-      }));
+    if (want.length === 0) return createdItems;
 
     // For each (shift, station, job, product, material) scope: get-or-create
     // the staging row and bump its quantity + itemCount. Ledger is untouched.
@@ -259,11 +268,7 @@ export async function createFromCycle(
     }
   }
 
-  return itemRows.map((row, i) => ({
-    id: row.id,
-    productId: itemSpecs[i].productId,
-    quantity: itemSpecs[i].itemQuantity,
-  }));
+  return createdItems;
 }
 
 // ============================================================================

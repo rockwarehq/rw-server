@@ -110,11 +110,15 @@ export async function update(id: string, input: UpdateDispositionInput) {
 
   const current = await prisma.itemDisposition.findUnique({
     where: { id },
-    select: { id: true, siteId: true, deletedAt: true },
+    select: { id: true, siteId: true, deletedAt: true, isSystem: true },
   });
 
   if (!current || current.deletedAt) {
     return { error: "Disposition not found", code: "DISPOSITION_NOT_FOUND" };
+  }
+
+  if (current.isSystem) {
+    return { error: "The system Scrap disposition cannot be renamed", code: "DISPOSITION_PROTECTED" };
   }
 
   if (name !== undefined) {
@@ -152,6 +156,10 @@ export async function remove(id: string) {
 
   if (!disposition || disposition.deletedAt) {
     return { error: "Disposition not found", code: "DISPOSITION_NOT_FOUND" };
+  }
+
+  if (disposition.isSystem) {
+    return { error: "The system Scrap disposition cannot be removed", code: "DISPOSITION_PROTECTED" };
   }
 
   if (disposition._count.itemDispositionLogs > 0) {

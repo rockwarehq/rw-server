@@ -1717,7 +1717,7 @@ export const partLogSearch = authRequired.input(partLogSearchInputSchema).handle
       };
       aggMap.set(key, entry);
     }
-    entry.totalDefect += d.quantity;
+    entry.totalDefect += Number(d.quantity);
     if (entry.partSku == null && partSku != null) entry.partSku = partSku;
   }
 

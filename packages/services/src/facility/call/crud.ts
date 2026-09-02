@@ -1,5 +1,6 @@
 import prisma, { Prisma } from "@rw/db";
 import type { CallSeverity } from "@rw/db";
+import { validateSiteRoleIds } from "../../employee/actor-role.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 
@@ -42,16 +43,6 @@ export interface UpdateCallDefinitionInput {
   answerRoleIds?: string[];
 }
 
-/** All ids must be employee roles of the definition's site. */
-async function validateRoleIds(siteId: string, roleIds: string[]): Promise<ServiceError | null> {
-  if (roleIds.length === 0) return null;
-  const count = await prisma.employeeRole.count({ where: { id: { in: roleIds }, siteId } });
-  if (count !== new Set(roleIds).size) {
-    return { error: "One or more employee roles not found for this site", code: "ROLE_NOT_FOUND" };
-  }
-  return null;
-}
-
 export interface ListCallDefinitionsFilter {
   siteId?: string;
   includeArchived?: boolean;
@@ -73,7 +64,7 @@ export async function createDefinition(
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
 
-  const roleError = await validateRoleIds(siteId, [...openRoleIds, ...answerRoleIds]);
+  const roleError = await validateSiteRoleIds(siteId, [...openRoleIds, ...answerRoleIds]);
   if (roleError) return roleError;
 
   // Names are unique per site, archived rows included (archive/unarchive
@@ -163,7 +154,7 @@ export async function updateDefinition(
     if (existing && existing.id !== id) return DUPLICATE_NAME;
   }
 
-  const roleError = await validateRoleIds(current.siteId, [
+  const roleError = await validateSiteRoleIds(current.siteId, [
     ...(input.openRoleIds ?? []),
     ...(input.answerRoleIds ?? []),
   ]);

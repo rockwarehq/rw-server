@@ -55,6 +55,8 @@ export const RESOLVERS = {
   call: (id: string) => prisma.call.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   callDefinition: (id: string) =>
     prisma.callDefinition.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  productionMode: (id: string) =>
+    prisma.productionMode.findUnique({ where: { id }, select: { siteId: true } }).then(one),
 
   // ── nullable siteId column (null => anySite rule in policy.ts) ─────
   gateway: (id: string) => prisma.gateway.findUnique({ where: { id }, select: { siteId: true } }).then(one),

@@ -2,8 +2,11 @@ import prisma from "@rw/db";
 import { Prisma } from "@rw/db";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
+import { findOpenModeLog, type OpenModeLog } from "../facility/production-mode/open-log.js";
+import { autoScrapCycleItems } from "../inventory/disposition-log.js";
 import { inventory } from "../inventory/index.js";
 import { applyProduction } from "../inventory/stock.js";
+import { updateDispositionBadItems } from "../metrics/recalc.js";
 import { checkAutoComplete } from "../order/auto-complete.js";
 import {
   acquireStationLock,
@@ -48,7 +51,16 @@ export interface StartCycleInput {
   quantity?: number;
 }
 
-type CycleItems = Array<{ id: string; productId: string; quantity: number }>;
+type CycleItems = Array<{
+  id: string;
+  cycleId: string;
+  productId: string;
+  quantity: number;
+  productVersionId: string;
+  jobProductVersionId: string | null;
+  toolVersionId: string | null;
+  toolCavityVersionId: string | null;
+}>;
 
 function sumItemQuantities(items: CycleItems): number {
   return items.reduce((sum, item) => sum + item.quantity, 0);
@@ -93,6 +105,27 @@ interface StrategyResult {
   stationCtx: StationMetricContext | null;
   /** Detection plan computed inside the tx; BullMQ enqueue happens post-commit. */
   detectionPrepared: PreparedDetection | null;
+  /** Items auto-scrapped by a scrapAll production mode; badItems bump happens post-commit. */
+  scrappedQuantity: number;
+}
+
+/** Scrap the cycle's items when the station's active mode says so. */
+async function applyModeScrap(
+  tx: Prisma.TransactionClient,
+  siteId: string,
+  stationId: string,
+  mode: OpenModeLog | null,
+  items: CycleItems,
+): Promise<number> {
+  if (!mode?.scrapAll || !mode.itemDispositionId || !mode.dispositionReasonId || items.length === 0) return 0;
+  return autoScrapCycleItems(tx, {
+    siteId,
+    stationId,
+    modeId: mode.modeId,
+    itemDispositionId: mode.itemDispositionId,
+    dispositionReasonId: mode.dispositionReasonId,
+    items,
+  });
 }
 
 /**
@@ -353,6 +386,13 @@ export async function complete(input: StartCycleInput) {
     closedEntry: closedEntry ? { startTime: closedEntry.startTime, endTime: closedEntry.endTime } : undefined,
   });
 
+  // Mode scrap logs committed with the cycle; bump badItems like a manual disposition.
+  if (result.scrappedQuantity > 0) {
+    updateDispositionBadItems(stationId, siteId, cycleEnd, result.scrappedQuantity).catch((err) => {
+      console.error(`[cycle] Failed to update badItems for mode scrap on station ${stationId}:`, err);
+    });
+  }
+
   publishStockEffects(siteId, setup.workspaceId, result.items);
 
   const t3 = Date.now();
@@ -389,6 +429,8 @@ async function completeImmediate(
     // Postgres evaluates the lock CTE lazily, after the reads.
     await acquireStationLock(tx, stationId);
 
+    const mode = await findOpenModeLog(tx, stationId);
+
     // ── CTE: insert cycle + read current state ──
     const cycleRows = await tx.$queryRaw<
       Array<{
@@ -409,7 +451,7 @@ async function completeImmediate(
         ORDER BY "end" DESC LIMIT 1
       ),
       new_cycle AS (
-        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", quantity, "quantityUnit", "standardCycle", "standardQuantity", "siteId", "stationId", "jobVersionId", "sourceEventId", attrs, "createdAt", "updatedAt")
+        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", quantity, "quantityUnit", "standardCycle", "standardQuantity", "siteId", "stationId", "jobVersionId", "sourceEventId", "modeId", attrs, "createdAt", "updatedAt")
         VALUES (
           gen_random_uuid(),
           COALESCE((SELECT "end" FROM prev), ${timestamp}),
@@ -423,6 +465,7 @@ async function completeImmediate(
           ${stationId},
           ${versionConnects.jobVersionId},
           ${sourceEventId}::uuid,
+          ${mode?.modeId ?? null}::uuid,
           '{}',
           NOW(),
           NOW()
@@ -486,10 +529,12 @@ async function completeImmediate(
       cycleWasSlow: isSlow,
       cycleStart: cycle.start,
       jobVersionId: versionConnects.jobVersionId,
+      modeId: mode?.modeId ?? null,
       openRow,
     });
 
-    const items = await inventory.createFromCycle(tx, cycle.id, jobId, stamp);
+    const items = await inventory.createFromCycle(tx, cycle.id, jobId, stamp, mode?.modeId);
+    const scrappedQuantity = await applyModeScrap(tx, siteId, stationId, mode, items);
 
     // Live-publish & detection-schedule data — read inside the tx so the
     // post-commit fire-and-forget block holds no DB connection.
@@ -522,6 +567,7 @@ async function completeImmediate(
       statusChanged: transition.statusChanged,
       stationCtx,
       detectionPrepared,
+      scrappedQuantity,
     };
   });
 }
@@ -546,6 +592,8 @@ async function completeOpenClose(
       // Cross-process serialization, before ANY read — see completeImmediate.
       await acquireStationLock(tx, stationId);
 
+      const mode = await findOpenModeLog(tx, stationId);
+
       const openCycles = await tx.cycle.findMany({
         where: { stationId, end: null },
         select: { id: true, start: true },
@@ -555,7 +603,7 @@ async function completeOpenClose(
 
       if (openCycles.length > 0) {
         const itemArrays = await Promise.all(
-          openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId, stamp)),
+          openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId, stamp, mode?.modeId)),
         );
         items = itemArrays.flat();
 
@@ -579,13 +627,16 @@ async function completeOpenClose(
               ...stamp,
               siteId,
               stationId,
+              modeId: mode?.modeId ?? null,
               ...versionConnects,
             },
           });
 
-          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId, stamp);
+          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId, stamp, mode?.modeId);
         }
       }
+
+      const scrappedQuantity = await applyModeScrap(tx, siteId, stationId, mode, items);
 
       const openEntry = await findOpenStateEntry(tx, stationId);
       const cycleDurationSeconds =
@@ -601,6 +652,7 @@ async function completeOpenClose(
         cycleWasSlow: isSlow,
         cycleStart: openCycles[0]?.start ?? timestamp,
         jobVersionId: versionConnects.jobVersionId,
+        modeId: mode?.modeId ?? null,
         openRow: openEntry
           ? {
               id: openEntry.id,
@@ -623,6 +675,7 @@ async function completeOpenClose(
           siteId,
           stationId,
           sourceEventId,
+          modeId: mode?.modeId ?? null,
           ...versionConnects,
         },
       });
@@ -656,6 +709,7 @@ async function completeOpenClose(
         statusChanged: transition.statusChanged,
         stationCtx,
         detectionPrepared,
+        scrappedQuantity,
       };
     })
     .catch((err: unknown) => {
@@ -679,6 +733,8 @@ async function completeImmediateReplay(
     // Cross-process serialization, before the prev read — see completeImmediate.
     await acquireStationLock(tx, stationId);
 
+    const mode = await findOpenModeLog(tx, stationId);
+
     const cycleRows = await tx.$queryRaw<
       Array<{
         cycle_id: string;
@@ -692,7 +748,7 @@ async function completeImmediateReplay(
         ORDER BY "end" DESC LIMIT 1
       ),
       new_cycle AS (
-        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", quantity, "quantityUnit", "standardCycle", "standardQuantity", "siteId", "stationId", "jobVersionId", "sourceEventId", attrs, "createdAt", "updatedAt")
+        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", quantity, "quantityUnit", "standardCycle", "standardQuantity", "siteId", "stationId", "jobVersionId", "sourceEventId", "modeId", attrs, "createdAt", "updatedAt")
         VALUES (
           gen_random_uuid(),
           COALESCE((SELECT "end" FROM prev), ${timestamp}),
@@ -706,6 +762,7 @@ async function completeImmediateReplay(
           ${stationId},
           ${versionConnects.jobVersionId},
           ${sourceEventId}::uuid,
+          ${mode?.modeId ?? null}::uuid,
           '{}',
           NOW(),
           NOW()
@@ -736,7 +793,8 @@ async function completeImmediateReplay(
       await tx.$executeRaw`INSERT INTO "_CycleToJobTool" ("A", "B") VALUES ${values} ON CONFLICT DO NOTHING`;
     }
 
-    const items = await inventory.createFromCycle(tx, cycle.id, jobId, stamp);
+    const items = await inventory.createFromCycle(tx, cycle.id, jobId, stamp, mode?.modeId);
+    const scrappedQuantity = await applyModeScrap(tx, siteId, stationId, mode, items);
 
     // Stock facts are never skipped: replayed cycles update on-hand too, even
     // though the replay path skips state transitions, detection, and metrics.
@@ -750,6 +808,7 @@ async function completeImmediateReplay(
       statusChanged: false,
       stationCtx: null,
       detectionPrepared: null,
+      scrappedQuantity,
     };
   });
 }
@@ -770,6 +829,8 @@ async function completeOpenCloseReplay(
       // Cross-process serialization, before ANY read — see completeImmediate.
       await acquireStationLock(tx, stationId);
 
+      const mode = await findOpenModeLog(tx, stationId);
+
       const openCycles = await tx.cycle.findMany({
         where: { stationId, end: null },
         select: { id: true, start: true },
@@ -779,7 +840,7 @@ async function completeOpenCloseReplay(
 
       if (openCycles.length > 0) {
         const itemArrays = await Promise.all(
-          openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId, stamp)),
+          openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId, stamp, mode?.modeId)),
         );
         items = itemArrays.flat();
 
@@ -802,13 +863,16 @@ async function completeOpenCloseReplay(
               ...stamp,
               siteId,
               stationId,
+              modeId: mode?.modeId ?? null,
               ...versionConnects,
             },
           });
 
-          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId, stamp);
+          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId, stamp, mode?.modeId);
         }
       }
+
+      const scrappedQuantity = await applyModeScrap(tx, siteId, stationId, mode, items);
 
       // Stamped on the new open cycle — see completeOpenClose.
       const newCycle = await tx.cycle.create({
@@ -818,6 +882,7 @@ async function completeOpenCloseReplay(
           siteId,
           stationId,
           sourceEventId,
+          modeId: mode?.modeId ?? null,
           ...versionConnects,
         },
       });
@@ -833,6 +898,7 @@ async function completeOpenCloseReplay(
         statusChanged: false,
         stationCtx: null,
         detectionPrepared: null,
+        scrappedQuantity,
       };
     })
     .catch((err: unknown) => {

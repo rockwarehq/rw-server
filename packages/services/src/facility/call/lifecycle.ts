@@ -1,6 +1,6 @@
 import prisma, { Prisma } from "@rw/db";
 import type { CallSeverity, CallSource } from "@rw/db";
-import { actorSiteRoleId, roleAllowed } from "../../employee/actor-role.js";
+import { actorRoleAllowed, resolveEmployee } from "../../employee/actor-role.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { publishCallEvent } from "./events.js";
@@ -63,39 +63,6 @@ export interface SearchCallsFilter {
   sortDir?: "asc" | "desc";
   limit?: number;
   offset?: number;
-}
-
-/**
- * Resolve who is acting. An explicit employeeId must exist in the workspace;
- * a userId resolves through their WorkspaceMembership.employee link, which
- * may legitimately be unset (unattributed action, not an error).
- */
-async function resolveEmployee(
-  workspaceId: string,
-  employeeId?: string,
-  userId?: string,
-): Promise<{ employeeId: string | null; employeeVersionId: string | null } | { error: string; code: string }> {
-  if (employeeId) {
-    const employee = await prisma.employee.findUnique({
-      where: { id: employeeId },
-      select: { id: true, workspaceId: true, versionId: true },
-    });
-    if (!employee || employee.workspaceId !== workspaceId) {
-      return { error: "Employee not found", code: "EMPLOYEE_NOT_FOUND" };
-    }
-    return { employeeId, employeeVersionId: employee.versionId };
-  }
-  if (userId) {
-    const membership = await prisma.workspaceMembership.findUnique({
-      where: { userId_workspaceId: { userId, workspaceId } },
-      select: { employeeId: true, employee: { select: { versionId: true } } },
-    });
-    return {
-      employeeId: membership?.employeeId ?? null,
-      employeeVersionId: membership?.employee?.versionId ?? null,
-    };
-  }
-  return { employeeId: null, employeeVersionId: null };
 }
 
 async function resolveShift(
@@ -268,16 +235,11 @@ export async function open(input: OpenCallInput): Promise<ServiceError | { data:
   if ("error" in resolved) return resolved;
 
   // SYSTEM opens bypass: automations aren't employees and must not be blocked.
-  if (input.source === "MANUAL" && definition.openRoles.length > 0) {
-    const roleId = await actorSiteRoleId(resolved.employeeId, definition.siteId);
-    if (
-      !roleAllowed(
-        roleId,
-        definition.openRoles.map((r) => r.id),
-      )
-    ) {
-      return { error: "Your role is not allowed to open this call", code: "OPEN_ROLE_RESTRICTED" };
-    }
+  if (
+    input.source === "MANUAL" &&
+    !(await actorRoleAllowed(resolved.employeeId, definition.siteId, definition.openRoles))
+  ) {
+    return { error: "Your role is not allowed to open this call", code: "OPEN_ROLE_RESTRICTED" };
   }
 
   const existing = await findOpenCall(station.id, definition.id);
@@ -347,16 +309,11 @@ export async function close(input: CloseCallInput): Promise<ServiceError | { dat
   const resolved = await resolveEmployee(call.site.workspaceId, input.closedByEmployeeId, input.closedByUserId);
   if ("error" in resolved) return resolved;
 
-  if (!input.bypassAnswerRoles && call.definition.answerRoles.length > 0) {
-    const roleId = await actorSiteRoleId(resolved.employeeId, call.siteId);
-    if (
-      !roleAllowed(
-        roleId,
-        call.definition.answerRoles.map((r) => r.id),
-      )
-    ) {
-      return { error: "Your role is not allowed to answer this call", code: "ANSWER_ROLE_RESTRICTED" };
-    }
+  if (
+    !input.bypassAnswerRoles &&
+    !(await actorRoleAllowed(resolved.employeeId, call.siteId, call.definition.answerRoles))
+  ) {
+    return { error: "Your role is not allowed to answer this call", code: "ANSWER_ROLE_RESTRICTED" };
   }
 
   // Race-safe: only the update that observes the call still open wins.
