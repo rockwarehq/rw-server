@@ -4,7 +4,7 @@ enum CallSeverity {
   WARNING
 }
 
-enum CallSource {
+enum ActionSource {
   MANUAL
   SYSTEM
 }
@@ -92,7 +92,7 @@ model Call {
   openedAt DateTime  @default(now()) @db.Timestamptz(3)
   closedAt DateTime? @db.Timestamptz(3)
 
-  source     CallSource
+  source     ActionSource
   sourceType String? // programmatic origin discriminator, e.g. "station.down"
   sourceRef  String? // free-form correlation id (alarm id, state-log id, ...)
   message    String?

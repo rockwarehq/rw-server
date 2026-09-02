@@ -8,7 +8,7 @@
 
 `apps/api` contains modules that look like shared infrastructure at first glance and periodically attract "move this to a package" suggestions:
 
-- `src/nats/command-bus.ts`, `src/nats/entity-event-publisher.ts` — JetStream publishers behind service seams (`gatewayCommands.setCommandSink`, `setEntityEventSink`)
+- `src/nats/command-bus.ts`, `src/nats/domain-event-publishers.ts` — JetStream publishers behind service seams (`gatewayCommands.setCommandSink`, `setEntityEventSink`, `call.setCallEventSink`, `productionMode.setModeEventSink`)
 - `src/nats/graph-definition-publisher.ts`, `src/nats/graph-values.ts` — JetStream/KV adapters that import `@rw/livestore`
 - `src/automations/` — concrete event schemas, action handlers, and ref sources wired into the generic `@rw/automations` framework
 

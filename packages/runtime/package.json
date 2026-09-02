@@ -9,6 +9,8 @@
     ".": "./dist/index.js",
     "./entity-events": "./dist/entity-events.js",
     "./call-events": "./dist/call-events.js",
+    "./mode-events": "./dist/mode-events.js",
+    "./domain-events": "./dist/domain-events.js",
     "./graph-subjects": "./dist/graph-subjects.js",
     "./command-subjects": "./dist/command-subjects.js",
     "./gateway-subjects": "./dist/gateway-subjects.js",

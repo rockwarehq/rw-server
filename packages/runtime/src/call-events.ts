@@ -2,6 +2,8 @@
 // guards shared by the publisher (apps/api) and any NATS consumers. This module
 // is dependency-free by design; the NATS connection lives in the apps.
 
+import { type EventCause, isOptionalCause, isOptionalString, sanitizeSubjectToken } from "./domain-events.js";
+
 export const CALL_EVENT_STREAM = "RW_CALL_EVENTS";
 export const CALL_EVENT_SUBJECT_PREFIX = "calls";
 export const CALL_EVENT_SUBJECT_FILTER = `${CALL_EVENT_SUBJECT_PREFIX}.>`;
@@ -31,16 +33,9 @@ export interface CallEvent {
   closedAt?: string; // closed events only
   closedByEmployeeId?: string;
   closeMessage?: string;
+  /** Present when an automation caused this change. */
+  cause?: EventCause;
   emittedAt: string;
-}
-
-function sanitizeSubjectToken(value: string): string {
-  const token = value.trim().replaceAll("/", ".").replaceAll("\\", ".").replace(/\s+/g, "_");
-  return token
-    .split(".")
-    .filter(Boolean)
-    .map((part) => part.replace(/[*>]/g, "_"))
-    .join(".");
 }
 
 export function deriveCallEventSubject(input: { siteId: string; callId: string; action: CallEventAction }): string {
@@ -51,10 +46,6 @@ export function deriveCallEventSubject(input: { siteId: string; callId: string; 
     throw new Error("call event subject requires siteId, callId, and action");
   }
   return `${CALL_EVENT_SUBJECT_PREFIX}.${site}.${callId}.${action}`;
-}
-
-function isOptionalString(value: unknown): value is string | undefined {
-  return value === undefined || typeof value === "string";
 }
 
 export function isCallEvent(value: unknown): value is CallEvent {
@@ -80,6 +71,7 @@ export function isCallEvent(value: unknown): value is CallEvent {
     isOptionalString(event.closedAt) &&
     isOptionalString(event.closedByEmployeeId) &&
     isOptionalString(event.closeMessage) &&
+    isOptionalCause(event.cause) &&
     typeof event.emittedAt === "string"
   );
 }

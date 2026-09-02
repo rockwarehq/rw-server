@@ -1,7 +1,9 @@
 import prisma from "@rw/db";
 import { hashPassword } from "@rw/auth/password";
 import { complete as completeCycle } from "@rw/services/cycle/cycle";
+import { productionMode } from "@rw/services/facility/index";
 import { transitionToDown } from "@rw/services/facility/station/state";
+import type { ModeEvent } from "@rw/runtime/mode-events";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
 import { rpcCall } from "./helpers/rpc-call.js";
@@ -349,6 +351,48 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
     expect(clearDenied.statusCode).toBe(403);
     const cleared = await rpcCall(server, "productionMode/clear", { stationId: stationA.id }, faToken);
     expect(cleared.statusCode).toBe(200);
+  });
+
+  it("SYSTEM source skips role gates, stamps the log, and emits forced/cleared mode events", async () => {
+    const restricted = await createMode({ name: "pm-test-system", roleIds: [roleMaintId] });
+    const second = await createMode({ name: "pm-test-system-2", roleIds: [roleMaintId] });
+    const events: ModeEvent[] = [];
+    productionMode.setModeEventSink((e) => {
+      events.push(e);
+    });
+    const cause = { correlationId: "root", causationId: "parent", hop: 1 };
+    const system = { source: "SYSTEM" as const, sourceType: "automation", sourceRef: "auto-1", cause };
+    try {
+      const forced = await productionMode.force({ stationId: stationA.id, modeId: restricted.id, ...system });
+      expect("data" in forced && forced.data).toMatchObject({ source: "SYSTEM", sourceType: "automation", sourceRef: "auto-1" });
+      // Switching emits cleared for the old mode, then forced for the new.
+      const switched = await productionMode.force({ stationId: stationA.id, modeId: second.id, ...system });
+      expect("data" in switched).toBe(true);
+      const cleared = await productionMode.clear({ stationId: stationA.id, ...system });
+      expect("data" in cleared && cleared.data?.endTime).toBeTruthy();
+    } finally {
+      productionMode.setModeEventSink(null);
+    }
+    await new Promise((r) => setImmediate(r));
+
+    expect(events.map((e) => [e.action, e.modeId])).toEqual([
+      ["forced", restricted.id],
+      ["cleared", restricted.id],
+      ["forced", second.id],
+      ["cleared", second.id],
+    ]);
+    expect(events[0]).toMatchObject({
+      stationId: stationA.id,
+      stationName: "pm-test-station",
+      siteId: siteA.id,
+      workspaceId,
+      source: "SYSTEM",
+      sourceType: "automation",
+      sourceRef: "auto-1",
+      cause,
+    });
+    expect(events[0]?.endedAt).toBeUndefined();
+    expect(events[1]?.endedAt).toBeTruthy();
   });
 
   it("force splits the open state-log entry at the boundary; clear splits back", async () => {

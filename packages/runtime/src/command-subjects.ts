@@ -12,6 +12,8 @@
 //
 // The gateway mirrors these exact strings in rw-gateway/src/subjects.ts.
 
+import { sanitizeSubjectToken } from "./domain-events.js";
+
 export const COMMAND_STREAM = "RW_COMMANDS";
 
 // Only inbound gateway-level commands land in the stream. The `.ack`/`.result`
@@ -24,14 +26,6 @@ export const COMMAND_ACK_SUBJECT_FILTER = "commands.*.*.ack";
 export const COMMAND_RESULT_SUBJECT_FILTER = "commands.*.*.result";
 
 // Mirrors graph-subjects.sanitizeSubjectToken and the gateway's sanitizeToken.
-function sanitizeSubjectToken(value: string): string {
-  const token = value.trim().replaceAll("/", ".").replaceAll("\\", ".").replace(/\s+/g, "_");
-  return token
-    .split(".")
-    .filter(Boolean)
-    .map((part) => part.replace(/[*>]/g, "_"))
-    .join(".");
-}
 
 export function deriveGatewayCommandSubject(gatewayId: string): string {
   const token = sanitizeSubjectToken(gatewayId);

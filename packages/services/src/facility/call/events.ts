@@ -1,29 +1,8 @@
-import { randomUUID } from "node:crypto";
-
 import type { CallEvent } from "@rw/runtime/call-events";
+import { createEventSink, type EventSink } from "../../events/sink.js";
 
-export type CallEventSink = (event: CallEvent) => void | Promise<void>;
+const callEvents = createEventSink<CallEvent>("call-events");
 
-let sink: CallEventSink | null = null;
-
-export function setCallEventSink(next: CallEventSink | null): void {
-  sink = next;
-}
-
-export function publishCallEvent(input: Omit<CallEvent, "id" | "emittedAt">): void {
-  const event: CallEvent = {
-    ...input,
-    id: randomUUID(),
-    emittedAt: new Date().toISOString(),
-  };
-
-  if (!sink) return;
-
-  try {
-    void Promise.resolve(sink(event)).catch((err) => {
-      console.error("[call-events] sink failed:", err);
-    });
-  } catch (err) {
-    console.error("[call-events] sink failed:", err);
-  }
-}
+export type CallEventSink = EventSink<CallEvent>;
+export const setCallEventSink = callEvents.set;
+export const publishCallEvent = callEvents.publish;
