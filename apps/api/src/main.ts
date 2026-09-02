@@ -38,6 +38,7 @@ import {
   startModeEventPublisher,
   startNotificationEventPublisher,
 } from "./nats/domain-event-publishers.js";
+import { startAutomationEventConsumer } from "./nats/automation-event-consumer.js";
 import { startCommandBus } from "./nats/command-bus.js";
 import { rootLogger } from "./logger.js";
 import { Redis } from "ioredis";
@@ -51,6 +52,7 @@ let cleanupEntityEventPublisher: (() => Promise<void>) | null = null;
 let cleanupCallEventPublisher: (() => Promise<void>) | null = null;
 let cleanupModeEventPublisher: (() => Promise<void>) | null = null;
 let cleanupNotificationEventPublisher: (() => Promise<void>) | null = null;
+let cleanupAutomationEventConsumer: (() => Promise<void>) | null = null;
 let cleanupCommandBus: (() => Promise<void>) | null = null;
 
 let readinessRedis: Redis | null = null;
@@ -102,6 +104,7 @@ async function main() {
   cleanupCallEventPublisher = await startCallEventPublisher();
   cleanupModeEventPublisher = await startModeEventPublisher();
   cleanupNotificationEventPublisher = await startNotificationEventPublisher();
+  cleanupAutomationEventConsumer = await startAutomationEventConsumer();
   cleanupCommandBus = await startCommandBus();
 
   // Producer-side queues that HTTP/RPC handlers enqueue against. These
@@ -136,6 +139,7 @@ async function shutdown() {
   if (cleanupEntityEventPublisher) await cleanupEntityEventPublisher();
   if (cleanupCallEventPublisher) await cleanupCallEventPublisher();
   if (cleanupModeEventPublisher) await cleanupModeEventPublisher();
+  if (cleanupAutomationEventConsumer) await cleanupAutomationEventConsumer();
   if (cleanupNotificationEventPublisher) await cleanupNotificationEventPublisher();
   if (cleanupCommandBus) await cleanupCommandBus();
   if (readinessRedis) readinessRedis.disconnect();

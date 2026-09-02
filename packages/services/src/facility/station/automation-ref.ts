@@ -4,9 +4,9 @@ import { createNameRef } from "../automation-ref-factory.js";
 /** `stations` picker source — every non-deleted station, name-ordered. */
 export const stationsAutomationRef = createNameRef({
   key: "stations",
-  findRows: () =>
+  findRows: (siteId) =>
     prisma.station.findMany({
-      where: { deletedAt: null },
+      where: { deletedAt: null, ...(siteId ? { siteId } : {}) },
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),

@@ -38,6 +38,30 @@ own site's events. When an action calls into another domain that will raise its 
 `causeOf(ctx.event)` along so the next `fire()` continues the chain (`correlationId`, `causationId`,
 `hop`); the framework drops anything more than 5 hops deep and records it as a `DROPPED` run.
 
+## Events and actions today
+
+| Event | Fed by | About (`scopeKey`) |
+| --- | --- | --- |
+| `job.changed` | `changeJob` RPC, in-process | station |
+| `call.changed` | `calls.>` stream via the automation event consumer | call |
+| `mode.changed` | `modes.>` stream | station |
+| `notification.changed` | `notifications.>` stream | notification |
+
+| Action | Does |
+| --- | --- |
+| `notifyGroup` | `notification.send` to a group; dedupe key = event id + automation + action index |
+| `openCall` / `closeCall` | open (or close the open) call of a definition at a station |
+| `forceMode` / `clearMode` | force a station into / out of a production mode |
+| `sendAlert` | email picked users directly (predates notification groups) |
+
+Every domain call an action makes is `source: SYSTEM`, `sourceType: "automation"`, `sourceRef: <automation id>`,
+with `causeOf(event)` attached, so the domain's own outbound event continues the chain. Station-targeting
+actions default to the station the event was about when `stationId` is blank.
+
+The bridge is `src/nats/automation-event-consumer.ts`: one durable JetStream consumer per domain stream,
+mapped by the `from*Event` function next to each event schema, fired with the domain event's id so a
+redelivery yields the same automation event id.
+
 ## Adding things
 
 - **New action** → add `actions/<type>.ts`, then one import line in `actions/index.ts`.
@@ -46,7 +70,10 @@ own site's events. When an action calls into another domain that will raise its 
   and a `scopeKey` naming what the event is about.
 - **New version** → add a `"2"` entry to that action/event's `versions` map; keep `"1"` while any
   automation pins it.
-- **New ref picker** → add a `RefSource` under `@rw/services` and `.register(...)` it in `index.ts`.
+- **New ref picker** → add a `RefSource` under `@rw/services` (use `createNameRef`, which filters by the
+  editor's `siteId`) and `.register(...)` it in `index.ts`.
+- **New domain stream as a trigger** → event module with a `from<Domain>Event` mapper, then one entry in
+  `BRIDGES` in the consumer.
 
 ## Notes
 

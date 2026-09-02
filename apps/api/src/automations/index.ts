@@ -1,7 +1,10 @@
 import { type AutomationFramework, createAutomationFramework, createRefRegistry } from "@rw/automations";
 import { createDbRunRecorder } from "@rw/services/automation/recorder";
 import { createDbAutomationStore } from "@rw/services/automation/store";
+import { callDefinitionsAutomationRef } from "@rw/services/facility/call/automation-ref";
+import { productionModesAutomationRef } from "@rw/services/facility/production-mode/automation-ref";
 import { stationsAutomationRef } from "@rw/services/facility/station/automation-ref";
+import { notificationGroupsAutomationRef } from "@rw/services/notification/automation-ref";
 import { workCentersAutomationRef } from "@rw/services/facility/workcenter/automation-ref";
 import { jobsAutomationRef } from "@rw/services/job/automation-ref";
 import { usersAutomationRef } from "@rw/services/user/automation-ref";
@@ -22,7 +25,10 @@ export async function createAppAutomationFramework(): Promise<AutomationFramewor
     .register(usersAutomationRef)
     .register(workCentersAutomationRef)
     .register(stationsAutomationRef)
-    .register(jobsAutomationRef);
+    .register(jobsAutomationRef)
+    .register(callDefinitionsAutomationRef)
+    .register(productionModesAutomationRef)
+    .register(notificationGroupsAutomationRef);
 
   return createAutomationFramework({
     eventSchemas: EVENT_SCHEMAS,

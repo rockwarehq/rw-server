@@ -6,6 +6,8 @@ export interface ActionContext {
   /** The event that matched. Handlers that call into another domain pass `causeOf(event)` along. */
   event: AppEvent;
   eventId: string;
+  /** Position in the automation's actions[]; with `event.id` it makes a stable idempotency key. */
+  actionIdx: number;
 }
 
 /** One version's behavior: input shape + run function. Schema and run can't drift — they live in the same object. */

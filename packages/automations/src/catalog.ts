@@ -31,7 +31,7 @@ function factsFor(payload: EventSchemaVersion["payload"]): FactDef[] {
         const fact: FactDef = {
           id: `event.payload.${key}`,
           label: prop.title,
-          type: "string",
+          type: prop.type === "number" ? "number" : "string",
         };
         if (prop.ref) fact.ref = prop.ref;
         return fact;
