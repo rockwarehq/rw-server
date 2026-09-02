@@ -33,7 +33,8 @@ export interface RecordActionInput {
 
 export interface FinishRunInput {
   matched: string[];
-  status: "SUCCESS" | "FAILED";
+  /** DROPPED = the event exceeded `maxHops` and was not evaluated; `error` says so. */
+  status: "SUCCESS" | "FAILED" | "DROPPED";
   error?: string;
 }
 

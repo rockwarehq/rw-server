@@ -8,6 +8,27 @@ export interface AppEvent {
   version: string;
   ts: string;
   payload: Record<string, unknown>;
+  /** Value of the framework's `partitionField` (e.g. a site id). Only automations in this partition, plus global ones, see the event. */
+  partition?: string;
+  /** Value of the schema version's `scopeKey` field — what the event is about (a call id, a station id). */
+  scope?: string;
+  /** Id of the root event of the chain this event belongs to. Equals `id` for a root event. */
+  correlationId: string;
+  /** Id of the event that directly caused this one. Absent for a root event. */
+  causationId?: string;
+  /** How many automation-fired events deep this one is. 0 for a root event. */
+  hop: number;
+}
+
+/**
+ * Identity of the event that caused a new one. Built with `causeOf(event)` inside an action handler,
+ * carried through whatever domain call the action makes, and handed back to `fire()` when the
+ * resulting domain event re-enters the framework.
+ */
+export interface EventCause {
+  correlationId: string;
+  causationId: string;
+  hop: number;
 }
 
 export type FactMap = Record<string, unknown>;
@@ -43,6 +64,8 @@ export interface ActionInputSchema {
 
 export interface EventSchemaVersion {
   payload: Record<string, SchemaProperty>;
+  /** Payload field naming what the event is about (e.g. "callId"). A future timed action keys its cancel on it. */
+  scopeKey?: string;
 }
 
 export interface EventSchema {
@@ -83,6 +106,8 @@ export interface Automation {
   eventVersion: string;
   conditions: RuleGroupType;
   actions: AutomationAction[];
+  /** Partition this automation belongs to (e.g. a site id). Null/absent = global, sees every partition's events. */
+  partition?: string | null;
 }
 
 export interface Catalog {

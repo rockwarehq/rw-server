@@ -1,8 +1,10 @@
-import type { ActionInputSchema, Automation } from "./types.js";
+import type { ActionInputSchema, AppEvent, Automation } from "./types.js";
 
 /** Everything an action handler receives when it runs. */
 export interface ActionContext {
   automation: Automation;
+  /** The event that matched. Handlers that call into another domain pass `causeOf(event)` along. */
+  event: AppEvent;
   eventId: string;
 }
 

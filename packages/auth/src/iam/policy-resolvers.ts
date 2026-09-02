@@ -66,6 +66,7 @@ export const RESOLVERS = {
   objectSchema: (id: string) => prisma.objectSchema.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   objectInstance: (id: string) =>
     prisma.objectInstance.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  automation: (id: string) => prisma.automation.findUnique({ where: { id }, select: { siteId: true } }).then(one),
 
   // ── one hop through a required parent ───────────────────────────────
   stationStateLog: (id: string) =>
@@ -144,6 +145,7 @@ export const NULLABLE_SITE_KINDS = [
   "document",
   "objectSchema",
   "objectInstance",
+  "automation",
   "point",
   "pointGroup",
 ] as const satisfies readonly ResolvableKind[];

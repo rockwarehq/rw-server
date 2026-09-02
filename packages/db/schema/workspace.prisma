@@ -120,6 +120,7 @@ model Site {
   callDefinitions        CallDefinition[]
   calls                  Call[]
   productionModes        ProductionMode[]
+  automations            Automation[]
   stationModeLogs        StationModeLog[]
 
   @@unique([workspaceId, name])

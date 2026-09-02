@@ -13,6 +13,7 @@ import "dotenv/config";
 import {
   type AutomationAction,
   type AutomationStore,
+  causeOf,
   createActionRegistry,
   createAutomationFramework,
   statelessContextBuilder,
@@ -41,7 +42,10 @@ const AUTO_MAIN_ID = "a017a000-0000-4000-8000-000000000001";
 const AUTO_AUTHOR_ID = "a017a000-0000-4000-8000-000000000002";
 const AUTO_BROKEN_ID = "a017a000-0000-4000-8000-000000000003";
 const AUTO_BADVER_ID = "a017a000-0000-4000-8000-000000000004";
-const AUTOMATION_IDS = [AUTO_MAIN_ID, AUTO_AUTHOR_ID, AUTO_BROKEN_ID, AUTO_BADVER_ID];
+const AUTO_SITE_ID = "a017a000-0000-4000-8000-000000000005";
+const AUTO_OTHER_SITE_ID = "a017a000-0000-4000-8000-000000000006";
+const OTHER_SITE_ID = "a51c0000-0000-4000-8000-000000000009";
+const AUTOMATION_IDS = [AUTO_MAIN_ID, AUTO_AUTHOR_ID, AUTO_BROKEN_ID, AUTO_BADVER_ID, AUTO_SITE_ID, AUTO_OTHER_SITE_ID];
 const MAIN_LABEL = "E2E: alert on job change at s_1";
 const AUTHOR_LABEL = "E2E: authored alert at s_9";
 
@@ -97,6 +101,11 @@ async function setup(): Promise<{ workspaceId: string }> {
   await prisma.site.upsert({
     where: { id: SITE_ID },
     create: { id: SITE_ID, name: "E2E Site", workspaceId },
+    update: {},
+  });
+  await prisma.site.upsert({
+    where: { id: OTHER_SITE_ID },
+    create: { id: OTHER_SITE_ID, name: "E2E Other Site", workspaceId },
     update: {},
   });
   await prisma.workcenter.upsert({
@@ -171,14 +180,21 @@ async function main(): Promise<void> {
 
   const fw = await createAppAutomationFramework();
 
-  /** Upsert a `job.changed` automation matching `stationId == value`, with the given actions. */
-  const seedAutomation = (spec: { id: string; label: string; value: string; actions: AutomationAction[] }) =>
+  /** Upsert a `job.changed` automation matching `stationId == value`, with the given actions. Global unless `partition` is set. */
+  const seedAutomation = (spec: {
+    id: string;
+    label: string;
+    value: string;
+    actions: AutomationAction[];
+    partition?: string;
+  }) =>
     fw.store.upsert({
       id: spec.id,
       label: spec.label,
       enabled: true,
       event: "job.changed",
       eventVersion: "1",
+      partition: spec.partition ?? null,
       conditions: {
         combinator: "and",
         rules: [{ field: "event.payload.stationId", operator: "=", value: spec.value }],
@@ -448,6 +464,62 @@ async function main(): Promise<void> {
     const e13 = await assertThrows(() => fw.fire("job.changed", { stationId: "s_1" }, { version: "999" }));
     check("threw on explicit unknown event version", e13 !== null);
     check("error names the unknown version", e13 !== null && /999/.test(e13.message), e13?.message);
+
+    // -------------------------------------------------------------------------
+    console.log("\n14. Partition — a site-scoped automation only sees its own site's events");
+    const siteAction: AutomationAction = {
+      type: "sendAlert",
+      version: "1",
+      inputs: { text: "site hit {{event.payload.stationId}}", recipientUserIds: [USR_OPS.id] },
+    };
+    await seedAutomation({
+      id: AUTO_SITE_ID,
+      label: "E2E: site A only",
+      value: "s_14",
+      partition: SITE_ID,
+      actions: [siteAction],
+    });
+    await seedAutomation({
+      id: AUTO_OTHER_SITE_ID,
+      label: "E2E: site B only",
+      value: "s_14",
+      partition: OTHER_SITE_ID,
+      actions: [siteAction],
+    });
+    fw.engine.reload();
+    const r14 = await fw.fire("job.changed", { siteId: SITE_ID, stationId: "s_14" });
+    firedEventIds.add(r14.eventId);
+    check("site A automation matched", r14.matched.includes(AUTO_SITE_ID), r14.matched);
+    check("site B automation did NOT match", !r14.matched.includes(AUTO_OTHER_SITE_ID), r14.matched);
+    const run14 = await prisma.automationRun.findFirst({ where: { eventId: r14.eventId } });
+    check("run row carries siteId", run14?.siteId === SITE_ID, run14?.siteId);
+    check("root run: correlationId = eventId, hop 0", run14?.correlationId === r14.eventId && run14?.hop === 0, run14);
+    const reopenedSite = await createDbAutomationStore();
+    check("partition persisted as siteId", reopenedSite.get(AUTO_SITE_ID)?.partition === SITE_ID);
+
+    // -------------------------------------------------------------------------
+    console.log("\n15. Chain — a caused event carries correlation/causation/hop; past maxHops it is DROPPED");
+    const parent = { id: r14.eventId, correlationId: r14.eventId, hop: 0 };
+    const r15 = await fw.fire(
+      "job.changed",
+      { siteId: SITE_ID, stationId: "s_14" },
+      { cause: causeOf(parent as never) },
+    );
+    firedEventIds.add(r15.eventId);
+    const run15 = await prisma.automationRun.findFirst({ where: { eventId: r15.eventId } });
+    check("child correlationId = parent eventId", run15?.correlationId === r14.eventId, run15?.correlationId);
+    check("child causationId = parent eventId", run15?.causationId === r14.eventId, run15?.causationId);
+    check("child hop = 1", run15?.hop === 1, run15?.hop);
+    const deep = { correlationId: r14.eventId, causationId: r15.eventId, hop: 5 };
+    const r15b = await fw.fire("job.changed", { siteId: SITE_ID, stationId: "s_14" }, { cause: deep });
+    firedEventIds.add(r15b.eventId);
+    check("dropped past maxHops", typeof r15b.dropped === "string" && r15b.matched.length === 0, r15b);
+    const run15b = await prisma.automationRun.findFirst({ where: { eventId: r15b.eventId } });
+    check(
+      "audit recorded a DROPPED run with the reason",
+      run15b?.status === "DROPPED" && /maxHops/.test(run15b.error ?? ""),
+      run15b,
+    );
   } finally {
     await teardown(workspaceId);
     await prisma.$disconnect();

@@ -1,13 +1,15 @@
 import { ORPCError } from "@orpc/server";
-import type { AutomationAction, AutomationFramework } from "@rw/automations";
+import type { Automation, AutomationAction, AutomationFramework } from "@rw/automations";
 import * as z from "zod";
 import { getAutomationFramework } from "../automations/index.js";
 import { authRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
+import { authorize, authorizeList } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
 
-// Automations are global — handlers resolve the single shared framework (cached after first build;
-// the first call pays the Prisma initial-load cost). `authRequired` still gates on user identity.
+// Automations belong to a site (the engine's `partition`). Handlers resolve the single shared
+// framework (cached after first build; the first call pays the Prisma initial-load cost) and gate
+// on `settings:*` at the automation's site via the `automation` policy resolver. Legacy rows with
+// no site are global; the resolver's null-site rule applies to them.
 
 const conditionsSchema = z.object({
   combinator: z.string(),
@@ -24,6 +26,12 @@ const actionSchema = z.object({
 
 /** An automation has one or more actions, run sequentially when conditions match. */
 const actionsSchema = z.array(actionSchema).min(1);
+
+/** Wire shape: the engine's `partition` is presented as `siteId`. */
+function present(a: Automation) {
+  const { partition, ...rest } = a;
+  return { ...rest, siteId: partition ?? null };
+}
 
 /**
  * Validate every action's inputs (against the chosen version's inputSchema) and return the
@@ -65,7 +73,7 @@ export const getCatalog = authRequired
     }),
   )
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "workspace" } }));
+    grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "anySite" } }));
 
     const fw = await getAutomationFramework();
     return fw.catalog(input.eventType, input.actionType, input.eventVersion, input.actionVersion);
@@ -80,7 +88,7 @@ export const getCatalog = authRequired
 export const listRefOptions = authRequired
   .input(z.object({ source: z.string().min(1) }))
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "workspace" } }));
+    grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "anySite" } }));
 
     const fw = await getAutomationFramework();
     try {
@@ -91,16 +99,25 @@ export const listRefOptions = authRequired
     }
   });
 
-export const listAutomations = authRequired.handler(async ({ context }) => {
-  grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "workspace" } }));
+/** Automations for one site (the requested site, or the token's active site) plus any global ones. */
+export const listAutomations = authRequired
+  .input(z.object({ siteId: z.uuid().optional() }).optional())
+  .handler(async ({ input, context }) => {
+    const scope = grant(
+      await authorizeList(context.iam, { permission: "settings:read", requestedSiteId: input?.siteId }),
+    );
 
-  const fw = await getAutomationFramework();
-  return fw.store.list();
-});
+    const fw = await getAutomationFramework();
+    return fw.store
+      .list()
+      .filter((a) => a.partition == null || a.partition === scope.siteId)
+      .map(present);
+  });
 
 export const createAutomation = authRequired
   .input(
     z.object({
+      siteId: z.uuid(),
       label: z.string().min(1),
       enabled: z.boolean().optional(),
       // Automation pins to a specific event schema version (defaults to event's `latest`).
@@ -113,7 +130,9 @@ export const createAutomation = authRequired
     }),
   )
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "settings:write", scope: { kind: "workspace" } }));
+    grant(
+      await authorize(context.iam, { permission: "settings:write", scope: { kind: "site", siteId: input.siteId } }),
+    );
 
     const fw = await getAutomationFramework();
     const eventSchema = fw.eventSchemas[input.event];
@@ -132,11 +151,12 @@ export const createAutomation = authRequired
       enabled: input.enabled ?? true,
       event: input.event,
       eventVersion,
+      partition: input.siteId,
       conditions: input.conditions,
       actions,
     });
     fw.engine.reload();
-    return automation;
+    return present(automation);
   });
 
 export const updateAutomation = authRequired
@@ -151,7 +171,7 @@ export const updateAutomation = authRequired
     }),
   )
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "settings:write", scope: { kind: "workspace" } }));
+    grant(await authorize(context.iam, { permission: "settings:write", scope: { kind: "automation", id: input.id } }));
 
     const fw = await getAutomationFramework();
     const existing = fw.store.get(input.id);
@@ -179,11 +199,11 @@ export const updateAutomation = authRequired
       actions,
     });
     fw.engine.reload();
-    return updated;
+    return present(updated);
   });
 
 export const deleteAutomation = authRequired.input(z.object({ id: z.string() })).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "settings:admin", scope: { kind: "workspace" } }));
+  grant(await authorize(context.iam, { permission: "settings:admin", scope: { kind: "automation", id: input.id } }));
 
   const fw = await getAutomationFramework();
   if (!(await fw.store.remove(input.id))) throw new ORPCError("NOT_FOUND", { message: "automation not found" });
