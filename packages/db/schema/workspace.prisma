@@ -121,6 +121,8 @@ model Site {
   calls                  Call[]
   productionModes        ProductionMode[]
   automations            Automation[]
+  notificationGroups     NotificationGroup[]
+  notifications          Notification[]
   stationModeLogs        StationModeLog[]
 
   @@unique([workspaceId, name])

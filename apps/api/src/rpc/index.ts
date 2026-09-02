@@ -16,6 +16,7 @@ import * as statusCategory from "./status-category.js";
 import * as statusReason from "./status-reason.js";
 import * as callRpc from "./call.js";
 import * as productionModeRpc from "./production-mode.js";
+import * as notificationRpc from "./notification.js";
 import * as shift from "./shift.js";
 import * as disposition from "./disposition.js";
 import * as pointValue from "./point-value.js";
@@ -382,6 +383,18 @@ export const router = {
     force: productionModeRpc.force,
     clear: productionModeRpc.clear,
     listLogs: productionModeRpc.listLogs,
+  },
+  notificationGroup: {
+    create: notificationRpc.groupCreate,
+    list: notificationRpc.groupList,
+    get: notificationRpc.groupGet,
+    update: notificationRpc.groupUpdate,
+    archive: notificationRpc.groupArchive,
+  },
+  notification: {
+    send: notificationRpc.send,
+    list: notificationRpc.list,
+    get: notificationRpc.get,
   },
   shift: {
     current: shift.current,

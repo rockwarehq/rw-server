@@ -17,6 +17,8 @@ const createInputSchema = z.object({
   roleId: z.uuid().optional(),
   pin: z.string().min(4).max(8).optional(),
   badgeNumber: z.string().min(1).nullable().optional(),
+  email: z.email().nullable().optional(),
+  phone: z.string().min(3).max(32).nullable().optional(),
 });
 
 const listInputSchema = z.object({
@@ -37,6 +39,8 @@ const updateInputSchema = z.object({
   roleId: z.uuid().optional(),
   pin: z.string().min(4).max(8).optional(),
   badgeNumber: z.string().min(1).nullable().optional(),
+  email: z.email().nullable().optional(),
+  phone: z.string().min(3).max(32).nullable().optional(),
 });
 
 const idInputSchema = z.object({

@@ -16,6 +16,9 @@
       "path": "../automations"
     },
     {
+      "path": "../notifications"
+    },
+    {
       "path": "../db"
     },
     {
