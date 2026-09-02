@@ -10,7 +10,8 @@ import { buildContextBuilders, EVENT_SCHEMAS } from "./events/index.js";
 
 /**
  * Build the DB-backed automation framework wired with this app's events + actions + refs.
- * Automations are global — there's no workspace scoping. Wires:
+ * Automations are partitioned by site: every event carries `siteId`, and an automation only sees
+ * its own site's events. Wires:
  *   - `createDbAutomationStore` — automation definitions in Postgres.
  *   - the audit recorder — writes `AutomationRun` + `AutomationActionRun` rows on every fire.
  *   - the DB-backed ref sources — pickers list every user / job / station / work center.
@@ -31,6 +32,8 @@ export async function createAppAutomationFramework(): Promise<AutomationFramewor
     actions: buildActionRegistry(),
     refs,
     recorder: createDbRunRecorder(),
+    partitionField: "siteId",
+    maxHops: 5,
   });
 }
 

@@ -9,7 +9,9 @@ export const schema: EventSchema = {
   latest: "1",
   versions: {
     "1": {
+      scopeKey: "stationId",
       payload: {
+        siteId: { type: "string", title: "Site", matchable: false },
         previousJobId: { type: "string", title: "Previous Job", ref: { source: "jobs" } },
         currentJobId: { type: "string", title: "Current Job", ref: { source: "jobs" } },
         stationId: { type: "string", title: "Station", ref: { source: "stations" } },

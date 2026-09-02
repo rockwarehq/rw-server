@@ -580,6 +580,7 @@ export const changeJob = userOrDisplayRequired.input(changeJobInputSchema).handl
       // station with no work center has no id), and the schema validator rejects explicit null.
       // ids drive condition matching; the *Name fields are display-only template variables.
       fw.fire("job.changed", {
+        siteId: result.data.siteId,
         previousJobId: result.data.previousJobId ?? undefined,
         currentJobId: result.data.newJobId ?? undefined,
         stationId: result.data.stationId,

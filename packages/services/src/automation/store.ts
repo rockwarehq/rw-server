@@ -8,7 +8,7 @@ import prisma from "@rw/db";
  * Initial load fills an in-memory `Map` so `list()` / `get()` stay synchronous (the engine's hot
  * path expects sync reads). Writes go to Postgres AND update the cache in lockstep.
  *
- * Automations are global — no workspace scoping. The DB row carries no workspaceId.
+ * The engine's `partition` is the row's `siteId` (null = global, legacy rows only).
  *
  * MULTI-INSTANCE CAVEAT: another instance writing won't refresh THIS instance's cache. Plan
  * documented in @rw/automations' `store.ts` — Redis pub/sub broadcast. Single-instance for now.
@@ -22,30 +22,22 @@ export async function createDbAutomationStore(): Promise<AutomationStore> {
     get: (id) => cache.get(id),
 
     async upsert(automation) {
+      const data = {
+        label: automation.label,
+        enabled: automation.enabled,
+        event: automation.event,
+        eventVersion: automation.eventVersion,
+        siteId: automation.partition ?? null,
+        // JSON columns; Prisma serializes structured values directly.
+        conditions: automation.conditions as unknown as Parameters<
+          typeof prisma.automation.upsert
+        >[0]["update"]["conditions"],
+        actions: automation.actions as unknown as Parameters<typeof prisma.automation.upsert>[0]["update"]["actions"],
+      };
       const row = await prisma.automation.upsert({
         where: { id: automation.id },
-        create: {
-          id: automation.id,
-          label: automation.label,
-          enabled: automation.enabled,
-          event: automation.event,
-          eventVersion: automation.eventVersion,
-          // JSON columns; Prisma serializes structured values directly.
-          conditions: automation.conditions as unknown as Parameters<
-            typeof prisma.automation.upsert
-          >[0]["create"]["conditions"],
-          actions: automation.actions as unknown as Parameters<typeof prisma.automation.upsert>[0]["create"]["actions"],
-        },
-        update: {
-          label: automation.label,
-          enabled: automation.enabled,
-          event: automation.event,
-          eventVersion: automation.eventVersion,
-          conditions: automation.conditions as unknown as Parameters<
-            typeof prisma.automation.upsert
-          >[0]["update"]["conditions"],
-          actions: automation.actions as unknown as Parameters<typeof prisma.automation.upsert>[0]["update"]["actions"],
-        },
+        create: { id: automation.id, ...data },
+        update: data,
       });
       const out = rowToAutomation(row);
       cache.set(out.id, out);
@@ -78,6 +70,7 @@ function rowToAutomation(row: {
   enabled: boolean;
   event: string;
   eventVersion: string;
+  siteId: string | null;
   conditions: unknown;
   actions: unknown;
 }): Automation {
@@ -87,6 +80,7 @@ function rowToAutomation(row: {
     enabled: row.enabled,
     event: row.event,
     eventVersion: row.eventVersion,
+    partition: row.siteId,
     conditions: row.conditions as RuleGroupType,
     actions: row.actions as AutomationAction[],
   };

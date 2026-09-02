@@ -1,6 +1,9 @@
 import prisma from "@rw/db";
-import type { Prisma } from "@rw/db";
+import type { ActionSource, Prisma } from "@rw/db";
+import type { EventCause } from "@rw/runtime/domain-events";
+import type { ModeEventAction } from "@rw/runtime/mode-events";
 import { actorRoleAllowed, resolveEmployee } from "../../employee/actor-role.js";
+import { publishModeEvent } from "./events.js";
 import {
   acquireStationLock,
   loadStationMetricContext,
@@ -23,28 +26,68 @@ const MODE_ROLE_RESTRICTED: ServiceError = {
   code: "MODE_ROLE_RESTRICTED",
 };
 
-export interface ForceModeInput {
-  stationId: string;
-  modeId: string;
+/** Who is acting. This is also the programmatic entry point — automations force/clear with source SYSTEM. */
+interface ActorInput {
   /** Pre-resolved employee (display flows where the UI knows the operator). */
   employeeId?: string;
   /** USER principal — resolved to an employee via WorkspaceMembership. */
   userId?: string;
   /** Set by the rpc layer for modes:admin principals — skips role restrictions. */
   bypassRoles?: boolean;
+  /** MANUAL (default) = operator/user; SYSTEM = programmatic caller, which also skips role restrictions. */
+  source?: ActionSource;
+  /** Programmatic origin discriminator, e.g. "automation". */
+  sourceType?: string;
+  /** Free-form correlation id (automation id, alarm id, ...). */
+  sourceRef?: string;
+  /** Automation chain this change continues; carried onto the emitted mode event. */
+  cause?: EventCause;
 }
 
-export interface ClearModeInput {
+export interface ForceModeInput extends ActorInput {
   stationId: string;
-  employeeId?: string;
-  userId?: string;
-  bypassRoles?: boolean;
+  modeId: string;
+}
+
+export interface ClearModeInput extends ActorInput {
+  stationId: string;
 }
 
 export interface ListModeLogsFilter {
   stationId: string;
   limit?: number;
   offset?: number;
+}
+
+function skipsRoleGate(input: ActorInput): boolean {
+  return input.bypassRoles === true || input.source === "SYSTEM";
+}
+
+/** Self-contained `modes.<site>.<station>.<action>` event; the actor fields describe THIS action. */
+function emitModeEvent(
+  action: ModeEventAction,
+  log: ModeLogRecord,
+  station: { name: string; site: { workspaceId: string } },
+  input: ActorInput,
+): void {
+  publishModeEvent({
+    action,
+    logId: log.id,
+    modeId: log.modeId,
+    modeName: log.mode.name,
+    workspaceId: station.site.workspaceId,
+    siteId: log.siteId,
+    stationId: log.stationId,
+    stationName: station.name,
+    source: input.source ?? "MANUAL",
+    sourceType: input.sourceType,
+    sourceRef: input.sourceRef,
+    startedAt: log.startTime.toISOString(),
+    startedByEmployeeId: log.startedByEmployeeId ?? undefined,
+    endedAt: log.endTime?.toISOString(),
+    endedByEmployeeId: log.endedByEmployeeId ?? undefined,
+    cause: input.cause,
+  });
 }
 
 /** Live metric + entity.changes so dashboards and andon rules see the mode move. */
@@ -84,7 +127,7 @@ export async function force(input: ForceModeInput): Promise<ServiceError | { dat
 
   const station = await prisma.station.findUnique({
     where: { id: input.stationId },
-    select: { id: true, siteId: true, deletedAt: true },
+    select: { id: true, name: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } },
   });
   if (!station || station.deletedAt) {
     return { error: "Station not found", code: "STATION_NOT_FOUND" };
@@ -96,12 +139,12 @@ export async function force(input: ForceModeInput): Promise<ServiceError | { dat
   const resolved = await resolveEmployee(mode.site.workspaceId, input.employeeId, input.userId);
   if ("error" in resolved) return resolved;
 
-  if (!input.bypassRoles && !(await actorRoleAllowed(resolved.employeeId, mode.siteId, mode.roles))) {
+  if (!skipsRoleGate(input) && !(await actorRoleAllowed(resolved.employeeId, mode.siteId, mode.roles))) {
     return MODE_ROLE_RESTRICTED;
   }
 
   const now = new Date();
-  const { entry, changed } = await prisma.$transaction(async (tx) => {
+  const { entry, previous, changed } = await prisma.$transaction(async (tx) => {
     await acquireStationLock(tx, station.id);
 
     const open = await tx.stationModeLog.findFirst({
@@ -109,15 +152,16 @@ export async function force(input: ForceModeInput): Promise<ServiceError | { dat
       include: logInclude,
     });
     if (open?.modeId === mode.id) {
-      return { entry: open, changed: false };
+      return { entry: open, previous: null, changed: false };
     }
 
-    if (open) {
-      await tx.stationModeLog.update({
-        where: { id: open.id },
-        data: { endTime: now, endedByEmployeeId: resolved.employeeId },
-      });
-    }
+    const previous = open
+      ? await tx.stationModeLog.update({
+          where: { id: open.id },
+          data: { endTime: now, endedByEmployeeId: resolved.employeeId },
+          include: logInclude,
+        })
+      : null;
     const created = await tx.stationModeLog.create({
       data: {
         siteId: mode.siteId,
@@ -125,14 +169,21 @@ export async function force(input: ForceModeInput): Promise<ServiceError | { dat
         modeId: mode.id,
         startTime: now,
         startedByEmployeeId: resolved.employeeId,
+        source: input.source ?? "MANUAL",
+        sourceType: input.sourceType ?? null,
+        sourceRef: input.sourceRef ?? null,
       },
       include: logInclude,
     });
     await splitOpenStateEntryForModeChange(tx, station.id, now, mode.id);
-    return { entry: created, changed: true };
+    return { entry: created, previous, changed: true };
   });
 
-  if (changed) publishModeChange(station.id, mode.name, now);
+  if (changed) {
+    publishModeChange(station.id, mode.name, now);
+    if (previous) emitModeEvent("cleared", previous, station, input);
+    emitModeEvent("forced", entry, station, input);
+  }
   return { data: entry };
 }
 
@@ -140,7 +191,7 @@ export async function force(input: ForceModeInput): Promise<ServiceError | { dat
 export async function clear(input: ClearModeInput): Promise<ServiceError | { data: ModeLogRecord | null }> {
   const station = await prisma.station.findUnique({
     where: { id: input.stationId },
-    select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } },
+    select: { id: true, name: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } },
   });
   if (!station || station.deletedAt) {
     return { error: "Station not found", code: "STATION_NOT_FOUND" };
@@ -156,7 +207,7 @@ export async function clear(input: ClearModeInput): Promise<ServiceError | { dat
   if ("error" in resolved) return resolved;
 
   // Same role list gates entering and exiting the mode.
-  if (!input.bypassRoles && !(await actorRoleAllowed(resolved.employeeId, station.siteId, open.mode.roles))) {
+  if (!skipsRoleGate(input) && !(await actorRoleAllowed(resolved.employeeId, station.siteId, open.mode.roles))) {
     return MODE_ROLE_RESTRICTED;
   }
 
@@ -176,7 +227,10 @@ export async function clear(input: ClearModeInput): Promise<ServiceError | { dat
     return closed;
   });
 
-  if (entry) publishModeChange(station.id, null, now);
+  if (entry) {
+    publishModeChange(station.id, null, now);
+    emitModeEvent("cleared", entry, station, input);
+  }
   return { data: entry };
 }
 

@@ -14,6 +14,7 @@ import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 type ChangeJobResult =
   | {
       data: {
+        siteId: string;
         stationId: string;
         stationName: string;
         previousJobId: string | null;
@@ -230,6 +231,7 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
 
   return {
     data: {
+      siteId: station.siteId,
       stationId,
       stationName: station.name,
       previousJobId,

@@ -16,8 +16,13 @@
 
 model Automation {
   id      String  @id @default(uuid()) @db.Uuid
-  label   String  @unique
+  label   String
   enabled Boolean @default(true)
+
+  /// Site this automation belongs to — it only sees that site's events. Null = global (legacy rows);
+  /// the RPC layer requires a site on create.
+  siteId String? @db.Uuid
+  site   Site?   @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
   /// Event type this automation listens to (e.g. "job.changed"). Matches an `EventSchema.type`
   /// declared in apps/api/src/automations/events/.
@@ -34,8 +39,10 @@ model Automation {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
+  @@unique([siteId, label])
   // Hot path on engine.reload(): "list enabled automations for this event type."
   @@index([enabled, event])
+  @@index([siteId])
 }
 
 /// One row per fw.fire() call
@@ -48,6 +55,15 @@ model AutomationRun {
   eventId      String @db.Uuid
   /// AppEvent.payload as raised (post-zod validation, pre-dispatch).
   payload      Json
+
+  /// AppEvent.partition — the site the event was raised for (null when the payload carried none).
+  siteId String? @db.Uuid
+
+  /// Chain tracing (AppEvent.correlationId / causationId / hop): the root event of the chain,
+  /// the event that directly caused this one, and how many automation hops deep it is.
+  correlationId String  @db.Uuid
+  causationId   String? @db.Uuid
+  hop           Int     @default(0)
 
   /// Automations that matched conditions for this run, in dispatch order. Empty join when no
   /// automations matched — still a valid run, not an error.
@@ -66,6 +82,8 @@ model AutomationRun {
   @@index([firedAt(sort: Desc)])
   @@index([eventType])
   @@index([status])
+  @@index([siteId, firedAt(sort: Desc)])
+  @@index([correlationId])
 }
 
 /// One row per action attempt within an AutomationRun.
@@ -111,6 +129,8 @@ model AutomationRunMatch {
 enum AutomationRunStatus {
   SUCCESS
   FAILED
+  /// Event exceeded the framework's maxHops and was not evaluated; `error` says so.
+  DROPPED
 }
 
 enum AutomationActionRunStatus {

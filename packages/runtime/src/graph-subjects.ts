@@ -1,4 +1,6 @@
 // The only granularity bridged end-to-end right now.
+import { sanitizeSubjectToken } from "./domain-events.js";
+
 export const MIRRORED_GRANULARITY = "SHIFT";
 
 // The MetricBucket columns the bridge publishes
@@ -38,15 +40,6 @@ export const MIRRORED_CONTEXT_KEYS = [
 ] as const;
 
 export type MirroredContextKey = (typeof MIRRORED_CONTEXT_KEYS)[number];
-
-function sanitizeSubjectToken(value: string): string {
-  const token = value.trim().replaceAll("/", ".").replaceAll("\\", ".").replace(/\s+/g, "_");
-  return token
-    .split(".")
-    .filter(Boolean)
-    .map((part) => part.replace(/[*>]/g, "_"))
-    .join(".");
-}
 
 export function deriveTagSubject(deviceId: string, tagPath: string): string {
   const deviceToken = sanitizeSubjectToken(deviceId);

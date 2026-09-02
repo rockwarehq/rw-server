@@ -14,17 +14,11 @@
 
 // health.gateway.<id> is 3 tokens; health.device.<id>.<ds> (4 tokens) is a
 // separate stream and deliberately does not match this filter.
+import { sanitizeSubjectToken } from "./domain-events.js";
+
 export const GATEWAY_HEALTH_SUBJECT_FILTER = "health.gateway.*";
 
 // Mirrors the gateway's sanitizeToken / graph-subjects.sanitizeSubjectToken.
-function sanitizeSubjectToken(value: string): string {
-  const token = value.trim().replaceAll("/", ".").replaceAll("\\", ".").replace(/\s+/g, "_");
-  return token
-    .split(".")
-    .filter(Boolean)
-    .map((part) => part.replace(/[*>]/g, "_"))
-    .join(".");
-}
 
 export function deriveGatewayHealthSubject(gatewayId: string): string {
   const token = sanitizeSubjectToken(gatewayId);

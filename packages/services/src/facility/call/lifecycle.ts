@@ -1,5 +1,6 @@
 import prisma, { Prisma } from "@rw/db";
-import type { CallSeverity, CallSource } from "@rw/db";
+import type { ActionSource, CallSeverity } from "@rw/db";
+import type { EventCause } from "@rw/runtime/domain-events";
 import { actorRoleAllowed, resolveEmployee } from "../../employee/actor-role.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
@@ -18,11 +19,13 @@ type ServiceError = { error: string; code: string };
 export interface OpenCallInput {
   stationId: string;
   definitionId: string;
-  source: CallSource;
+  source: ActionSource;
   /** Programmatic origin discriminator, e.g. "station.down". */
   sourceType?: string;
   /** Free-form correlation id (alarm id, state-log id, ...). */
   sourceRef?: string;
+  /** Automation chain this open continues; carried onto the emitted call event. */
+  cause?: EventCause;
   message?: string;
   /** Pre-resolved employee (display flows where the UI knows the operator). */
   openedByEmployeeId?: string;
@@ -37,6 +40,7 @@ export interface CloseCallInput {
   closedByUserId?: string;
   /** Set by the rpc layer for calls:admin principals — skips answer-role restrictions. */
   bypassAnswerRoles?: boolean;
+  cause?: EventCause;
 }
 
 export interface ListActiveCallsFilter {
@@ -55,7 +59,7 @@ export interface SearchCallsFilter {
   stationId?: string;
   definitionId?: string;
   severity?: CallSeverity;
-  source?: CallSource;
+  source?: ActionSource;
   status?: "open" | "closed" | "all";
   openedFrom?: Date;
   openedTo?: Date;
@@ -131,7 +135,12 @@ async function resolveJobDimensions(currentJobId: string | null) {
   };
 }
 
-function emitLifecycleEvents(call: CallRecord, action: "opened" | "closed", workspaceId: string): void {
+function emitLifecycleEvents(
+  call: CallRecord,
+  action: "opened" | "closed",
+  workspaceId: string,
+  cause?: EventCause,
+): void {
   publishCallEvent({
     action,
     callId: call.id,
@@ -151,6 +160,7 @@ function emitLifecycleEvents(call: CallRecord, action: "opened" | "closed", work
     closedAt: call.closedAt?.toISOString(),
     closedByEmployeeId: call.closedByEmployeeId ?? undefined,
     closeMessage: call.closeMessage ?? undefined,
+    cause,
   });
   publishEntityEvent({
     action: action === "opened" ? "created" : "updated",
@@ -271,7 +281,7 @@ export async function open(input: OpenCallInput): Promise<ServiceError | { data:
       },
       include: callInclude,
     });
-    emitLifecycleEvents(call, "opened", definition.site.workspaceId);
+    emitLifecycleEvents(call, "opened", definition.site.workspaceId, input.cause);
     return { data: call, deduped: false };
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
@@ -331,7 +341,7 @@ export async function close(input: CloseCallInput): Promise<ServiceError | { dat
   }
 
   const closed = await prisma.call.findUniqueOrThrow({ where: { id: input.id }, include: callInclude });
-  emitLifecycleEvents(closed, "closed", call.site.workspaceId);
+  emitLifecycleEvents(closed, "closed", call.site.workspaceId, input.cause);
   return { data: closed };
 }
 

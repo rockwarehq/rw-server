@@ -32,8 +32,11 @@ import { driver } from "./services/device/index.js";
 import { registerReplayReconcileWorker, stopReplayReconcileWorker } from "@rw/services/queues/replay-reconcile";
 import { recoverReplayWindows, cleanup as cleanupReplay } from "@rw/services/cycle/replay";
 import { startGraphDefinitionPublisher } from "./nats/graph-definition-publisher.js";
-import { startEntityEventPublisher } from "./nats/entity-event-publisher.js";
-import { startCallEventPublisher } from "./nats/call-event-publisher.js";
+import {
+  startCallEventPublisher,
+  startEntityEventPublisher,
+  startModeEventPublisher,
+} from "./nats/domain-event-publishers.js";
 import { startCommandBus } from "./nats/command-bus.js";
 import { rootLogger } from "./logger.js";
 import { Redis } from "ioredis";
@@ -45,6 +48,7 @@ let cleanupMetricsBridge: (() => Promise<void>) | null = null;
 let cleanupGraphDefinitionPublisher: (() => Promise<void>) | null = null;
 let cleanupEntityEventPublisher: (() => Promise<void>) | null = null;
 let cleanupCallEventPublisher: (() => Promise<void>) | null = null;
+let cleanupModeEventPublisher: (() => Promise<void>) | null = null;
 let cleanupCommandBus: (() => Promise<void>) | null = null;
 
 let readinessRedis: Redis | null = null;
@@ -94,6 +98,7 @@ async function main() {
   cleanupGraphDefinitionPublisher = await startGraphDefinitionPublisher();
   cleanupEntityEventPublisher = await startEntityEventPublisher();
   cleanupCallEventPublisher = await startCallEventPublisher();
+  cleanupModeEventPublisher = await startModeEventPublisher();
   cleanupCommandBus = await startCommandBus();
 
   // Producer-side queues that HTTP/RPC handlers enqueue against. These
@@ -127,6 +132,7 @@ async function shutdown() {
   if (cleanupGraphDefinitionPublisher) await cleanupGraphDefinitionPublisher();
   if (cleanupEntityEventPublisher) await cleanupEntityEventPublisher();
   if (cleanupCallEventPublisher) await cleanupCallEventPublisher();
+  if (cleanupModeEventPublisher) await cleanupModeEventPublisher();
   if (cleanupCommandBus) await cleanupCommandBus();
   if (readinessRedis) readinessRedis.disconnect();
   const { createPrismaClient: getClient } = await import("@rw/db");

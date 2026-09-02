@@ -20,7 +20,7 @@ const fw = createAutomationFramework({
   store,                          // your AutomationStore impl
   contextBuilders,                // Record<eventType, ContextBuilder> — must cover every event schema
   actions,                        // ActionRegistry of your handlers
-  // refs, recorder — optional
+  // refs, recorder, partitionField, maxHops — optional
 });
 ```
 
@@ -52,6 +52,28 @@ type with no automations returns `{ eventId, matched: [] }`.
 
 Pass `{ version }` to raise a specific event version; defaults to the schema's `latest`.
 
+## Partitions
+
+A multi-tenant consumer sets `partitionField` (e.g. `"siteId"`). Every event schema version must then
+declare that payload field; `fire()` copies its value to `event.partition`. An `Automation` with a
+`partition` only sees events of its own partition; one with `partition: null` is global and sees
+them all. The package never knows what a partition *is* — the app maps it to a site, tenant, etc.
+
+## Chains and hops
+
+Every event carries `correlationId` (the root event of its chain), `causationId` (the event that
+directly caused it) and `hop` (how many automation-fired events deep it is). A root event has
+`correlationId === id` and `hop 0`. When an action triggers something that raises another event,
+pass `causeOf(ctx.event)` through to that `fire()` call as `{ cause }` and the chain continues.
+An event whose `hop` exceeds `maxHops` (default 5) is not evaluated: `fire()` returns `dropped` and
+the recorder gets a `DROPPED` run, so a loop stops and is visible in the audit.
+
+## Scope key
+
+An event schema version may name a `scopeKey` — the payload field saying what the event is about
+(`"callId"`, `"stationId"`). `fire()` copies it to `event.scope`. Nothing acts on it yet; it is the
+handle a future delayed action will cancel on when the same scope's next event does not match.
+
 ## Versioning
 
 Schemas and handlers carry a `latest` pointer and a `versions` map. Each `ActionVersion` is
@@ -81,8 +103,8 @@ stale rules.
  fire(type, payload) → validate & normalize payload → build event envelope → open audit run → flatten event to a fact map → run pre-compiled conditions → for each match, interpolate inputs + execute actions in order
  (auditing each) → finalize audit run (matches + status) → return.
 
-  Three things worth remembering: it's synchronous, in-process, no queue — fire() returns only after all matched actions finish; and the audit run brackets the whole thing (opened before, closed after) so even no-match and
-  failed fires are recorded. Currently not horizontally scaleable 
+  Three things worth remembering: it's synchronous, in-process, no queue — fire() returns only after all matched actions finish; the audit run brackets the whole thing (opened before, closed after) so even no-match, dropped and
+  failed fires are recorded; and a partitioned automation's match is skipped when the event's partition differs. Currently not horizontally scaleable 
 
 
 ## Files
@@ -100,6 +122,7 @@ stale rules.
 | `store.ts` | `AutomationStore` interface (storage seam). Implementations live in the app. |
 | `refs.ts` | `RefSource` / `RefRegistry` — picker data sources for ref-typed inputs. |
 | `catalog.ts` | `buildCatalog(...)` — the editor catalog (fields, variables, operators) a UI renders from. |
-| `engine.ts` | Evaluation core. Indexes automations per event type, builds a json-rules-engine per type, `dispatch()`. |
-| `framework.ts` | `createAutomationFramework(config)` — assembles engine, validators, and `fire()`. |
+| `engine.ts` | Evaluation core. Indexes automations per event type, builds a json-rules-engine per type, `dispatch()` with the partition filter and hop guard. |
+| `framework.ts` | `createAutomationFramework(config)` — assembles engine, validators, `fire()` (envelope: partition, scope, chain fields) and `causeOf()`. |
+| `framework.test.ts` | Unit tests for partitions, the event envelope and the hop limit (`pnpm test`). |
 | `index.ts` | Public barrel. |

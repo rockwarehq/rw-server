@@ -13,19 +13,30 @@ export interface EngineDeps {
   contextBuilders: Record<EventType, ContextBuilder>;
   actions: ActionRegistry;
   recorder?: RunRecorder;
+  /** Events with `hop` above this are dropped (recorded, not evaluated). */
+  maxHops: number;
+}
+
+export interface DispatchResult {
+  /** Ids of the automations whose conditions matched, in dispatch order. */
+  matched: string[];
+  /** Set when the event exceeded `maxHops` and was not evaluated. */
+  dropped?: string;
 }
 
 /**
  * Evaluates automations and runs their actions. The evaluation core (json-rules-engine + condition
- * translation) is shared by every event type;
+ * translation) is shared by every event type.
  *
  * Conditions are indexed per event type, so an automation only runs against events of its own type.
+ * A partitioned automation additionally only runs against events of its own partition; a global one
+ * (no partition) sees every event of its type.
  */
 export interface AutomationEngine {
   /** Rebuild the per-event-type rule engines from the current enabled automations. */
   reload(): void;
   /** Run all conditions for this event's type; fire the action of each matching automation. */
-  dispatch(event: AppEvent): Promise<string[]>;
+  dispatch(event: AppEvent): Promise<DispatchResult>;
 }
 
 export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
@@ -55,7 +66,7 @@ export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
           );
         }
 
-        await versioned.run(inputs, { automation, eventId: event.id });
+        await versioned.run(inputs, { automation, event, eventId: event.id });
         await recorder.recordAction({
           runId,
           automationId: automation.id,
@@ -100,12 +111,19 @@ export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
       }
     },
 
-    async dispatch(event: AppEvent): Promise<string[]> {
+    async dispatch(event: AppEvent): Promise<DispatchResult> {
+      if (event.hop > deps.maxHops) {
+        const dropped = `hop ${event.hop} exceeds maxHops ${deps.maxHops} (correlationId ${event.correlationId})`;
+        const runId = await recorder.startRun({ event });
+        await recorder.finishRun(runId, { matched: [], status: "DROPPED", error: dropped });
+        return { matched: [], dropped };
+      }
+
       const engine = engines.get(event.type);
       if (!engine) {
         const runId = await recorder.startRun({ event });
         await recorder.finishRun(runId, { matched: [], status: "SUCCESS" });
-        return [];
+        return { matched: [] };
       }
 
       const builder = deps.contextBuilders[event.type];
@@ -116,16 +134,16 @@ export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
       try {
         const facts = await builder.build(event);
         const { results } = await engine.run(facts);
-
         for (const r of results) {
           const automationId = r.event?.type;
           const automation = automationId ? deps.store.get(automationId) : undefined;
           if (!automation) continue;
+          if (automation.partition != null && automation.partition !== event.partition) continue;
           matched.push(automation.id);
           await runActions(automation, event, runId);
         }
         await recorder.finishRun(runId, { matched, status: "SUCCESS" });
-        return matched;
+        return { matched };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         await recorder.finishRun(runId, { matched, status: "FAILED", error: message });

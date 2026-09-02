@@ -1,3 +1,5 @@
+import { sanitizeSubjectToken } from "./domain-events.js";
+
 export const ENTITY_EVENT_STREAM = "RW_ENTITY_EVENTS";
 export const ENTITY_EVENT_SUBJECT_PREFIX = "entity.changes";
 export const ENTITY_EVENT_SUBJECT_FILTER = `${ENTITY_EVENT_SUBJECT_PREFIX}.>`;
@@ -14,15 +16,6 @@ export interface EntityEvent {
   workspaceId: string;
   changedFields?: string[];
   emittedAt: string;
-}
-
-function sanitizeSubjectToken(value: string): string {
-  const token = value.trim().replaceAll("/", ".").replaceAll("\\", ".").replace(/\s+/g, "_");
-  return token
-    .split(".")
-    .filter(Boolean)
-    .map((part) => part.replace(/[*>]/g, "_"))
-    .join(".");
 }
 
 export function deriveEntityEventSubject(input: {

@@ -22,6 +22,10 @@ export function createDbRunRecorder(): RunRecorder {
           eventId: event.id,
           // JSON column; Prisma stores the payload as-raised (after zod validation, pre-dispatch).
           payload: event.payload as unknown as Parameters<typeof prisma.automationRun.create>[0]["data"]["payload"],
+          siteId: event.partition ?? null,
+          correlationId: event.correlationId,
+          causationId: event.causationId ?? null,
+          hop: event.hop,
           // status set on finishRun; the schema requires it, so we open with SUCCESS as a placeholder
           // — finishRun always overwrites it with the actual outcome.
           status: "SUCCESS",

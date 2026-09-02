@@ -11,10 +11,13 @@ export {
   createActionRegistry,
 } from "./actions.js";
 export { type ContextBuilder, statelessContextBuilder } from "./context.js";
-export type { AutomationEngine } from "./engine.js";
+export type { AutomationEngine, DispatchResult } from "./engine.js";
 export {
+  causeOf,
   createAutomationFramework,
+  DEFAULT_MAX_HOPS,
   type FireOptions,
+  type FireResult,
   type AutomationFramework,
   type AutomationFrameworkConfig,
 } from "./framework.js";
@@ -39,6 +42,7 @@ export type {
   ActionSchemaVersion,
   AppEvent,
   Catalog,
+  EventCause,
   EventSchema,
   EventSchemaVersion,
   EventType,

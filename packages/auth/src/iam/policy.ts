@@ -396,6 +396,7 @@ const NOT_FOUND_MESSAGES: Record<ResolvableSiteRef["kind"], string> = {
   document: "Document not found",
   objectSchema: "Schema not found",
   objectInstance: "Instance not found",
+  automation: "Automation not found",
   point: "Point not found",
   pointGroup: "Point group not found",
 };

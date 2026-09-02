@@ -5,7 +5,7 @@ import { createAutomationEngine, type AutomationEngine } from "./engine.js";
 import type { RunRecorder } from "./recorder.js";
 import { createRefRegistry, type RefContext, type RefOption, type RefRegistry } from "./refs.js";
 import type { AutomationStore } from "./store.js";
-import type { ActionSchema, AppEvent, Catalog, EventSchema, EventType } from "./types.js";
+import type { ActionSchema, AppEvent, Catalog, EventCause, EventSchema, EventType } from "./types.js";
 import { createValidators } from "./validate.js";
 
 /**
@@ -30,12 +30,36 @@ export interface AutomationFrameworkConfig {
   refs?: RefRegistry;
   /** Audit sink for `fire()` runs. Defaults to `noopRunRecorder` when omitted. */
   recorder?: RunRecorder;
+  /**
+   * Payload field that partitions automations (e.g. "siteId"). When set, every event schema version
+   * must declare it, `fire()` copies it to `event.partition`, and an automation with a `partition`
+   * only sees events whose field equals it. Omit for a single-tenant consumer.
+   */
+  partitionField?: string;
+  /** Events deeper than this many automation hops are dropped instead of evaluated. Default 5. */
+  maxHops?: number;
 }
+
+export const DEFAULT_MAX_HOPS = 5;
 
 /** Options for `fire()` — version can be specified to raise as a non-latest schema. */
 export interface FireOptions {
   /** Event schema version to raise as. Defaults to the event's `latest`. */
   version?: string;
+  /** The event that led to this one. Omit for a root event. */
+  cause?: EventCause;
+}
+
+export interface FireResult {
+  eventId: string;
+  matched: string[];
+  /** Set when the event exceeded `maxHops` and was not evaluated. */
+  dropped?: string;
+}
+
+/** The cause to hand to whatever an action triggers, so the next event continues this event's chain. */
+export function causeOf(event: AppEvent): EventCause {
+  return { correlationId: event.correlationId, causationId: event.id, hop: event.hop };
 }
 
 export interface AutomationFramework {
@@ -63,11 +87,7 @@ export interface AutomationFramework {
    * unknown event type, unknown version, or any misconfigured action in the matched set. See the
    * README's "Error model" for the convention.
    */
-  fire(
-    type: EventType,
-    payload: Record<string, unknown>,
-    opts?: FireOptions,
-  ): Promise<{ eventId: string; matched: string[] }>;
+  fire(type: EventType, payload: Record<string, unknown>, opts?: FireOptions): Promise<FireResult>;
 }
 
 /**
@@ -79,9 +99,10 @@ export interface AutomationFramework {
  * with no registered handler.
  */
 export function createAutomationFramework(config: AutomationFrameworkConfig): AutomationFramework {
-  const { store, eventSchemas, actionSchemas, contextBuilders } = config;
+  const { store, eventSchemas, actionSchemas, contextBuilders, partitionField } = config;
   const refs = config.refs ?? createRefRegistry();
   const validators = createValidators(eventSchemas, actionSchemas);
+  const maxHops = config.maxHops ?? DEFAULT_MAX_HOPS;
 
   // Fail fast: every declared event type must have a fact builder. Catches typos and missed
   // registrations at startup instead of silently using wrong facts at the first dispatch.
@@ -91,10 +112,19 @@ export function createAutomationFramework(config: AutomationFrameworkConfig): Au
     }
   }
 
-  // Fail fast: every event schema's `latest` must point at an existing version.
+  // Fail fast: every event schema's `latest` must point at an existing version, every version must
+  // carry the partition field (when configured), and a declared scopeKey must be a payload field.
   for (const [type, schema] of Object.entries(eventSchemas)) {
     if (!schema.versions[schema.latest]) {
       throw new Error(`event "${type}" latest="${schema.latest}" is not a key in versions`);
+    }
+    for (const [version, v] of Object.entries(schema.versions)) {
+      if (partitionField && !v.payload[partitionField]) {
+        throw new Error(`event "${type}@${version}" payload must declare partition field "${partitionField}"`);
+      }
+      if (v.scopeKey && !v.payload[v.scopeKey]) {
+        throw new Error(`event "${type}@${version}" scopeKey "${v.scopeKey}" is not a payload field`);
+      }
     }
   }
 
@@ -130,6 +160,7 @@ export function createAutomationFramework(config: AutomationFrameworkConfig): Au
     contextBuilders,
     actions: config.actions,
     recorder: config.recorder,
+    maxHops,
   });
   engine.reload();
 
@@ -151,19 +182,29 @@ export function createAutomationFramework(config: AutomationFrameworkConfig): Au
       if (!eventSchema) throw new Error(`unknown event type: ${type}`);
       const version = opts?.version ?? eventSchema.latest;
       const normalized = validators.validateEventPayload(type, version, payload);
+      // UUID v4 — DB stores eventId as `@db.Uuid`, and a stable id format helps downstream
+      // tracing (logs, audit rows, external systems) all line up. Uses the Web Crypto global
+      // (`globalThis.crypto`) so the package stays isomorphic — works in Node 20+ and browsers
+      // without a `node:crypto` import.
+      const id = globalThis.crypto.randomUUID();
+      const cause = opts?.cause;
       const event: AppEvent = {
-        // UUID v4 — DB stores eventId as `@db.Uuid`, and a stable id format helps downstream
-        // tracing (logs, audit rows, external systems) all line up. Uses the Web Crypto global
-        // (`globalThis.crypto`) so the package stays isomorphic — works in Node 20+ and browsers
-        // without a `node:crypto` import.
-        id: globalThis.crypto.randomUUID(),
+        id,
         type,
         version,
         ts: new Date().toISOString(),
         payload: normalized,
+        correlationId: cause?.correlationId ?? id,
+        causationId: cause?.causationId,
+        hop: cause ? cause.hop + 1 : 0,
       };
-      const matched = await engine.dispatch(event);
-      return { eventId: event.id, matched };
+      const partition = partitionField ? normalized[partitionField] : undefined;
+      if (partition != null) event.partition = String(partition);
+      const scopeKey = eventSchema.versions[version]?.scopeKey;
+      const scope = scopeKey ? normalized[scopeKey] : undefined;
+      if (scope != null) event.scope = String(scope);
+
+      return { eventId: id, ...(await engine.dispatch(event)) };
     },
   };
 }

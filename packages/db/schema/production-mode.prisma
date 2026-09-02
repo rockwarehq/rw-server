@@ -61,6 +61,11 @@ model StationModeLog {
   // At most one open entry per station: partial unique index on (stationId)
   // WHERE open — hand-written in the production_modes migration.
 
+  /// Who forced the mode. SYSTEM = a programmatic caller (automation, alarm) — skips the mode's role gates.
+  source     ActionSource @default(MANUAL)
+  sourceType String? // programmatic origin discriminator, e.g. "automation"
+  sourceRef  String? // free-form correlation id (automation id, alarm id, ...)
+
   startedByEmployeeId String?   @db.Uuid
   startedByEmployee   Employee? @relation("ModeLogStartedBy", fields: [startedByEmployeeId], references: [id], onDelete: SetNull)
   endedByEmployeeId   String?   @db.Uuid

@@ -23,6 +23,7 @@ import { getAutomationFramework } from "./automations/index.js";
 
 const fw = await getAutomationFramework();
 const { eventId, matched } = await fw.fire("job.changed", {
+  siteId: "site_1",
   previousJobId: "j_100",
   currentJobId: "j_200",
   stationId: "s_1",
@@ -32,11 +33,17 @@ const { eventId, matched } = await fw.fire("job.changed", {
 `fire()` throws on a bad payload, unknown event type, or a misconfigured matched action — wrap it if
 you want graceful handling.
 
+Every event payload carries `siteId`: it is the framework's partition, so an automation only sees its
+own site's events. When an action calls into another domain that will raise its own event, pass
+`causeOf(ctx.event)` along so the next `fire()` continues the chain (`correlationId`, `causationId`,
+`hop`); the framework drops anything more than 5 hops deep and records it as a `DROPPED` run.
+
 ## Adding things
 
 - **New action** → add `actions/<type>.ts`, then one import line in `actions/index.ts`.
 - **New event** → add `events/<type>.ts` (use `statelessContextBuilder` unless it needs joined data),
-  then one import line in `events/index.ts`.
+  then one import line in `events/index.ts`. Declare `siteId` in the payload (boot fails otherwise)
+  and a `scopeKey` naming what the event is about.
 - **New version** → add a `"2"` entry to that action/event's `versions` map; keep `"1"` while any
   automation pins it.
 - **New ref picker** → add a `RefSource` under `@rw/services` and `.register(...)` it in `index.ts`.
