@@ -14,6 +14,8 @@ export interface CreateEmployeeInput {
   roleId?: string;
   pin?: string;
   badgeNumber?: string | null;
+  email?: string | null;
+  phone?: string | null;
 }
 
 export interface UpdateEmployeeInput {
@@ -24,6 +26,8 @@ export interface UpdateEmployeeInput {
   roleId?: string;
   pin?: string | null;
   badgeNumber?: string | null;
+  email?: string | null;
+  phone?: string | null;
 }
 
 export interface ListEmployeesFilter {
@@ -42,6 +46,8 @@ const versionSelectPublic = {
   lastName: true,
   employeeNumber: true,
   badgeNumber: true,
+  email: true,
+  phone: true,
   createdAt: true,
 } as const;
 
@@ -165,6 +171,8 @@ async function createWithClient(input: CreateEmployeeInput, db: DbClient) {
       lastName: input.lastName,
       employeeNumber: input.employeeNumber || null,
       badgeNumber: input.badgeNumber || null,
+      email: input.email || null,
+      phone: input.phone || null,
       pinHash,
     },
   });
@@ -332,7 +340,9 @@ export async function update(id: string, input: UpdateEmployeeInput) {
     input.lastName !== undefined ||
     input.employeeNumber !== undefined ||
     input.pin !== undefined ||
-    input.badgeNumber !== undefined;
+    input.badgeNumber !== undefined ||
+    input.email !== undefined ||
+    input.phone !== undefined;
 
   const result = await prisma.$transaction(async (tx) => {
     if (input.status) {
@@ -369,6 +379,8 @@ export async function update(id: string, input: UpdateEmployeeInput) {
           lastName: input.lastName ?? currentVersion.lastName,
           employeeNumber: nextEmployeeNumber,
           badgeNumber: nextBadgeNumber,
+          email: input.email !== undefined ? input.email || null : currentVersion.email,
+          phone: input.phone !== undefined ? input.phone || null : currentVersion.phone,
           pinHash,
         },
       });

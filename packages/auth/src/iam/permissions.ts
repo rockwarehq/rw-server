@@ -8,6 +8,7 @@ export const RESOURCES = [
   "status", // status reasons + categories (downtime taxonomy)
   "calls", // shop-floor call definitions + call lifecycle
   "modes", // production mode catalog + station force/clear
+  "notifications", // notification groups + send/delivery log
   "tool", // tools
   "product", // products, materials, process types
   "dashboard", // dashboards (saved views)

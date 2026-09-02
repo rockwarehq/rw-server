@@ -18,8 +18,15 @@ import {
   MODE_EVENT_SUBJECT_FILTER,
   type ModeEvent,
 } from "@rw/runtime/mode-events";
+import {
+  deriveNotificationEventSubject,
+  NOTIFICATION_EVENT_STREAM,
+  NOTIFICATION_EVENT_SUBJECT_FILTER,
+  type NotificationEvent,
+} from "@rw/runtime/notification-events";
 import { setEntityEventSink } from "@rw/services/entity/index";
 import { call, productionMode } from "@rw/services/facility/index";
+import { setNotificationEventSink } from "@rw/services/notification/index";
 import { moduleLogger } from "../logger.js";
 import { ensureStream, natsServers } from "./util.js";
 
@@ -117,4 +124,14 @@ export const startModeEventPublisher = () =>
     filter: MODE_EVENT_SUBJECT_FILTER,
     subjectFor: (e) => deriveModeEventSubject({ siteId: e.siteId, stationId: e.stationId, action: e.action }),
     setSink: productionMode.setModeEventSink,
+  });
+
+export const startNotificationEventPublisher = () =>
+  startDomainEventPublisher<NotificationEvent>({
+    name: "notification-events",
+    stream: NOTIFICATION_EVENT_STREAM,
+    filter: NOTIFICATION_EVENT_SUBJECT_FILTER,
+    subjectFor: (e) =>
+      deriveNotificationEventSubject({ siteId: e.siteId, notificationId: e.notificationId, action: e.action }),
+    setSink: setNotificationEventSink,
   });

@@ -26,6 +26,7 @@ COPY packages/services/package.json packages/services/
 COPY packages/auth/package.json packages/auth/
 COPY packages/runtime/package.json packages/runtime/
 COPY packages/automations/package.json packages/automations/
+COPY packages/notifications/package.json packages/notifications/
 COPY packages/integrations/package.json packages/integrations/
 COPY packages/livestore/package.json packages/livestore/
 COPY packages/historian/package.json packages/historian/
@@ -62,6 +63,7 @@ COPY packages/services/package.json packages/services/
 COPY packages/auth/package.json packages/auth/
 COPY packages/runtime/package.json packages/runtime/
 COPY packages/automations/package.json packages/automations/
+COPY packages/notifications/package.json packages/notifications/
 COPY packages/integrations/package.json packages/integrations/
 COPY packages/livestore/package.json packages/livestore/
 COPY packages/historian/package.json packages/historian/
@@ -80,6 +82,7 @@ COPY packages/services/package.json packages/services/
 COPY packages/auth/package.json packages/auth/
 COPY packages/runtime/package.json packages/runtime/
 COPY packages/automations/package.json packages/automations/
+COPY packages/notifications/package.json packages/notifications/
 COPY packages/integrations/package.json packages/integrations/
 COPY packages/livestore/package.json packages/livestore/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
@@ -97,6 +100,7 @@ COPY packages/runtime/package.json packages/runtime/
 COPY packages/services/package.json packages/services/
 COPY packages/auth/package.json packages/auth/
 COPY packages/automations/package.json packages/automations/
+COPY packages/notifications/package.json packages/notifications/
 COPY packages/integrations/package.json packages/integrations/
 COPY packages/livestore/package.json packages/livestore/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
@@ -133,7 +137,9 @@ COPY --from=build /repo/packages/auth/package.json packages/auth/
 COPY --from=build /repo/packages/runtime/dist packages/runtime/dist
 COPY --from=build /repo/packages/runtime/package.json packages/runtime/
 COPY --from=build /repo/packages/automations/dist packages/automations/dist
+COPY --from=build /repo/packages/notifications/dist packages/notifications/dist
 COPY --from=build /repo/packages/automations/package.json packages/automations/
+COPY --from=build /repo/packages/notifications/package.json packages/notifications/
 COPY --from=build /repo/packages/integrations/dist packages/integrations/dist
 COPY --from=build /repo/packages/integrations/package.json packages/integrations/
 COPY --from=build /repo/packages/livestore/dist packages/livestore/dist
@@ -185,7 +191,9 @@ COPY --from=build /repo/packages/auth/package.json packages/auth/
 COPY --from=build /repo/packages/runtime/dist packages/runtime/dist
 COPY --from=build /repo/packages/runtime/package.json packages/runtime/
 COPY --from=build /repo/packages/automations/dist packages/automations/dist
+COPY --from=build /repo/packages/notifications/dist packages/notifications/dist
 COPY --from=build /repo/packages/automations/package.json packages/automations/
+COPY --from=build /repo/packages/notifications/package.json packages/notifications/
 COPY --from=build /repo/packages/integrations/dist packages/integrations/dist
 COPY --from=build /repo/packages/integrations/package.json packages/integrations/
 COPY --from=build /repo/packages/livestore/dist packages/livestore/dist
@@ -230,7 +238,9 @@ COPY --from=build /repo/packages/auth/dist packages/auth/dist
 COPY --from=build /repo/packages/services/package.json packages/services/
 COPY --from=build /repo/packages/auth/package.json packages/auth/
 COPY --from=build /repo/packages/automations/dist packages/automations/dist
+COPY --from=build /repo/packages/notifications/dist packages/notifications/dist
 COPY --from=build /repo/packages/automations/package.json packages/automations/
+COPY --from=build /repo/packages/notifications/package.json packages/notifications/
 COPY --from=build /repo/packages/integrations/dist packages/integrations/dist
 COPY --from=build /repo/packages/integrations/package.json packages/integrations/
 COPY --from=build /repo/packages/livestore/dist packages/livestore/dist

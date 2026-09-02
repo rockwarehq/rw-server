@@ -52,6 +52,9 @@ model Employee {
   startedModeLogs StationModeLog[] @relation("ModeLogStartedBy")
   endedModeLogs   StationModeLog[] @relation("ModeLogEndedBy")
 
+  notificationGroups     NotificationGroup[]    @relation("NotificationGroupMembers")
+  notificationDeliveries NotificationDelivery[]
+
   @@index([workspaceId, status])
 }
 
@@ -65,6 +68,8 @@ model EmployeeVersion {
   employeeNumber String?
   pinHash        String? // bcrypt, for operator PIN checks
   badgeNumber    String? // physical token (RFID/barcode)
+  email          String? // notification contact (not a login — that lives on User)
+  phone          String? // notification contact, E.164 preferred
 
   employeeId String   @db.Uuid
   employee   Employee @relation("EmployeeVersions", fields: [employeeId], references: [id], onDelete: Cascade)

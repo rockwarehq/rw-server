@@ -36,6 +36,7 @@ import {
   startCallEventPublisher,
   startEntityEventPublisher,
   startModeEventPublisher,
+  startNotificationEventPublisher,
 } from "./nats/domain-event-publishers.js";
 import { startCommandBus } from "./nats/command-bus.js";
 import { rootLogger } from "./logger.js";
@@ -49,6 +50,7 @@ let cleanupGraphDefinitionPublisher: (() => Promise<void>) | null = null;
 let cleanupEntityEventPublisher: (() => Promise<void>) | null = null;
 let cleanupCallEventPublisher: (() => Promise<void>) | null = null;
 let cleanupModeEventPublisher: (() => Promise<void>) | null = null;
+let cleanupNotificationEventPublisher: (() => Promise<void>) | null = null;
 let cleanupCommandBus: (() => Promise<void>) | null = null;
 
 let readinessRedis: Redis | null = null;
@@ -99,6 +101,7 @@ async function main() {
   cleanupEntityEventPublisher = await startEntityEventPublisher();
   cleanupCallEventPublisher = await startCallEventPublisher();
   cleanupModeEventPublisher = await startModeEventPublisher();
+  cleanupNotificationEventPublisher = await startNotificationEventPublisher();
   cleanupCommandBus = await startCommandBus();
 
   // Producer-side queues that HTTP/RPC handlers enqueue against. These
@@ -133,6 +136,7 @@ async function shutdown() {
   if (cleanupEntityEventPublisher) await cleanupEntityEventPublisher();
   if (cleanupCallEventPublisher) await cleanupCallEventPublisher();
   if (cleanupModeEventPublisher) await cleanupModeEventPublisher();
+  if (cleanupNotificationEventPublisher) await cleanupNotificationEventPublisher();
   if (cleanupCommandBus) await cleanupCommandBus();
   if (readinessRedis) readinessRedis.disconnect();
   const { createPrismaClient: getClient } = await import("@rw/db");

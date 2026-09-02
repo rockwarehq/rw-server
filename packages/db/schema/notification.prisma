@@ -1,0 +1,85 @@
+/// Admin-defined, per-site group of employees notified together. Channels are
+/// chosen on the group so senders (automations) never know about email vs SMS.
+model NotificationGroup {
+  id          String                @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  channels    NotificationChannel[] @default([EMAIL])
+
+  members Employee[] @relation("NotificationGroupMembers")
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  notifications Notification[]
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+}
+
+enum NotificationDeliveryStatus {
+  SENT
+  FAILED
+  /// Not attempted: the employee has no address for the channel, or the channel has no provider.
+  SKIPPED
+}
+
+/// One send request: what was asked, by whom, for which group. Who received
+/// it and whether the provider accepted it is the deliveries.
+model Notification {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  groupId   String            @db.Uuid
+  group     NotificationGroup @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  groupName String // snapshot at send time
+
+  subject String
+  body    String
+
+  source     ActionSource @default(SYSTEM)
+  sourceType String? // programmatic origin discriminator, e.g. "automation"
+  sourceRef  String? // free-form correlation id (automation id, ...)
+  /// Caller-supplied idempotency key (e.g. automation eventId + action index); a repeat returns the original.
+  dedupeKey  String? @unique
+
+  deliveries NotificationDelivery[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([siteId, createdAt(sort: Desc)])
+  @@index([groupId])
+}
+
+/// One row per recipient per channel: the address used and the outcome.
+model NotificationDelivery {
+  id String @id @default(uuid()) @db.Uuid
+
+  notificationId String       @db.Uuid
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  employeeId String?   @db.Uuid
+  employee   Employee? @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+
+  channel           NotificationChannel
+  address           String? // email / phone used; null when the employee had none
+  status            NotificationDeliveryStatus
+  error             String?
+  providerMessageId String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([notificationId])
+  @@index([employeeId])
+}

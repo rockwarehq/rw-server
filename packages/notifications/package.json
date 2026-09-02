@@ -1,0 +1,20 @@
+{
+  "name": "@rw/notifications",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.8",
+    "typescript": "~6.0.2",
+    "vitest": "^4.0.14"
+  }
+}
