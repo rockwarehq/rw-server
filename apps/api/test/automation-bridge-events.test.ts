@@ -6,6 +6,7 @@ import { fromJobEvent } from "../src/automations/events/job-changed.js";
 import { buildContextBuilders, EVENT_SCHEMAS } from "../src/automations/events/index.js";
 import { fromModeEvent } from "../src/automations/events/mode-changed.js";
 import { fromNotificationEvent } from "../src/automations/events/notification-changed.js";
+import { workContextPayload } from "../src/automations/events/work-context.js";
 import { createRefRegistry } from "@rw/automations";
 
 // Tier 1: the app's event/action catalog boots, and each domain event maps to a payload the
@@ -90,6 +91,14 @@ describe("automation bridge events", () => {
       fromNotificationEvent({ ...base, action: "failed", notificationId: "n1", groupId: "g1", groupName: "Ops", subject: "x", source: "SYSTEM", sent: 0, failed: 1, skipped: 2 }),
     );
     expect(notif.matched).toEqual([]);
+  });
+
+  it("derives business day and day type from the business date", () => {
+    const sat = workContextPayload({ businessDate: "2026-09-05" });
+    expect(sat).toMatchObject({ businessDay: "Saturday", dayType: "Weekend" });
+    const thu = workContextPayload({ businessDate: "2026-09-03" });
+    expect(thu).toMatchObject({ businessDay: "Thursday", dayType: "Weekday" });
+    expect(workContextPayload({})).toMatchObject({ businessDay: undefined, dayType: undefined });
   });
 
   it("exposes numeric facts and the new actions in the catalog", () => {
