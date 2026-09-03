@@ -1,5 +1,4 @@
-import { jetstream, jetstreamManager, DiscardPolicy, RetentionPolicy, StorageType } from "@nats-io/jetstream";
-import { connect } from "@nats-io/transport-node";
+import { jetstream, jetstreamManager } from "@nats-io/jetstream";
 import {
   CALL_EVENT_STREAM,
   CALL_EVENT_SUBJECT_FILTER,
@@ -34,15 +33,13 @@ import { setEntityEventSink } from "@rw/services/entity/index";
 import { call, productionMode, station } from "@rw/services/facility/index";
 import { setNotificationEventSink } from "@rw/services/notification/index";
 import { moduleLogger } from "../logger.js";
-import { ensureStream, natsServers } from "./util.js";
+import { ensureStream, getNatsConnection } from "./util.js";
 
 // One JetStream publisher per domain event stream (see ADR-0004). Each installs itself as the
 // domain's event sink and publishes every event on its derived subject with the event id as
-// msgID for dedup. Disabled (no-op cleanup) when NATS_URL is unset or the connection fails.
+// msgID for dedup. Disabled (no-op cleanup) when the shared NATS connection is unavailable.
 
 const encoder = new TextEncoder();
-const WEEK_NANOS = 7 * 24 * 60 * 60 * 1_000_000_000;
-const TWO_MINUTES_NANOS = 2 * 60 * 1_000_000_000;
 
 interface DomainPublisher<T extends { id: string }> {
   name: string;
@@ -56,35 +53,13 @@ async function startDomainEventPublisher<T extends { id: string }>(
   p: DomainPublisher<T>,
 ): Promise<() => Promise<void>> {
   const log = moduleLogger(`${p.name}-publisher`);
-  const servers = process.env.NATS_URL;
-  if (!servers) {
-    log.info(`NATS_URL not set, ${p.name} disabled`);
-    return async () => {};
-  }
-
-  const nc = await connect({
-    servers: natsServers(servers),
-    name: process.env.NATS_CLIENT_NAME || `rw-api-${p.name}`,
-    maxReconnectAttempts: -1,
-  }).catch((err: unknown) => {
-    log.error({ err }, `could not connect to NATS, ${p.name} disabled`);
-    return null;
-  });
+  const nc = await getNatsConnection();
   if (!nc) return async () => {};
 
-  const jsm = await jetstreamManager(nc);
   try {
-    await ensureStream(jsm, p.stream, p.filter, {
-      retention: RetentionPolicy.Limits,
-      storage: StorageType.File,
-      discard: DiscardPolicy.Old,
-      max_msgs: 100_000,
-      max_age: WEEK_NANOS,
-      duplicate_window: TWO_MINUTES_NANOS,
-    });
+    await ensureStream(await jetstreamManager(nc), p.stream, p.filter);
   } catch (err) {
     log.error({ err }, `could not ensure JetStream stream, ${p.name} disabled`);
-    await nc.drain();
     return async () => {};
   }
   const js = jetstream(nc);
@@ -97,12 +72,9 @@ async function startDomainEventPublisher<T extends { id: string }>(
       });
   });
 
-  log.info({ server: nc.getServer() }, `publishing ${p.name}`);
+  log.info(`publishing ${p.name}`);
 
-  return async () => {
-    p.setSink(null);
-    await nc.drain();
-  };
+  return async () => p.setSink(null);
 }
 
 export const startEntityEventPublisher = () =>

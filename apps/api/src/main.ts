@@ -41,6 +41,7 @@ import {
 } from "./nats/domain-event-publishers.js";
 import { startAutomationEventConsumer } from "./nats/automation-event-consumer.js";
 import { startCommandBus } from "./nats/command-bus.js";
+import { closeNatsConnection } from "./nats/util.js";
 import { rootLogger } from "./logger.js";
 import { Redis } from "ioredis";
 import { infraConfig } from "./config.js";
@@ -48,20 +49,14 @@ import { registerReadinessCheck } from "./readiness.js";
 
 let cleanupBridge: (() => Promise<void>) | null = null;
 let cleanupMetricsBridge: (() => Promise<void>) | null = null;
-let cleanupGraphDefinitionPublisher: (() => Promise<void>) | null = null;
-let cleanupEntityEventPublisher: (() => Promise<void>) | null = null;
-let cleanupCallEventPublisher: (() => Promise<void>) | null = null;
-let cleanupModeEventPublisher: (() => Promise<void>) | null = null;
-let cleanupNotificationEventPublisher: (() => Promise<void>) | null = null;
-let cleanupJobEventPublisher: (() => Promise<void>) | null = null;
-let cleanupAutomationEventConsumer: (() => Promise<void>) | null = null;
-let cleanupCommandBus: (() => Promise<void>) | null = null;
+// NATS adapters, stopped in order before the shared connection is drained.
+const natsCleanups: (() => Promise<void>)[] = [];
 
 let readinessRedis: Redis | null = null;
 
 // Readiness checks served by GET /ready. DB and Redis are critical (the app
 // can't do useful work without them); NATS registers itself as non-critical
-// in command-bus.ts since the app deliberately degrades without it.
+// in nats/util.ts since the app deliberately degrades without it.
 function registerReadiness() {
   registerReadinessCheck("db", async () => {
     const prisma = createPrismaClient("api");
@@ -101,14 +96,18 @@ async function main() {
   // back through Redis (~1ms) — fine for SSE latency, no double-delivery.
   cleanupBridge = await initEventsBridge("both");
   cleanupMetricsBridge = await initMetricsBridge("both");
-  cleanupGraphDefinitionPublisher = await startGraphDefinitionPublisher();
-  cleanupEntityEventPublisher = await startEntityEventPublisher();
-  cleanupCallEventPublisher = await startCallEventPublisher();
-  cleanupModeEventPublisher = await startModeEventPublisher();
-  cleanupNotificationEventPublisher = await startNotificationEventPublisher();
-  cleanupJobEventPublisher = await startJobEventPublisher();
-  cleanupAutomationEventConsumer = await startAutomationEventConsumer();
-  cleanupCommandBus = await startCommandBus();
+  for (const start of [
+    startGraphDefinitionPublisher,
+    startEntityEventPublisher,
+    startCallEventPublisher,
+    startModeEventPublisher,
+    startNotificationEventPublisher,
+    startJobEventPublisher,
+    startAutomationEventConsumer,
+    startCommandBus,
+  ]) {
+    natsCleanups.push(await start());
+  }
 
   // Producer-side queues that HTTP/RPC handlers enqueue against. These
   // initialize Queue instances; the workers consuming them run elsewhere
@@ -138,14 +137,8 @@ async function shutdown() {
   ]);
   if (cleanupBridge) await cleanupBridge();
   if (cleanupMetricsBridge) await cleanupMetricsBridge();
-  if (cleanupGraphDefinitionPublisher) await cleanupGraphDefinitionPublisher();
-  if (cleanupEntityEventPublisher) await cleanupEntityEventPublisher();
-  if (cleanupCallEventPublisher) await cleanupCallEventPublisher();
-  if (cleanupModeEventPublisher) await cleanupModeEventPublisher();
-  if (cleanupAutomationEventConsumer) await cleanupAutomationEventConsumer();
-  if (cleanupNotificationEventPublisher) await cleanupNotificationEventPublisher();
-  if (cleanupJobEventPublisher) await cleanupJobEventPublisher();
-  if (cleanupCommandBus) await cleanupCommandBus();
+  for (const cleanup of natsCleanups) await cleanup();
+  await closeNatsConnection();
   if (readinessRedis) readinessRedis.disconnect();
   const { createPrismaClient: getClient } = await import("@rw/db");
   await getClient("api").$disconnect();

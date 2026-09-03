@@ -1,5 +1,5 @@
-import { jetstream, jetstreamManager, DiscardPolicy, RetentionPolicy, StorageType } from "@nats-io/jetstream";
-import { connect, type NatsConnection } from "@nats-io/transport-node";
+import { jetstream, jetstreamManager } from "@nats-io/jetstream";
+import type { NatsConnection } from "@nats-io/transport-node";
 import {
   COMMAND_ACK_SUBJECT_FILTER,
   COMMAND_RESULT_SUBJECT_FILTER,
@@ -12,42 +12,28 @@ import {
 } from "@rw/runtime/command-subjects";
 import { commands as gatewayCommands } from "@rw/services/device/gateway/index";
 import { moduleLogger } from "../logger.js";
-import { ensureStream, natsServers } from "./util.js";
-import { registerReadinessCheck, unregisterReadinessCheck } from "../readiness.js";
+import { ensureStream, getNatsConnection } from "./util.js";
 
 const log = moduleLogger("command-bus");
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const DAY_NANOS = 24 * 60 * 60 * 1_000_000_000;
-const TWO_MINUTES_NANOS = 2 * 60 * 1_000_000_000;
 
 // Commands leave the cloud durably (JetStream) so a gateway that is offline when
 // a command is queued still receives it on reconnect. Ack/result come back over
 // core NATS (best-effort) and update the CommandQueue audit row.
 export async function startCommandBus(): Promise<() => Promise<void>> {
-  const servers = process.env.NATS_URL;
-  if (!servers) {
-    log.info("NATS_URL not set, gateway commands over NATS disabled");
-    return async () => {};
-  }
-
-  const nc = await connect({
-    servers: natsServers(servers),
-    name: process.env.NATS_CLIENT_NAME || "rw-api-commands",
-    maxReconnectAttempts: -1,
-  }).catch((err: unknown) => {
-    log.error({ err }, "could not connect to NATS, gateway commands disabled");
-    return null;
-  });
+  const nc = await getNatsConnection();
   if (!nc) return async () => {};
 
-  const jsm = await jetstreamManager(nc);
   try {
-    await ensureCommandStream(jsm);
+    await ensureStream(await jetstreamManager(nc), COMMAND_STREAM, COMMAND_SUBJECT_FILTER, {
+      max_msgs: 10_000,
+      max_age: DAY_NANOS,
+    });
   } catch (err) {
     log.error({ err }, "could not ensure JetStream stream, gateway commands disabled");
-    await nc.drain();
     return async () => {};
   }
   const js = jetstream(nc);
@@ -67,16 +53,12 @@ export async function startCommandBus(): Promise<() => Promise<void>> {
   void consumeAcks(acks);
   void consumeResults(results);
 
-  log.info({ server: nc.getServer() }, "publishing commands + consuming ack/result");
-
-  // Non-critical: the app deliberately degrades without NATS, so this is
-  // reported in /ready but never flips readiness to 503.
-  registerReadinessCheck("nats", () => !nc.isClosed(), { critical: false });
+  log.info("publishing commands + consuming ack/result");
 
   return async () => {
-    unregisterReadinessCheck("nats");
     gatewayCommands.setCommandSink(null);
-    await nc.drain();
+    acks.unsubscribe();
+    results.unsubscribe();
   };
 }
 
@@ -112,15 +94,4 @@ function parse<T>(data: Uint8Array): T | null {
   } catch {
     return null;
   }
-}
-
-function ensureCommandStream(jsm: Awaited<ReturnType<typeof jetstreamManager>>): Promise<void> {
-  return ensureStream(jsm, COMMAND_STREAM, COMMAND_SUBJECT_FILTER, {
-    retention: RetentionPolicy.Limits,
-    storage: StorageType.File,
-    discard: DiscardPolicy.Old,
-    max_msgs: 10_000,
-    max_age: DAY_NANOS,
-    duplicate_window: TWO_MINUTES_NANOS,
-  });
 }

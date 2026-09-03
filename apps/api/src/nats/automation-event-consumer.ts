@@ -1,5 +1,4 @@
 import { AckPolicy, DeliverPolicy, type ConsumerMessages, jetstream, jetstreamManager } from "@nats-io/jetstream";
-import { connect } from "@nats-io/transport-node";
 import { CALL_EVENT_STREAM, CALL_EVENT_SUBJECT_FILTER, parseCallEvent } from "@rw/runtime/call-events";
 import type { EventCause } from "@rw/runtime/domain-events";
 import { JOB_EVENT_STREAM, JOB_EVENT_SUBJECT_FILTER, parseJobEvent } from "@rw/runtime/job-events";
@@ -15,7 +14,7 @@ import { fromModeEvent } from "../automations/events/mode-changed.js";
 import { fromNotificationEvent } from "../automations/events/notification-changed.js";
 import { getAutomationFramework } from "../automations/index.js";
 import { moduleLogger } from "../logger.js";
-import { natsServers } from "./util.js";
+import { getNatsConnection } from "./util.js";
 
 // The bridge from domain event streams into the automation engine: each stream gets a durable
 // consumer whose messages are parsed, mapped to an automation event, and fired. Runs in the api
@@ -68,20 +67,7 @@ const BRIDGES: Bridge[] = [
 ];
 
 export async function startAutomationEventConsumer(): Promise<() => Promise<void>> {
-  const servers = process.env.NATS_URL;
-  if (!servers) {
-    log.info("NATS_URL not set, automation event consumer disabled");
-    return async () => {};
-  }
-
-  const nc = await connect({
-    servers: natsServers(servers),
-    name: process.env.NATS_CLIENT_NAME || "rw-api-automation-events",
-    maxReconnectAttempts: -1,
-  }).catch((err: unknown) => {
-    log.error({ err }, "could not connect to NATS, automation event consumer disabled");
-    return null;
-  });
+  const nc = await getNatsConnection();
   if (!nc) return async () => {};
 
   const js = jetstream(nc);
@@ -141,6 +127,5 @@ export async function startAutomationEventConsumer(): Promise<() => Promise<void
 
   return async () => {
     for (const m of running) m.stop();
-    await nc.drain();
   };
 }
