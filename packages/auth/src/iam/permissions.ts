@@ -102,12 +102,14 @@ export const WC_GRANT_GLOBAL_PERMISSIONS: Record<WorkcenterAccessLevel, readonly
   ],
 };
 
-// A grant confers these ONLY at the granted workcenter — status, calls, and
-// facility config (stations, workcenter setup) are the workcenter's own.
-// settings/user/billing appear in neither map: those stay with plant admins.
+// A grant confers these ONLY at the granted workcenter — status, calls,
+// production modes (force/clear act on stations), and facility config
+// (stations, workcenter setup) are the workcenter's own.
+// settings/user/billing/notifications appear in neither map: those stay
+// with plant admins.
 export const WC_GRANT_SCOPED_PERMISSIONS: Record<WorkcenterAccessLevel, readonly Permission[]> = {
-  READ: ["status:read", "calls:read"],
-  WRITE: ["status:read", "status:write", "calls:read", "calls:write", "facility:write"],
+  READ: ["status:read", "calls:read", "modes:read"],
+  WRITE: ["status:read", "status:write", "calls:read", "calls:write", "modes:read", "modes:write", "facility:write"],
 };
 
 function workcenterAccessPermissions(access: string): {

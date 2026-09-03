@@ -132,13 +132,16 @@ describe("workcenter grants", () => {
     // Workcenter-scoped: only at the granted workcenter.
     expect(snapshotHasPermission(s, "status:write", SITE_A, WC_1)).toBe(true);
     expect(snapshotHasPermission(s, "calls:write", SITE_A, WC_1)).toBe(true);
+    expect(snapshotHasPermission(s, "modes:write", SITE_A, WC_1)).toBe(true);
     expect(snapshotHasPermission(s, "facility:write", SITE_A, WC_1)).toBe(true);
     expect(snapshotHasPermission(s, "status:write", SITE_A, WC_2)).toBe(false);
+    expect(snapshotHasPermission(s, "modes:write", SITE_A, WC_2)).toBe(false);
     expect(snapshotHasPermission(s, "facility:write", SITE_A)).toBe(false);
     // Plant-admin territory is never conferred by a grant.
     expect(snapshotHasPermission(s, "settings:write", SITE_A, WC_1)).toBe(false);
     expect(snapshotHasPermission(s, "user:read", SITE_A, WC_1)).toBe(false);
     expect(snapshotHasPermission(s, "billing:read", SITE_A, WC_1)).toBe(false);
+    expect(snapshotHasPermission(s, "notifications:write", SITE_A, WC_1)).toBe(false);
   });
 
   it("site role and grant union — the site role dominates at every workcenter", () => {
