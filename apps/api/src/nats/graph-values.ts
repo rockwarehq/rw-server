@@ -1,31 +1,25 @@
 import { jetstream } from "@nats-io/jetstream";
 import { Kvm } from "@nats-io/kv";
-import { connect } from "@nats-io/transport-node";
 import { CVG_BUCKET, CvgStore } from "@rw/livestore/store/cvg-store";
 import type { ValueEnvelope } from "@rw/livestore/types/index";
 import { moduleLogger } from "../logger.js";
-import { natsServers } from "./util.js";
+import { getNatsConnection } from "./util.js";
 
 const log = moduleLogger("graph-values");
 
 // Read-only access to livestore's current-value KV bucket for one-shot value
 // introspection (graph.introspect.values / explain). Livestore remains the
 // bucket's sole writer; this module never creates the bucket — if livestore
-// has not provisioned it (or NATS_URL is unset), reads report unavailable.
+// has not provisioned it (or NATS is unavailable), reads report unavailable.
 
 const READ_CHUNK = 50;
 
 let storePromise: Promise<CvgStore | null> | null = null;
 
 async function openStore(): Promise<CvgStore | null> {
-  const servers = process.env.NATS_URL;
-  if (!servers) return null;
+  const nc = await getNatsConnection();
+  if (!nc) return null;
   try {
-    const nc = await connect({
-      servers: natsServers(servers),
-      name: process.env.NATS_CLIENT_NAME || "rw-api-graph-values",
-      maxReconnectAttempts: -1,
-    });
     const kv = await new Kvm(jetstream(nc)).open(CVG_BUCKET);
     return new CvgStore(kv);
   } catch (err) {

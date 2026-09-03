@@ -37,7 +37,7 @@ const USR = [
   { id: "5e700000-0000-4000-8000-000000000002", email: "riley.shiftlead@e2e.test" },
   { id: "5e700000-0000-4000-8000-000000000003", email: "ops.pager@e2e.test" },
 ];
-const [USR_SUP, USR_LEAD, USR_OPS] = USR;
+const [USR_SUP, USR_LEAD] = USR;
 const AUTO_MAIN_ID = "a017a000-0000-4000-8000-000000000001";
 const AUTO_AUTHOR_ID = "a017a000-0000-4000-8000-000000000002";
 const AUTO_BROKEN_ID = "a017a000-0000-4000-8000-000000000003";
@@ -72,7 +72,7 @@ async function assertThrows(fn: () => Promise<unknown>): Promise<Error | null> {
   }
 }
 
-/** Capture `[automations] ALERT` log lines emitted while `fn` runs (the sendAlert handler logs them). */
+/** Capture `[automations] ALERT` log lines emitted while `fn` runs (legacy; no action logs these any more). */
 async function captureAlerts<T>(fn: () => Promise<T>): Promise<{ result: T; alerts: string[] }> {
   const alerts: string[] = [];
   const real = console.log;
@@ -210,28 +210,14 @@ async function main(): Promise<void> {
       label: MAIN_LABEL,
       value: "s_1",
       actions: [
-        {
-          type: "sendAlert",
-          version: "1",
-          inputs: {
-            text: "Job changed from {{event.payload.previousJobId}} to {{event.payload.currentJobId}} at {{event.payload.stationId}}",
-            recipientUserIds: [USR_SUP.id],
-          },
-        },
-        {
-          type: "sendAlert",
-          version: "1",
-          inputs: {
-            text: "FYI: shift lead notified of change at {{event.payload.stationId}}",
-            recipientUserIds: [USR_LEAD.id],
-          },
-        },
+        { type: "clearMode", version: "1", inputs: { stationId: STATION_ID } },
+        { type: "clearMode", version: "1", inputs: { stationId: STATION_ID } },
       ],
     });
     fw.engine.reload();
 
     const { result: r1, alerts } = await captureAlerts(() =>
-      fw.fire("job.changed", { previousJobId: "j_100", currentJobId: "j_200", stationId: "s_1" }),
+      fw.fire("job.changed", { previousJobId: "j_100", jobId: "j_200", stationId: "s_1" }),
     );
     firedEventIds.add(r1.eventId);
     const ourAlerts = alerts.filter((a) => a.includes(MAIN_LABEL));
@@ -271,7 +257,7 @@ async function main(): Promise<void> {
 
     // -------------------------------------------------------------------------
     console.log("\n3. Condition mismatch — valid event, our automation doesn't match (stationId s_2)");
-    const r2 = await fw.fire("job.changed", { previousJobId: "j_100", currentJobId: "j_200", stationId: "s_2" });
+    const r2 = await fw.fire("job.changed", { previousJobId: "j_100", jobId: "j_200", stationId: "s_2" });
     firedEventIds.add(r2.eventId);
     check("our automation NOT in matched", !r2.matched.includes(AUTO_MAIN_ID), r2.matched);
 
@@ -295,13 +281,7 @@ async function main(): Promise<void> {
       id: AUTO_AUTHOR_ID,
       label: AUTHOR_LABEL,
       value: "s_9",
-      actions: [
-        {
-          type: "sendAlert",
-          version: "1",
-          inputs: { text: "hit {{event.payload.stationId}}", recipientUserIds: [USR_OPS.id] },
-        },
-      ],
+      actions: [{ type: "clearMode", version: "1", inputs: { stationId: STATION_ID } }],
     });
     check("upsert returned the automation", created.label === AUTHOR_LABEL);
     const beforeReload = await fw.fire("job.changed", { stationId: "s_9" });
@@ -358,16 +338,16 @@ async function main(): Promise<void> {
     console.log("\n9b. Unknown action version — fire() throws when the version pin has no handler");
     await seedAutomation({
       id: AUTO_BADVER_ID,
-      label: "E2E: bad version pin (sendAlert@999)",
+      label: "E2E: bad version pin (clearMode@999)",
       value: "s_99",
-      actions: [{ type: "sendAlert", version: "999", inputs: { text: "x", recipientUserIds: [USR_OPS.id] } }],
+      actions: [{ type: "clearMode", version: "999", inputs: { stationId: STATION_ID } }],
     });
     fw.engine.reload();
     const e9b = await assertThrows(() => fw.fire("job.changed", { stationId: "s_99" }));
     check("fire() threw on bad version", e9b !== null);
     check(
-      "error names the missing version 'sendAlert@999'",
-      e9b !== null && /sendAlert@999/.test(e9b.message),
+      "error names the missing version 'clearMode@999'",
+      e9b !== null && /clearMode@999/.test(e9b.message),
       e9b?.message,
     );
 
@@ -410,17 +390,6 @@ async function main(): Promise<void> {
 
     // -------------------------------------------------------------------------
     console.log("\n11. Ref pickers — each DB-backed source returns the seeded rows");
-    const users = await fw.listRefOptions("users");
-    check(
-      "users picker includes the supervisor",
-      users.some((o) => o.id === USR_SUP.id && o.label === USR_SUP.email),
-      users,
-    );
-    check(
-      "users picker includes the ops pager",
-      users.some((o) => o.id === USR_OPS.id && o.label === USR_OPS.email),
-      users,
-    );
     const stations = await fw.listRefOptions("stations");
     check(
       "stations picker includes the seeded station",
@@ -444,18 +413,22 @@ async function main(): Promise<void> {
 
     // -------------------------------------------------------------------------
     console.log("\n12. Catalog — ref metadata on action inputs + event payload facts");
-    const catalog = fw.catalog("job.changed", "sendAlert");
+    const catalog = fw.catalog("job.changed", "notify");
     check("catalog reports event version", catalog.eventVersion === "1", catalog.eventVersion);
     check("catalog reports action version (latest)", catalog.actionVersion === "1", catalog.actionVersion);
-    const recipientsProp = catalog.action.versions[catalog.actionVersion]?.inputSchema.properties.recipientUserIds;
-    check("recipientUserIds has ref source 'users'", recipientsProp?.ref?.source === "users", recipientsProp?.ref);
-    check("recipientUserIds is multi", recipientsProp?.ref?.multi === true, recipientsProp?.ref);
+    const recipientsProp = catalog.action.versions[catalog.actionVersion]?.inputSchema.properties.groupIds;
+    check(
+      "groupIds has ref source 'notificationGroups'",
+      recipientsProp?.ref?.source === "notificationGroups",
+      recipientsProp?.ref,
+    );
+    check("groupIds is multi", recipientsProp?.ref?.multi === true, recipientsProp?.ref);
     const stationFact = catalog.facts.find((f) => f.id === "event.payload.stationId");
     check("stationId fact carries ref.source = 'stations'", stationFact?.ref?.source === "stations", stationFact?.ref);
-    const jobFact = catalog.facts.find((f) => f.id === "event.payload.currentJobId");
-    check("currentJobId fact carries ref.source = 'jobs'", jobFact?.ref?.source === "jobs", jobFact?.ref);
-    const wcFact = catalog.facts.find((f) => f.id === "event.payload.workCenterId");
-    check("workCenterId fact carries ref.source = 'workCenters'", wcFact?.ref?.source === "workCenters", wcFact?.ref);
+    const jobFact = catalog.facts.find((f) => f.id === "event.payload.jobId");
+    check("jobId fact carries ref.source = 'jobs'", jobFact?.ref?.source === "jobs", jobFact?.ref);
+    const wcFact = catalog.facts.find((f) => f.id === "event.payload.workcenterId");
+    check("workcenterId fact carries ref.source = 'workCenters'", wcFact?.ref?.source === "workCenters", wcFact?.ref);
     const deptFact = catalog.facts.find((f) => f.id === "event.payload.department");
     check("department fact has NO ref (free-text)", deptFact?.ref === undefined, deptFact?.ref);
 
@@ -467,11 +440,7 @@ async function main(): Promise<void> {
 
     // -------------------------------------------------------------------------
     console.log("\n14. Partition — a site-scoped automation only sees its own site's events");
-    const siteAction: AutomationAction = {
-      type: "sendAlert",
-      version: "1",
-      inputs: { text: "site hit {{event.payload.stationId}}", recipientUserIds: [USR_OPS.id] },
-    };
+    const siteAction: AutomationAction = { type: "clearMode", version: "1", inputs: { stationId: STATION_ID } };
     await seedAutomation({
       id: AUTO_SITE_ID,
       label: "E2E: site A only",

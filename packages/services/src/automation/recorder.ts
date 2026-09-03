@@ -50,15 +50,15 @@ export function createDbRunRecorder(): RunRecorder {
       });
     },
 
-    async finishRun(runId, { matched, status, error }) {
-      // Atomic: update the run row's terminal state AND write one match row per matched automation.
-      // Order preserved via matchIdx so consumers can reconstruct dispatch order.
+    async finishRun(runId, { matched, cooled = [], status, error }) {
+      // Atomic: update the run row's terminal state AND write one match row per matched automation
+      // (cooled-down matches included, flagged skipped). Order preserved via matchIdx.
+      const rows = [
+        ...matched.map((automationId) => ({ automationId, skipped: null as string | null })),
+        ...cooled.map((automationId) => ({ automationId, skipped: "cooldown" })),
+      ];
       await prisma.$transaction([
-        ...matched.map((automationId, matchIdx) =>
-          prisma.automationRunMatch.create({
-            data: { runId, automationId, matchIdx },
-          }),
-        ),
+        ...rows.map((row, matchIdx) => prisma.automationRunMatch.create({ data: { runId, matchIdx, ...row } })),
         prisma.automationRun.update({
           where: { id: runId },
           data: { status, error, finishedAt: new Date() },

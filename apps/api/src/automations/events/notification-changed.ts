@@ -9,15 +9,16 @@ export const schema: EventSchema = {
   versions: {
     "1": {
       scopeKey: "notificationId",
+      cooldownKey: "groupId",
       payload: {
         siteId: { type: "string", title: "Site", matchable: false },
-        action: { type: "string", title: "Outcome", enum: ["sent", "failed"] },
+        action: { type: "string", title: "What happened", enum: ["sent", "failed"] },
         notificationId: { type: "string", title: "Notification Id", matchable: false },
         groupId: { type: "string", title: "Group", ref: { source: "notificationGroups" } },
         groupName: { type: "string", title: "Group Name", matchable: false },
         subject: { type: "string", title: "Subject", matchable: false },
-        source: { type: "string", title: "Source", enum: ["MANUAL", "SYSTEM"] },
-        sourceType: { type: "string", title: "Source Type" },
+        source: { type: "string", title: "Triggered By", enum: ["MANUAL", "SYSTEM"], matchable: false },
+        sourceType: { type: "string", title: "Trigger Type", matchable: false },
         sourceRef: { type: "string", title: "Source Ref", matchable: false },
         sent: { type: "number", title: "Sent Count" },
         failed: { type: "number", title: "Failed Count" },

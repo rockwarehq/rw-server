@@ -3,6 +3,7 @@ import type { ActionSource, Prisma } from "@rw/db";
 import type { EventCause } from "@rw/runtime/domain-events";
 import type { ModeEventAction } from "@rw/runtime/mode-events";
 import { actorRoleAllowed, resolveEmployee } from "../../employee/actor-role.js";
+import { snapshotDimensions, toDateString } from "../work-context.js";
 import { publishModeEvent } from "./events.js";
 import {
   acquireStationLock,
@@ -14,6 +15,9 @@ import {
 
 const logInclude = {
   mode: { select: { id: true, name: true, scrapAll: true } },
+  workcenter: { select: { id: true, name: true } },
+  jobVersion: { select: { name: true } },
+  shiftInstance: { select: { id: true, shiftName: true } },
   startedByEmployee: { select: { id: true, version: { select: { firstName: true, lastName: true } } } },
   endedByEmployee: { select: { id: true, version: { select: { firstName: true, lastName: true } } } },
 } as const;
@@ -63,13 +67,20 @@ function skipsRoleGate(input: ActorInput): boolean {
   return input.bypassRoles === true || input.source === "SYSTEM";
 }
 
+const stationSelect = {
+  id: true,
+  name: true,
+  siteId: true,
+  deletedAt: true,
+  workcenterId: true,
+  currentJobId: true,
+  currentVersionId: true,
+  site: { select: { workspaceId: true } },
+} as const;
+type StationForMode = Prisma.StationGetPayload<{ select: typeof stationSelect }>;
+
 /** Self-contained `modes.<site>.<station>.<action>` event; the actor fields describe THIS action. */
-function emitModeEvent(
-  action: ModeEventAction,
-  log: ModeLogRecord,
-  station: { name: string; site: { workspaceId: string } },
-  input: ActorInput,
-): void {
+function emitModeEvent(action: ModeEventAction, log: ModeLogRecord, station: StationForMode, input: ActorInput): void {
   publishModeEvent({
     action,
     logId: log.id,
@@ -86,6 +97,13 @@ function emitModeEvent(
     startedByEmployeeId: log.startedByEmployeeId ?? undefined,
     endedAt: log.endTime?.toISOString(),
     endedByEmployeeId: log.endedByEmployeeId ?? undefined,
+    workcenterId: log.workcenterId ?? undefined,
+    workcenterName: log.workcenter?.name,
+    jobId: log.jobId ?? undefined,
+    jobName: log.jobVersion?.name ?? undefined,
+    shiftInstanceId: log.shiftInstanceId ?? undefined,
+    shiftName: log.shiftInstance?.shiftName,
+    businessDate: toDateString(log.businessDate),
     cause: input.cause,
   });
 }
@@ -125,10 +143,7 @@ export async function force(input: ForceModeInput): Promise<ServiceError | { dat
     return { error: "Production mode not found", code: "MODE_NOT_FOUND" };
   }
 
-  const station = await prisma.station.findUnique({
-    where: { id: input.stationId },
-    select: { id: true, name: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } },
-  });
+  const station = await prisma.station.findUnique({ where: { id: input.stationId }, select: stationSelect });
   if (!station || station.deletedAt) {
     return { error: "Station not found", code: "STATION_NOT_FOUND" };
   }
@@ -144,6 +159,7 @@ export async function force(input: ForceModeInput): Promise<ServiceError | { dat
   }
 
   const now = new Date();
+  const dims = await snapshotDimensions(station, now);
   const { entry, previous, changed } = await prisma.$transaction(async (tx) => {
     await acquireStationLock(tx, station.id);
 
@@ -158,7 +174,11 @@ export async function force(input: ForceModeInput): Promise<ServiceError | { dat
     const previous = open
       ? await tx.stationModeLog.update({
           where: { id: open.id },
-          data: { endTime: now, endedByEmployeeId: resolved.employeeId },
+          data: {
+            endTime: now,
+            endedByEmployeeId: resolved.employeeId,
+            endedByEmployeeVersionId: resolved.employeeVersionId,
+          },
           include: logInclude,
         })
       : null;
@@ -169,6 +189,8 @@ export async function force(input: ForceModeInput): Promise<ServiceError | { dat
         modeId: mode.id,
         startTime: now,
         startedByEmployeeId: resolved.employeeId,
+        startedByEmployeeVersionId: resolved.employeeVersionId,
+        ...dims,
         source: input.source ?? "MANUAL",
         sourceType: input.sourceType ?? null,
         sourceRef: input.sourceRef ?? null,
@@ -189,10 +211,7 @@ export async function force(input: ForceModeInput): Promise<ServiceError | { dat
 
 /** Clear the station's active mode. Clearing an already-clear station is a no-op. */
 export async function clear(input: ClearModeInput): Promise<ServiceError | { data: ModeLogRecord | null }> {
-  const station = await prisma.station.findUnique({
-    where: { id: input.stationId },
-    select: { id: true, name: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } },
-  });
+  const station = await prisma.station.findUnique({ where: { id: input.stationId }, select: stationSelect });
   if (!station || station.deletedAt) {
     return { error: "Station not found", code: "STATION_NOT_FOUND" };
   }
@@ -220,7 +239,11 @@ export async function clear(input: ClearModeInput): Promise<ServiceError | { dat
     if (!current) return null;
     const closed = await tx.stationModeLog.update({
       where: { id: current.id },
-      data: { endTime: now, endedByEmployeeId: resolved.employeeId },
+      data: {
+        endTime: now,
+        endedByEmployeeId: resolved.employeeId,
+        endedByEmployeeVersionId: resolved.employeeVersionId,
+      },
       include: logInclude,
     });
     await splitOpenStateEntryForModeChange(tx, station.id, now, null);

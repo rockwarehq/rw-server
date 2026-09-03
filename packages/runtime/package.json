@@ -10,6 +10,7 @@
     "./entity-events": "./dist/entity-events.js",
     "./call-events": "./dist/call-events.js",
     "./mode-events": "./dist/mode-events.js",
+    "./job-events": "./dist/job-events.js",
     "./notification-events": "./dist/notification-events.js",
     "./domain-events": "./dist/domain-events.js",
     "./graph-subjects": "./dist/graph-subjects.js",

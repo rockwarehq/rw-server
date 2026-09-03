@@ -36,6 +36,12 @@ model Automation {
   /// Each fires in sequence when conditions match.
   actions Json
 
+  /// After firing for a cooldown scope (e.g. a station), further matches for that scope are
+  /// skipped for this long. Null = no cooldown.
+  cooldownMs Int?
+
+  cooldowns AutomationCooldown[]
+
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
@@ -121,9 +127,22 @@ model AutomationRunMatch {
   automationId String        @db.Uuid
   /// Order this automation was reached in the dispatch loop (0-based).
   matchIdx     Int
+  /// Set when the match did NOT run its actions, with why (e.g. "cooldown").
+  skipped      String?
 
   @@unique([runId, automationId])
   @@index([automationId])
+}
+
+/// When an automation last fired per cooldown scope — shared by every api instance.
+model AutomationCooldown {
+  automationId String     @db.Uuid
+  automation   Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  /// The event's cooldown scope value (a station id, a group id, ...); "" = per automation.
+  scope        String
+  firedAt      DateTime   @db.Timestamptz(3)
+
+  @@id([automationId, scope])
 }
 
 enum AutomationRunStatus {

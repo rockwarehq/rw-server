@@ -11,6 +11,7 @@ export {
   createActionRegistry,
 } from "./actions.js";
 export { type ContextBuilder, statelessContextBuilder } from "./context.js";
+export { type CooldownStore, createMemoryCooldownStore } from "./cooldown.js";
 export type { AutomationEngine, DispatchResult } from "./engine.js";
 export {
   causeOf,

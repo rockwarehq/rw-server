@@ -395,6 +395,42 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
     expect(events[1]?.endedAt).toBeTruthy();
   });
 
+  it("force snapshots star-pattern dimensions (work center, job, job version) like calls", async () => {
+    const wc = await prisma.workcenter.create({ data: { siteId: siteA.id, name: "pm-test-wc" }, select: { id: true } });
+    const job = await prisma.job.create({ data: { siteId: siteA.id }, select: { id: true } });
+    const jobVersion = await prisma.jobVersion.create({
+      data: { jobId: job.id, version: 1, name: "pm-test-jv" },
+      select: { id: true },
+    });
+    await prisma.job.update({ where: { id: job.id }, data: { currentVersionId: jobVersion.id } });
+    const station = await prisma.station.create({
+      data: { siteId: siteA.id, name: "pm-test-dim-station", workcenterId: wc.id, currentJobId: job.id },
+      select: { id: true },
+    });
+    const mode = await createMode({ name: "pm-test-dims" });
+    const events: ModeEvent[] = [];
+    productionMode.setModeEventSink((e) => {
+      events.push(e);
+    });
+    try {
+      const forced = await productionMode.force({ stationId: station.id, modeId: mode.id, employeeId: faEmployeeId });
+      if (!("data" in forced)) throw new Error(forced.error);
+      expect(forced.data).toMatchObject({ workcenterId: wc.id, jobId: job.id, jobVersionId: jobVersion.id });
+      expect(forced.data.startedByEmployeeId).toBe(faEmployeeId);
+      await new Promise((r) => setImmediate(r));
+      expect(events[0]).toMatchObject({ action: "forced", workcenterId: wc.id, workcenterName: "pm-test-wc", jobId: job.id, jobName: "pm-test-jv" });
+    } finally {
+      productionMode.setModeEventSink(null);
+      await prisma.stationModeLog.deleteMany({ where: { stationId: station.id } });
+      await prisma.stationStateLog.deleteMany({ where: { stationId: station.id } });
+      await prisma.station.delete({ where: { id: station.id } });
+      await prisma.job.update({ where: { id: job.id }, data: { currentVersionId: null } });
+      await prisma.jobVersion.delete({ where: { id: jobVersion.id } });
+      await prisma.job.delete({ where: { id: job.id } });
+      await prisma.workcenter.delete({ where: { id: wc.id } });
+    }
+  });
+
   it("force splits the open state-log entry at the boundary; clear splits back", async () => {
     const mode = await createMode({ name: "pm-test-split" });
     const blockId = "pm-test-block";

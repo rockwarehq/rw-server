@@ -28,6 +28,7 @@ export async function createDbAutomationStore(): Promise<AutomationStore> {
         event: automation.event,
         eventVersion: automation.eventVersion,
         siteId: automation.partition ?? null,
+        cooldownMs: automation.cooldownMs ?? null,
         // JSON columns; Prisma serializes structured values directly.
         conditions: automation.conditions as unknown as Parameters<
           typeof prisma.automation.upsert
@@ -71,6 +72,7 @@ function rowToAutomation(row: {
   event: string;
   eventVersion: string;
   siteId: string | null;
+  cooldownMs: number | null;
   conditions: unknown;
   actions: unknown;
 }): Automation {
@@ -81,6 +83,7 @@ function rowToAutomation(row: {
     event: row.event,
     eventVersion: row.eventVersion,
     partition: row.siteId,
+    cooldownMs: row.cooldownMs,
     conditions: row.conditions as RuleGroupType,
     actions: row.actions as AutomationAction[],
   };

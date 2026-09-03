@@ -2,7 +2,14 @@
 // guards shared by the publisher (apps/api) and any NATS consumers. This module
 // is dependency-free by design; the NATS connection lives in the apps.
 
-import { type EventCause, isOptionalCause, isOptionalString, sanitizeSubjectToken } from "./domain-events.js";
+import {
+  type EventCause,
+  isOptionalCause,
+  isOptionalString,
+  isOptionalWorkContext,
+  sanitizeSubjectToken,
+  type WorkContext,
+} from "./domain-events.js";
 
 export const CALL_EVENT_STREAM = "RW_CALL_EVENTS";
 export const CALL_EVENT_SUBJECT_PREFIX = "calls";
@@ -13,7 +20,7 @@ export type CallEventSeverity = "INFORMATION" | "ALERT" | "WARNING";
 export type CallEventSource = "MANUAL" | "SYSTEM";
 
 /// Carries enough for a notification consumer to react without a DB read.
-export interface CallEvent {
+export interface CallEvent extends WorkContext {
   id: string; // event id — published as msgID for JetStream dedup
   action: CallEventAction;
   callId: string;
@@ -72,6 +79,7 @@ export function isCallEvent(value: unknown): value is CallEvent {
     isOptionalString(event.closedByEmployeeId) &&
     isOptionalString(event.closeMessage) &&
     isOptionalCause(event.cause) &&
+    isOptionalWorkContext(event) &&
     typeof event.emittedAt === "string"
   );
 }

@@ -33,6 +33,8 @@ export interface RecordActionInput {
 
 export interface FinishRunInput {
   matched: string[];
+  /** Automations that matched but were inside their cooldown window; nothing ran for them. */
+  cooled?: string[];
   /** DROPPED = the event exceeded `maxHops` and was not evaluated; `error` says so. */
   status: "SUCCESS" | "FAILED" | "DROPPED";
   error?: string;

@@ -33,11 +33,17 @@ const groupListInputSchema = z.object({
   ...pageSchema,
 });
 
-const sendInputSchema = z.object({
-  groupId: z.uuid(),
-  subject: z.string().min(1).max(500),
-  body: z.string().min(1).max(10_000),
-});
+const sendInputSchema = z
+  .object({
+    siteId: z.uuid(),
+    groupIds: z.array(z.uuid()).max(50).optional(),
+    employeeIds: z.array(z.uuid()).max(500).optional(),
+    subject: z.string().min(1).max(500),
+    body: z.string().min(1).max(10_000),
+  })
+  .refine((v) => (v.groupIds?.length ?? 0) + (v.employeeIds?.length ?? 0) > 0, {
+    message: "Pick at least one group or person",
+  });
 
 const listInputSchema = z.object({
   siteId: z.uuid().optional(),
@@ -103,13 +109,10 @@ export const groupArchive = authRequired.input(idInputSchema).handler(async ({ i
 
 // ── Sending + delivery log ───────────────────────────────────────────────
 
-/** A person sending to a group from the UI (a test send or an ad-hoc message). */
+/** A person sending to groups and/or people from the UI (a test send or an ad-hoc message). */
 export const send = authRequired.input(sendInputSchema).handler(async ({ input, context }) => {
   grant(
-    await authorize(context.iam, {
-      permission: "notifications:write",
-      scope: { kind: "notificationGroup", id: input.groupId },
-    }),
+    await authorize(context.iam, { permission: "notifications:write", scope: { kind: "site", siteId: input.siteId } }),
   );
 
   const result = await notification.send({ ...input, source: "MANUAL", sourceType: "user", sourceRef: context.iam.id });

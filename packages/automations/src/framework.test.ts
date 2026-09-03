@@ -157,6 +157,61 @@ describe("event envelope", () => {
   });
 });
 
+describe("cooldown", () => {
+  const cooled = (id: string, cooldownMs: number) => ({ ...automation(id, SITE_A), cooldownMs });
+  const fireAt = (fw: ReturnType<typeof build>["fw"], callId: string) =>
+    fw.fire("call.changed", { siteId: SITE_A, callId, action: "opened" });
+
+  it("skips a second match inside the window for the same scope and reports it as cooled", async () => {
+    const { fw, ran } = build([cooled("a", 60_000)]);
+    const first = await fireAt(fw, "c1");
+    const second = await fireAt(fw, "c1");
+    expect(first).toMatchObject({ matched: ["a"], cooled: [] });
+    expect(second).toMatchObject({ matched: [], cooled: ["a"] });
+    expect(ran).toHaveLength(1);
+  });
+
+  it("keys the window on cooldownKey when it differs from scopeKey", async () => {
+    const perStation: EventSchema = {
+      ...callEvent,
+      versions: {
+        "1": {
+          ...callEvent.versions["1"]!,
+          cooldownKey: "stationId",
+          payload: { ...callEvent.versions["1"]!.payload, stationId: { type: "string", title: "Station" } },
+        },
+      },
+    };
+    const { fw, ran } = build([cooled("a", 60_000)], {
+      eventSchemas: { [perStation.type]: perStation },
+      contextBuilders: { [perStation.type]: statelessContextBuilder },
+    });
+    await fw.fire("call.changed", { siteId: SITE_A, callId: "c1", stationId: "s1", action: "opened" });
+    const sameStation = await fw.fire("call.changed", {
+      siteId: SITE_A,
+      callId: "c2",
+      stationId: "s1",
+      action: "opened",
+    });
+    const otherStation = await fw.fire("call.changed", {
+      siteId: SITE_A,
+      callId: "c3",
+      stationId: "s2",
+      action: "opened",
+    });
+    expect(sameStation.cooled).toEqual(["a"]);
+    expect(otherStation.matched).toEqual(["a"]);
+    expect(ran).toHaveLength(2);
+  });
+
+  it("does not cool down automations without a cooldown", async () => {
+    const { fw, ran } = build([automation("a", SITE_A)]);
+    await fireAt(fw, "c1");
+    await fireAt(fw, "c1");
+    expect(ran).toHaveLength(2);
+  });
+});
+
 describe("hop limit", () => {
   it("drops an event past maxHops without running actions and records the drop", async () => {
     const { fw, ran, finished } = build([automation("a", SITE_A)], { maxHops: 2 });

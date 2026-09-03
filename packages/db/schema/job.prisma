@@ -25,6 +25,7 @@ model Tool {
   jobs         JobTool[]
   jobProducts  JobProduct[]
   calls        Call[]
+  modeLogs     StationModeLog[]
 
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
@@ -108,22 +109,22 @@ model Job {
   currentVersion JobVersion?  @relation("JobCurrent", fields: [currentVersionId], references: [id])
   versions       JobVersion[] @relation("JobVersions")
 
-  tools           JobTool[]
-  jobProducts     JobProduct[]
-  orders          WorkOrder[]
-  labels Label[]
+  tools       JobTool[]
+  jobProducts JobProduct[]
+  orders      WorkOrder[]
+  labels      Label[]
 
   currentOfStations  Station[]            @relation("StationCurrentJob")
   stationJobs        StationJob[]
   stationJobLogs     StationJobLog[]
   materialShiftUsage MaterialShiftUsage[]
   calls              Call[]
+  modeLogs           StationModeLog[]
 
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
   deletedAt  DateTime? @db.Timestamptz(3)
   archivedAt DateTime? @db.Timestamptz(3)
-
 }
 
 enum StandardCycleUnit {
@@ -160,6 +161,7 @@ model JobVersion {
   cycles       Cycle[]
   stateLogs    StationStateLog[]
   calls        Call[]
+  modeLogs     StationModeLog[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 

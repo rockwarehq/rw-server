@@ -33,17 +33,18 @@ enum NotificationDeliveryStatus {
   SKIPPED
 }
 
-/// One send request: what was asked, by whom, for which group. Who received
-/// it and whether the provider accepted it is the deliveries.
+/// One send request: what was asked, by whom, to which groups and/or people.
+/// Who received it and whether the provider accepted it is the deliveries.
 model Notification {
   id String @id @default(uuid()) @db.Uuid
 
   siteId String @db.Uuid
   site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
-  groupId   String            @db.Uuid
-  group     NotificationGroup @relation(fields: [groupId], references: [id], onDelete: Restrict)
-  groupName String // snapshot at send time
+  /// First group targeted (null for a direct-to-people send); groupName snapshots every group name.
+  groupId   String?            @db.Uuid
+  group     NotificationGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  groupName String?
 
   subject String
   body    String
@@ -52,7 +53,7 @@ model Notification {
   sourceType String? // programmatic origin discriminator, e.g. "automation"
   sourceRef  String? // free-form correlation id (automation id, ...)
   /// Caller-supplied idempotency key (e.g. automation eventId + action index); a repeat returns the original.
-  dedupeKey  String? @unique
+  dedupeKey  String?      @unique
 
   deliveries NotificationDelivery[]
 

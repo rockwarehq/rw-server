@@ -1,6 +1,7 @@
 import type { ActionRegistry } from "./actions.js";
 import { buildCatalog } from "./catalog.js";
 import type { ContextBuilder } from "./context.js";
+import type { CooldownStore } from "./cooldown.js";
 import { createAutomationEngine, type AutomationEngine } from "./engine.js";
 import type { RunRecorder } from "./recorder.js";
 import { createRefRegistry, type RefContext, type RefOption, type RefRegistry } from "./refs.js";
@@ -38,6 +39,8 @@ export interface AutomationFrameworkConfig {
   partitionField?: string;
   /** Events deeper than this many automation hops are dropped instead of evaluated. Default 5. */
   maxHops?: number;
+  /** Shared last-fired store for cooldowns. Defaults to in-memory (fine for one process). */
+  cooldowns?: CooldownStore;
 }
 
 export const DEFAULT_MAX_HOPS = 5;
@@ -58,6 +61,8 @@ export interface FireOptions {
 export interface FireResult {
   eventId: string;
   matched: string[];
+  /** Automations that matched but were cooling down for this event's cooldown scope. */
+  cooled: string[];
   /** Set when the event exceeded `maxHops` and was not evaluated. */
   dropped?: string;
 }
@@ -130,6 +135,9 @@ export function createAutomationFramework(config: AutomationFrameworkConfig): Au
       if (v.scopeKey && !v.payload[v.scopeKey]) {
         throw new Error(`event "${type}@${version}" scopeKey "${v.scopeKey}" is not a payload field`);
       }
+      if (v.cooldownKey && !v.payload[v.cooldownKey]) {
+        throw new Error(`event "${type}@${version}" cooldownKey "${v.cooldownKey}" is not a payload field`);
+      }
     }
   }
 
@@ -166,6 +174,7 @@ export function createAutomationFramework(config: AutomationFrameworkConfig): Au
     actions: config.actions,
     recorder: config.recorder,
     maxHops,
+    cooldowns: config.cooldowns,
   });
   engine.reload();
 
@@ -205,9 +214,12 @@ export function createAutomationFramework(config: AutomationFrameworkConfig): Au
       };
       const partition = partitionField ? normalized[partitionField] : undefined;
       if (partition != null) event.partition = String(partition);
-      const scopeKey = eventSchema.versions[version]?.scopeKey;
-      const scope = scopeKey ? normalized[scopeKey] : undefined;
+      const schemaVersion = eventSchema.versions[version];
+      const scope = schemaVersion?.scopeKey ? normalized[schemaVersion.scopeKey] : undefined;
       if (scope != null) event.scope = String(scope);
+      const cooldownKey = schemaVersion?.cooldownKey ?? schemaVersion?.scopeKey;
+      const cooldownScope = cooldownKey ? normalized[cooldownKey] : undefined;
+      if (cooldownScope != null) event.cooldownScope = String(cooldownScope);
 
       return { eventId: id, ...(await engine.dispatch(event)) };
     },

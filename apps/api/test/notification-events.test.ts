@@ -45,7 +45,7 @@ describe("notification event contract", () => {
     expect(isNotificationEvent(null)).toBe(false);
     expect(isNotificationEvent({ ...baseEvent, action: "queued" })).toBe(false);
     expect(isNotificationEvent({ ...baseEvent, sent: "2" })).toBe(false);
-    expect(parseNotificationEvent({ ...baseEvent, groupId: undefined })).toBeNull();
+    expect(parseNotificationEvent({ ...baseEvent, notificationId: undefined })).toBeNull();
     expect(parseNotificationEvent(baseEvent)).toEqual(baseEvent);
   });
 });
