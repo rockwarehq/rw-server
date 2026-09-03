@@ -13,6 +13,12 @@ import {
   type EntityEvent,
 } from "@rw/runtime/entity-events";
 import {
+  deriveJobEventSubject,
+  JOB_EVENT_STREAM,
+  JOB_EVENT_SUBJECT_FILTER,
+  type JobEvent,
+} from "@rw/runtime/job-events";
+import {
   deriveModeEventSubject,
   MODE_EVENT_STREAM,
   MODE_EVENT_SUBJECT_FILTER,
@@ -25,7 +31,7 @@ import {
   type NotificationEvent,
 } from "@rw/runtime/notification-events";
 import { setEntityEventSink } from "@rw/services/entity/index";
-import { call, productionMode } from "@rw/services/facility/index";
+import { call, productionMode, station } from "@rw/services/facility/index";
 import { setNotificationEventSink } from "@rw/services/notification/index";
 import { moduleLogger } from "../logger.js";
 import { ensureStream, natsServers } from "./util.js";
@@ -134,4 +140,13 @@ export const startNotificationEventPublisher = () =>
     subjectFor: (e) =>
       deriveNotificationEventSubject({ siteId: e.siteId, notificationId: e.notificationId, action: e.action }),
     setSink: setNotificationEventSink,
+  });
+
+export const startJobEventPublisher = () =>
+  startDomainEventPublisher<JobEvent>({
+    name: "job-events",
+    stream: JOB_EVENT_STREAM,
+    filter: JOB_EVENT_SUBJECT_FILTER,
+    subjectFor: (e) => deriveJobEventSubject({ siteId: e.siteId, stationId: e.stationId, action: e.action }),
+    setSink: station.setJobEventSink,
   });

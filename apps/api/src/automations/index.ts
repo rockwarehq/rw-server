@@ -1,13 +1,14 @@
 import { type AutomationFramework, createAutomationFramework, createRefRegistry } from "@rw/automations";
+import { createDbCooldownStore } from "@rw/services/automation/cooldown-store";
 import { createDbRunRecorder } from "@rw/services/automation/recorder";
 import { createDbAutomationStore } from "@rw/services/automation/store";
 import { callDefinitionsAutomationRef } from "@rw/services/facility/call/automation-ref";
 import { productionModesAutomationRef } from "@rw/services/facility/production-mode/automation-ref";
 import { stationsAutomationRef } from "@rw/services/facility/station/automation-ref";
-import { notificationGroupsAutomationRef } from "@rw/services/notification/automation-ref";
+import { shiftNamesAutomationRef } from "@rw/services/facility/work-context";
+import { employeesAutomationRef, notificationGroupsAutomationRef } from "@rw/services/notification/automation-ref";
 import { workCentersAutomationRef } from "@rw/services/facility/workcenter/automation-ref";
 import { jobsAutomationRef } from "@rw/services/job/automation-ref";
-import { usersAutomationRef } from "@rw/services/user/automation-ref";
 import { ACTION_SCHEMAS, buildActionRegistry } from "./actions/index.js";
 import { buildContextBuilders, EVENT_SCHEMAS } from "./events/index.js";
 
@@ -22,13 +23,14 @@ import { buildContextBuilders, EVENT_SCHEMAS } from "./events/index.js";
 export async function createAppAutomationFramework(): Promise<AutomationFramework> {
   const store = await createDbAutomationStore();
   const refs = createRefRegistry()
-    .register(usersAutomationRef)
     .register(workCentersAutomationRef)
     .register(stationsAutomationRef)
     .register(jobsAutomationRef)
     .register(callDefinitionsAutomationRef)
     .register(productionModesAutomationRef)
-    .register(notificationGroupsAutomationRef);
+    .register(notificationGroupsAutomationRef)
+    .register(employeesAutomationRef)
+    .register(shiftNamesAutomationRef);
 
   return createAutomationFramework({
     eventSchemas: EVENT_SCHEMAS,
@@ -40,6 +42,7 @@ export async function createAppAutomationFramework(): Promise<AutomationFramewor
     recorder: createDbRunRecorder(),
     partitionField: "siteId",
     maxHops: 5,
+    cooldowns: createDbCooldownStore(),
   });
 }
 

@@ -2,6 +2,7 @@ import { type AutomationStore, createAutomationFramework } from "@rw/automations
 import { describe, expect, it } from "vitest";
 import { ACTION_SCHEMAS, buildActionRegistry } from "../src/automations/actions/index.js";
 import { fromCallEvent } from "../src/automations/events/call-changed.js";
+import { fromJobEvent } from "../src/automations/events/job-changed.js";
 import { buildContextBuilders, EVENT_SCHEMAS } from "../src/automations/events/index.js";
 import { fromModeEvent } from "../src/automations/events/mode-changed.js";
 import { fromNotificationEvent } from "../src/automations/events/notification-changed.js";
@@ -20,7 +21,7 @@ const emptyStore: AutomationStore = {
 
 function framework() {
   const refs = createRefRegistry();
-  for (const key of ["users", "workCenters", "stations", "jobs", "callDefinitions", "productionModes", "notificationGroups"]) {
+  for (const key of ["workCenters", "stations", "jobs", "callDefinitions", "productionModes", "notificationGroups", "employees", "shiftNames"]) {
     refs.register({ key, list: async () => [] });
   }
   return createAutomationFramework({
@@ -58,11 +59,27 @@ describe("automation bridge events", () => {
       }),
       { id: base.id, cause },
     );
-    expect(r).toEqual({ eventId: base.id, matched: [] });
+    expect(r).toMatchObject({ eventId: base.id, matched: [] });
   });
 
   it("mode.changed and notification.changed accept their mapped events", async () => {
     const fw = framework();
+    const job = await fw.fire(
+      "job.changed",
+      fromJobEvent({
+        ...base,
+        action: "changed",
+        stationId: "st1",
+        stationName: "Press 4",
+        previousJobId: "j1",
+        jobId: "j2",
+        jobName: "New",
+        changedAt: base.emittedAt,
+        source: "MANUAL",
+        businessDate: "2026-09-03",
+      }),
+    );
+    expect(job.matched).toEqual([]);
     const mode = await fw.fire(
       "mode.changed",
       fromModeEvent({ ...base, action: "cleared", logId: "l1", modeId: "m1", modeName: "Trial", stationId: "st1", stationName: "Press 4", source: "MANUAL", startedAt: base.emittedAt, endedAt: base.emittedAt }),
@@ -77,8 +94,8 @@ describe("automation bridge events", () => {
 
   it("exposes numeric facts and the new actions in the catalog", () => {
     const fw = framework();
-    const catalog = fw.catalog("notification.changed", "notifyGroup");
+    const catalog = fw.catalog("notification.changed", "notify");
     expect(catalog.facts.find((f) => f.id === "event.payload.sent")?.type).toBe("number");
-    expect(catalog.actions.map((a) => a.type).sort()).toEqual(["clearMode", "closeCall", "forceMode", "notifyGroup", "openCall", "sendAlert"]);
+    expect(catalog.actions.map((a) => a.type).sort()).toEqual(["clearMode", "closeCall", "forceMode", "notify", "openCall"]);
   });
 });

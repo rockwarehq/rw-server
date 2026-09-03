@@ -533,6 +533,7 @@ export const router = {
     execute: integration.execute,
   },
   automations: {
+    listSchemas: automations.listSchemas,
     getCatalog: automations.getCatalog,
     listRefOptions: automations.listRefOptions,
     list: automations.listAutomations,

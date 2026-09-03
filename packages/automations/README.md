@@ -68,6 +68,15 @@ pass `causeOf(ctx.event)` through to that `fire()` call as `{ cause }` and the c
 An event whose `hop` exceeds `maxHops` (default 5) is not evaluated: `fire()` returns `dropped` and
 the recorder gets a `DROPPED` run, so a loop stops and is visible in the audit.
 
+## Cooldown
+
+An `Automation` with `cooldownMs` fires at most once per cooldown scope per window. The scope is the
+event's `cooldownKey` payload field (defaulting to `scopeKey`; absent = one scope per automation), so
+"notify when a call opens" can cool down per station while calls themselves are scoped by call id.
+Matches inside the window are reported as `cooled` (and recorded as skipped matches), not run. The
+last-fired times live in the `CooldownStore` seam; the default is in-memory, the app supplies a shared
+store so several instances agree.
+
 ## Scope key
 
 An event schema version may name a `scopeKey` — the payload field saying what the event is about

@@ -130,7 +130,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("notifications", () => {
       events.push(e);
     });
     try {
-      const res = await rpcCall(server, "notification/send", { groupId: group.id, subject: "Hello", body: "Line 1" }, officeToken);
+      const res = await rpcCall(server, "notification/send", { siteId: siteA.id, groupIds: [group.id], subject: "Hello", body: "Line 1" }, officeToken);
       expect(res.statusCode).toBe(200);
       const sent = res.json as NotificationJson;
       expect(sent.source).toBe("MANUAL");
@@ -144,13 +144,43 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("notifications", () => {
       expect(events[0]).toMatchObject({ action: "sent", notificationId: sent.id, groupId: group.id, siteId: siteA.id, workspaceId, sent: 1, skipped: 1, failed: 0 });
 
       // Reader cannot send; office can read the log.
-      const denied = await rpcCall(server, "notification/send", { groupId: group.id, subject: "x", body: "y" }, readerToken);
+      const denied = await rpcCall(server, "notification/send", { siteId: siteA.id, groupIds: [group.id], subject: "x", body: "y" }, readerToken);
       expect(denied.statusCode).toBe(403);
       const log = await rpcCall(server, "notification/list", { siteId: siteA.id, groupId: group.id }, officeToken);
       expect((log.json as { data: NotificationJson[] }).data.map((n) => n.id)).toEqual([sent.id]);
     } finally {
       notification.setNotificationEventSink(null);
     }
+  });
+
+  it("send: groups and people merge, each person once; people-only sends need a site", async () => {
+    const group = await createGroup({ name: "notif-test-merge", memberIds: [withEmailId] });
+    const sends: string[] = [];
+    notification.setChannelAdapter("EMAIL", {
+      async send(to) {
+        sends.push(to);
+        return { ok: true, providerMessageId: "m" };
+      },
+    });
+    // withEmailId is in the group AND listed directly → one delivery; withoutEmailId direct → skipped.
+    const merged = await notification.send({
+      groupIds: [group.id],
+      employeeIds: [withEmailId, withoutEmailId],
+      subject: "M",
+      body: "B",
+    });
+    if (!("data" in merged)) throw new Error(merged.error);
+    expect(merged.data.deliveries).toHaveLength(2);
+    expect(sends).toEqual(["notif-recipient@test.local"]);
+    expect(merged.data.groupName).toBe("notif-test-merge");
+
+    const direct = await notification.send({ siteId: siteA.id, employeeIds: [withEmailId], subject: "D", body: "B" });
+    if (!("data" in direct)) throw new Error(direct.error);
+    expect(direct.data).toMatchObject({ groupId: null, groupName: null });
+    expect(direct.data.deliveries[0]).toMatchObject({ employeeId: withEmailId, channel: "EMAIL", status: "SENT" });
+
+    const noSite = await notification.send({ employeeIds: [withEmailId], subject: "D", body: "B" });
+    expect("error" in noSite && noSite.code).toBe("NO_RECIPIENTS");
   });
 
   it("send: dedupeKey makes a repeat return the original; a channel with no provider is SKIPPED and emits failed", async () => {
@@ -161,8 +191,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("notifications", () => {
     });
     try {
       const cause = { correlationId: "root", causationId: "parent", hop: 1 };
-      const first = await notification.send({ groupId: group.id, subject: "S", body: "B", dedupeKey: "notif-test-key", sourceType: "automation", sourceRef: "auto-1", cause });
-      const again = await notification.send({ groupId: group.id, subject: "S", body: "B", dedupeKey: "notif-test-key" });
+      const first = await notification.send({
+        groupIds: [group.id], subject: "S", body: "B", dedupeKey: "notif-test-key", sourceType: "automation", sourceRef: "auto-1", cause });
+      const again = await notification.send({
+        groupIds: [group.id], subject: "S", body: "B", dedupeKey: "notif-test-key" });
       expect("data" in first && "data" in again && again.data.id === first.data.id && again.deduped === true).toBe(true);
       if (!("data" in first)) throw new Error(first.error);
       expect(first.data.deliveries).toHaveLength(1);

@@ -12,6 +12,8 @@ export interface AppEvent {
   partition?: string;
   /** Value of the schema version's `scopeKey` field — what the event is about (a call id, a station id). */
   scope?: string;
+  /** Value of the schema version's `cooldownKey` field (defaults to `scopeKey`) — the unit a cooldown applies to. */
+  cooldownScope?: string;
   /** Id of the root event of the chain this event belongs to. Equals `id` for a root event. */
   correlationId: string;
   /** Id of the event that directly caused this one. Absent for a root event. */
@@ -66,6 +68,8 @@ export interface EventSchemaVersion {
   payload: Record<string, SchemaProperty>;
   /** Payload field naming what the event is about (e.g. "callId"). A future timed action keys its cancel on it. */
   scopeKey?: string;
+  /** Payload field a cooldown is keyed on (e.g. "stationId"). Defaults to `scopeKey`; absent = per automation. */
+  cooldownKey?: string;
 }
 
 export interface EventSchema {
@@ -108,6 +112,8 @@ export interface Automation {
   actions: AutomationAction[];
   /** Partition this automation belongs to (e.g. a site id). Null/absent = global, sees every partition's events. */
   partition?: string | null;
+  /** After firing for a cooldown scope, ignore further matches for that scope this long. Null/0 = none. */
+  cooldownMs?: number | null;
 }
 
 export interface Catalog {

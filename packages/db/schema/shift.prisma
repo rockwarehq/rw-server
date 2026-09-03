@@ -223,6 +223,7 @@ model ShiftInstance {
   shiftComments       ShiftComment[]
   materialShiftUsage  MaterialShiftUsage[]
   calls               Call[]
+  modeLogs            StationModeLog[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 

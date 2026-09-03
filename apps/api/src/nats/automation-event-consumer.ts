@@ -2,6 +2,7 @@ import { AckPolicy, DeliverPolicy, type ConsumerMessages, jetstream, jetstreamMa
 import { connect } from "@nats-io/transport-node";
 import { CALL_EVENT_STREAM, CALL_EVENT_SUBJECT_FILTER, parseCallEvent } from "@rw/runtime/call-events";
 import type { EventCause } from "@rw/runtime/domain-events";
+import { JOB_EVENT_STREAM, JOB_EVENT_SUBJECT_FILTER, parseJobEvent } from "@rw/runtime/job-events";
 import { MODE_EVENT_STREAM, MODE_EVENT_SUBJECT_FILTER, parseModeEvent } from "@rw/runtime/mode-events";
 import {
   NOTIFICATION_EVENT_STREAM,
@@ -9,6 +10,7 @@ import {
   parseNotificationEvent,
 } from "@rw/runtime/notification-events";
 import { fromCallEvent } from "../automations/events/call-changed.js";
+import { fromJobEvent } from "../automations/events/job-changed.js";
 import { fromModeEvent } from "../automations/events/mode-changed.js";
 import { fromNotificationEvent } from "../automations/events/notification-changed.js";
 import { getAutomationFramework } from "../automations/index.js";
@@ -48,6 +50,13 @@ const BRIDGES: Bridge[] = [
     type: "mode.changed",
     parse: parseModeEvent,
     toPayload: fromModeEvent,
+  },
+  {
+    stream: JOB_EVENT_STREAM,
+    filter: JOB_EVENT_SUBJECT_FILTER,
+    type: "job.changed",
+    parse: parseJobEvent,
+    toPayload: fromJobEvent,
   },
   {
     stream: NOTIFICATION_EVENT_STREAM,

@@ -76,9 +76,9 @@ model OrderLineItem {
   /// DEPRECATED — frozen legacy allocation counter (total produced incl. scrap).
   /// No longer written; fulfillment is computed coverage + OrderConsumption.
   /// Dropped in a future cleanup migration.
-  completedQuantity Decimal @default(0) @db.Decimal(18, 4)
+  completedQuantity Decimal        @default(0) @db.Decimal(18, 4)
   /// DEPRECATED — frozen legacy allocation counter. See completedQuantity.
-  scrapQuantity     Decimal @default(0) @db.Decimal(18, 4)
+  scrapQuantity     Decimal        @default(0) @db.Decimal(18, 4)
   /// DEPRECATED — frozen denormalized view of the legacy counters.
   status            LineItemStatus @default(PENDING)
 
@@ -249,6 +249,7 @@ model Product {
   consumptions       OrderConsumption[]
   stockAdjustments   ProductStockAdjustment[]
   calls              Call[]
+  modeLogs           StationModeLog[]
 
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
@@ -292,10 +293,10 @@ model Material {
   currentVersion MaterialVersion?  @relation("MaterialCurrent", fields: [currentVersionId], references: [id])
   versions       MaterialVersion[] @relation("MaterialVersions")
 
-  products        ProductMaterial[]
-  ledgerEntries   MaterialLedgerEntry[]
-  shiftUsage      MaterialShiftUsage[]
-  labels          Label[]
+  products      ProductMaterial[]
+  ledgerEntries MaterialLedgerEntry[]
+  shiftUsage    MaterialShiftUsage[]
+  labels        Label[]
 
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)

@@ -2,7 +2,14 @@
 // guards shared by the publisher (apps/api) and any NATS consumers. Mirrors
 // call-events; dependency-free by design.
 
-import { type EventCause, isOptionalCause, isOptionalString, sanitizeSubjectToken } from "./domain-events.js";
+import {
+  type EventCause,
+  isOptionalCause,
+  isOptionalString,
+  isOptionalWorkContext,
+  sanitizeSubjectToken,
+  type WorkContext,
+} from "./domain-events.js";
 
 export const MODE_EVENT_STREAM = "RW_MODE_EVENTS";
 export const MODE_EVENT_SUBJECT_PREFIX = "modes";
@@ -12,7 +19,7 @@ export type ModeEventAction = "forced" | "cleared";
 export type ModeEventSource = "MANUAL" | "SYSTEM";
 
 /// One event per StationModeLog transition. A switch emits `cleared` for the old mode then `forced` for the new.
-export interface ModeEvent {
+export interface ModeEvent extends WorkContext {
   id: string; // event id — published as msgID for JetStream dedup
   action: ModeEventAction;
   logId: string;
@@ -66,6 +73,7 @@ export function isModeEvent(value: unknown): value is ModeEvent {
     isOptionalString(event.endedAt) &&
     isOptionalString(event.endedByEmployeeId) &&
     isOptionalCause(event.cause) &&
+    isOptionalWorkContext(event) &&
     typeof event.emittedAt === "string"
   );
 }

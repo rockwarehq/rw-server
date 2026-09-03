@@ -16,8 +16,9 @@ export interface NotificationEvent {
   id: string; // event id — published as msgID for JetStream dedup
   action: NotificationEventAction;
   notificationId: string;
-  groupId: string;
-  groupName: string;
+  /** Absent for a direct-to-people send. */
+  groupId?: string;
+  groupName?: string;
   workspaceId: string;
   siteId: string;
   subject: string;
@@ -53,8 +54,8 @@ export function isNotificationEvent(value: unknown): value is NotificationEvent 
     typeof event.id === "string" &&
     (event.action === "sent" || event.action === "failed") &&
     typeof event.notificationId === "string" &&
-    typeof event.groupId === "string" &&
-    typeof event.groupName === "string" &&
+    isOptionalString(event.groupId) &&
+    isOptionalString(event.groupName) &&
     typeof event.workspaceId === "string" &&
     typeof event.siteId === "string" &&
     typeof event.subject === "string" &&

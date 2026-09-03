@@ -10,6 +10,10 @@ import {
 import { publishEntityEvent } from "../../entity/events.js";
 import { resolveEffectiveStandards } from "./effective-standards.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
+import type { ActionSource } from "@rw/db";
+import type { EventCause } from "@rw/runtime/domain-events";
+import { resolveShiftContext, toDateString } from "../work-context.js";
+import { publishJobEvent } from "./job-events.js";
 
 type ChangeJobResult =
   | {
@@ -36,7 +40,21 @@ type ChangeJobResult =
  * Closes the current StationJobLog entry, updates Station.currentJobId,
  * and creates a new StationJobLog entry with snapshotted version data.
  */
-export async function changeJob(stationId: string, newJobId: string | null): Promise<ChangeJobResult> {
+/** Who is changing the job. This is also the programmatic entry point — automations pass source SYSTEM. */
+export interface ChangeJobActor {
+  employeeId?: string;
+  source?: ActionSource;
+  sourceType?: string;
+  sourceRef?: string;
+  /** Automation chain this change continues; carried onto the emitted job event. */
+  cause?: EventCause;
+}
+
+export async function changeJob(
+  stationId: string,
+  newJobId: string | null,
+  actor: ChangeJobActor = {},
+): Promise<ChangeJobResult> {
   const timestamp = new Date();
 
   // Validate the new job before entering the transaction.
@@ -228,6 +246,30 @@ export async function changeJob(stationId: string, newJobId: string | null): Pro
         select: { currentVersion: { select: { name: true } } },
       })
     : null;
+
+  const shift = await resolveShiftContext(station.siteId, station.workcenterId, timestamp);
+  publishJobEvent({
+    action: "changed",
+    workspaceId: station.site.workspaceId,
+    siteId: station.siteId,
+    stationId,
+    stationName: station.name,
+    previousJobId: previousJobId ?? undefined,
+    previousJobName: previousJob?.currentVersion?.name ?? undefined,
+    changedAt: timestamp.toISOString(),
+    changedByEmployeeId: actor.employeeId,
+    source: actor.source ?? "MANUAL",
+    sourceType: actor.sourceType,
+    sourceRef: actor.sourceRef,
+    workcenterId: station.workcenterId ?? undefined,
+    workcenterName: station.workcenter?.name,
+    jobId: newJobId ?? undefined,
+    jobName: job?.currentVersion?.name ?? undefined,
+    shiftInstanceId: shift?.id,
+    shiftName: shift?.name,
+    businessDate: toDateString(shift?.businessDate),
+    cause: actor.cause,
+  });
 
   return {
     data: {

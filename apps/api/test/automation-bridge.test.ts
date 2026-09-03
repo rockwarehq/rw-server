@@ -1,5 +1,6 @@
 import prisma from "@rw/db";
-import { call, productionMode } from "@rw/services/facility/index";
+import type { JobEvent } from "@rw/runtime/job-events";
+import { call, productionMode, station } from "@rw/services/facility/index";
 import * as notification from "@rw/services/notification/index";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAppAutomationFramework } from "../src/automations/index.js";
@@ -49,7 +50,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("automation bridge", () => {
       return a;
     };
     await seed("bridge: mode forced → open call", "mode.changed", "forced", [{ type: "openCall", inputs: { definitionId, message: "Mode {{event.payload.modeName}} forced" } }]);
-    await seed("bridge: call opened → notify", "call.changed", "opened", [{ type: "notifyGroup", inputs: { groupId, subject: "Call {{event.payload.definitionName}}", body: "at {{event.payload.stationName}}" } }]);
+    await seed("bridge: call opened → notify", "call.changed", "opened", [{ type: "notify", inputs: { groupIds: [groupId], subject: "Call {{event.payload.definitionName}}", body: "at {{event.payload.stationName}}" } }]);
     await seed("bridge: mode cleared → close call", "mode.changed", "cleared", [{ type: "closeCall", inputs: { definitionId, closeMessage: "mode cleared" } }]);
     fw.engine.reload();
     notification.setChannelAdapter("EMAIL", { async send() { return { ok: true, providerMessageId: "bridge-msg" }; } });
@@ -104,6 +105,38 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("automation bridge", () => {
     const runs = await prisma.automationRun.findMany({ where: { eventId }, orderBy: { firedAt: "asc" } });
     expect(runs).toHaveLength(2);
     expect(runs[0]).toMatchObject({ correlationId: cause.correlationId, causationId: cause.causationId, hop: 1 });
+  });
+
+  it("changing a station's job publishes a job event carrying work context and the previous job", async () => {
+    const job = await prisma.job.create({ data: { siteId }, select: { id: true } });
+    const version = await prisma.jobVersion.create({
+      data: { jobId: job.id, version: 1, name: "bridge-test-job" },
+      select: { id: true },
+    });
+    await prisma.job.update({ where: { id: job.id }, data: { currentVersionId: version.id } });
+    const events: JobEvent[] = [];
+    station.setJobEventSink((e) => {
+      events.push(e);
+    });
+    try {
+      const changed = await station.changeJob(stationId, job.id, { source: "SYSTEM", sourceType: "automation", sourceRef: "auto-x" });
+      expect("data" in changed).toBe(true);
+      const cleared = await station.changeJob(stationId, null);
+      expect("data" in cleared).toBe(true);
+      await new Promise((r) => setImmediate(r));
+      expect(events.map((e) => [e.jobId ?? null, e.previousJobId ?? null])).toEqual([
+        [job.id, null],
+        [null, job.id],
+      ]);
+      expect(events[0]).toMatchObject({ action: "changed", siteId, workspaceId, stationId, stationName: "bridge-test-station", jobName: "bridge-test-job", source: "SYSTEM", sourceType: "automation", sourceRef: "auto-x" });
+      expect(events[1]?.previousJobName).toBe("bridge-test-job");
+    } finally {
+      station.setJobEventSink(null);
+      await prisma.stationJobLog.deleteMany({ where: { stationId } });
+      await prisma.job.update({ where: { id: job.id }, data: { currentVersionId: null } });
+      await prisma.jobVersion.delete({ where: { id: version.id } });
+      await prisma.job.delete({ where: { id: job.id } });
+    }
   });
 
   it("mode cleared → automation closes the open call; a second clear finds nothing and still succeeds", async () => {

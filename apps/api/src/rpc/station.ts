@@ -1,14 +1,10 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
-import { moduleLogger } from "../logger.js";
 import { authRequired, processorRequired, userOrDisplayRequired } from "./middleware.js";
 import { station } from "@rw/services/facility/index";
 import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
-import { getAutomationFramework } from "../automations/index.js";
 import { type CodeOverrides, throwServiceError } from "./errors.js";
-
-const log = moduleLogger("rpc:station");
 
 // Pinned historical mappings (observable error codes are API — see errors.ts):
 // these codes fell through to BAD_REQUEST here before the shared mapper existed,
@@ -571,29 +567,6 @@ export const changeJob = userOrDisplayRequired.input(changeJobInputSchema).handl
 
   const result = await station.changeJob(input.stationId, input.jobId);
   if ("error" in result) throwServiceError(result);
-
-  // Fire the `job.changed` automation event. Fire-and-forget so a misconfigured automation can
-  // never fail a committed job change — mirrors the side-effect pattern inside `changeJob`.
-  getAutomationFramework()
-    .then((fw) =>
-      // Coerce nulls to undefined: payload fields are optional strings (a cleared job or a
-      // station with no work center has no id), and the schema validator rejects explicit null.
-      // ids drive condition matching; the *Name fields are display-only template variables.
-      fw.fire("job.changed", {
-        siteId: result.data.siteId,
-        previousJobId: result.data.previousJobId ?? undefined,
-        currentJobId: result.data.newJobId ?? undefined,
-        stationId: result.data.stationId,
-        workCenterId: result.data.workCenterId ?? undefined,
-        previousJobName: result.data.previousJobName ?? undefined,
-        currentJobName: result.data.currentJobName ?? undefined,
-        stationName: result.data.stationName ?? undefined,
-        workCenterName: result.data.workCenterName ?? undefined,
-      }),
-    )
-    .catch((err) => {
-      log.error({ err, stationId: result.data.stationId }, "changeJob: failed to fire job.changed automation");
-    });
 
   return result.data;
 });

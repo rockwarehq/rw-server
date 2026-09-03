@@ -25,6 +25,7 @@ model Workcenter {
   itemDispositionLogs ItemDispositionLog[]
   shiftComments       ShiftComment[]
   calls               Call[]
+  modeLogs            StationModeLog[]
 
   @@unique([siteId, parentId, name])
   @@index([siteId])
@@ -254,6 +255,7 @@ model StationVersion {
   stateLogs           StationStateLog[]
   itemDispositionLogs ItemDispositionLog[]
   calls               Call[]
+  modeLogs            StationModeLog[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 

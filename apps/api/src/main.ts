@@ -35,6 +35,7 @@ import { startGraphDefinitionPublisher } from "./nats/graph-definition-publisher
 import {
   startCallEventPublisher,
   startEntityEventPublisher,
+  startJobEventPublisher,
   startModeEventPublisher,
   startNotificationEventPublisher,
 } from "./nats/domain-event-publishers.js";
@@ -52,6 +53,7 @@ let cleanupEntityEventPublisher: (() => Promise<void>) | null = null;
 let cleanupCallEventPublisher: (() => Promise<void>) | null = null;
 let cleanupModeEventPublisher: (() => Promise<void>) | null = null;
 let cleanupNotificationEventPublisher: (() => Promise<void>) | null = null;
+let cleanupJobEventPublisher: (() => Promise<void>) | null = null;
 let cleanupAutomationEventConsumer: (() => Promise<void>) | null = null;
 let cleanupCommandBus: (() => Promise<void>) | null = null;
 
@@ -104,6 +106,7 @@ async function main() {
   cleanupCallEventPublisher = await startCallEventPublisher();
   cleanupModeEventPublisher = await startModeEventPublisher();
   cleanupNotificationEventPublisher = await startNotificationEventPublisher();
+  cleanupJobEventPublisher = await startJobEventPublisher();
   cleanupAutomationEventConsumer = await startAutomationEventConsumer();
   cleanupCommandBus = await startCommandBus();
 
@@ -141,6 +144,7 @@ async function shutdown() {
   if (cleanupModeEventPublisher) await cleanupModeEventPublisher();
   if (cleanupAutomationEventConsumer) await cleanupAutomationEventConsumer();
   if (cleanupNotificationEventPublisher) await cleanupNotificationEventPublisher();
+  if (cleanupJobEventPublisher) await cleanupJobEventPublisher();
   if (cleanupCommandBus) await cleanupCommandBus();
   if (readinessRedis) readinessRedis.disconnect();
   const { createPrismaClient: getClient } = await import("@rw/db");

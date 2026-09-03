@@ -1,6 +1,7 @@
 import { Engine } from "json-rules-engine";
 import { type ActionRegistry, missingRequired } from "./actions.js";
 import type { ContextBuilder } from "./context.js";
+import { type CooldownStore, createMemoryCooldownStore } from "./cooldown.js";
 import { interpolateInputs } from "./interpolate.js";
 import { qbToEngineConditions } from "./qb-to-engine.js";
 import { noopRunRecorder, type RunRecorder } from "./recorder.js";
@@ -15,11 +16,14 @@ export interface EngineDeps {
   recorder?: RunRecorder;
   /** Events with `hop` above this are dropped (recorded, not evaluated). */
   maxHops: number;
+  cooldowns?: CooldownStore;
 }
 
 export interface DispatchResult {
   /** Ids of the automations whose conditions matched, in dispatch order. */
   matched: string[];
+  /** Automations that matched but were still cooling down for the event's cooldown scope. */
+  cooled: string[];
   /** Set when the event exceeded `maxHops` and was not evaluated. */
   dropped?: string;
 }
@@ -43,6 +47,15 @@ export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
   // Compiled engines, one per event type. Rebuilt by reload().
   let engines = new Map<EventType, Engine>();
   const recorder: RunRecorder = deps.recorder ?? noopRunRecorder;
+  const cooldowns = deps.cooldowns ?? createMemoryCooldownStore();
+
+  /** True when the automation fired for this event's cooldown scope less than `cooldownMs` ago. */
+  async function coolingDown(automation: Automation, event: AppEvent): Promise<boolean> {
+    const windowMs = automation.cooldownMs ?? 0;
+    if (windowMs <= 0) return false;
+    const last = await cooldowns.lastFiredAt(automation.id, event.cooldownScope ?? "");
+    return last !== undefined && Date.parse(event.ts) - last < windowMs;
+  }
 
   async function runActions(automation: Automation, event: AppEvent, runId: string): Promise<void> {
     for (const [idx, action] of automation.actions.entries()) {
@@ -116,14 +129,14 @@ export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
         const dropped = `hop ${event.hop} exceeds maxHops ${deps.maxHops} (correlationId ${event.correlationId})`;
         const runId = await recorder.startRun({ event });
         await recorder.finishRun(runId, { matched: [], status: "DROPPED", error: dropped });
-        return { matched: [], dropped };
+        return { matched: [], cooled: [], dropped };
       }
 
       const engine = engines.get(event.type);
       if (!engine) {
         const runId = await recorder.startRun({ event });
         await recorder.finishRun(runId, { matched: [], status: "SUCCESS" });
-        return { matched: [] };
+        return { matched: [], cooled: [] };
       }
 
       const builder = deps.contextBuilders[event.type];
@@ -131,6 +144,7 @@ export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
 
       const runId = await recorder.startRun({ event });
       const matched: string[] = [];
+      const cooled: string[] = [];
       try {
         const facts = await builder.build(event);
         const { results } = await engine.run(facts);
@@ -139,14 +153,21 @@ export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
           const automation = automationId ? deps.store.get(automationId) : undefined;
           if (!automation) continue;
           if (automation.partition != null && automation.partition !== event.partition) continue;
+          if (await coolingDown(automation, event)) {
+            cooled.push(automation.id);
+            continue;
+          }
           matched.push(automation.id);
+          if ((automation.cooldownMs ?? 0) > 0) {
+            await cooldowns.markFired(automation.id, event.cooldownScope ?? "", Date.parse(event.ts));
+          }
           await runActions(automation, event, runId);
         }
-        await recorder.finishRun(runId, { matched, status: "SUCCESS" });
-        return { matched };
+        await recorder.finishRun(runId, { matched, cooled, status: "SUCCESS" });
+        return { matched, cooled };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        await recorder.finishRun(runId, { matched, status: "FAILED", error: message });
+        await recorder.finishRun(runId, { matched, cooled, status: "FAILED", error: message });
         throw err;
       }
     },

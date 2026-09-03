@@ -25,7 +25,7 @@ const fw = await getAutomationFramework();
 const { eventId, matched } = await fw.fire("job.changed", {
   siteId: "site_1",
   previousJobId: "j_100",
-  currentJobId: "j_200",
+  jobId: "j_200",
   stationId: "s_1",
 });
 ```
@@ -42,17 +42,16 @@ own site's events. When an action calls into another domain that will raise its 
 
 | Event | Fed by | About (`scopeKey`) |
 | --- | --- | --- |
-| `job.changed` | `changeJob` RPC, in-process | station |
+| `job.changed` | `jobs.>` stream | station |
 | `call.changed` | `calls.>` stream via the automation event consumer | call |
 | `mode.changed` | `modes.>` stream | station |
 | `notification.changed` | `notifications.>` stream | notification |
 
 | Action | Does |
 | --- | --- |
-| `notifyGroup` | `notification.send` to a group; dedupe key = event id + automation + action index |
+| `notify` | `notification.send` to groups and/or people; dedupe key = event id + automation + action index |
 | `openCall` / `closeCall` | open (or close the open) call of a definition at a station |
 | `forceMode` / `clearMode` | force a station into / out of a production mode |
-| `sendAlert` | email picked users directly (predates notification groups) |
 
 Every domain call an action makes is `source: SYSTEM`, `sourceType: "automation"`, `sourceRef: <automation id>`,
 with `causeOf(event)` attached, so the domain's own outbound event continues the chain. Station-targeting

@@ -4,11 +4,15 @@ import type { EventCause } from "@rw/runtime/domain-events";
 import { actorRoleAllowed, resolveEmployee } from "../../employee/actor-role.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
+import { snapshotDimensions, toDateString } from "../work-context.js";
 import { publishCallEvent } from "./events.js";
 
 const callInclude = {
   definition: { select: { id: true, name: true, severity: true } },
   station: { select: { id: true, name: true } },
+  workcenter: { select: { id: true, name: true } },
+  jobVersion: { select: { name: true } },
+  shiftInstance: { select: { id: true, shiftName: true } },
   openedByEmployee: { select: { id: true, version: { select: { firstName: true, lastName: true } } } },
   closedByEmployee: { select: { id: true, version: { select: { firstName: true, lastName: true } } } },
 } as const;
@@ -69,72 +73,6 @@ export interface SearchCallsFilter {
   offset?: number;
 }
 
-async function resolveShift(
-  siteId: string,
-  workcenterId: string | null,
-  at: Date,
-): Promise<{ id: string; businessDate: Date } | null> {
-  const select = { id: true, businessDate: true } as const;
-  if (workcenterId) {
-    const scoped = await prisma.shiftInstance.findFirst({
-      where: { siteId, workCenterId: workcenterId, startTime: { lte: at }, endTime: { gt: at } },
-      select,
-      orderBy: { startTime: "desc" },
-    });
-    if (scoped) return scoped;
-  }
-  return prisma.shiftInstance.findFirst({
-    where: { siteId, workCenterId: null, startTime: { lte: at }, endTime: { gt: at } },
-    select,
-    orderBy: { startTime: "desc" },
-  });
-}
-
-/**
- * BI dimension snapshots from the station's current job. Tool/product are
- * only set when the job has exactly one active tool/product — multi-tool or
- * multi-product jobs dimension through jobId instead.
- */
-async function resolveJobDimensions(currentJobId: string | null) {
-  const empty = {
-    jobId: null,
-    jobVersionId: null,
-    toolId: null,
-    toolVersionId: null,
-    productId: null,
-    productVersionId: null,
-  };
-  if (!currentJobId) return empty;
-  const job = await prisma.job.findUnique({
-    where: { id: currentJobId },
-    select: {
-      id: true,
-      currentVersionId: true,
-      tools: {
-        where: { isActive: true, deletedAt: null },
-        select: { toolId: true, tool: { select: { currentVersionId: true } } },
-        take: 2,
-      },
-      jobProducts: {
-        where: { deletedAt: null, currentVersion: { isActive: true } },
-        select: { productId: true, product: { select: { currentVersionId: true } } },
-        take: 2,
-      },
-    },
-  });
-  if (!job) return empty;
-  const tool = job.tools.length === 1 ? job.tools[0] : null;
-  const jobProduct = job.jobProducts.length === 1 ? job.jobProducts[0] : null;
-  return {
-    jobId: job.id,
-    jobVersionId: job.currentVersionId,
-    toolId: tool?.toolId ?? null,
-    toolVersionId: tool?.tool.currentVersionId ?? null,
-    productId: jobProduct?.productId ?? null,
-    productVersionId: jobProduct?.product.currentVersionId ?? null,
-  };
-}
-
 function emitLifecycleEvents(
   call: CallRecord,
   action: "opened" | "closed",
@@ -160,6 +98,13 @@ function emitLifecycleEvents(
     closedAt: call.closedAt?.toISOString(),
     closedByEmployeeId: call.closedByEmployeeId ?? undefined,
     closeMessage: call.closeMessage ?? undefined,
+    workcenterId: call.workcenterId ?? undefined,
+    workcenterName: call.workcenter?.name,
+    jobId: call.jobId ?? undefined,
+    jobName: call.jobVersion?.name ?? undefined,
+    shiftInstanceId: call.shiftInstanceId ?? undefined,
+    shiftName: call.shiftInstance?.shiftName,
+    businessDate: toDateString(call.businessDate),
     cause,
   });
   publishEntityEvent({
@@ -256,8 +201,7 @@ export async function open(input: OpenCallInput): Promise<ServiceError | { data:
   if (existing) return { data: existing, deduped: true };
 
   const now = new Date();
-  const shift = await resolveShift(station.siteId, station.workcenterId, now);
-  const jobDims = await resolveJobDimensions(station.currentJobId);
+  const dims = await snapshotDimensions(station, now);
 
   try {
     const call = await prisma.call.create({
@@ -273,11 +217,7 @@ export async function open(input: OpenCallInput): Promise<ServiceError | { data:
         message: input.message ?? null,
         openedByEmployeeId: resolved.employeeId,
         openedByEmployeeVersionId: resolved.employeeVersionId,
-        workcenterId: station.workcenterId,
-        stationVersionId: station.currentVersionId,
-        ...jobDims,
-        shiftInstanceId: shift?.id ?? null,
-        businessDate: shift?.businessDate ?? null,
+        ...dims,
       },
       include: callInclude,
     });

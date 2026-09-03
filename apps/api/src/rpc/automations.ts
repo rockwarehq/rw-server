@@ -59,6 +59,14 @@ function validateActions(fw: AutomationFramework, actions: z.infer<typeof action
   });
 }
 
+/** Every event and action schema the editor can pick from (`getCatalog` needs a chosen event). */
+export const listSchemas = authRequired.handler(async ({ context }) => {
+  grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "anySite" } }));
+
+  const fw = await getAutomationFramework();
+  return { events: Object.values(fw.eventSchemas), actions: Object.values(fw.actionSchemas) };
+});
+
 /**
  * Catalog (event + action schemas, facts, variables) for a specific (eventType, actionType) — and
  * optionally specific versions. If a version is omitted, the framework uses each schema's `latest`.
@@ -127,6 +135,7 @@ export const createAutomation = authRequired
       // Allow creating a stub with no actions yet — the UI creates an empty
       // automation and the user configures actions afterward in the editor.
       actions: z.array(actionSchema).default([]),
+      cooldownMs: z.number().int().min(0).nullable().optional(),
     }),
   )
   .handler(async ({ input, context }) => {
@@ -154,6 +163,7 @@ export const createAutomation = authRequired
       partition: input.siteId,
       conditions: input.conditions,
       actions,
+      cooldownMs: input.cooldownMs || null,
     });
     fw.engine.reload();
     return present(automation);
@@ -168,6 +178,7 @@ export const updateAutomation = authRequired
       eventVersion: z.string().min(1).optional(),
       conditions: conditionsSchema.optional(),
       actions: actionsSchema.optional(),
+      cooldownMs: z.number().int().min(0).nullable().optional(),
     }),
   )
   .handler(async ({ input, context }) => {
@@ -197,6 +208,7 @@ export const updateAutomation = authRequired
       eventVersion,
       conditions: input.conditions ?? existing.conditions,
       actions,
+      cooldownMs: input.cooldownMs === undefined ? existing.cooldownMs : input.cooldownMs || null,
     });
     fw.engine.reload();
     return present(updated);
