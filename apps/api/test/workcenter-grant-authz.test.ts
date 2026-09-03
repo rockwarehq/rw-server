@@ -271,6 +271,62 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("workcenter grant authorization 
     });
   });
 
+  describe("session payload", () => {
+    interface MeAccess {
+      roles: unknown[];
+      permissions: string[];
+      workcenterGrants: Array<{ workcenterId: string; siteId: string; access: string; permissions: string[] }>;
+    }
+    const getMeAccess = async (token: string): Promise<MeAccess> => {
+      const res = await server.inject({
+        method: "GET",
+        url: "/users/me",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(res.statusCode).toBe(200);
+      return (res.json() as { access: MeAccess }).access;
+    };
+
+    it("/users/me carries grants with per-workcenter permissions; the flat list stays site-level", async () => {
+      const access = await getMeAccess(readToken);
+      expect(access.roles).toHaveLength(0);
+      expect(access.workcenterGrants).toHaveLength(1);
+      const grant = access.workcenterGrants[0];
+      expect(grant).toMatchObject({ workcenterId: wcGranted.id, siteId: siteA.id, access: "READ" });
+      // Scoped perms live on the grant, never in the flat list.
+      expect(grant.permissions).toEqual(expect.arrayContaining(["status:read", "calls:read", "job:read"]));
+      expect(grant.permissions).not.toContain("status:write");
+      expect(access.permissions).toContain("job:read");
+      expect(access.permissions).not.toContain("status:read");
+    });
+
+    it("WRITE grants expose scoped writes per grant only", async () => {
+      const access = await getMeAccess(writeToken);
+      const grant = access.workcenterGrants[0];
+      expect(grant.access).toBe("WRITE");
+      expect(grant.permissions).toEqual(expect.arrayContaining(["status:write", "calls:write", "facility:write"]));
+      expect(access.permissions).toContain("job:write");
+      for (const scoped of ["status:write", "calls:write", "facility:write"]) {
+        expect(access.permissions).not.toContain(scoped);
+      }
+    });
+
+    it("plant admins report no grants and GET /workspaces carries grant rows", async () => {
+      const adminAccess = await getMeAccess(plantAdminToken);
+      expect(adminAccess.workcenterGrants).toHaveLength(0);
+
+      const res = await server.inject({
+        method: "GET",
+        url: "/workspaces",
+        headers: { authorization: `Bearer ${writeToken}` },
+      });
+      expect(res.statusCode).toBe(200);
+      const rows = res.json() as Array<{ workcenterGrants: Array<{ workcenter: { name: string } }> }>;
+      expect(rows[0]?.workcenterGrants).toHaveLength(1);
+      expect(rows[0]?.workcenterGrants[0]?.workcenter.name).toBe(`${PREFIX}-wc-granted`);
+    });
+  });
+
   describe("member lifecycle", () => {
     it("invite with grants only creates a grant-holding membership", async () => {
       const plantAdmin = await prisma.user.findUniqueOrThrow({

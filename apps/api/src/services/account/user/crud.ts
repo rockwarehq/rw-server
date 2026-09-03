@@ -1,6 +1,12 @@
 import prisma from "@rw/db";
 import type { UserStatus } from "@rw/db";
-import { getEffectivePermissions, listAccessibleSites, type Permission } from "@rw/auth/iam/index";
+import {
+  getEffectivePermissions,
+  listAccessibleSites,
+  loadPermissionSnapshot,
+  snapshotEffectivePermissions,
+  type Permission,
+} from "@rw/auth/iam/index";
 import { logEvent } from "@rw/services/audit/index";
 import { getWorkspaceAccessSummaries } from "../workspace/members.js";
 import { resolveAvatarUrl } from "./avatar.js";
@@ -142,6 +148,7 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
       access: {
         roles: [{ id: `system:${user.systemRole}`, name: `System ${user.systemRole}`, scope: "WORKSPACE" as const }],
         permissions: sortPermissions(permissions),
+        workcenterGrants: [],
       },
     };
   }
@@ -181,16 +188,27 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
       workspace: null,
       site: null,
       sites: [],
-      access: { roles: [], permissions: [] },
+      access: { roles: [], permissions: [], workcenterGrants: [] },
     };
   }
 
   const sites = await listAccessibleSites(userId, membership.workspaceId);
   const site = siteId ? (sites.find((item) => item.id === siteId) ?? null) : null;
-  const permissions = await getEffectivePermissions(userId, {
-    workspaceId: membership.workspaceId,
-    ...(site ? { siteId: site.id } : {}),
-  });
+  // One snapshot serves both the flat site-context permission list and the
+  // per-grant permission sets. The flat list intentionally EXCLUDES
+  // workcenter-scoped grant permissions (no workcenterId passed) — clients
+  // gate site-level chrome on it; per-workcenter abilities ride on each
+  // grant's own `permissions` below.
+  const snapshot = await loadPermissionSnapshot(userId, membership.workspaceId);
+  const permissions = snapshot ? snapshotEffectivePermissions(snapshot, site?.id) : new Set<Permission>();
+  const workcenterGrants = snapshot
+    ? (snapshot.workcenterGrants ?? []).map((grant) => ({
+        workcenterId: grant.workcenterId,
+        siteId: grant.siteId,
+        access: grant.access,
+        permissions: sortPermissions(snapshotEffectivePermissions(snapshot, grant.siteId, grant.workcenterId)),
+      }))
+    : [];
 
   const roles = membership.roleAssignments
     .filter((assignment) => assignment.siteId === null || (site !== null && assignment.siteId === site.id))
@@ -218,6 +236,7 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
     access: {
       roles,
       permissions: sortPermissions(permissions),
+      workcenterGrants,
     },
   };
 }

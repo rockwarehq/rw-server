@@ -414,10 +414,7 @@ export async function removeSiteAccess(
   }
 
   const remaining =
-    membership.roleAssignments.length -
-    siteAssignments.length +
-    membership.workcenterGrants.length -
-    siteGrants.length;
+    membership.roleAssignments.length - siteAssignments.length + membership.workcenterGrants.length - siteGrants.length;
   if (remaining === 0) {
     // Membership grants cascade-delete with the membership row.
     const result = await removeMember(workspaceId, userId, opts);

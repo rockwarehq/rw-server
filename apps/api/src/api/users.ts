@@ -228,6 +228,21 @@ const getMeResponseSchema = {
       properties: {
         roles: { type: "array", items: accessRoleSchema },
         permissions: { type: "array", items: { type: "string" } },
+        // Per-workcenter grants with their server-computed effective
+        // permission sets (roles ∪ grant global ∪ grant scoped at that
+        // workcenter) — clients never expand the grant maps themselves.
+        workcenterGrants: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              workcenterId: { type: "string", format: "uuid" },
+              siteId: { type: "string", format: "uuid" },
+              access: { type: "string", enum: ["READ", "WRITE"] },
+              permissions: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
       },
     },
   },
