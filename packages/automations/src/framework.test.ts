@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createActionRegistry } from "./actions.js";
+import { buildCatalog } from "./catalog.js";
 import { statelessContextBuilder } from "./context.js";
 import { causeOf, createAutomationFramework, type AutomationFrameworkConfig } from "./framework.js";
 import type { FinishRunInput, RunRecorder } from "./recorder.js";
@@ -229,5 +230,19 @@ describe("hop limit", () => {
     const r = await fw.fire("call.changed", { siteId: SITE_A, callId: "c1", action: "opened" }, { cause });
     expect(r.dropped).toBeUndefined();
     expect(ran).toHaveLength(1);
+  });
+});
+
+describe("catalog", () => {
+  it("offers enum payload fields as pick lists", () => {
+    const noop = {
+      type: "noop",
+      displayName: "Noop",
+      latest: "1",
+      versions: { "1": { inputSchema: { required: [], properties: {} } } },
+    };
+    const catalog = buildCatalog({ "call.changed": callEvent }, { noop }, "call.changed", "noop");
+    const action = catalog.facts.find((f) => f.id === "event.payload.action");
+    expect(action?.enumValues).toEqual(["opened", "closed"]);
   });
 });

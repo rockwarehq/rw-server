@@ -34,6 +34,7 @@ function factsFor(payload: EventSchemaVersion["payload"]): FactDef[] {
           type: prop.type === "number" ? "number" : "string",
         };
         if (prop.ref) fact.ref = prop.ref;
+        if (prop.enum) fact.enumValues = prop.enum;
         return fact;
       }),
   ];
