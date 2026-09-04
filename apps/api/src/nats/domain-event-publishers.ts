@@ -29,6 +29,12 @@ import {
   NOTIFICATION_EVENT_SUBJECT_FILTER,
   type NotificationEvent,
 } from "@rw/runtime/notification-events";
+import {
+  deriveStationStatusSubject,
+  STATION_EVENT_STREAM,
+  STATION_STATUS_SUBJECT_FILTER,
+  type StationStatusEvent,
+} from "@rw/runtime/station-status-events";
 import { setEntityEventSink } from "@rw/services/entity/index";
 import { call, productionMode, station } from "@rw/services/facility/index";
 import { setNotificationEventSink } from "@rw/services/notification/index";
@@ -102,6 +108,15 @@ export const startModeEventPublisher = () =>
     filter: MODE_EVENT_SUBJECT_FILTER,
     subjectFor: (e) => deriveModeEventSubject({ siteId: e.siteId, stationId: e.stationId, action: e.action }),
     setSink: productionMode.setModeEventSink,
+  });
+
+export const startStationStatusEventPublisher = () =>
+  startDomainEventPublisher<StationStatusEvent>({
+    name: "station-status-events",
+    stream: STATION_EVENT_STREAM,
+    filter: STATION_STATUS_SUBJECT_FILTER,
+    subjectFor: (e) => deriveStationStatusSubject({ siteId: e.siteId, stationId: e.stationId }),
+    setSink: station.setStationStatusEventSink,
   });
 
 export const startNotificationEventPublisher = () =>

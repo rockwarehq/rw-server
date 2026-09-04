@@ -8,10 +8,16 @@ import {
   NOTIFICATION_EVENT_SUBJECT_FILTER,
   parseNotificationEvent,
 } from "@rw/runtime/notification-events";
+import {
+  parseStationStatusEvent,
+  STATION_EVENT_STREAM,
+  STATION_STATUS_SUBJECT_FILTER,
+} from "@rw/runtime/station-status-events";
 import { fromCallEvent } from "../automations/events/call-changed.js";
 import { fromJobEvent } from "../automations/events/job-changed.js";
 import { fromModeEvent } from "../automations/events/mode-changed.js";
 import { fromNotificationEvent } from "../automations/events/notification-changed.js";
+import { fromStationStatusEvent } from "../automations/events/station-status-changed.js";
 import { getAutomationFramework } from "../automations/index.js";
 import { moduleLogger } from "../logger.js";
 import { getNatsConnection } from "./util.js";
@@ -64,6 +70,13 @@ const BRIDGES: Bridge[] = [
     parse: parseNotificationEvent,
     toPayload: fromNotificationEvent,
   },
+  {
+    stream: STATION_EVENT_STREAM,
+    filter: STATION_STATUS_SUBJECT_FILTER,
+    type: "station.status.changed",
+    parse: parseStationStatusEvent,
+    toPayload: fromStationStatusEvent,
+  },
 ];
 
 export async function startAutomationEventConsumer(): Promise<() => Promise<void>> {
@@ -76,7 +89,7 @@ export async function startAutomationEventConsumer(): Promise<() => Promise<void
   const running: ConsumerMessages[] = [];
 
   for (const bridge of BRIDGES) {
-    const durable = `rw-api-automations-${bridge.type.replace(".", "-")}`;
+    const durable = `rw-api-automations-${bridge.type.replaceAll(".", "-")}`;
     try {
       // The publishers (started before this) ensure the streams exist.
       await jsm.consumers.info(bridge.stream, durable).catch(() =>

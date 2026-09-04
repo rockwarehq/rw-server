@@ -46,6 +46,7 @@ own site's events. When an action calls into another domain that will raise its 
 | `call.changed` | `calls.>` stream via the automation event consumer | call |
 | `mode.changed` | `modes.>` stream | station |
 | `notification.changed` | `notifications.>` stream | notification |
+| `station.status.changed` | `stations.*.*.status` stream | station; `statusSince` anchors delays |
 
 | Action | Does |
 | --- | --- |

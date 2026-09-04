@@ -5,6 +5,7 @@ import { createDbAutomationStore } from "@rw/services/automation/store";
 import { callDefinitionsAutomationRef } from "@rw/services/facility/call/automation-ref";
 import { productionModesAutomationRef } from "@rw/services/facility/production-mode/automation-ref";
 import { stationsAutomationRef } from "@rw/services/facility/station/automation-ref";
+import { statusReasonsAutomationRef } from "@rw/services/facility/status-reason/automation-ref";
 import { shiftNamesAutomationRef } from "@rw/services/facility/work-context";
 import { employeesAutomationRef, notificationGroupsAutomationRef } from "@rw/services/notification/automation-ref";
 import { workCentersAutomationRef } from "@rw/services/facility/workcenter/automation-ref";
@@ -29,6 +30,7 @@ export async function createAppAutomationFramework(): Promise<AutomationFramewor
   const refs = createRefRegistry()
     .register(workCentersAutomationRef)
     .register(stationsAutomationRef)
+    .register(statusReasonsAutomationRef)
     .register(jobsAutomationRef)
     .register(callDefinitionsAutomationRef)
     .register(productionModesAutomationRef)

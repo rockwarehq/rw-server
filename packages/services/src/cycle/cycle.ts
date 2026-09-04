@@ -11,6 +11,7 @@ import { checkAutoComplete } from "../order/auto-complete.js";
 import {
   acquireStationLock,
   applyCycleCompleteTransition,
+  type ClosedEntryInfo,
   findOpenStateEntry,
   loadStationMetricContext,
   publishStationLastCycleMetricEvent,
@@ -20,6 +21,7 @@ import {
   type StationMetricContext,
 } from "../facility/station/state.js";
 import { enqueueDetection, prepareDetection, type PreparedDetection } from "../facility/station/state-detection.js";
+import { emitStationStatusChanged } from "../facility/station/status-events.js";
 import { batchedMetricsUpdate } from "../metrics/batcher.js";
 import { incrementHourCounts } from "../metrics/cascade.js";
 import { trackReplayedCycle } from "./replay.js";
@@ -95,7 +97,7 @@ interface StrategyResult {
   cycle: { id: string; start: Date; end: Date | null };
   items: CycleItems;
   /** Populated only when a state-log row actually closed (period model: most cycles close nothing). */
-  closedEntry: { startTime: Date; endTime: Date; state: "UP" | "DOWN" } | null;
+  closedEntry: ClosedEntryInfo | null;
   /** Open status after the cycle ("UP" or "SLOW"), or null when the
    * strategy did not evaluate state (replayed paths). */
   newStatus: "UP" | "SLOW" | null;
@@ -370,6 +372,11 @@ export async function complete(input: StartCycleInput) {
       } catch (err) {
         console.error(`[cycle] publishStationStatusEntityEvent failed for station ${stationId}:`, err);
       }
+      // Transitions are rare relative to cycles, so this one post-commit read is acceptable.
+      void emitStationStatusChanged(stationId, {
+        status: closedEntry ? (closedEntry.status ?? closedEntry.state) : null,
+        statusReasonId: closedEntry?.statusReasonId ?? null,
+      }).catch((err) => console.error(`[cycle] station status event failed for station ${stationId}:`, err));
     }
 
     try {
