@@ -4,17 +4,24 @@ import {
   snapshotAccessibleSites,
   snapshotEffectivePermissions,
   snapshotHasPermission,
+  snapshotWorkcentersWithPermission,
 } from "./permissions.js";
 
 const SITE_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const SITE_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const WC_1 = "11111111-1111-4111-8111-111111111111";
+const WC_2 = "22222222-2222-4222-8222-222222222222";
 
 const snap = (
   assignments: PermissionSnapshot["assignments"],
   systemRole: string | null = null,
+  workcenterGrants?: PermissionSnapshot["workcenterGrants"],
+  grantsRequiredSiteIds?: string[],
 ): PermissionSnapshot => ({
   systemRole,
   assignments,
+  ...(workcenterGrants ? { workcenterGrants } : {}),
+  ...(grantsRequiredSiteIds ? { grantsRequiredSiteIds } : {}),
 });
 
 describe("snapshotEffectivePermissions", () => {
@@ -90,5 +97,160 @@ describe("snapshotAccessibleSites", () => {
   it("resolves system roles: all sites when the role carries the permission, none otherwise", () => {
     expect(snapshotAccessibleSites(snap([], "SUPPORT"), "facility:read")).toEqual({ all: true });
     expect(snapshotAccessibleSites(snap([], "SUPPORT"), "facility:write")).toEqual({ all: false, siteIds: [] });
+  });
+});
+
+describe("workcenter grants", () => {
+  const readGrant = { workcenterId: WC_1, siteId: SITE_A, access: "READ" };
+  const writeGrant = { workcenterId: WC_1, siteId: SITE_A, access: "WRITE" };
+
+  it("READ grant confers global reads site-wide, nothing at other sites", () => {
+    const s = snap([], null, [readGrant]);
+    const atSite = snapshotEffectivePermissions(s, SITE_A);
+    expect(atSite.has("job:read")).toBe(true);
+    expect(atSite.has("facility:read")).toBe(true);
+    expect(atSite.has("job:write")).toBe(false);
+    expect(atSite.has("settings:read")).toBe(false);
+    expect(snapshotEffectivePermissions(s, SITE_B).size).toBe(0);
+    expect(snapshotEffectivePermissions(s).size).toBe(0);
+  });
+
+  it("READ grant confers scoped reads only at the granted workcenter", () => {
+    const s = snap([], null, [readGrant]);
+    expect(snapshotHasPermission(s, "status:read", SITE_A)).toBe(false);
+    expect(snapshotHasPermission(s, "status:read", SITE_A, WC_2)).toBe(false);
+    expect(snapshotHasPermission(s, "status:read", SITE_A, WC_1)).toBe(true);
+    expect(snapshotHasPermission(s, "calls:read", SITE_A, WC_1)).toBe(true);
+    expect(snapshotHasPermission(s, "status:write", SITE_A, WC_1)).toBe(false);
+  });
+
+  it("WRITE grant confers global writes site-wide but workcenter writes only in its workcenter", () => {
+    const s = snap([], null, [writeGrant]);
+    // Global resources: writable anywhere in the site.
+    expect(snapshotHasPermission(s, "job:write", SITE_A)).toBe(true);
+    expect(snapshotHasPermission(s, "schedule:write", SITE_A, WC_2)).toBe(true);
+    // Employee stays read-only even for WRITE.
+    expect(snapshotHasPermission(s, "employee:write", SITE_A, WC_1)).toBe(false);
+    // Workcenter-scoped: only at the granted workcenter.
+    expect(snapshotHasPermission(s, "status:write", SITE_A, WC_1)).toBe(true);
+    expect(snapshotHasPermission(s, "calls:write", SITE_A, WC_1)).toBe(true);
+    expect(snapshotHasPermission(s, "modes:write", SITE_A, WC_1)).toBe(true);
+    expect(snapshotHasPermission(s, "facility:write", SITE_A, WC_1)).toBe(true);
+    expect(snapshotHasPermission(s, "status:write", SITE_A, WC_2)).toBe(false);
+    expect(snapshotHasPermission(s, "modes:write", SITE_A, WC_2)).toBe(false);
+    expect(snapshotHasPermission(s, "facility:write", SITE_A)).toBe(false);
+    // Plant-admin territory is never conferred by a grant.
+    expect(snapshotHasPermission(s, "settings:write", SITE_A, WC_1)).toBe(false);
+    expect(snapshotHasPermission(s, "user:read", SITE_A, WC_1)).toBe(false);
+    expect(snapshotHasPermission(s, "billing:read", SITE_A, WC_1)).toBe(false);
+    expect(snapshotHasPermission(s, "notifications:write", SITE_A, WC_1)).toBe(false);
+  });
+
+  it("site role and grant union — the site role dominates at every workcenter", () => {
+    const s = snap([{ siteId: SITE_A, permissions: ["status:write", "settings:write"] }], null, [readGrant]);
+    // Site role applies regardless of workcenter…
+    expect(snapshotHasPermission(s, "status:write", SITE_A, WC_2)).toBe(true);
+    expect(snapshotHasPermission(s, "settings:write", SITE_A)).toBe(true);
+    // …and the grant still adds its global reads.
+    expect(snapshotHasPermission(s, "job:read", SITE_A)).toBe(true);
+  });
+
+  it("unknown access levels confer nothing", () => {
+    const s = snap([], null, [{ workcenterId: WC_1, siteId: SITE_A, access: "OWNER" }]);
+    expect(snapshotEffectivePermissions(s, SITE_A, WC_1).size).toBe(0);
+  });
+
+  it("snapshotAccessibleSites counts grant sites for both global and scoped permissions", () => {
+    const s = snap([], null, [writeGrant]);
+    expect(snapshotAccessibleSites(s, "facility:read")).toEqual({ all: false, siteIds: [SITE_A] });
+    expect(snapshotAccessibleSites(s, "status:write")).toEqual({ all: false, siteIds: [SITE_A] });
+    expect(snapshotAccessibleSites(s, "settings:write")).toEqual({ all: false, siteIds: [] });
+  });
+
+  it("snapshotWorkcentersWithPermission lists granted workcenters at the site", () => {
+    const s = snap([], null, [writeGrant, { workcenterId: WC_2, siteId: SITE_B, access: "WRITE" }]);
+    expect(snapshotWorkcentersWithPermission(s, "status:write", SITE_A)).toEqual([WC_1]);
+    expect(snapshotWorkcentersWithPermission(s, "status:write", SITE_B)).toEqual([WC_2]);
+    const readOnly = snap([], null, [readGrant]);
+    expect(snapshotWorkcentersWithPermission(readOnly, "status:write", SITE_A)).toEqual([]);
+    expect(snapshotWorkcentersWithPermission(readOnly, "calls:read", SITE_A)).toEqual([WC_1]);
+  });
+});
+
+describe("base workcenter access policy (GRANTS_REQUIRED)", () => {
+  // Plant Member shape: read-tier site role (no status:write).
+  const MEMBER_READS = ["facility:read", "job:read", "status:read", "calls:read", "modes:read", "product:read"];
+  // Plant Admin shape: carries status:write, the management-tier marker.
+  const ADMIN_PERMS = ["facility:read", "status:read", "status:write", "calls:read", "calls:write"];
+
+  it("strips floor reads from read-tier site roles, keeping everything else", () => {
+    const s = snap([{ siteId: SITE_A, permissions: MEMBER_READS }], null, undefined, [SITE_A]);
+    const perms = snapshotEffectivePermissions(s, SITE_A);
+    expect(perms.has("status:read")).toBe(false);
+    expect(perms.has("calls:read")).toBe(false);
+    expect(perms.has("modes:read")).toBe(false);
+    expect(perms.has("facility:read")).toBe(true);
+    expect(perms.has("job:read")).toBe(true);
+    expect(perms.has("product:read")).toBe(true);
+  });
+
+  it("exempts management-tier roles (status:write present)", () => {
+    const s = snap([{ siteId: SITE_A, permissions: ADMIN_PERMS }], null, undefined, [SITE_A]);
+    const perms = snapshotEffectivePermissions(s, SITE_A);
+    expect(perms.has("status:read")).toBe(true);
+    expect(perms.has("calls:read")).toBe(true);
+  });
+
+  it("exempts WORKSPACE-scope roles even when every site is strict", () => {
+    const s = snap([{ siteId: null, permissions: MEMBER_READS }], null, undefined, [SITE_A, SITE_B]);
+    expect(snapshotEffectivePermissions(s, SITE_A).has("status:read")).toBe(true);
+  });
+
+  it("grants re-add floor reads only at the granted workcenter", () => {
+    const s = snap(
+      [{ siteId: SITE_A, permissions: MEMBER_READS }],
+      null,
+      [{ workcenterId: WC_1, siteId: SITE_A, access: "READ" }],
+      [SITE_A],
+    );
+    expect(snapshotHasPermission(s, "status:read", SITE_A)).toBe(false);
+    expect(snapshotHasPermission(s, "status:read", SITE_A, WC_2)).toBe(false);
+    expect(snapshotHasPermission(s, "status:read", SITE_A, WC_1)).toBe(true);
+    expect(snapshotHasPermission(s, "calls:read", SITE_A, WC_1)).toBe(true);
+  });
+
+  it("applies per site in multi-site snapshots", () => {
+    const s = snap(
+      [
+        { siteId: SITE_A, permissions: MEMBER_READS },
+        { siteId: SITE_B, permissions: MEMBER_READS },
+      ],
+      null,
+      undefined,
+      [SITE_A],
+    );
+    expect(snapshotHasPermission(s, "status:read", SITE_A)).toBe(false);
+    expect(snapshotHasPermission(s, "status:read", SITE_B)).toBe(true);
+  });
+
+  it("accessible sites: floor perms exclude strict sites, facility:read still includes them", () => {
+    const s = snap([{ siteId: SITE_A, permissions: MEMBER_READS }], null, undefined, [SITE_A]);
+    expect(snapshotAccessibleSites(s, "status:read")).toEqual({ all: false, siteIds: [] });
+    expect(snapshotAccessibleSites(s, "facility:read")).toEqual({ all: false, siteIds: [SITE_A] });
+    // A grant still counts its site for floor perms.
+    const withGrant = snap(
+      [{ siteId: SITE_A, permissions: MEMBER_READS }],
+      null,
+      [{ workcenterId: WC_1, siteId: SITE_A, access: "READ" }],
+      [SITE_A],
+    );
+    expect(snapshotAccessibleSites(withGrant, "status:read")).toEqual({ all: false, siteIds: [SITE_A] });
+  });
+
+  it("absent policy field behaves exactly like today; system roles unaffected", () => {
+    const legacy = snap([{ siteId: SITE_A, permissions: MEMBER_READS }]);
+    expect(snapshotEffectivePermissions(legacy, SITE_A).has("status:read")).toBe(true);
+    const support = snapshotEffectivePermissions(snap([], "SUPPORT", undefined, [SITE_A]), SITE_A);
+    expect(support.has("status:read")).toBe(true);
   });
 });

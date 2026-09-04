@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import createError from "http-errors";
 import { verifyAccessToken, isExpiredTokenError, type DecodedAccessToken } from "@rw/auth/tokens";
 import { API_TOKEN_PREFIX, touchApiToken, validateApiToken } from "@rw/auth/api-tokens";
-import { type PermissionSnapshot, snapshotAccessibleSites } from "@rw/auth/iam/index";
+import { BASE_WORKCENTER_ACCESS_KEY, type PermissionSnapshot, snapshotAccessibleSites } from "@rw/auth/iam/index";
 import { Principal, type AppIAMContext, type IAMContext, type UnknownIAMContext } from "@rw/auth/context";
 import prisma from "@rw/db";
 
@@ -239,17 +239,39 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
 
   // Resolve the role/permission snapshot once; the site-claim check below
   // and every downstream policy evaluation share it instead of re-querying.
-  const permissionSnapshot: PermissionSnapshot = userResult.systemRole
-    ? { systemRole: userResult.systemRole, assignments: [] }
-    : {
-        systemRole: null,
-        assignments: (
-          await prisma.roleAssignment.findMany({
-            where: { membership: { userId: decodedToken.id, workspaceId: decodedToken.workspaceId } },
-            select: { siteId: true, role: { select: { permissions: true } } },
-          })
-        ).map((a) => ({ siteId: a.siteId, permissions: a.role.permissions })),
-      };
+  let permissionSnapshot: PermissionSnapshot;
+  if (userResult.systemRole) {
+    permissionSnapshot = { systemRole: userResult.systemRole, assignments: [] };
+  } else {
+    const membershipWhere = { userId: decodedToken.id, workspaceId: decodedToken.workspaceId };
+    const [assignments, workcenterGrants, policySites] = await Promise.all([
+      prisma.roleAssignment.findMany({
+        where: { membership: membershipWhere },
+        select: { siteId: true, role: { select: { permissions: true } } },
+      }),
+      prisma.workcenterGrant.findMany({
+        where: { membership: membershipWhere },
+        select: { workcenterId: true, access: true, workcenter: { select: { siteId: true } } },
+      }),
+      prisma.site.findMany({
+        where: {
+          workspaceId: decodedToken.workspaceId,
+          attrs: { path: [BASE_WORKCENTER_ACCESS_KEY], equals: "GRANTS_REQUIRED" },
+        },
+        select: { id: true },
+      }),
+    ]);
+    permissionSnapshot = {
+      systemRole: null,
+      assignments: assignments.map((a) => ({ siteId: a.siteId, permissions: a.role.permissions })),
+      workcenterGrants: workcenterGrants.map((g) => ({
+        workcenterId: g.workcenterId,
+        siteId: g.workcenter.siteId,
+        access: g.access,
+      })),
+      grantsRequiredSiteIds: policySites.map((s) => s.id),
+    };
+  }
 
   if (decodedToken.siteId) {
     const access = snapshotAccessibleSites(permissionSnapshot, "facility:read");

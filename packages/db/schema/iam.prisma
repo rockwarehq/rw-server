@@ -39,6 +39,30 @@ model Role {
   @@index([workspaceId])
 }
 
+enum WorkcenterAccess {
+  READ
+  WRITE
+}
+
+/// GitHub-collaborator-style grant: a membership gets READ or WRITE at one
+/// workcenter, independent of (and unioned with) any site role. Evaluated in
+/// code (packages/auth/src/iam/permissions.ts), never through Role rows.
+model WorkcenterGrant {
+  id           String           @id @default(uuid()) @db.Uuid
+  membershipId String           @db.Uuid
+  workcenterId String           @db.Uuid
+  access       WorkcenterAccess
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  membership WorkspaceMembership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  workcenter Workcenter          @relation(fields: [workcenterId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, workcenterId])
+  @@index([workcenterId])
+}
+
 model RoleAssignment {
   id           String @id @default(uuid()) @db.Uuid
   membershipId String @db.Uuid

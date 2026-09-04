@@ -30,6 +30,8 @@ export {
   snapshotEffectivePermissions,
   snapshotHasPermission,
   snapshotAccessibleSites,
+  BASE_WORKCENTER_ACCESS_KEY,
+  type BaseWorkcenterAccess,
   type PermissionSnapshot,
   type Resource,
   type Action,

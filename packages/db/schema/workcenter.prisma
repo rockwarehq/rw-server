@@ -26,6 +26,7 @@ model Workcenter {
   shiftComments       ShiftComment[]
   calls               Call[]
   modeLogs            StationModeLog[]
+  grants              WorkcenterGrant[]
 
   @@unique([siteId, parentId, name])
   @@index([siteId])
