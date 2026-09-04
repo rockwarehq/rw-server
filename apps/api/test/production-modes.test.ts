@@ -87,15 +87,24 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
     });
 
     const faRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Factory Administrator", scope: "SITE" } },
+      where: { workspaceId_name_scope: { workspaceId, name: "Plant Admin", scope: "SITE" } },
       select: { id: true },
     });
     const readerRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Read-only User", scope: "SITE" } },
+      where: { workspaceId_name_scope: { workspaceId, name: "Plant Member", scope: "SITE" } },
       select: { id: true },
     });
-    const officeRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Office User", scope: "SITE" } },
+    // Custom role: modes:write without modes:admin — Plant Member has no
+    // writes and Plant Admin's modes:admin would pass the create/gate checks.
+    const officeRole = await prisma.role.upsert({
+      where: { workspaceId_name_scope: { workspaceId, name: "pm-test-operator", scope: "SITE" } },
+      update: { permissions: ["facility:read", "modes:read", "modes:write"] },
+      create: {
+        workspaceId,
+        name: "pm-test-operator",
+        scope: "SITE",
+        permissions: ["facility:read", "modes:read", "modes:write"],
+      },
       select: { id: true },
     });
     const passwordHash = await hashPassword(PASSWORD);
@@ -184,6 +193,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
     await prisma.employee.deleteMany({ where: { id: { in: [faEmployeeId, officeEmployeeId] } } });
     await prisma.employeeRole.deleteMany({ where: { id: { in: [roleOpsId, roleMaintId] } } });
     await prisma.user.deleteMany({ where: { email: { in: [FA_EMAIL, READER_EMAIL, OFFICE_EMAIL] } } });
+    await prisma.role.deleteMany({ where: { name: "pm-test-operator", isSystem: false } });
     await server.close();
   });
 

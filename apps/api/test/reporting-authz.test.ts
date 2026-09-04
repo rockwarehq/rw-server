@@ -63,11 +63,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
     });
 
     const faRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Factory Administrator", scope: "SITE" } },
+      where: { workspaceId_name_scope: { workspaceId, name: "Plant Admin", scope: "SITE" } },
       select: { id: true },
     });
     const readerRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Read-only User", scope: "SITE" } },
+      where: { workspaceId_name_scope: { workspaceId, name: "Plant Member", scope: "SITE" } },
       select: { id: true },
     });
     const passwordHash = await hashPassword(PASSWORD);
@@ -117,7 +117,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
   it("log searches allow the granted site and honor permission mapping", async () => {
     const cycles = await rpcCall(server, "logs/cycleSearch", { siteId: siteA.id }, faToken);
     expect(cycles.statusCode).toBe(200);
-    // Read-only User carries employee:read, so logon search is permitted
+    // Plant Member carries employee:read, so logon search is permitted
     const logon = await rpcCall(server, "logs/logonSearch", { siteId: siteA.id }, readerToken);
     expect(logon.statusCode).toBe(200);
   });

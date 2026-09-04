@@ -130,10 +130,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
     siteBId = siteB.id;
 
     const factoryAdminRole = await prisma.role.findFirstOrThrow({
-      where: { workspaceId, name: "Factory Administrator", scope: "SITE", isSystem: true },
+      where: { workspaceId, name: "Plant Admin", scope: "SITE", isSystem: true },
     });
     const readOnlyRole = await prisma.role.findFirstOrThrow({
-      where: { workspaceId, name: "Read-only User", scope: "SITE", isSystem: true },
+      where: { workspaceId, name: "Plant Member", scope: "SITE", isSystem: true },
     });
     readOnlyRoleId = readOnlyRole.id;
     const customSiteAdminRole = await prisma.role.create({
@@ -200,9 +200,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
     await server.close();
   });
 
-  it("seeded Factory Administrator holds site-scoped user:admin", async () => {
+  it("seeded Plant Admin holds site-scoped user:admin", async () => {
     const role = await prisma.role.findFirstOrThrow({
-      where: { workspaceId, name: "Factory Administrator", scope: "SITE", isSystem: true },
+      where: { workspaceId, name: "Plant Admin", scope: "SITE", isSystem: true },
     });
     expect(role.permissions).toContain("user:admin");
   });

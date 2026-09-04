@@ -26,7 +26,7 @@ import * as gatewaySvc from "@rw/services/device/gateway/index";
 
 const DEFAULT_ROLES = ["Operator", "Supervisor", "Lead", "Quality", "Maintenance", "Contractor", "Engineer", "Manager"];
 
-type SystemRoleName = "Company Administrator" | "Factory Administrator" | "Office User" | "Read-only User";
+type SystemRoleName = "Company Administrator" | "Plant Admin" | "Plant Member";
 type SiteKey = "primary" | "secondary";
 
 interface RoleAssignmentSpec {
@@ -49,28 +49,19 @@ interface CustomerDevUser {
 const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
   {
     email: "factory@example.com",
-    firstName: "Factory",
-    lastName: "Administrator",
-    persona: "Factory Administrator",
-    description: "Local factory administrator with full access to production data and site configuration.",
-    assignments: [{ roleName: "Factory Administrator", scope: "SITE", site: "primary" }],
-  },
-  {
-    email: "office@example.com",
-    firstName: "Office",
-    lastName: "User",
-    persona: "Office User",
-    description:
-      "Production office user who can work with schedules, jobs, products, tools, and facility data for the site.",
-    assignments: [{ roleName: "Office User", scope: "SITE", site: "primary" }],
+    firstName: "Plant",
+    lastName: "Admin",
+    persona: "Plant Admin",
+    description: "Plant administrator with full access to all plant data, settings, and user management.",
+    assignments: [{ roleName: "Plant Admin", scope: "SITE", site: "primary" }],
   },
   {
     email: "readonly@example.com",
-    firstName: "Read-only",
+    firstName: "Plant",
     lastName: "User",
-    persona: "Read-only User",
-    description: "Analytics and reporting user with read-only access to production data for the site.",
-    assignments: [{ roleName: "Read-only User", scope: "SITE", site: "primary" }],
+    persona: "Plant Member",
+    description: "Plant member with read access to all plant data.",
+    assignments: [{ roleName: "Plant Member", scope: "SITE", site: "primary" }],
   },
   {
     email: "coadmin@example.com",
@@ -102,19 +93,19 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     email: "disabled@example.com",
     firstName: "Disabled",
     lastName: "User",
-    persona: "Disabled Office User",
+    persona: "Disabled Plant Member",
     description:
-      "Office user with DISABLED status — verifies login rejection and session revocation for disabled accounts.",
+      "Plant user with DISABLED status — verifies login rejection and session revocation for disabled accounts.",
     status: "DISABLED",
-    assignments: [{ roleName: "Office User", scope: "SITE", site: "primary" }],
+    assignments: [{ roleName: "Plant Member", scope: "SITE", site: "primary" }],
   },
   {
     email: "engineer@example.com",
     firstName: "Engineer",
     lastName: "User",
-    persona: "Site B Factory Administrator",
-    description: "Factory administrator on the secondary site only — verifies cross-site isolation.",
-    assignments: [{ roleName: "Factory Administrator", scope: "SITE", site: "secondary" }],
+    persona: "Site B Plant Admin",
+    description: "Plant admin on the secondary site only — verifies cross-site isolation.",
+    assignments: [{ roleName: "Plant Admin", scope: "SITE", site: "secondary" }],
   },
   {
     email: "mixed@example.com",
@@ -122,10 +113,10 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     lastName: "Roles",
     persona: "Multi-site User",
     description:
-      "Office User on the primary site and Read-only User on the secondary site — tests per-site role differentiation.",
+      "Plant Admin on the primary site and Plant Member on the secondary site — tests per-site role differentiation.",
     assignments: [
-      { roleName: "Office User", scope: "SITE", site: "primary" },
-      { roleName: "Read-only User", scope: "SITE", site: "secondary" },
+      { roleName: "Plant Admin", scope: "SITE", site: "primary" },
+      { roleName: "Plant Member", scope: "SITE", site: "secondary" },
     ],
   },
 ];

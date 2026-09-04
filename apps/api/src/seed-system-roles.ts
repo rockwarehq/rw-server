@@ -7,7 +7,7 @@ const all = (resource: (typeof RESOURCES)[number]): Permission[] =>
 
 const COMPANY_ADMINISTRATOR_PERMISSIONS: readonly Permission[] = [...ALL_PERMISSIONS];
 
-const FACTORY_ADMINISTRATOR_PERMISSIONS: readonly Permission[] = [
+const PLANT_ADMIN_PERMISSIONS: readonly Permission[] = [
   ...all("facility"),
   ...all("schedule"),
   ...all("job"),
@@ -28,40 +28,19 @@ const FACTORY_ADMINISTRATOR_PERMISSIONS: readonly Permission[] = [
   // user administration (org-wide removal, admin password resets, disable)
   // stays behind scope:"workspace" checks that a site grant cannot satisfy.
   "user:admin",
-  // Local factory admins manage their site's integrations (settings:write);
-  // destructive/execute integration ops and API token minting stay
-  // settings:admin (Company Administrator).
   "settings:read",
   "settings:write",
+  // Plant Admin is the site-level superuser ("admin gets everything"):
+  // settings:admin and billing round out the full set. Only owner:all stays
+  // off — the workspace-ownership marker belongs to Company Administrator.
+  // Site-scoped assignment still bounds the blast radius: workspace-level
+  // actions sit behind scope:"workspace" checks a SITE assignment cannot
+  // satisfy.
+  "settings:admin",
+  ...all("billing"),
 ];
 
-const OFFICE_USER_PERMISSIONS: readonly Permission[] = [
-  "schedule:read",
-  "schedule:write",
-  "job:read",
-  "job:write",
-  "status:read",
-  "status:write",
-  "calls:read",
-  "calls:write",
-  "modes:read",
-  "modes:write",
-  "notifications:read",
-  "notifications:write",
-  "facility:read",
-  "tool:read",
-  "tool:write",
-  "product:read",
-  "product:write",
-  "dashboard:read",
-  // Reads only on the engineering surfaces: entity/graph configuration is
-  // Factory Administrator territory (office users analyze, not configure).
-  "entity:read",
-  "graph:read",
-  "employee:read",
-];
-
-const READ_ONLY_USER_PERMISSIONS: readonly Permission[] = [
+const PLANT_MEMBER_PERMISSIONS: readonly Permission[] = [
   "facility:read",
   "product:read",
   "job:read",
@@ -92,23 +71,21 @@ export const SYSTEM_ROLE_SPECS: readonly SystemRoleSpec[] = [
     permissions: COMPANY_ADMINISTRATOR_PERMISSIONS,
   },
   {
-    name: "Factory Administrator",
-    description: "Local factory administrator with full access to production data and site configuration.",
+    name: "Plant Admin",
+    description: "Plant administrator with full access to all plant data, settings, and user management.",
     scope: "SITE",
-    permissions: FACTORY_ADMINISTRATOR_PERMISSIONS,
+    permissions: PLANT_ADMIN_PERMISSIONS,
   },
   {
-    name: "Office User",
+    // The base membership tier (GitHub's "Member"): read access site-wide,
+    // with floor visibility (status/calls) subject to the site's
+    // baseWorkcenterAccess policy — under GRANTS_REQUIRED those come only
+    // from workcenter grants. The policy lives in the evaluator, not here.
+    name: "Plant Member",
     description:
-      "Production office user who can work with schedules, jobs, products, tools, and facility data for the site.",
+      "Base plant membership with read access to plant data. Workcenter access can be granted per workcenter.",
     scope: "SITE",
-    permissions: OFFICE_USER_PERMISSIONS,
-  },
-  {
-    name: "Read-only User",
-    description: "Analytics and reporting user with read-only access to production data for the site.",
-    scope: "SITE",
-    permissions: READ_ONLY_USER_PERMISSIONS,
+    permissions: PLANT_MEMBER_PERMISSIONS,
   },
 ];
 

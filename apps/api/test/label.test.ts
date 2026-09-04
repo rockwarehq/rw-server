@@ -74,8 +74,17 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tie
       select: { id: true },
     });
 
-    const officeRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Office User", scope: "SITE" } },
+    // Custom role: job:write without settings:write — a Plant Member can't tag
+    // (no writes at all) and a Plant Admin could also create labels.
+    const officeRole = await prisma.role.upsert({
+      where: { workspaceId_name_scope: { workspaceId, name: `${PREFIX}-job-writer`, scope: "SITE" } },
+      update: { permissions: ["facility:read", "job:read", "job:write"] },
+      create: {
+        workspaceId,
+        name: `${PREFIX}-job-writer`,
+        scope: "SITE",
+        permissions: ["facility:read", "job:read", "job:write"],
+      },
       select: { id: true },
     });
     const passwordHash = await hashPassword(PASSWORD);
@@ -126,13 +135,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tie
     await prisma.station.deleteMany({ where: { id: { in: stationIds } } });
     await prisma.label.deleteMany({ where: { name: { startsWith: PREFIX } } });
     await prisma.roleAssignment.deleteMany({ where: { membership: { user: { email: OFFICE_EMAIL } } } });
+    await prisma.role.deleteMany({ where: { name: { startsWith: PREFIX }, isSystem: false } });
     await prisma.workspaceMembership.deleteMany({ where: { user: { email: OFFICE_EMAIL } } });
     await prisma.user.deleteMany({ where: { email: OFFICE_EMAIL } });
     await prisma.site.deleteMany({ where: { id: siteB.id } });
     await server.close();
   });
 
-  it("admin creates labels; duplicates rejected; office user cannot create but can tag", async () => {
+  it("admin creates labels; duplicates rejected; job writer cannot create but can tag", async () => {
     const m = await rpcCall(server, "label/create", { siteId: site.id, name: `${PREFIX}-molding` }, adminToken);
     expect(m.statusCode).toBe(200);
     molding = lbl(m);

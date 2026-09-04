@@ -447,7 +447,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       // Roster reads align with RPC workspace.listMembers: user:read held at
-      // any site suffices (site Factory Administrators manage their people).
+      // any site suffices (site Plant Admins manage their people).
       const auth = await authorize(request.iam, { permission: "user:read", scope: { kind: "anySite" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
