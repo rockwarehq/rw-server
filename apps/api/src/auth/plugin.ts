@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import createError from "http-errors";
 import { verifyAccessToken, isExpiredTokenError, type DecodedAccessToken } from "@rw/auth/tokens";
 import { API_TOKEN_PREFIX, touchApiToken, validateApiToken } from "@rw/auth/api-tokens";
-import { type PermissionSnapshot, snapshotAccessibleSites } from "@rw/auth/iam/index";
+import { BASE_WORKCENTER_ACCESS_KEY, type PermissionSnapshot, snapshotAccessibleSites } from "@rw/auth/iam/index";
 import { Principal, type AppIAMContext, type IAMContext, type UnknownIAMContext } from "@rw/auth/context";
 import prisma from "@rw/db";
 
@@ -244,7 +244,7 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
     permissionSnapshot = { systemRole: userResult.systemRole, assignments: [] };
   } else {
     const membershipWhere = { userId: decodedToken.id, workspaceId: decodedToken.workspaceId };
-    const [assignments, workcenterGrants] = await Promise.all([
+    const [assignments, workcenterGrants, policySites] = await Promise.all([
       prisma.roleAssignment.findMany({
         where: { membership: membershipWhere },
         select: { siteId: true, role: { select: { permissions: true } } },
@@ -252,6 +252,13 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
       prisma.workcenterGrant.findMany({
         where: { membership: membershipWhere },
         select: { workcenterId: true, access: true, workcenter: { select: { siteId: true } } },
+      }),
+      prisma.site.findMany({
+        where: {
+          workspaceId: decodedToken.workspaceId,
+          attrs: { path: [BASE_WORKCENTER_ACCESS_KEY], equals: "GRANTS_REQUIRED" },
+        },
+        select: { id: true },
       }),
     ]);
     permissionSnapshot = {
@@ -262,6 +269,7 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
         siteId: g.workcenter.siteId,
         access: g.access,
       })),
+      grantsRequiredSiteIds: policySites.map((s) => s.id),
     };
   }
 

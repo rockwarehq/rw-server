@@ -16,10 +16,12 @@ const snap = (
   assignments: PermissionSnapshot["assignments"],
   systemRole: string | null = null,
   workcenterGrants?: PermissionSnapshot["workcenterGrants"],
+  grantsRequiredSiteIds?: string[],
 ): PermissionSnapshot => ({
   systemRole,
   assignments,
   ...(workcenterGrants ? { workcenterGrants } : {}),
+  ...(grantsRequiredSiteIds ? { grantsRequiredSiteIds } : {}),
 });
 
 describe("snapshotEffectivePermissions", () => {
@@ -172,5 +174,83 @@ describe("workcenter grants", () => {
     const readOnly = snap([], null, [readGrant]);
     expect(snapshotWorkcentersWithPermission(readOnly, "status:write", SITE_A)).toEqual([]);
     expect(snapshotWorkcentersWithPermission(readOnly, "calls:read", SITE_A)).toEqual([WC_1]);
+  });
+});
+
+describe("base workcenter access policy (GRANTS_REQUIRED)", () => {
+  // Plant Member shape: read-tier site role (no status:write).
+  const MEMBER_READS = ["facility:read", "job:read", "status:read", "calls:read", "modes:read", "product:read"];
+  // Plant Admin shape: carries status:write, the management-tier marker.
+  const ADMIN_PERMS = ["facility:read", "status:read", "status:write", "calls:read", "calls:write"];
+
+  it("strips floor reads from read-tier site roles, keeping everything else", () => {
+    const s = snap([{ siteId: SITE_A, permissions: MEMBER_READS }], null, undefined, [SITE_A]);
+    const perms = snapshotEffectivePermissions(s, SITE_A);
+    expect(perms.has("status:read")).toBe(false);
+    expect(perms.has("calls:read")).toBe(false);
+    expect(perms.has("modes:read")).toBe(false);
+    expect(perms.has("facility:read")).toBe(true);
+    expect(perms.has("job:read")).toBe(true);
+    expect(perms.has("product:read")).toBe(true);
+  });
+
+  it("exempts management-tier roles (status:write present)", () => {
+    const s = snap([{ siteId: SITE_A, permissions: ADMIN_PERMS }], null, undefined, [SITE_A]);
+    const perms = snapshotEffectivePermissions(s, SITE_A);
+    expect(perms.has("status:read")).toBe(true);
+    expect(perms.has("calls:read")).toBe(true);
+  });
+
+  it("exempts WORKSPACE-scope roles even when every site is strict", () => {
+    const s = snap([{ siteId: null, permissions: MEMBER_READS }], null, undefined, [SITE_A, SITE_B]);
+    expect(snapshotEffectivePermissions(s, SITE_A).has("status:read")).toBe(true);
+  });
+
+  it("grants re-add floor reads only at the granted workcenter", () => {
+    const s = snap(
+      [{ siteId: SITE_A, permissions: MEMBER_READS }],
+      null,
+      [{ workcenterId: WC_1, siteId: SITE_A, access: "READ" }],
+      [SITE_A],
+    );
+    expect(snapshotHasPermission(s, "status:read", SITE_A)).toBe(false);
+    expect(snapshotHasPermission(s, "status:read", SITE_A, WC_2)).toBe(false);
+    expect(snapshotHasPermission(s, "status:read", SITE_A, WC_1)).toBe(true);
+    expect(snapshotHasPermission(s, "calls:read", SITE_A, WC_1)).toBe(true);
+  });
+
+  it("applies per site in multi-site snapshots", () => {
+    const s = snap(
+      [
+        { siteId: SITE_A, permissions: MEMBER_READS },
+        { siteId: SITE_B, permissions: MEMBER_READS },
+      ],
+      null,
+      undefined,
+      [SITE_A],
+    );
+    expect(snapshotHasPermission(s, "status:read", SITE_A)).toBe(false);
+    expect(snapshotHasPermission(s, "status:read", SITE_B)).toBe(true);
+  });
+
+  it("accessible sites: floor perms exclude strict sites, facility:read still includes them", () => {
+    const s = snap([{ siteId: SITE_A, permissions: MEMBER_READS }], null, undefined, [SITE_A]);
+    expect(snapshotAccessibleSites(s, "status:read")).toEqual({ all: false, siteIds: [] });
+    expect(snapshotAccessibleSites(s, "facility:read")).toEqual({ all: false, siteIds: [SITE_A] });
+    // A grant still counts its site for floor perms.
+    const withGrant = snap(
+      [{ siteId: SITE_A, permissions: MEMBER_READS }],
+      null,
+      [{ workcenterId: WC_1, siteId: SITE_A, access: "READ" }],
+      [SITE_A],
+    );
+    expect(snapshotAccessibleSites(withGrant, "status:read")).toEqual({ all: false, siteIds: [SITE_A] });
+  });
+
+  it("absent policy field behaves exactly like today; system roles unaffected", () => {
+    const legacy = snap([{ siteId: SITE_A, permissions: MEMBER_READS }]);
+    expect(snapshotEffectivePermissions(legacy, SITE_A).has("status:read")).toBe(true);
+    const support = snapshotEffectivePermissions(snap([], "SUPPORT", undefined, [SITE_A]), SITE_A);
+    expect(support.has("status:read")).toBe(true);
   });
 });

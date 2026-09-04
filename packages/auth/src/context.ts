@@ -18,6 +18,8 @@ export interface IAMPermissionSnapshot {
   systemRole: string | null;
   assignments: Array<{ siteId: string | null; permissions: string[] }>;
   workcenterGrants?: Array<{ workcenterId: string; siteId: string; access: string }>;
+  /** Sites whose baseWorkcenterAccess policy is GRANTS_REQUIRED (absent = ALL). */
+  grantsRequiredSiteIds?: string[];
 }
 
 interface BaseIAMContext {

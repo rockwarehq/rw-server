@@ -123,6 +123,33 @@ function workcenterAccessPermissions(access: string): {
   };
 }
 
+// ── Base workcenter access policy ────────────────────────────────────────
+// GitHub's org "base permissions" at plant scope: a per-site setting (stored
+// in Site.attrs) deciding whether read-tier site roles see the live floor
+// (status/calls) site-wide (ALL — the default) or only at explicitly
+// granted workcenters (GRANTS_REQUIRED). Management-tier roles — anything
+// carrying status:write — are exempt; WORKSPACE-scope roles are exempt by
+// their null siteId. facility:read is deliberately NOT in the floor set:
+// the directory (workcenter/station names, site entry) stays visible; it is
+// the live floor data that the policy gates.
+
+export const BASE_WORKCENTER_ACCESS_KEY = "baseWorkcenterAccess" as const;
+export type BaseWorkcenterAccess = "ALL" | "GRANTS_REQUIRED";
+
+const POLICY_FLOOR_PERMISSIONS: ReadonlySet<Permission> = new Set(["status:read", "calls:read", "modes:read"]);
+const POLICY_EXEMPT_MARKER: Permission = "status:write";
+
+function assignmentDropsFloor(
+  assignment: { siteId: string | null; permissions: string[] },
+  grantsRequired: ReadonlySet<string>,
+): boolean {
+  return (
+    assignment.siteId !== null &&
+    grantsRequired.has(assignment.siteId) &&
+    !assignment.permissions.includes(POLICY_EXEMPT_MARKER)
+  );
+}
+
 // ── Permission checks ────────────────────────────────────────────────────
 
 export interface PermissionContext {
@@ -150,6 +177,12 @@ export interface PermissionSnapshot {
   systemRole: string | null;
   assignments: Array<{ siteId: string | null; permissions: string[] }>;
   workcenterGrants?: Array<{ workcenterId: string; siteId: string; access: string }>;
+  /**
+   * Sites whose baseWorkcenterAccess policy is GRANTS_REQUIRED. Absent or
+   * empty means ALL everywhere (legacy snapshots fail open to today's
+   * behavior through rolling deploys).
+   */
+  grantsRequiredSiteIds?: string[];
 }
 
 /** Load the snapshot for a user's membership. Null when the user is missing. */
@@ -165,7 +198,7 @@ export async function loadPermissionSnapshot(userId: string, workspaceId: string
     return { systemRole: user.systemRole, assignments: [] };
   }
 
-  const [assignments, grants] = await Promise.all([
+  const [assignments, grants, policySites] = await Promise.all([
     prisma.roleAssignment.findMany({
       where: { membership: { userId, workspaceId } },
       select: { siteId: true, role: { select: { permissions: true } } },
@@ -173,6 +206,10 @@ export async function loadPermissionSnapshot(userId: string, workspaceId: string
     prisma.workcenterGrant.findMany({
       where: { membership: { userId, workspaceId } },
       select: { workcenterId: true, access: true, workcenter: { select: { siteId: true } } },
+    }),
+    prisma.site.findMany({
+      where: { workspaceId, attrs: { path: [BASE_WORKCENTER_ACCESS_KEY], equals: "GRANTS_REQUIRED" } },
+      select: { id: true },
     }),
   ]);
 
@@ -184,6 +221,7 @@ export async function loadPermissionSnapshot(userId: string, workspaceId: string
       siteId: g.workcenter.siteId,
       access: g.access,
     })),
+    grantsRequiredSiteIds: policySites.map((s) => s.id),
   };
 }
 
@@ -211,9 +249,14 @@ export function snapshotEffectivePermissions(
   }
 
   const out = new Set<Permission>();
+  const grantsRequired = new Set(snapshot.grantsRequiredSiteIds ?? []);
   for (const assignment of snapshot.assignments) {
     if (assignment.siteId !== null && assignment.siteId !== siteId) continue;
+    // GRANTS_REQUIRED sites strip the floor reads from read-tier site roles;
+    // workcenter grants re-add them per workcenter in the loop below.
+    const dropFloor = assignmentDropsFloor(assignment, grantsRequired);
     for (const p of assignment.permissions) {
+      if (dropFloor && POLICY_FLOOR_PERMISSIONS.has(p as Permission)) continue;
       if (ALL_PERMISSIONS_SET.has(p as Permission)) {
         out.add(p as Permission);
       }
@@ -250,8 +293,15 @@ export function snapshotAccessibleSites(snapshot: PermissionSnapshot, permission
   }
 
   const siteIds = new Set<string>();
+  const grantsRequired = new Set(snapshot.grantsRequiredSiteIds ?? []);
   for (const assignment of snapshot.assignments) {
     if (!assignment.permissions.includes(permission)) continue;
+    // Keep "held at X" ⇔ "X accessible" consistent under the base-access
+    // policy: floor perms stripped by GRANTS_REQUIRED don't make the site
+    // accessible either (grants below still add their sites).
+    if (POLICY_FLOOR_PERMISSIONS.has(permission) && assignmentDropsFloor(assignment, grantsRequired)) {
+      continue;
+    }
     if (assignment.siteId === null) return { all: true };
     siteIds.add(assignment.siteId);
   }
