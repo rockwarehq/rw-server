@@ -327,6 +327,115 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("workcenter grant authorization 
     });
   });
 
+  describe("base workcenter access policy", () => {
+    // Runs against the test-created Site B (never the shared Rockware seed
+    // site) so flipping the policy cannot perturb other suites.
+    const ROLE_ONLY_EMAIL = "wcgrant-policy-role@test.local";
+    const ROLE_GRANT_EMAIL = "wcgrant-policy-grant@test.local";
+    let roleOnlyToken: string;
+    let roleGrantToken: string;
+
+    interface MeAccess {
+      permissions: string[];
+      workcenterGrants: Array<{ workcenterId: string; access: string; permissions: string[] }>;
+    }
+    const meAccess = async (token: string): Promise<MeAccess> => {
+      const res = await server.inject({
+        method: "GET",
+        url: "/users/me",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(res.statusCode).toBe(200);
+      return (res.json() as { access: MeAccess }).access;
+    };
+
+    beforeAll(async () => {
+      const plantMemberRole = await prisma.role.findUniqueOrThrow({
+        where: { workspaceId_name_scope: { workspaceId, name: "Plant Member", scope: "SITE" } },
+        select: { id: true },
+      });
+      const passwordHash = await hashPassword(PASSWORD);
+      const makeSiteBMember = async (email: string) => {
+        const u = await prisma.user.upsert({
+          where: { email },
+          update: { passwordHash, status: "ACTIVE" },
+          create: { email, passwordHash, firstName: "WcPolicy", status: "ACTIVE" },
+        });
+        const membership = await prisma.workspaceMembership.upsert({
+          where: { userId_workspaceId: { userId: u.id, workspaceId } },
+          update: {},
+          create: { userId: u.id, workspaceId },
+        });
+        await prisma.roleAssignment.create({
+          data: { membershipId: membership.id, roleId: plantMemberRole.id, siteId: siteB.id },
+        });
+        return membership;
+      };
+      await makeSiteBMember(ROLE_ONLY_EMAIL);
+      const granted = await makeSiteBMember(ROLE_GRANT_EMAIL);
+      await prisma.workcenterGrant.create({
+        data: { membershipId: granted.id, workcenterId: wcSiteB.id, access: "READ" },
+      });
+      // The outer beforeAll already spends 4 of the 5/min per-IP login
+      // budget; log these two in from a distinct source address.
+      const loginFrom = async (email: string) => {
+        const res = await server.inject({
+          method: "POST",
+          url: "/auth/login",
+          payload: { email, password: PASSWORD },
+          remoteAddress: "127.0.0.9",
+        });
+        expect(res.statusCode).toBe(200);
+        return (res.json() as { accessToken: string }).accessToken;
+      };
+      roleOnlyToken = await loginFrom(ROLE_ONLY_EMAIL);
+      roleGrantToken = await loginFrom(ROLE_GRANT_EMAIL);
+    }, 30_000);
+
+    afterAll(async () => {
+      await prisma.site.update({ where: { id: siteB.id }, data: { attrs: {} } });
+      await prisma.user.deleteMany({ where: { email: { in: [ROLE_ONLY_EMAIL, ROLE_GRANT_EMAIL] } } });
+    });
+
+    it("under ALL (default) floor reads are site-wide", async () => {
+      const access = await meAccess(roleOnlyToken);
+      expect(access.permissions).toContain("status:read");
+      expect(access.permissions).toContain("calls:read");
+      const calls = await rpcCall(server, "call/listActive", { siteId: siteB.id }, roleOnlyToken);
+      expect(calls.statusCode).toBe(200);
+    });
+
+    it("flipping to GRANTS_REQUIRED takes effect on the next request", async () => {
+      const flip = await rpcCall(
+        server,
+        "site/updateSettings",
+        { id: siteB.id, settings: { baseWorkcenterAccess: "GRANTS_REQUIRED" } },
+        companyAdminToken,
+      );
+      expect(flip.statusCode).toBe(200);
+
+      // Same tokens, no re-login: floor reads gone from the flat list…
+      const roleOnly = await meAccess(roleOnlyToken);
+      expect(roleOnly.permissions).not.toContain("status:read");
+      expect(roleOnly.permissions).not.toContain("calls:read");
+      expect(roleOnly.permissions).toContain("facility:read");
+      expect(roleOnly.permissions).toContain("job:read");
+
+      // …but a grant keeps them per workcenter.
+      const withGrant = await meAccess(roleGrantToken);
+      expect(withGrant.permissions).not.toContain("status:read");
+      expect(withGrant.workcenterGrants).toHaveLength(1);
+      expect(withGrant.workcenterGrants[0]?.permissions).toContain("status:read");
+      expect(withGrant.workcenterGrants[0]?.permissions).toContain("calls:read");
+
+      // Floor list endpoints: FORBIDDEN without a grant, narrowed 200 with one.
+      const denied = await rpcCall(server, "call/listActive", { siteId: siteB.id }, roleOnlyToken);
+      expect(denied.statusCode).toBe(403);
+      const narrowed = await rpcCall(server, "call/listActive", { siteId: siteB.id }, roleGrantToken);
+      expect(narrowed.statusCode).toBe(200);
+    });
+  });
+
   describe("member lifecycle", () => {
     it("invite with grants only creates a grant-holding membership", async () => {
       const plantAdmin = await prisma.user.findUniqueOrThrow({

@@ -34,6 +34,12 @@ const updateSettingsInputSchema = z.object({
   id: z.uuid(),
   settings: z.object({
     orderAutoComplete: z.boolean().optional(),
+    // Gated (like the rest of settings) on facility:write — gating this one
+    // key on settings:write would be theater while the generic site.update
+    // writes arbitrary attrs under facility:write. WRITE workcenter grants
+    // confer facility:write only workcenter-scoped, so grant holders cannot
+    // flip it.
+    baseWorkcenterAccess: z.enum(["ALL", "GRANTS_REQUIRED"]).optional(),
   }),
 });
 
