@@ -17,11 +17,13 @@ const conditionsSchema = z.object({
   not: z.boolean().optional(),
 });
 
-// Per-action input: type + optional version (defaults to the action's `latest`) + inputs.
+// Per-action input: type + optional version (defaults to the action's `latest`) + inputs + optional delay.
 const actionSchema = z.object({
   type: z.string(),
   version: z.string().min(1).optional(),
   inputs: z.record(z.string(), z.unknown()),
+  delayMs: z.number().int().min(0).nullable().optional(),
+  repeat: z.boolean().nullable().optional(),
 });
 
 /** An automation has one or more actions, run sequentially when conditions match. */
@@ -51,7 +53,13 @@ function validateActions(fw: AutomationFramework, actions: z.infer<typeof action
       });
     }
     try {
-      return { type: a.type, version, inputs: fw.validateActionInputs(a.type, version, a.inputs) };
+      return {
+        type: a.type,
+        version,
+        inputs: fw.validateActionInputs(a.type, version, a.inputs),
+        ...(a.delayMs ? { delayMs: a.delayMs } : {}),
+        ...(a.repeat ? { repeat: true } : {}),
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new ORPCError("BAD_REQUEST", { message: `actions[${idx}].inputs invalid — ${msg}` });

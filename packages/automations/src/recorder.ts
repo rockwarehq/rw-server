@@ -25,7 +25,8 @@ export interface RecordActionInput {
   actionIdx: number;
   actionType: string;
   actionVersion: string;
-  status: "SUCCESS" | "FAILED";
+  /** SCHEDULED = armed as a delayed action, outcome recorded later as its own run; SKIPPED = not armed, `error` says why. */
+  status: "SUCCESS" | "FAILED" | "SCHEDULED" | "SKIPPED";
   error?: string;
   startedAt: string;
   finishedAt: string;

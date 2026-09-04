@@ -13,6 +13,7 @@ export {
 export { type ContextBuilder, statelessContextBuilder } from "./context.js";
 export { type CooldownStore, createMemoryCooldownStore } from "./cooldown.js";
 export type { AutomationEngine, DispatchResult } from "./engine.js";
+export { createMemoryScheduleStore, type ScheduledAction, type ScheduleStore } from "./schedule.js";
 export {
   causeOf,
   createAutomationFramework,

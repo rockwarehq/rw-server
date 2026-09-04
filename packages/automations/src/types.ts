@@ -66,7 +66,7 @@ export interface ActionInputSchema {
 
 export interface EventSchemaVersion {
   payload: Record<string, SchemaProperty>;
-  /** Payload field naming what the event is about (e.g. "callId"). A future timed action keys its cancel on it. */
+  /** Payload field naming what the event is about (e.g. "callId"). Delayed actions are armed and cancelled per scope value. */
   scopeKey?: string;
   /** Payload field a cooldown is keyed on (e.g. "stationId"). Defaults to `scopeKey`; absent = per automation. */
   cooldownKey?: string;
@@ -100,6 +100,10 @@ export interface AutomationAction {
   type: string;
   version: string;
   inputs: Record<string, unknown>;
+  /** Run this long after the match instead of immediately; cancelled if the scope's next event no longer matches. Null/0 = immediate. */
+  delayMs?: number | null;
+  /** After a delayed fire, re-arm on the scope's next match. Off = fire once per scope until a non-matching event clears it. */
+  repeat?: boolean | null;
 }
 
 export interface Automation {
