@@ -104,7 +104,8 @@ export type UpdateRoleErrorCode =
   | "SITE_WORKSPACE_MISMATCH"
   | "OWNER_PERMISSION_RESERVED"
   | "OWNER_PERMISSION_REQUIRED"
-  | "LAST_OWNER";
+  | "LAST_OWNER"
+  | "LAST_SITE_ADMIN";
 
 export type UpdateRoleResult =
   | { success: true; data: { [x: string]: unknown } }
@@ -525,6 +526,37 @@ export async function updateRole(input: UpdateRoleInput): Promise<UpdateRoleResu
         });
         if (!remainingOwner) {
           return updateRoleError("LAST_OWNER", "Cannot remove the last workspace owner");
+        }
+      }
+
+      // Site-level analog of the last-owner guard: a plant must keep at
+      // least one member whose SITE role carries user:admin (Plant Admin or
+      // a custom admin role), so the site stays self-administrable without
+      // Company Administrator intervention.
+      const SITE_ADMIN_MARKER = "user:admin";
+      const currentIsSiteAdmin =
+        role.scope === "SITE" &&
+        currentAssignments.some(
+          (assignment) => assignment.role.scope === "SITE" && assignment.role.permissions.includes(SITE_ADMIN_MARKER),
+        );
+      const targetIsSiteAdmin = role.permissions.includes(SITE_ADMIN_MARKER);
+      if (currentIsSiteAdmin && !targetIsSiteAdmin) {
+        const remainingAdmin = await tx.workspaceMembership.findFirst({
+          where: {
+            workspaceId: input.workspaceId,
+            userId: { not: input.targetUserId },
+            user: { status: "ACTIVE", systemRole: null },
+            roleAssignments: {
+              some: {
+                siteId: assignmentSiteId,
+                role: { scope: "SITE", permissions: { has: SITE_ADMIN_MARKER } },
+              },
+            },
+          },
+          select: { id: true },
+        });
+        if (!remainingAdmin) {
+          return updateRoleError("LAST_SITE_ADMIN", "Cannot change the role of the last plant admin at this site");
         }
       }
 

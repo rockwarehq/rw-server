@@ -28,17 +28,15 @@ export interface SiteSettings {
   baseWorkcenterAccess: BaseWorkcenterAccess;
 }
 
-const SETTINGS_KEYS = [
-  "orderAutoComplete",
-  "baseWorkcenterAccess",
-] as const satisfies ReadonlyArray<keyof SiteSettings>;
+const SETTINGS_KEYS = ["orderAutoComplete", "baseWorkcenterAccess"] as const satisfies ReadonlyArray<
+  keyof SiteSettings
+>;
 
 export function parseSiteSettings(attrs: unknown): SiteSettings {
   const record = (attrs ?? {}) as Record<string, unknown>;
   return {
     orderAutoComplete: record.orderAutoComplete === true,
-    baseWorkcenterAccess:
-      record[BASE_WORKCENTER_ACCESS_KEY] === "GRANTS_REQUIRED" ? "GRANTS_REQUIRED" : "ALL",
+    baseWorkcenterAccess: record[BASE_WORKCENTER_ACCESS_KEY] === "GRANTS_REQUIRED" ? "GRANTS_REQUIRED" : "ALL",
   };
 }
 
