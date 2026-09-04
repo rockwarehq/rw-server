@@ -47,6 +47,8 @@ export interface ListJobsFilter {
   /** Only return jobs that have at least one JobProduct with a matching productId */
   productIds?: string[];
   view?: "full" | "slim";
+  /** Full view only: include jobProducts (with product names) per job. */
+  includeProducts?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -173,7 +175,7 @@ export async function create(input: CreateJobInput) {
  * List jobs with optional filtering
  */
 export async function list(filter: ListJobsFilter = {}) {
-  const { siteId, labelIds, q, name, productIds, view = "full", limit = 50, offset = 0 } = filter;
+  const { siteId, labelIds, q, name, productIds, view = "full", includeProducts = false, limit = 50, offset = 0 } = filter;
 
   const where: Prisma.JobWhereInput = {
     deletedAt: null,
@@ -247,6 +249,24 @@ export async function list(filter: ListJobsFilter = {}) {
         site: { select: { id: true, name: true } },
         labels: { select: { id: true, name: true, color: true } },
         _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
+        // Opt-in (e.g. the workspace timeline's job band): product names per
+        // job without a per-job get.
+        ...(includeProducts
+          ? {
+              jobProducts: {
+                where: { deletedAt: null },
+                include: {
+                  currentVersion: true,
+                  product: {
+                    select: {
+                      id: true,
+                      currentVersion: { select: { sku: true, name: true } },
+                    },
+                  },
+                },
+              },
+            }
+          : {}),
       },
       ...pagination,
     }),

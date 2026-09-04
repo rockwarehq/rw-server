@@ -125,6 +125,8 @@ const jobListInputSchema = z.object({
   name: z.string().optional(),
   productIds: z.array(z.uuid()).optional(),
   view: z.enum(["full", "slim"]).default("full"),
+  // Full view only: include jobProducts (with product names) per job.
+  includeProducts: z.boolean().optional(),
   limit: z.number().min(0).default(50),
   offset: z.number().min(0).default(0),
 });
