@@ -11,6 +11,7 @@ export const schema: EventSchema = {
     "1": {
       scopeKey: "callId",
       cooldownKey: "stationId",
+      sinceKey: "openedAt",
       payload: {
         siteId: { type: "string", title: "Site", matchable: false },
         action: { type: "string", title: "What happened", enum: ["opened", "closed"] },
@@ -28,6 +29,7 @@ export const schema: EventSchema = {
         openedByEmployeeId: { type: "string", title: "Opened By (Employee Id)", matchable: false },
         closedByEmployeeId: { type: "string", title: "Closed By (Employee Id)", matchable: false },
         closeMessage: { type: "string", title: "Close Message", matchable: false },
+        openedAt: { type: "string", title: "Opened At", matchable: false },
       },
     },
   },
@@ -53,5 +55,6 @@ export function fromCallEvent(e: CallEvent): Record<string, unknown> {
     openedByEmployeeId: e.openedByEmployeeId,
     closedByEmployeeId: e.closedByEmployeeId,
     closeMessage: e.closeMessage,
+    openedAt: e.openedAt,
   };
 }

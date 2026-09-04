@@ -96,8 +96,12 @@ re-arm on the scope's next match instead. `engine.startScheduled()` subscribes t
 against the automation as it is now (a disabled automation or removed action is dropped) and is
 recorded as its own run carrying the original event. The default store is in-process timers; the
 app supplies a shared one so several instances see one pending set and each entry runs on exactly
-one of them. `runAt` is the event time plus the delay; anchoring it elsewhere (a "down since" field)
-is a one-line change in `runActions`.
+one of them.
+
+The clock starts at the event unless the event schema names a `sinceKey` — a payload field holding
+the ISO time the condition began (`statusSince`, `openedAt`, `startedAt`). Then the action runs at
+`since + delayMs`, or immediately if that is already past: "down for 10 minutes" measures from when
+the station went down even if the matching event (a reason change, a late detection) came later.
 
 ## Versioning
 

@@ -11,6 +11,7 @@ export const schema: EventSchema = {
     "1": {
       scopeKey: "stationId",
       cooldownKey: "stationId",
+      sinceKey: "startedAt",
       payload: {
         siteId: { type: "string", title: "Site", matchable: false },
         action: { type: "string", title: "What happened", enum: ["forced", "cleared"] },
@@ -23,6 +24,7 @@ export const schema: EventSchema = {
         source: { type: "string", title: "Triggered By", enum: ["MANUAL", "SYSTEM"], matchable: false },
         sourceType: { type: "string", title: "Trigger Type", matchable: false },
         sourceRef: { type: "string", title: "Source Ref", matchable: false },
+        startedAt: { type: "string", title: "Started At", matchable: false },
       },
     },
   },
@@ -43,5 +45,6 @@ export function fromModeEvent(e: ModeEvent): Record<string, unknown> {
     source: e.source,
     sourceType: e.sourceType,
     sourceRef: e.sourceRef,
+    startedAt: e.startedAt,
   };
 }

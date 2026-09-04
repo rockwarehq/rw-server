@@ -141,6 +141,9 @@ export function createAutomationFramework(config: AutomationFrameworkConfig): Au
       if (v.cooldownKey && !v.payload[v.cooldownKey]) {
         throw new Error(`event "${type}@${version}" cooldownKey "${v.cooldownKey}" is not a payload field`);
       }
+      if (v.sinceKey && !v.payload[v.sinceKey]) {
+        throw new Error(`event "${type}@${version}" sinceKey "${v.sinceKey}" is not a payload field`);
+      }
     }
   }
 
@@ -224,6 +227,8 @@ export function createAutomationFramework(config: AutomationFrameworkConfig): Au
       const cooldownKey = schemaVersion?.cooldownKey ?? schemaVersion?.scopeKey;
       const cooldownScope = cooldownKey ? normalized[cooldownKey] : undefined;
       if (cooldownScope != null) event.cooldownScope = String(cooldownScope);
+      const since = schemaVersion?.sinceKey ? normalized[schemaVersion.sinceKey] : undefined;
+      if (typeof since === "string" && !Number.isNaN(Date.parse(since))) event.since = since;
 
       return { eventId: id, ...(await engine.dispatch(event)) };
     },
