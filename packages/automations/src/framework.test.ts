@@ -337,6 +337,30 @@ describe("delayed actions", () => {
     await stop();
   });
 
+  it("measures the delay from the sinceKey field and fires at once when that is already past", async () => {
+    const anchored: EventSchema = {
+      ...callEvent,
+      versions: {
+        "1": {
+          ...callEvent.versions["1"]!,
+          sinceKey: "openedAt",
+          payload: { ...callEvent.versions["1"]!.payload, openedAt: { type: "string", title: "Opened" } },
+        },
+      },
+    };
+    const { fw, ran } = build([delayed("a", 60_000)], {
+      eventSchemas: { [anchored.type]: anchored },
+      contextBuilders: { [anchored.type]: statelessContextBuilder },
+    });
+    const stop = await fw.engine.startScheduled();
+    const openedAt = new Date(Date.now() - 120_000).toISOString();
+    await fw.fire("call.changed", { siteId: SITE_A, callId: "c1", action: "opened", openedAt });
+    await settle();
+    expect(ran).toHaveLength(1);
+    expect(ran[0]?.event.since).toBe(openedAt);
+    await stop();
+  });
+
   it("drops a due entry whose action was replaced by another type meanwhile", async () => {
     const rows = [delayed("a")];
     const { fw, ran } = build(rows);

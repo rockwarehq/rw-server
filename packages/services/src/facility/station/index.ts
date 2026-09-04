@@ -9,6 +9,12 @@ export * as actions from "./actions/index.js";
 export * as execution from "./execution.js";
 export * as jobs from "./jobs.js";
 export { setJobEventSink, publishJobEvent, type JobEventSink } from "./job-events.js";
+export {
+  setStationStatusEventSink,
+  publishStationStatusEvent,
+  emitStationStatusChanged,
+  type StationStatusEventSink,
+} from "./status-events.js";
 
 // Re-export commonly used functions at top level for convenience
 export {

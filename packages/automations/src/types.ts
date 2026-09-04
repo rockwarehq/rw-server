@@ -14,6 +14,8 @@ export interface AppEvent {
   scope?: string;
   /** Value of the schema version's `cooldownKey` field (defaults to `scopeKey`) — the unit a cooldown applies to. */
   cooldownScope?: string;
+  /** ISO value of the schema version's `sinceKey` field — when the condition began; delayed actions measure from it. */
+  since?: string;
   /** Id of the root event of the chain this event belongs to. Equals `id` for a root event. */
   correlationId: string;
   /** Id of the event that directly caused this one. Absent for a root event. */
@@ -70,6 +72,8 @@ export interface EventSchemaVersion {
   scopeKey?: string;
   /** Payload field a cooldown is keyed on (e.g. "stationId"). Defaults to `scopeKey`; absent = per automation. */
   cooldownKey?: string;
+  /** Payload field holding an ISO time the condition began (e.g. "statusSince", "openedAt"). A delayed action's clock starts there, not at the event. */
+  sinceKey?: string;
 }
 
 export interface EventSchema {

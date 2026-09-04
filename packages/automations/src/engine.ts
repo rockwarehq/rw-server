@@ -130,9 +130,11 @@ export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
         await runAction(automation, action, idx, event, runId);
         continue;
       }
-      // Arm-if-absent: a repeat match for the same scope keeps the original clock. The delay is
-      // anchored to the event time; a schema-driven anchor (e.g. "down since") would replace it here.
-      const runAt = Date.parse(event.ts) + (action.delayMs ?? 0);
+      // Arm-if-absent: a repeat match for the same scope keeps the original clock. The delay counts
+      // from `since` (when the condition began) when the schema provides it, else from the event;
+      // an anchor already past the delay fires immediately.
+      const now = Date.parse(event.ts);
+      const runAt = Math.max(now, (event.since ? Date.parse(event.since) : now) + (action.delayMs ?? 0));
       const armed = await schedules.schedule({
         automationId: automation.id,
         actionIdx: idx,

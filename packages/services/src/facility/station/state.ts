@@ -6,6 +6,8 @@ import { publishMetricValueChange } from "../../rpc/metrics-bus.js";
 import { publishStationShiftContext } from "../../metrics/graph-context.js";
 import { updateTimeBased } from "../../metrics/recalc.js";
 import { publishEntityEvent } from "../../entity/events.js";
+import type { StationStatus } from "@rw/runtime/station-status-events";
+import { emitStationStatusChanged } from "./status-events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { findOpenModeLog } from "../production-mode/open-log.js";
 
@@ -186,6 +188,17 @@ export async function loadStationMetricContext(
 
   return { stationId, siteId: station.siteId, workspaceId: station.workspaceId, name: station.name, path };
 }
+
+const logStatusEventError = (stationId: string) => (err: unknown) =>
+  console.error(`[state] station status event failed for station ${stationId}:`, err);
+
+/** What the open row said before a transition, for the status event's previous* fields. */
+const previousStatusOf = (
+  row: { state: "UP" | "DOWN"; status: StationStatus | null; statusReasonId: string | null } | null,
+) => ({
+  status: row?.status ?? row?.state ?? null,
+  statusReasonId: row?.statusReasonId ?? null,
+});
 
 /** Publish entity.changes so livestore re-resolves status-bound properties. Only after a real change, post-commit. */
 export function publishStationStatusEntityEvent(ctx: StationMetricContext, changedFields: string[]): void {
@@ -627,11 +640,12 @@ export async function splitOpenStateEntryForModeChange(
  * so duration KPIs (runSeconds) don't change.
  */
 export async function transitionToSlow(stationId: string, timestamp: Date) {
-  const { entry, statusChanged } = await prisma.$transaction(async (tx) => {
+  const { entry, statusChanged, previous } = await prisma.$transaction(async (tx) => {
     // Serialize with other state transitions for this station
     await acquireStationLock(tx, stationId);
 
     const current = await findOpenStateEntry(tx, stationId);
+    const previous = previousStatusOf(current);
 
     if (!current) {
       // No open entry — create a SLOW one (shouldn't normally happen)
@@ -645,17 +659,17 @@ export async function transitionToSlow(stationId: string, timestamp: Date) {
         blockId,
         modeId: mode?.modeId,
       });
-      return { entry: created, statusChanged: true };
+      return { entry: created, statusChanged: true, previous };
     }
 
     // Already DOWN — downtime supersedes slow, do nothing
     if (current.state === "DOWN") {
-      return { entry: current, statusChanged: false };
+      return { entry: current, statusChanged: false, previous };
     }
 
     // Already SLOW — no change needed
     if (current.status === "SLOW") {
-      return { entry: current, statusChanged: false };
+      return { entry: current, statusChanged: false, previous };
     }
 
     // Currently RUNNING — backdate SLOW to the last cycle completion.
@@ -665,7 +679,7 @@ export async function transitionToSlow(stationId: string, timestamp: Date) {
         where: { id: current.id },
         data: { status: "SLOW" },
       });
-      return { entry: updated, statusChanged: true };
+      return { entry: updated, statusChanged: true, previous };
     }
     await closeOpenStateEntries(tx, stationId, slowStart);
     const created = await tx.stationStateLog.create({
@@ -679,7 +693,7 @@ export async function transitionToSlow(stationId: string, timestamp: Date) {
         modeId: current.modeId,
       },
     });
-    return { entry: created, statusChanged: true };
+    return { entry: created, statusChanged: true, previous };
   });
 
   const ctx = await loadStationMetricContext(prisma, stationId);
@@ -691,6 +705,7 @@ export async function transitionToSlow(stationId: string, timestamp: Date) {
     );
     if (statusChanged) publishStationStatusEntityEvent(ctx, ["status", "statusStartAt"]);
   }
+  if (statusChanged) void emitStationStatusChanged(stationId, previous).catch(logStatusEventError(stationId));
   return entry;
 }
 
@@ -712,6 +727,7 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
     await acquireStationLock(tx, stationId);
 
     const current = await findOpenStateEntry(tx, stationId);
+    const previous = previousStatusOf(current);
 
     // Look up the active job for this station (open StationJobLog entry)
     const activeJob = await tx.stationJobLog.findFirst({
@@ -740,7 +756,12 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
         modeId: mode?.modeId,
         statusReasonId: defaultReasonId,
       });
-      return { entry, convertedRange: null as { startTime: Date; endTime: Date } | null, statusChanged: true };
+      return {
+        entry,
+        convertedRange: null as { startTime: Date; endTime: Date } | null,
+        statusChanged: true,
+        previous,
+      };
     }
 
     // Already DOWN — no change needed
@@ -749,6 +770,7 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
         entry: current,
         convertedRange: null as { startTime: Date; endTime: Date } | null,
         statusChanged: false,
+        previous,
       };
     }
 
@@ -788,7 +810,7 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
 
     // Range that changed from UP→DOWN, needed for metrics recalc
     const convertedRange = { startTime: downStart, endTime: timestamp };
-    return { entry, convertedRange, statusChanged: true };
+    return { entry, convertedRange, statusChanged: true, previous };
   });
 
   // Fire updateTimeBased for the converted range (after transaction commits)
@@ -812,6 +834,9 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
     );
     publishStationStatusReasonMetricEvent(ctx, result.entry.statusReasonId, result.entry.updatedAt);
     if (result.statusChanged) publishStationStatusEntityEvent(ctx, ["status", "statusReasonId", "statusStartAt"]);
+  }
+  if (result.statusChanged) {
+    void emitStationStatusChanged(stationId, result.previous).catch(logStatusEventError(stationId));
   }
   return result.entry;
 }
@@ -1095,6 +1120,11 @@ export async function assignDowntimeReason(
       workspaceId: entry.station.site.workspaceId,
       changedFields: ["statusReasonId"],
     });
+    if (statusReasonId !== entry.statusReasonId) {
+      void emitStationStatusChanged(entry.stationId, previousStatusOf(entry), { source: "MANUAL" }).catch(
+        logStatusEventError(entry.stationId),
+      );
+    }
   }
 
   return { success: true, updatedCount: result.count };
