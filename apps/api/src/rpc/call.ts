@@ -178,10 +178,10 @@ export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ i
 
 export const listActive = userOrDisplayRequired.input(listActiveInputSchema).handler(async ({ input, context }) => {
   const scope = grant(await authorizeList(context.iam, { permission: "calls:read", requestedSiteId: input.siteId }));
-  return call.listActive({ ...input, ...scopeFilter(scope) });
+  return call.listActive({ ...input, ...scopeFilter(scope), workcenterIds: scope.workcenterIds });
 });
 
 export const search = authRequired.input(searchInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "calls:read", scope: { kind: "site", siteId: input.siteId } }));
-  return call.search(input);
+  const scope = grant(await authorizeList(context.iam, { permission: "calls:read", requestedSiteId: input.siteId }));
+  return call.search({ ...input, workcenterIds: scope.workcenterIds });
 });

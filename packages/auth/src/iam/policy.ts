@@ -6,6 +6,7 @@ import {
   type Permission,
   snapshotAccessibleSites,
   snapshotHasPermission,
+  snapshotWorkcentersWithPermission,
 } from "./permissions.js";
 import {
   type NullableSiteKind,
@@ -34,7 +35,12 @@ import {
 export type ScopeRef =
   | { kind: "workspace" } // workspace-level action (e.g. site.create)
   | { kind: "anySite" } // grant if permission held workspace-wide or at >=1 site
-  | { kind: "site"; siteId: string } // literal id from input/params
+  // Literal ids from input/params. workcenterId lets create-flows evaluate
+  // workcenter grants against the target workcenter; spoofing is safe
+  // without a lookup because a grant only matches when BOTH its siteId and
+  // workcenterId equal the claimed pair, and a workcenter belongs to
+  // exactly one site.
+  | { kind: "site"; siteId: string; workcenterId?: string }
   | ResolvableSiteRef; // derived from a resource id via a narrow lookup
 
 export interface PolicyDenial {
@@ -69,6 +75,14 @@ export interface ListScope {
   ok: true;
   workspaceId: string;
   siteId: string;
+  /**
+   * Set when access comes only from workcenter grants: rows must belong to
+   * these workcenters — or carry no workcenter at all, which stays readable
+   * (site-level rows like the status taxonomy). Handlers for workcenter-
+   * bound resources merge {@link scopeWorkcenterWhere}; handlers for global
+   * resources ignore it.
+   */
+  workcenterIds?: string[];
 }
 
 export type ListPolicyResult = ListScope | PolicyDenial;
@@ -99,6 +113,18 @@ export function scopeWhere(scope: ListScope): { siteId: string } {
   return { siteId: scope.siteId };
 }
 
+/**
+ * Prisma fragment narrowing a workcenter-bound list to the scope's granted
+ * workcenters. Site-level rows (workcenterId null) stay readable; writing
+ * them still denies through single-record authorize — asymmetric on purpose.
+ * Merge into `AND` next to {@link scopeWhere}.
+ */
+export function scopeWorkcenterWhere(
+  scope: ListScope,
+): { OR: Array<{ workcenterId: { in: string[] } } | { workcenterId: null }> } | Record<string, never> {
+  return scope.workcenterIds ? { OR: [{ workcenterId: { in: scope.workcenterIds } }, { workcenterId: null }] } : {};
+}
+
 export interface PolicyDeps {
   hasPermission: typeof defaultHasPermission;
   getAccessibleSites: typeof defaultGetAccessibleSites;
@@ -117,7 +143,7 @@ export interface AuthorizeFn {
   ): Promise<WorkspaceGrant | PolicyDenial>;
   (
     iam: IAMContext | undefined,
-    check: { permission: Permission; scope: { kind: "site"; siteId: string } },
+    check: { permission: Permission; scope: { kind: "site"; siteId: string; workcenterId?: string } },
   ): Promise<SiteGrant | PolicyDenial>;
   (
     iam: IAMContext | undefined,
@@ -184,11 +210,16 @@ export function createPolicy(deps: PolicyDeps) {
     permission: Permission,
     workspaceId: string,
     siteId?: string,
+    workcenterId?: string,
   ): Promise<boolean> | boolean {
     if (iam.permissionSnapshot) {
-      return snapshotHasPermission(iam.permissionSnapshot, permission, siteId);
+      return snapshotHasPermission(iam.permissionSnapshot, permission, siteId, workcenterId);
     }
-    return deps.hasPermission(iam.id as string, permission, { workspaceId, ...(siteId ? { siteId } : {}) });
+    return deps.hasPermission(iam.id as string, permission, {
+      workspaceId,
+      ...(siteId ? { siteId } : {}),
+      ...(workcenterId ? { workcenterId } : {}),
+    });
   }
 
   function userAccessibleSites(
@@ -248,13 +279,15 @@ export function createPolicy(deps: PolicyDeps) {
       return anySiteGrant(auth.iam, check.permission, workspaceId);
     }
 
-    // Resolve the target site. Literal ids need no query; resource refs are
-    // a narrow read of the denormalized siteId column (or one required-
-    // parent hop), and run BEFORE any permission query so nonexistent ids
-    // short-circuit.
+    // Resolve the target site (and, for workcenter-bound resources, the
+    // workcenter). Literal ids need no query; resource refs are a narrow
+    // read of the denormalized siteId column (or one required-parent hop),
+    // and run BEFORE any permission query so nonexistent ids short-circuit.
     let siteId: string;
+    let workcenterId: string | undefined;
     if (check.scope.kind === "site") {
       siteId = check.scope.siteId;
+      workcenterId = check.scope.workcenterId;
     } else {
       const resolved = await deps.resolveSiteRef(check.scope);
       if (!resolved) {
@@ -266,13 +299,14 @@ export function createPolicy(deps: PolicyDeps) {
         return anySiteGrant(auth.iam, check.permission, workspaceId);
       }
       siteId = resolved.siteId;
+      workcenterId = resolved.workcenterId ?? undefined;
     }
 
     if (principal !== Principal.USER) {
       return deviceSiteGrant(auth.iam, workspaceId, siteId);
     }
 
-    const ok = await userHasPermission(auth.iam, check.permission, workspaceId, siteId);
+    const ok = await userHasPermission(auth.iam, check.permission, workspaceId, siteId, workcenterId);
     if (!ok) {
       return deny("FORBIDDEN", `Missing permission: ${check.permission}`, check.permission);
     }
@@ -311,6 +345,14 @@ export function createPolicy(deps: PolicyDeps) {
     }
     const ok = await userHasPermission(auth.iam, check.permission, workspaceId, siteId);
     if (!ok) {
+      // No site-wide hold — workcenter grants may still narrow the list to
+      // the granted workcenters (snapshot-only; without one, deny as before).
+      if (auth.iam.permissionSnapshot) {
+        const workcenterIds = snapshotWorkcentersWithPermission(auth.iam.permissionSnapshot, check.permission, siteId);
+        if (workcenterIds.length > 0) {
+          return { ok: true, workspaceId, siteId, workcenterIds };
+        }
+      }
       return deny("FORBIDDEN", `Missing permission: ${check.permission}`, check.permission);
     }
     return { ok: true, workspaceId, siteId };
