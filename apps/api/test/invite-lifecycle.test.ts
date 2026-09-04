@@ -289,7 +289,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
 
     const noRole = await invite(adminToken, { email: INVITEE_EMAILS[5] });
     expect(noRole.statusCode).toBe(400);
-    expect((noRole.json() as { error: string }).error).toBe("roleId is required");
+    expect((noRole.json() as { error: string }).error).toBe("roleId or workcenterGrants is required");
 
     const adopted = await invite(adminToken, { email: INVITEE_EMAILS[5], roleId });
     expect(adopted.statusCode).toBe(201);

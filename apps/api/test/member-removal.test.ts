@@ -12,6 +12,8 @@ const PENDING_EMAIL = "pending-site-member@test.local";
 const OTHER_SITE_EMAIL = "other-site-member@test.local";
 const CUSTOM_ADMIN_EMAIL = "custom-site-admin@test.local";
 const CUSTOM_ADMIN_PASSWORD = "CustomAdmin123!";
+const LONE_ADMIN_EMAIL = "lone-site-admin@test.local";
+const SECOND_ADMIN_EMAIL = "second-site-admin@test.local";
 const ALL_EMAILS = [
   FACTORY_ADMIN_EMAIL,
   SITE_ONLY_EMAIL,
@@ -19,6 +21,8 @@ const ALL_EMAILS = [
   PENDING_EMAIL,
   OTHER_SITE_EMAIL,
   CUSTOM_ADMIN_EMAIL,
+  LONE_ADMIN_EMAIL,
+  SECOND_ADMIN_EMAIL,
 ];
 const CUSTOM_SITE_ADMIN_ROLE = "Custom Site Admin (member removal)";
 const HYBRID_WS_ROLE = "Hybrid Workspace Role (member removal)";
@@ -282,5 +286,35 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
       where: { userId_workspaceId: { userId: otherSiteUserId, workspaceId } },
     });
     expect(membership).toBeNull();
+  });
+
+  it("blocks demoting the last plant admin at a site until another admin exists", async () => {
+    const plantAdminRole = await prisma.role.findFirstOrThrow({
+      where: { workspaceId, name: "Plant Admin", scope: "SITE", isSystem: true },
+    });
+    // Site B has no admins yet — this member becomes its only one.
+    const loneAdminId = await createMember(LONE_ADMIN_EMAIL, {
+      assignments: [{ roleId: plantAdminRole.id, siteId: siteBId }],
+    });
+    const adminSiteBToken = await switchSite(adminToken, siteBId);
+    const demote = (token: string, userId: string) =>
+      server.inject({
+        method: "PUT",
+        url: `/workspaces/${workspaceId}/members/${userId}`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: { roleId: readOnlyRoleId },
+        remoteAddress: nextIp(),
+      });
+
+    const blocked = await demote(adminSiteBToken, loneAdminId);
+    expect(blocked.statusCode).toBe(400);
+    expect(blocked.json<{ error: string }>().error).toMatch(/last plant admin/i);
+
+    // A second admin at the site unblocks the demotion.
+    await createMember(SECOND_ADMIN_EMAIL, {
+      assignments: [{ roleId: plantAdminRole.id, siteId: siteBId }],
+    });
+    const allowed = await demote(adminSiteBToken, loneAdminId);
+    expect(allowed.statusCode).toBe(200);
   });
 });

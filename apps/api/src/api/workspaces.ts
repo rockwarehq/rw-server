@@ -111,6 +111,24 @@ const accessSchema = {
   },
 } as const satisfies JSONSchema;
 
+// Grant rows as the members/workspaces services return them (WorkcenterGrantRef).
+const workcenterGrantSchema = {
+  type: "object",
+  properties: {
+    id: { type: "string", format: "uuid" },
+    workcenterId: { type: "string", format: "uuid" },
+    access: { type: "string", enum: ["READ", "WRITE"] },
+    workcenter: {
+      type: "object",
+      properties: {
+        id: { type: "string", format: "uuid" },
+        name: { type: "string" },
+        siteId: { type: "string", format: "uuid" },
+      },
+    },
+  },
+} as const satisfies JSONSchema;
+
 const memberSchema = {
   type: "object",
   properties: {
@@ -133,6 +151,7 @@ const memberSchema = {
     },
     roles: { type: "array", items: roleRefSchema },
     roleAssignments: { type: "array", items: roleAssignmentSchema },
+    workcenterGrants: { type: "array", items: workcenterGrantSchema },
   },
 } as const satisfies JSONSchema;
 
@@ -197,6 +216,7 @@ const listWorkspacesResponseSchema = {
       employee: employeeProfileSchema,
       roles: { type: "array", items: roleRefSchema },
       roleAssignments: { type: "array", items: roleAssignmentSchema },
+      workcenterGrants: { type: "array", items: workcenterGrantSchema },
       access: accessSchema,
     },
   },

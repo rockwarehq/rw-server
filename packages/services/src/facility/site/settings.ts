@@ -1,4 +1,5 @@
 import prisma from "@rw/db";
+import { BASE_WORKCENTER_ACCESS_KEY, type BaseWorkcenterAccess } from "@rw/auth/iam/permissions";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 
@@ -17,14 +18,25 @@ export interface SiteSettings {
    * (same code path as a manual completion).
    */
   orderAutoComplete: boolean;
+  /**
+   * Base workcenter access for read-tier site roles (GitHub's org "base
+   * permissions" at plant scope): ALL (default) = members see live floor
+   * data site-wide; GRANTS_REQUIRED = floor reads (status/calls/modes)
+   * come only from explicit workcenter grants. The permission evaluator
+   * (@rw/auth iam/permissions.ts) reads the raw attrs key directly.
+   */
+  baseWorkcenterAccess: BaseWorkcenterAccess;
 }
 
-const SETTINGS_KEYS = ["orderAutoComplete"] as const satisfies ReadonlyArray<keyof SiteSettings>;
+const SETTINGS_KEYS = ["orderAutoComplete", "baseWorkcenterAccess"] as const satisfies ReadonlyArray<
+  keyof SiteSettings
+>;
 
 export function parseSiteSettings(attrs: unknown): SiteSettings {
   const record = (attrs ?? {}) as Record<string, unknown>;
   return {
     orderAutoComplete: record.orderAutoComplete === true,
+    baseWorkcenterAccess: record[BASE_WORKCENTER_ACCESS_KEY] === "GRANTS_REQUIRED" ? "GRANTS_REQUIRED" : "ALL",
   };
 }
 
