@@ -4,6 +4,7 @@ import type { ContextBuilder } from "./context.js";
 import type { CooldownStore } from "./cooldown.js";
 import { createAutomationEngine, type AutomationEngine } from "./engine.js";
 import type { RunRecorder } from "./recorder.js";
+import type { ScheduleStore } from "./schedule.js";
 import { createRefRegistry, type RefContext, type RefOption, type RefRegistry } from "./refs.js";
 import type { AutomationStore } from "./store.js";
 import type { ActionSchema, AppEvent, Catalog, EventCause, EventSchema, EventType } from "./types.js";
@@ -41,6 +42,8 @@ export interface AutomationFrameworkConfig {
   maxHops?: number;
   /** Shared last-fired store for cooldowns. Defaults to in-memory (fine for one process). */
   cooldowns?: CooldownStore;
+  /** Shared store for armed delayed actions. Defaults to in-memory (fine for one process). */
+  schedules?: ScheduleStore;
 }
 
 export const DEFAULT_MAX_HOPS = 5;
@@ -175,6 +178,7 @@ export function createAutomationFramework(config: AutomationFrameworkConfig): Au
     recorder: config.recorder,
     maxHops,
     cooldowns: config.cooldowns,
+    schedules: config.schedules,
   });
   engine.reload();
 

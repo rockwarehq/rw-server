@@ -5,8 +5,9 @@ import { type CooldownStore, createMemoryCooldownStore } from "./cooldown.js";
 import { interpolateInputs } from "./interpolate.js";
 import { qbToEngineConditions } from "./qb-to-engine.js";
 import { noopRunRecorder, type RunRecorder } from "./recorder.js";
+import { createMemoryScheduleStore, type ScheduleStore } from "./schedule.js";
 import type { AutomationStore } from "./store.js";
-import type { AppEvent, Automation, EventType } from "./types.js";
+import type { AppEvent, Automation, AutomationAction, EventType } from "./types.js";
 
 export interface EngineDeps {
   store: AutomationStore;
@@ -17,6 +18,7 @@ export interface EngineDeps {
   /** Events with `hop` above this are dropped (recorded, not evaluated). */
   maxHops: number;
   cooldowns?: CooldownStore;
+  schedules?: ScheduleStore;
 }
 
 export interface DispatchResult {
@@ -41,13 +43,18 @@ export interface AutomationEngine {
   reload(): void;
   /** Run all conditions for this event's type; fire the action of each matching automation. */
   dispatch(event: AppEvent): Promise<DispatchResult>;
+  /** Start receiving due delayed actions from the schedule store and running them. Returns a stop function. */
+  startScheduled(): Promise<() => Promise<void>>;
 }
+
+const hasDelay = (action: AutomationAction) => (action.delayMs ?? 0) > 0;
 
 export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
   // Compiled engines, one per event type. Rebuilt by reload().
   let engines = new Map<EventType, Engine>();
   const recorder: RunRecorder = deps.recorder ?? noopRunRecorder;
   const cooldowns = deps.cooldowns ?? createMemoryCooldownStore();
+  const schedules = deps.schedules ?? createMemoryScheduleStore();
 
   /** True when the automation fired for this event's cooldown scope less than `cooldownMs` ago. */
   async function coolingDown(automation: Automation, event: AppEvent): Promise<boolean> {
@@ -57,54 +64,96 @@ export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
     return last !== undefined && Date.parse(event.ts) - last < windowMs;
   }
 
+  /** Enabled automations for this event's type and partition that were not in `matched`. */
+  function unmatched(event: AppEvent, matched: Set<string>): Automation[] {
+    return deps.store
+      .list()
+      .filter(
+        (a) =>
+          a.enabled &&
+          a.event === event.type &&
+          (a.partition == null || a.partition === event.partition) &&
+          !matched.has(a.id),
+      );
+  }
+
+  async function runAction(
+    automation: Automation,
+    action: AutomationAction,
+    idx: number,
+    event: AppEvent,
+    runId: string,
+  ): Promise<void> {
+    const startedAt = new Date().toISOString();
+    const record = (status: "SUCCESS" | "FAILED", error?: string) =>
+      recorder.recordAction({
+        runId,
+        automationId: automation.id,
+        actionIdx: idx,
+        actionType: action.type,
+        actionVersion: action.version,
+        status,
+        error,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+      });
+    try {
+      const versioned = deps.actions.get(action.type, action.version);
+      if (!versioned) {
+        const knownVersions = deps.actions.latest(action.type)
+          ? ` (registered versions of "${action.type}" don't include "${action.version}")`
+          : "";
+        throw new Error(
+          `automation "${automation.label}" (${automation.id}) action #${idx} ("${action.type}@${action.version}"): no handler registered${knownVersions}`,
+        );
+      }
+
+      const inputs = interpolateInputs(action.inputs as Record<string, unknown>, { event });
+      const missing = missingRequired(inputs, versioned.inputSchema);
+      if (missing) {
+        throw new Error(
+          `automation "${automation.label}" (${automation.id}) action #${idx} ("${action.type}@${action.version}"): missing required input "${missing}"`,
+        );
+      }
+
+      await versioned.run(inputs, { automation, event, eventId: event.id, actionIdx: idx });
+      await record("SUCCESS");
+    } catch (err) {
+      await record("FAILED", err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  }
+
   async function runActions(automation: Automation, event: AppEvent, runId: string): Promise<void> {
     for (const [idx, action] of automation.actions.entries()) {
-      const startedAt = new Date().toISOString();
-      try {
-        const versioned = deps.actions.get(action.type, action.version);
-        if (!versioned) {
-          const knownVersions = deps.actions.latest(action.type)
-            ? ` (registered versions of "${action.type}" don't include "${action.version}")`
-            : "";
-          throw new Error(
-            `automation "${automation.label}" (${automation.id}) action #${idx} ("${action.type}@${action.version}"): no handler registered${knownVersions}`,
-          );
-        }
-
-        const inputs = interpolateInputs(action.inputs as Record<string, unknown>, { event });
-        const missing = missingRequired(inputs, versioned.inputSchema);
-        if (missing) {
-          throw new Error(
-            `automation "${automation.label}" (${automation.id}) action #${idx} ("${action.type}@${action.version}"): missing required input "${missing}"`,
-          );
-        }
-
-        await versioned.run(inputs, { automation, event, eventId: event.id, actionIdx: idx });
-        await recorder.recordAction({
-          runId,
-          automationId: automation.id,
-          actionIdx: idx,
-          actionType: action.type,
-          actionVersion: action.version,
-          status: "SUCCESS",
-          startedAt,
-          finishedAt: new Date().toISOString(),
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        await recorder.recordAction({
-          runId,
-          automationId: automation.id,
-          actionIdx: idx,
-          actionType: action.type,
-          actionVersion: action.version,
-          status: "FAILED",
-          error: message,
-          startedAt,
-          finishedAt: new Date().toISOString(),
-        });
-        throw err;
+      if (!hasDelay(action)) {
+        await runAction(automation, action, idx, event, runId);
+        continue;
       }
+      // Arm-if-absent: a repeat match for the same scope keeps the original clock. The delay is
+      // anchored to the event time; a schema-driven anchor (e.g. "down since") would replace it here.
+      const runAt = Date.parse(event.ts) + (action.delayMs ?? 0);
+      const armed = await schedules.schedule({
+        automationId: automation.id,
+        actionIdx: idx,
+        actionType: action.type,
+        scope: event.scope ?? "",
+        runAt,
+        repeat: !!action.repeat,
+        event,
+      });
+      const at = new Date().toISOString();
+      await recorder.recordAction({
+        runId,
+        automationId: automation.id,
+        actionIdx: idx,
+        actionType: action.type,
+        actionVersion: action.version,
+        status: armed ? "SCHEDULED" : "SKIPPED",
+        error: armed ? undefined : "already armed or fired for this scope",
+        startedAt: at,
+        finishedAt: at,
+      });
     }
   }
 
@@ -163,6 +212,10 @@ export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
           }
           await runActions(automation, event, runId);
         }
+        // Cancel-on-clear: the scope's condition no longer holds for these, so drop anything armed.
+        for (const a of unmatched(event, new Set([...matched, ...cooled]))) {
+          if (a.actions.some(hasDelay)) await schedules.cancel(a.id, event.scope ?? "");
+        }
         await recorder.finishRun(runId, { matched, cooled, status: "SUCCESS" });
         return { matched, cooled };
       } catch (err) {
@@ -170,6 +223,24 @@ export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
         await recorder.finishRun(runId, { matched, cooled, status: "FAILED", error: message });
         throw err;
       }
+    },
+
+    startScheduled() {
+      return schedules.start(async (s) => {
+        // Runs the automation as it is now; an entry whose automation is gone or disabled, or whose
+        // action was removed or replaced by one of another type, is dropped.
+        const automation = deps.store.get(s.automationId);
+        const action = automation?.enabled ? automation.actions[s.actionIdx] : undefined;
+        if (!automation || action?.type !== s.actionType) return;
+        const runId = await recorder.startRun({ event: s.event });
+        try {
+          await runAction(automation, action, s.actionIdx, s.event, runId);
+          await recorder.finishRun(runId, { matched: [automation.id], status: "SUCCESS" });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await recorder.finishRun(runId, { matched: [automation.id], status: "FAILED", error: message });
+        }
+      });
     },
   };
 }

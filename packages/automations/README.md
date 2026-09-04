@@ -80,8 +80,24 @@ store so several instances agree.
 ## Scope key
 
 An event schema version may name a `scopeKey` — the payload field saying what the event is about
-(`"callId"`, `"stationId"`). `fire()` copies it to `event.scope`. Nothing acts on it yet; it is the
-handle a future delayed action will cancel on when the same scope's next event does not match.
+(`"callId"`, `"stationId"`). `fire()` copies it to `event.scope`. Delayed actions are armed and
+cancelled per scope value.
+
+## Delayed actions
+
+An action with `delayMs` is armed instead of run when its automation matches: the engine hands
+`(automation, action index, scope, runAt, event)` to the `ScheduleStore` and records the action as
+`SCHEDULED` (or `SKIPPED` when the key was already taken). Arming is if-absent, so a repeat match
+for the same scope keeps the original clock. When a later event of the same type for the same scope
+does *not* match the automation, its armed actions for that scope are cancelled — "notify if still
+down after 10 minutes" clears itself when the station comes back up. After a fire the key stays held
+until such a clearing event, so the action runs once per incident; set `repeat` on the action to
+re-arm on the scope's next match instead. `engine.startScheduled()` subscribes to the store; each due entry runs
+against the automation as it is now (a disabled automation or removed action is dropped) and is
+recorded as its own run carrying the original event. The default store is in-process timers; the
+app supplies a shared one so several instances see one pending set and each entry runs on exactly
+one of them. `runAt` is the event time plus the delay; anchoring it elsewhere (a "down since" field)
+is a one-line change in `runActions`.
 
 ## Versioning
 

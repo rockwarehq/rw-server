@@ -78,6 +78,12 @@ redelivery yields the same automation event id.
 
 - **Just-in-time, no queue.** Events fire synchronously in-process — no broker, no background worker.
   `fire()` runs the matched automations' actions in order and returns when they're done.
+- **Delayed actions.** An action with `delayMs` is armed as a JetStream scheduled message (server
+  2.12+) in the `RW_AUTOMATION_SCHEDULES` stream by `src/nats/automation-schedule-store.ts`; when due
+  the server republishes it and a durable work-queue consumer runs it on one instance via
+  `engine.startScheduled()`. No polling. NATS is required — the framework does not build without it.
+  Deleting or editing an automation leaves armed entries in place; a due entry runs against the
+  current definition and is dropped if the automation or action is gone.
 - **In-memory + reload.** Automations are cached in memory; every create/update/delete must call
   `engine.reload()` (the RPC handlers do this). A write that bypasses them runs against stale rules.
 - **Horizontal scaling — not implemented.** The cache is per-instance, so a config upsert/delete only

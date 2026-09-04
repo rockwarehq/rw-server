@@ -246,3 +246,116 @@ describe("catalog", () => {
     expect(action?.enumValues).toEqual(["opened", "closed"]);
   });
 });
+
+describe("delayed actions", () => {
+  const delayed = (id: string, delayMs = 20, repeat = false): Automation => ({
+    ...automation(id, SITE_A),
+    actions: [{ type: "noop", version: "1", inputs: {}, delayMs, repeat }],
+  });
+  const fire = (fw: ReturnType<typeof build>["fw"], callId: string, action = "opened") =>
+    fw.fire("call.changed", { siteId: SITE_A, callId, action });
+  const settle = () => new Promise((r) => setTimeout(r, 60));
+
+  it("arms the action instead of running it, then runs it once due with the matching event", async () => {
+    const statuses: string[] = [];
+    const { fw, ran } = build([delayed("a")], {
+      recorder: {
+        startRun: async () => "run",
+        recordAction: async (input) => {
+          statuses.push(input.status);
+        },
+        finishRun: async () => {},
+      },
+    });
+    const stop = await fw.engine.startScheduled();
+    const r = await fire(fw, "c1");
+    expect(r.matched).toEqual(["a"]);
+    expect(ran).toHaveLength(0);
+    expect(statuses).toEqual(["SCHEDULED"]);
+
+    await settle();
+    expect(ran).toHaveLength(1);
+    expect(ran[0]?.event.id).toBe(r.eventId);
+    expect(statuses).toEqual(["SCHEDULED", "SUCCESS"]);
+    await stop();
+  });
+
+  it("keeps the original clock when the same scope matches again", async () => {
+    const { fw, ran } = build([delayed("a")]);
+    const stop = await fw.engine.startScheduled();
+    await fire(fw, "c1");
+    await fire(fw, "c1");
+    await settle();
+    expect(ran).toHaveLength(1);
+    await stop();
+  });
+
+  it("cancels when the scope's next event no longer matches", async () => {
+    const { fw, ran } = build([delayed("a")]);
+    const stop = await fw.engine.startScheduled();
+    await fire(fw, "c1");
+    await fire(fw, "c1", "closed");
+    await settle();
+    expect(ran).toHaveLength(0);
+    await stop();
+  });
+
+  it("leaves other scopes armed", async () => {
+    const { fw, ran } = build([delayed("a")]);
+    const stop = await fw.engine.startScheduled();
+    await fire(fw, "c1");
+    await fire(fw, "c2", "closed");
+    await settle();
+    expect(ran).toHaveLength(1);
+    expect(ran[0]?.event.scope).toBe("c1");
+    await stop();
+  });
+
+  it("fires once per scope until a clearing event, when repeat is off", async () => {
+    const { fw, ran } = build([delayed("a")]);
+    const stop = await fw.engine.startScheduled();
+    await fire(fw, "c1");
+    await settle();
+    await fire(fw, "c1");
+    await settle();
+    expect(ran).toHaveLength(1);
+    await fire(fw, "c1", "closed");
+    await fire(fw, "c1");
+    await settle();
+    expect(ran).toHaveLength(2);
+    await stop();
+  });
+
+  it("re-arms on the next match after firing, when repeat is on", async () => {
+    const { fw, ran } = build([delayed("a", 20, true)]);
+    const stop = await fw.engine.startScheduled();
+    await fire(fw, "c1");
+    await settle();
+    await fire(fw, "c1");
+    await settle();
+    expect(ran).toHaveLength(2);
+    await stop();
+  });
+
+  it("drops a due entry whose action was replaced by another type meanwhile", async () => {
+    const rows = [delayed("a")];
+    const { fw, ran } = build(rows);
+    const stop = await fw.engine.startScheduled();
+    await fire(fw, "c1");
+    await fw.store.upsert({ ...rows[0]!, actions: [{ type: "other", version: "1", inputs: {} }] });
+    await settle();
+    expect(ran).toHaveLength(0);
+    await stop();
+  });
+
+  it("drops a due entry whose automation was disabled meanwhile", async () => {
+    const rows = [delayed("a")];
+    const { fw, ran } = build(rows);
+    const stop = await fw.engine.startScheduled();
+    await fire(fw, "c1");
+    await fw.store.upsert({ ...rows[0]!, enabled: false });
+    await settle();
+    expect(ran).toHaveLength(0);
+    await stop();
+  });
+});

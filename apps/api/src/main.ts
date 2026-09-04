@@ -39,6 +39,7 @@ import {
   startModeEventPublisher,
   startNotificationEventPublisher,
 } from "./nats/domain-event-publishers.js";
+import { getAutomationFramework } from "./automations/index.js";
 import { startAutomationEventConsumer } from "./nats/automation-event-consumer.js";
 import { startCommandBus } from "./nats/command-bus.js";
 import { closeNatsConnection } from "./nats/util.js";
@@ -104,6 +105,7 @@ async function main() {
     startNotificationEventPublisher,
     startJobEventPublisher,
     startAutomationEventConsumer,
+    async () => (await getAutomationFramework()).engine.startScheduled(),
     startCommandBus,
   ]) {
     natsCleanups.push(await start());
