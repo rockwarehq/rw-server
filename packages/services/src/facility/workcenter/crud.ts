@@ -30,6 +30,16 @@ export interface ListWorkcentersFilter {
 export async function create(input: CreateWorkcenterInput) {
   const { name, description, attrs, siteId, parentId } = input;
 
+  // Workcenters are a flat list per site: stations (and later station
+  // groups) go under workcenters, never another workcenter. Existing nested
+  // rows are tolerated but no new nesting can be created.
+  if (parentId) {
+    return {
+      error: "Workcenters cannot be nested under another workcenter",
+      code: "WORKCENTER_NESTING_UNSUPPORTED",
+    };
+  }
+
   // Validate site exists
   const site = await prisma.site.findUnique({
     where: { id: siteId },
@@ -40,32 +50,12 @@ export async function create(input: CreateWorkcenterInput) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
 
-  // Validate parent exists and belongs to same site
-  if (parentId) {
-    const parent = await prisma.workcenter.findUnique({
-      where: { id: parentId },
-      select: { id: true, siteId: true },
-    });
-
-    if (!parent) {
-      return { error: "Parent workcenter not found", code: "PARENT_NOT_FOUND" };
-    }
-
-    if (parent.siteId !== siteId) {
-      return {
-        error: "Parent workcenter must belong to the same site",
-        code: "SITE_MISMATCH",
-      };
-    }
-  }
-
   const workcenter = await prisma.workcenter.create({
     data: {
       name,
       description,
       attrs: attrs ?? {},
       siteId,
-      parentId,
     },
     include: {
       site: {
@@ -250,9 +240,18 @@ export async function update(id: string, input: UpdateWorkcenterInput, workspace
 }
 
 /**
- * Move workcenter to a new parent (within same site)
+ * Move workcenter to the top level. Nesting is unsupported: the only
+ * allowed move is parentId -> null, kept so admins can flatten trees that
+ * predate the flat-workcenter rule.
  */
 export async function move(id: string, newParentId: string | null, workspaceId?: string) {
+  if (newParentId !== null) {
+    return {
+      error: "Workcenters cannot be nested under another workcenter",
+      code: "WORKCENTER_NESTING_UNSUPPORTED",
+    };
+  }
+
   const current = await prisma.workcenter.findUnique({
     where: { id },
     include: {
@@ -271,60 +270,9 @@ export async function move(id: string, newParentId: string | null, workspaceId?:
     return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
-  // Validate new parent if provided
-  if (newParentId) {
-    // Cannot move to itself
-    if (newParentId === id) {
-      return {
-        error: "Cannot move workcenter to itself",
-        code: "CIRCULAR_REFERENCE",
-      };
-    }
-
-    const newParent = await prisma.workcenter.findUnique({
-      where: { id: newParentId },
-      select: { id: true, siteId: true, parentId: true },
-    });
-
-    if (!newParent) {
-      return {
-        error: "New parent workcenter not found",
-        code: "PARENT_NOT_FOUND",
-      };
-    }
-
-    // Must be in same site
-    if (newParent.siteId !== current.siteId) {
-      return {
-        error: "Cannot move workcenter to a different site",
-        code: "SITE_MISMATCH",
-      };
-    }
-
-    // Check for circular reference - ensure new parent is not a descendant
-    let checkId: string | null = newParentId;
-    while (checkId) {
-      const ancestor: { parentId: string | null } | null = await prisma.workcenter.findUnique({
-        where: { id: checkId },
-        select: { parentId: true },
-      });
-
-      if (!ancestor) break;
-
-      if (ancestor.parentId === id) {
-        return {
-          error: "Cannot move workcenter to its own descendant",
-          code: "CIRCULAR_REFERENCE",
-        };
-      }
-
-      checkId = ancestor.parentId;
-    }
-  }
-
   const workcenter = await prisma.workcenter.update({
     where: { id },
-    data: { parentId: newParentId },
+    data: { parentId: null },
     include: {
       site: {
         select: { id: true, name: true, workspaceId: true },

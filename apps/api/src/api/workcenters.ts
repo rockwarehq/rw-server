@@ -63,7 +63,6 @@ const createBodySchema = {
     description: { type: "string" },
     attrs: { type: "object", additionalProperties: true },
     siteId: { type: "string", format: "uuid" },
-    parentId: { type: "string", format: "uuid" },
   },
   required: ["name", "siteId"],
 } as const satisfies JSONSchema;
@@ -77,10 +76,12 @@ const updateBodySchema = {
   },
 } as const satisfies JSONSchema;
 
+// Nesting is unsupported; the only accepted move is to the top level
+// (parentId: null), kept so pre-existing trees can be flattened.
 const moveBodySchema = {
   type: "object",
   properties: {
-    parentId: { type: ["string", "null"], format: "uuid" },
+    parentId: { type: "null" },
   },
   required: ["parentId"],
 } as const satisfies JSONSchema;
