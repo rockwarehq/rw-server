@@ -1,7 +1,8 @@
 import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
-import { WATERMARK_OVERLAP_MS } from "./cursor.js";
+import { isUuid, WATERMARK_OVERLAP_MS } from "./cursor.js";
 import type {
+  ChangeContinuation,
   HistorianError,
   ResolvedRange,
   SeriesChanges,
@@ -126,7 +127,8 @@ interface PageToken {
 function decodePageToken(token: string): PageToken | null {
   try {
     const parsed = JSON.parse(Buffer.from(token, "base64url").toString("utf8")) as PageToken;
-    if (typeof parsed?.s !== "number" || typeof parsed?.i !== "string") return null;
+    if (typeof parsed?.s !== "number" || !Number.isFinite(new Date(parsed.s).getTime()) || !isUuid(parsed?.i))
+      return null;
     return parsed;
   } catch {
     return null;
@@ -268,33 +270,51 @@ async function fetchChanges(
   range: ResolvedRange,
   watermarkMs: number,
   limit: number,
+  continuation?: ChangeContinuation,
 ): Promise<SeriesChanges<MetricBucketRow> | HistorianError> {
+  // Deployed metric consumers aggregate deltas without client-side range filtering.
   const where = { ...scopeWhere(scope), ...rangeWhere(range) };
-  const frontier = new Date(watermarkMs - WATERMARK_OVERLAP_MS);
+  const frontierMs =
+    continuation?.frontierMs ?? (await prisma.$queryRaw<[{ now: Date }]>`SELECT now() AS now`)[0].now.getTime();
+  const changeWhere = (field: "updatedAt" | "archivedAt") => ({
+    ...where,
+    [field]: { lte: new Date(frontierMs) },
+    OR: continuation
+      ? [
+          { [field]: { gt: new Date(continuation.updatedAtMs) } },
+          { [field]: new Date(continuation.updatedAtMs), id: { gt: continuation.id } },
+        ]
+      : [{ [field]: { gt: new Date(watermarkMs - WATERMARK_OVERLAP_MS) } }],
+  });
   const take = limit + 1;
 
-  // The watermark comes from the database clock inside the same transaction
-  // as the delta scan (see station-state.ts for the rationale).
-  const [clock, live, archived] = await prisma.$transaction([
-    prisma.$queryRaw<[{ now: Date }]>`SELECT now() AS now`,
+  const [live, archived] = await prisma.$transaction([
     prisma.metricBucket.findMany({
-      where: { ...where, updatedAt: { gt: frontier } },
+      where: changeWhere("updatedAt"),
       select: { ...rowSelect, updatedAt: true },
       orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
       take,
     }),
     prisma.metricBucketLog.findMany({
-      where: { ...where, archivedAt: { gt: frontier } },
+      where: changeWhere("archivedAt"),
       select: { ...rowSelect, archivedAt: true },
       orderBy: [{ archivedAt: "asc" }, { id: "asc" }],
       take,
     }),
   ]);
 
-  const merged = [
+  // An archive move can expose two copies of the exact same key. Deliver
+  // only the archived winner so a page boundary cannot skip that revision.
+  const revisions = new Map<string, MetricBucketRow>();
+  for (const row of [
     ...live.map((row) => normalizeRow(row as LiveRow, false)),
     ...archived.map((row) => normalizeRow(row as LogRow, true)),
-  ].sort((a, b) => a.changeTs.getTime() - b.changeTs.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  ]) {
+    revisions.set(`${row.changeTs.getTime()}:${row.id}`, row);
+  }
+  const merged = [...revisions.values()].sort(
+    (a, b) => a.changeTs.getTime() - b.changeTs.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
 
   const hasMore = merged.length > limit;
   const data = hasMore ? merged.slice(0, limit) : merged;
@@ -304,10 +324,8 @@ async function fetchChanges(
     // Pure upserts: archive is an id-preserving move, corrections rewrite
     // rows in place — this series has no tombstones.
     deltas: data.map((row) => ({ op: "upsert" as const, row })),
-    // When a page is full the frontier stops at the last delivered row so the
-    // next page continues from there; the overlap window makes the boundary
-    // redelivery harmless.
-    nextWatermarkMs: hasMore && last ? last.changeTs.getTime() : clock[0].now.getTime(),
+    nextWatermarkMs: hasMore ? watermarkMs : frontierMs,
+    continuation: hasMore && last ? { frontierMs, updatedAtMs: last.changeTs.getTime(), id: last.id } : undefined,
     hasMore,
   };
 }

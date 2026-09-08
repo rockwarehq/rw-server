@@ -139,11 +139,15 @@ export const metricBucketLogList = authRequired
 
     const orderBy = [{ entityType: "asc" as const }, { entityName: "asc" as const }];
 
-    // Try archived data first; fall back to live MetricBucket for current shifts
-    const rows = await prisma.metricBucketLog.findMany({ where, orderBy, select });
-    if (rows.length > 0) return rows;
-
-    return prisma.metricBucket.findMany({ where, orderBy, select });
+    // Read live first so an archive move between reads cannot hide a bucket.
+    // Partial archives still need live stations; archived copies win by id.
+    const live = await prisma.metricBucket.findMany({ where, orderBy, select });
+    const archived = await prisma.metricBucketLog.findMany({ where, orderBy, select });
+    const rows = new Map(live.map((row) => [row.id, row]));
+    for (const row of archived) rows.set(row.id, row);
+    return [...rows.values()].sort(
+      (a, b) => a.entityType.localeCompare(b.entityType) || a.entityName.localeCompare(b.entityName),
+    );
   });
 
 // ============================================================================

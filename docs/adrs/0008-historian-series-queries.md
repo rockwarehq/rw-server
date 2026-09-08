@@ -188,6 +188,32 @@ Verified facts the scheme rests on:
   `MetricBucketLog` rows with no tombstones) are rejected with `BAD_REQUEST`;
   the client re-runs `query`. Hard-delete detection is an explicit non-goal.
 
+#### Implemented pagination contract
+
+The public `query` and `changes` inputs and response fields are unchanged.
+Clients must treat both `cursor` and `nextPageToken` as opaque strings.
+
+- A change sweep fixes an upper frontier from the DB clock. Its first page
+  applies the 45-second overlap to the previous watermark; subsequent pages
+  use a strict `(change timestamp, id)` continuation without applying overlap
+  again. Only exhaustion advances the watermark to the fixed frontier.
+- Mid-sweep cursors use an internal v2 payload carrying that continuation.
+  Existing v1 cursors remain accepted as the start of a new sweep.
+- Snapshot page tokens wrap the series keyset token with the original resolved
+  range and shift metadata, bound to the series and scope. Relative windows
+  are not resolved again, even across shift rollover or no active shift.
+  Shipped keyset-only tokens remain accepted, but cannot pin a range they never
+  recorded; their first resumed request resolves the range as before.
+- Station-state change scans return all changed rows within the authorized station,
+  not just rows currently overlapping the snapshot range.
+  Clients must replace rows by id before clipping/filtering for display,
+  so a correction moving a row out of the window removes the stale rendering.
+- Metric-bucket change scans retain the resolved-range filter on both live and
+  archived rows for compatibility with deployed clients that sum returned rows
+  without filtering. Out-of-window metric corrections are not delivered.
+- Late commits and clock skew still rely on the bounded overlap assumption;
+  this is not a commit-ordered change log or a transactional snapshot across pages.
+
 ### 4. Per-series mapping
 
 |  | metricBucket | stationState | cycle |

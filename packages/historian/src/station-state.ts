@@ -1,7 +1,8 @@
 import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
-import { WATERMARK_OVERLAP_MS } from "./cursor.js";
+import { isUuid, WATERMARK_OVERLAP_MS } from "./cursor.js";
 import type {
+  ChangeContinuation,
   HistorianError,
   ResolvedRange,
   SeriesChanges,
@@ -62,7 +63,8 @@ interface PageToken {
 function decodePageToken(token: string): PageToken | null {
   try {
     const parsed = JSON.parse(Buffer.from(token, "base64url").toString("utf8")) as PageToken;
-    if (typeof parsed?.s !== "number" || typeof parsed?.i !== "string") return null;
+    if (typeof parsed?.s !== "number" || !Number.isFinite(new Date(parsed.s).getTime()) || !isUuid(parsed?.i))
+      return null;
     return parsed;
   } catch {
     return null;
@@ -160,25 +162,31 @@ async function fetchRange(
 
 async function fetchChanges(
   scope: StationStateScope,
-  range: ResolvedRange,
+  _range: ResolvedRange,
   watermarkMs: number,
   limit: number,
+  continuation?: ChangeContinuation,
 ): Promise<SeriesChanges<StationStateRow> | HistorianError> {
-  const where = overlapWhere(scope, range);
-  where.updatedAt = { gt: new Date(watermarkMs - WATERMARK_OVERLAP_MS) };
-
-  // The watermark comes from the database clock inside the same transaction
-  // as the delta scan — writers span Postgres NOW() and the JS clocks of
-  // multiple processes, so an app clock cannot be the frontier.
-  const [clock, rows] = await prisma.$transaction([
-    prisma.$queryRaw<[{ now: Date }]>`SELECT now() AS now`,
-    prisma.stationStateLog.findMany({
-      where,
-      include: rowInclude,
-      orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
-      take: limit + 1,
-    }),
-  ]);
+  const frontierMs =
+    continuation?.frontierMs ?? (await prisma.$queryRaw<[{ now: Date }]>`SELECT now() AS now`)[0].now.getTime();
+  // Revisions can move a previously delivered interval outside the window.
+  // Deliver the station's full changed rows; clients replace by id then clip.
+  const where: Prisma.StationStateLogWhereInput = {
+    stationId: scope.stationId,
+    updatedAt: { lte: new Date(frontierMs) },
+    OR: continuation
+      ? [
+          { updatedAt: { gt: new Date(continuation.updatedAtMs) } },
+          { updatedAt: new Date(continuation.updatedAtMs), id: { gt: continuation.id } },
+        ]
+      : [{ updatedAt: { gt: new Date(watermarkMs - WATERMARK_OVERLAP_MS) } }],
+  };
+  const rows = await prisma.stationStateLog.findMany({
+    where,
+    include: rowInclude,
+    orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+    take: limit + 1,
+  });
 
   const hasMore = rows.length > limit;
   const data = hasMore ? rows.slice(0, limit) : rows;
@@ -189,10 +197,9 @@ async function fetchChanges(
       op: row.deletedAt ? ("delete" as const) : ("upsert" as const),
       row,
     })),
-    // When a page is full the frontier stops at the last delivered row so the
-    // next page continues from there; the overlap window makes the boundary
-    // redelivery harmless.
-    nextWatermarkMs: hasMore && last ? last.updatedAt.getTime() : clock[0].now.getTime(),
+    // Only a new sweep applies overlap; pages advance strictly by timestamp/id.
+    nextWatermarkMs: hasMore ? watermarkMs : frontierMs,
+    continuation: hasMore && last ? { frontierMs, updatedAtMs: last.updatedAt.getTime(), id: last.id } : undefined,
     hasMore,
   };
 }
