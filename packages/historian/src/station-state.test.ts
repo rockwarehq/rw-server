@@ -177,14 +177,57 @@ describe.skipIf(!process.env.DATABASE_URL)("historian stationState series", () =
     expect(closed?.row.endTime?.getTime()).toBe(at("2026-07-13T09:00:00.000Z").getTime());
   });
 
-  test("fetchChanges pages and holds the frontier at the last delivered row", async () => {
+  test("fetchChanges pages with a separate continuation and stable watermark", async () => {
+    await prisma.stationStateLog.updateMany({
+      where: { stationId },
+      data: { updatedAt: new Date(Date.now() - 1_000) },
+    });
     const first = await stationStateSeries.fetchChanges({ siteId, stationId }, RANGE, 0, 2);
     expect(isHistorianError(first)).toBe(false);
     if (isHistorianError(first)) return;
     expect(first.hasMore).toBe(true);
     expect(first.deltas).toHaveLength(2);
     const lastDelivered = first.deltas[first.deltas.length - 1];
-    expect(first.nextWatermarkMs).toBe(lastDelivered.row.updatedAt.getTime());
+    expect(first.nextWatermarkMs).toBe(0);
+    expect(first.continuation?.updatedAtMs).toBe(lastDelivered.row.updatedAt.getTime());
+    expect(first.continuation?.id).toBe(lastDelivered.row.id);
+    const ids = first.deltas.map((delta) => delta.row.id);
+    let page = first;
+    for (let i = 0; page.hasMore && i < 10; i++) {
+      const next = await stationStateSeries.fetchChanges(
+        { siteId, stationId },
+        RANGE,
+        page.nextWatermarkMs,
+        2,
+        page.continuation,
+      );
+      if (isHistorianError(next)) throw new Error(next.error);
+      ids.push(...next.deltas.map((delta) => delta.row.id));
+      page = next;
+    }
+    expect(page.hasMore).toBe(false);
+    expect(ids).toHaveLength(5);
+    expect(new Set(ids).size).toBe(5);
+    expect(page.nextWatermarkMs).toBe(first.continuation?.frontierMs);
+  });
+
+  test("fetchChanges delivers a correction and tombstone after an interval leaves the range", async () => {
+    const original = await prisma.stationStateLog.findFirstOrThrow({ where: { stationId, blockId: "blk-straddle" } });
+    await prisma.stationStateLog.update({
+      where: { id: original.id },
+      data: {
+        endTime: at("2026-07-13T05:45:00.000Z"),
+        deletedAt: new Date(),
+      },
+    });
+    const changes = await stationStateSeries.fetchChanges({ siteId, stationId }, RANGE, Date.now() - 1_000, 100);
+    if (isHistorianError(changes)) throw new Error(changes.error);
+    const revised = changes.deltas.find((delta) => delta.row.id === original.id);
+    expect(revised?.op).toBe("delete");
+    expect(revised?.row.endTime).toEqual(at("2026-07-13T05:45:00.000Z"));
+    const snapshot = await stationStateSeries.fetchRange({ siteId, stationId }, RANGE, { limit: 100 });
+    if (isHistorianError(snapshot)) throw new Error(snapshot.error);
+    expect(snapshot.rows.some((row) => row.id === original.id)).toBe(false);
   });
 
   test("resolveCurrentShift resolves the station's workcenter shift", async () => {

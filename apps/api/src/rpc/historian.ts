@@ -4,8 +4,10 @@ import prisma from "@rw/db";
 import {
   decodeCursor,
   encodeCursor,
+  encodeSnapshotPageToken,
   getSeries,
   isHistorianError,
+  resolveSnapshotPage,
   type ResolvedRange,
   type SeriesDefinition,
   type ShiftWindow,
@@ -147,7 +149,10 @@ export const query = userOrDisplayRequired.input(queryInputSchema).handler(async
   );
   const definition = await authorizeSeries(input.series);
 
-  const window = await resolveRange(definition, input.series, input.range);
+  const window = await resolveSnapshotPage(input.series.seriesType, input.series, input.pageToken, () =>
+    resolveRange(definition, input.series, input.range),
+  );
+  if (isHistorianError(window)) throwServiceError(window);
   if (!window) {
     // A relative window with nothing to resolve (no active shift): an empty
     // snapshot with no cursor. The client re-queries when a shift starts.
@@ -169,7 +174,7 @@ export const query = userOrDisplayRequired.input(queryInputSchema).handler(async
 
   const page = await definition.fetchRange(input.series, window.range, {
     limit: input.limit,
-    pageToken: input.pageToken ?? null,
+    pageToken: window.pageToken,
   });
   if (isHistorianError(page)) throwServiceError(page);
 
@@ -177,7 +182,9 @@ export const query = userOrDisplayRequired.input(queryInputSchema).handler(async
     resolvedRange: window.range,
     shift: shiftMeta(window.shift),
     rows: page.rows,
-    nextPageToken: page.nextPageToken,
+    nextPageToken: page.nextPageToken
+      ? encodeSnapshotPageToken(input.series.seriesType, input.series, window, page.nextPageToken)
+      : null,
     cursor,
   };
 });
@@ -191,12 +198,24 @@ export const changes = userOrDisplayRequired.input(changesInputSchema).handler(a
   const decoded = decodeCursor(input.cursor, input.series.seriesType, input.series, Date.now());
   if (isHistorianError(decoded)) throwServiceError(decoded);
 
-  const result = await definition.fetchChanges(input.series, decoded.range, decoded.watermarkMs, input.limit);
+  const result = await definition.fetchChanges(
+    input.series,
+    decoded.range,
+    decoded.watermarkMs,
+    input.limit,
+    decoded.continuation,
+  );
   if (isHistorianError(result)) throwServiceError(result);
 
   return {
     deltas: result.deltas,
-    cursor: encodeCursor(input.series.seriesType, input.series, decoded.range, result.nextWatermarkMs),
+    cursor: encodeCursor(
+      input.series.seriesType,
+      input.series,
+      decoded.range,
+      result.nextWatermarkMs,
+      result.continuation,
+    ),
     hasMore: result.hasMore,
   };
 });

@@ -37,13 +37,28 @@ const stationsDirectoryConfigSchema = z.object({
   columns: z.array(z.string().min(1)).max(50),
 });
 
+// Workcenter timeline (status gantt): overlay-layer toggles + the same
+// filter-selection semantics as shift-view (selections, not resolved
+// stations).
+const timelineConfigSchema = z.object({
+  layers: z.object({
+    jobs: z.boolean(),
+    downtime: z.boolean(),
+    shifts: z.boolean(),
+    andon: z.boolean(),
+  }),
+  stationIds: z.array(z.uuid()).nullable(),
+  labelIds: z.array(z.uuid()).nullable(),
+});
+
 // One member per page that supports saved views.
 const pageConfigSchema = z.discriminatedUnion("page", [
   z.object({ page: z.literal("shift-view"), config: shiftViewConfigSchema }),
   z.object({ page: z.literal("stations-directory"), config: stationsDirectoryConfigSchema }),
+  z.object({ page: z.literal("timeline"), config: timelineConfigSchema }),
 ]);
 
-const pageSchema = z.enum(["shift-view", "stations-directory"]);
+const pageSchema = z.enum(["shift-view", "stations-directory", "timeline"]);
 const visibilitySchema = z.enum(["PRIVATE", "WORKSPACE"]);
 
 const createInputSchema = z
@@ -64,6 +79,7 @@ const updateConfigSchema = z.discriminatedUnion("page", [
     page: z.literal("stations-directory"),
     config: stationsDirectoryConfigSchema.optional(),
   }),
+  z.object({ page: z.literal("timeline"), config: timelineConfigSchema.optional() }),
 ]);
 
 const updateInputSchema = z

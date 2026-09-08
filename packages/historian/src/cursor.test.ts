@@ -5,8 +5,35 @@ import { isHistorianError } from "./types.js";
 const scope = { siteId: "11111111-1111-1111-1111-111111111111", stationId: "22222222-2222-2222-2222-222222222222" };
 const range = { from: new Date("2026-07-13T06:00:00.000Z"), to: null };
 const now = new Date("2026-07-13T12:00:00.000Z").getTime();
+const rowId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
 describe("historian cursor", () => {
+  test("round-trips a continuation separately from the sweep watermark", () => {
+    const continuation = { frontierMs: now, updatedAtMs: now - 1_000, id: rowId };
+    const token = encodeCursor("stationState", scope, range, now - 5_000, continuation);
+    expect(decodeCursor(token, "stationState", scope, now)).toEqual({
+      range,
+      watermarkMs: now - 5_000,
+      continuation,
+    });
+  });
+
+  test("rejects malformed continuation positions", () => {
+    const token = encodeCursor("stationState", scope, range, now - 5_000);
+    const payload = JSON.parse(Buffer.from(token, "base64url").toString("utf8"));
+    for (const continuation of [
+      undefined,
+      {},
+      { frontierMs: now, updatedAtMs: now + 1, id: rowId },
+      { frontierMs: now, updatedAtMs: now - 1, id: "" },
+      { frontierMs: "bad", updatedAtMs: now - 1, id: rowId },
+      { frontierMs: now, updatedAtMs: now - 100_000, id: rowId },
+    ]) {
+      const bad = Buffer.from(JSON.stringify({ ...payload, v: 2, continuation })).toString("base64url");
+      expect(isHistorianError(decodeCursor(bad, "stationState", scope, now))).toBe(true);
+    }
+  });
+
   test("round-trips watermark and range", () => {
     const wm = now - 5_000;
     const token = encodeCursor("stationState", scope, range, wm);
@@ -17,6 +44,26 @@ describe("historian cursor", () => {
     expect(decoded.watermarkMs).toBe(wm);
     expect(decoded.range.from.getTime()).toBe(range.from.getTime());
     expect(decoded.range.to).toBeNull();
+  });
+
+  test.each([
+    "not-a-uuid",
+    "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeeg",
+    "",
+    123,
+    null,
+  ])("rejects invalid continuation UUID %s", (id) => {
+    const token = encodeCursor("stationState", scope, range, now - 5_000);
+    const payload = JSON.parse(Buffer.from(token, "base64url").toString("utf8"));
+    payload.v = 2;
+    payload.continuation = { frontierMs: now, updatedAtMs: now - 1, id };
+    const decoded = decodeCursor(
+      Buffer.from(JSON.stringify(payload)).toString("base64url"),
+      "stationState",
+      scope,
+      now,
+    );
+    expect(decoded).toMatchObject({ code: "BAD_CURSOR" });
   });
 
   test("round-trips a bounded range", () => {

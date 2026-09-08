@@ -185,14 +185,31 @@ describe.skipIf(!process.env.DATABASE_URL)("historian metricBucket series", () =
     expect(revised?.op).toBe("upsert");
   });
 
-  test("fetchChanges pages and holds the frontier at the last delivered row", async () => {
+  test("fetchChanges pages with a separate continuation and stable watermark", async () => {
+    const timestamp = new Date(Date.now() - 1_000);
+    await prisma.metricBucket.updateMany({ where: scope(), data: { updatedAt: timestamp } });
+    await prisma.metricBucketLog.updateMany({ where: scope(), data: { archivedAt: timestamp } });
     const first = await metricBucketSeries.fetchChanges(scope(), RANGE, 0, 2);
     expect(isHistorianError(first)).toBe(false);
     if (isHistorianError(first)) return;
     expect(first.hasMore).toBe(true);
     expect(first.deltas).toHaveLength(2);
     const lastDelivered = first.deltas[first.deltas.length - 1];
-    expect(first.nextWatermarkMs).toBe(lastDelivered.row.changeTs.getTime());
+    expect(first.nextWatermarkMs).toBe(0);
+    expect(first.continuation?.updatedAtMs).toBe(lastDelivered.row.changeTs.getTime());
+    expect(first.continuation?.id).toBe(lastDelivered.row.id);
+    const ids = first.deltas.map((delta) => delta.row.id);
+    let page = first;
+    for (let i = 0; page.hasMore && i < 10; i++) {
+      const next = await metricBucketSeries.fetchChanges(scope(), RANGE, page.nextWatermarkMs, 2, page.continuation);
+      if (isHistorianError(next)) throw new Error(next.error);
+      ids.push(...next.deltas.map((delta) => delta.row.id));
+      page = next;
+    }
+    expect(page.hasMore).toBe(false);
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(3);
+    expect(page.nextWatermarkMs).toBe(first.continuation?.frontierMs);
   });
 
   test("resolveCurrentShift resolves for both workcenter and station scopes", async () => {

@@ -40,10 +40,18 @@ export interface SeriesDelta<Row> {
   row: Row;
 }
 
+export interface ChangeContinuation {
+  frontierMs: number;
+  /** Series change timestamp: updatedAt, or archivedAt for metric logs. */
+  updatedAtMs: number;
+  id: string;
+}
+
 export interface SeriesChanges<Row> {
   deltas: SeriesDelta<Row>[];
-  /** Epoch-ms change-timestamp frontier for the next cursor. */
+  /** Previous watermark while paging; fixed sweep frontier after exhaustion. */
   nextWatermarkMs: number;
+  continuation?: ChangeContinuation;
   hasMore: boolean;
 }
 
@@ -71,14 +79,16 @@ export interface SeriesDefinition<Scope, Row> {
     page: { limit: number; pageToken?: string | null },
   ): Promise<SeriesPage<Row> | HistorianError>;
   /**
-   * Rows whose change timestamp is past the watermark minus the overlap
-   * window. At-least-once: bounded redelivery is expected and harmless under
-   * the idempotent-upsert contract.
+   * Scoped revisions: station states include corrections outside the range;
+   * metric buckets retain the resolved-range filter for deployed consumers.
+   * A sweep applies overlap once, then pages strictly by timestamp/id up to
+   * its fixed DB-clock frontier. Clients replace by id before display clipping.
    */
   fetchChanges(
     scope: Scope,
     range: ResolvedRange,
     watermarkMs: number,
     limit: number,
+    continuation?: ChangeContinuation,
   ): Promise<SeriesChanges<Row> | HistorianError>;
 }
