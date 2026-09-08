@@ -175,7 +175,17 @@ export async function create(input: CreateJobInput) {
  * List jobs with optional filtering
  */
 export async function list(filter: ListJobsFilter = {}) {
-  const { siteId, labelIds, q, name, productIds, view = "full", includeProducts = false, limit = 50, offset = 0 } = filter;
+  const {
+    siteId,
+    labelIds,
+    q,
+    name,
+    productIds,
+    view = "full",
+    includeProducts = false,
+    limit = 50,
+    offset = 0,
+  } = filter;
 
   const where: Prisma.JobWhereInput = {
     deletedAt: null,
