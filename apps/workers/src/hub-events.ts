@@ -3,7 +3,7 @@
 // Needs DATABASE_URL, HUB_URL, HUB_API_KEY.
 
 import prisma from "@rw/db";
-import type { SmsConsentStatus } from "@rw/db";
+import type { SmsConsentMethod, SmsConsentStatus } from "@rw/db";
 import { type HubEvent, isHubEnabled, readEvents } from "@rw/runtime/hub";
 import { applyFromHub, isUniqueViolation, workspacesForPhone } from "@rw/services/notification/index";
 
@@ -54,10 +54,22 @@ async function tick(): Promise<void> {
   }
 }
 
+const CONSENT_METHODS = new Set<SmsConsentMethod>([
+  "WEB_FORM",
+  "VERBAL",
+  "PAPER",
+  "TEXT_KEYWORD",
+  "STOP_KEYWORD",
+  "IMPORTED",
+]);
+
 async function applyConsent(event: HubEvent): Promise<void> {
   const phone = String(event.payload.phone ?? "");
   const status = event.payload.status as SmsConsentStatus;
   if (!phone || (status !== "OPTED_IN" && status !== "OPTED_OUT")) return;
+  // The hub reports how consent was captured (a carrier keyword, or another tenant's paper form).
+  const reported = event.payload.method as SmsConsentMethod;
+  const method = CONSENT_METHODS.has(reported) ? reported : status === "OPTED_OUT" ? "STOP_KEYWORD" : "TEXT_KEYWORD";
 
   // Only workspaces already tracking this number; one with no row never asked.
   for (const workspaceId of await workspacesForPhone(phone)) {
@@ -66,7 +78,7 @@ async function applyConsent(event: HubEvent): Promise<void> {
         workspaceId,
         phone,
         status,
-        method: status === "OPTED_OUT" ? "STOP_KEYWORD" : "TEXT_KEYWORD",
+        method,
         decidedAt: new Date(event.occurredAt),
         relayEventId: event.id,
       });
@@ -76,13 +88,12 @@ async function applyConsent(event: HubEvent): Promise<void> {
   }
 }
 
-/** QUEUED carries no new information: the row already says SENT from the original call. */
+/** Twilio callback statuses only. QUEUED adds nothing: the row already says SENT. */
 const DELIVERY_STATUS = {
   SENT: "SENT",
   DELIVERED: "SENT",
   UNDELIVERED: "FAILED",
   FAILED: "FAILED",
-  BLOCKED: "SKIPPED",
 } as const;
 
 async function applyDeliveryStatus(event: HubEvent): Promise<void> {
