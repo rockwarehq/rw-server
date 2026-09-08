@@ -1,3 +1,4 @@
+export * from "./consent.js";
 export * from "./group.js";
 export * from "./send.js";
 export { notifier, setChannelAdapter } from "./notifier.js";

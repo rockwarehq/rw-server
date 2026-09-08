@@ -483,6 +483,8 @@ export const router = {
     get: employee.get,
     update: employee.update,
     delete: employee.remove,
+    setSmsConsent: employee.setSmsConsent,
+    smsConsentHistory: employee.smsConsentHistory,
   },
   employeeRole: {
     create: employeeRole.create,

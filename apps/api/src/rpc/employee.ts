@@ -2,7 +2,7 @@ import { z } from "zod";
 import { authRequired } from "./middleware.js";
 import { authorize } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
-import { crud } from "../services/employee/index.js";
+import { crud, smsConsent } from "../services/employee/index.js";
 import { throwServiceError, unwrap } from "./errors.js";
 
 // ============================================================================
@@ -47,6 +47,14 @@ const idInputSchema = z.object({
   id: z.uuid(),
 });
 
+// Recorded against the employee's current phone number; A2P 10DLC wants the method on file.
+const setSmsConsentInputSchema = z.object({
+  employeeId: z.uuid(),
+  status: z.enum(["OPTED_IN", "OPTED_OUT"]),
+  method: z.enum(["WEB_FORM", "VERBAL", "PAPER", "TEXT_KEYWORD", "STOP_KEYWORD", "IMPORTED"]),
+  note: z.string().max(500).nullable().optional(),
+});
+
 // ============================================================================
 // Procedures
 // ============================================================================
@@ -88,3 +96,15 @@ export const remove = authRequired.input(idInputSchema).handler(async ({ input, 
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
+
+export const setSmsConsent = authRequired.input(setSmsConsentInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "employee:write", scope: { kind: "anySite" } }));
+  return unwrap(await smsConsent.set({ ...input, actorUserId: context.iam.id }));
+});
+
+export const smsConsentHistory = authRequired
+  .input(z.object({ employeeId: z.uuid() }))
+  .handler(async ({ input, context }) => {
+    grant(await authorize(context.iam, { permission: "employee:read", scope: { kind: "anySite" } }));
+    return unwrap(await smsConsent.history(input.employeeId));
+  });

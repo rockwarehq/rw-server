@@ -28,6 +28,9 @@ gateway-health = 'node dist/main.js --worker gateway-health'
 # Dispatches livestore hook events to IntegrationTriggers (SQL/REST/webhook).
 # Needs DATABASE_URL, NATS_URL, INTEGRATION_ENCRYPTION_KEY. Keep at 1 machine.
 integration-events = 'node dist/main.js --worker integration-events'
+# Polls rw-hub for consent changes and SMS delivery outcomes. Needs DATABASE_URL, HUB_URL,
+# HUB_API_KEY. Keep at 1 machine: two would race on the same cursor.
+hub-events = 'node dist/main.js --worker hub-events'
 
 [env]
 NODE_ENV = 'production'
@@ -51,7 +54,7 @@ path = '/metrics'
 [[services]]
 internal_port = 9465
 protocol = 'tcp'
-processes = ['rollups', 'imm-events', 'gateway-health', 'integration-events']
+processes = ['rollups', 'imm-events', 'gateway-health', 'integration-events', 'hub-events']
 
   [[services.tcp_checks]]
   interval = '15s'

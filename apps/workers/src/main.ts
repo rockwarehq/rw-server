@@ -7,8 +7,14 @@ import { startHostServer, onShutdown } from "@rw/runtime";
 import { createPrismaClient } from "@rw/db";
 import client from "prom-client";
 
-type WorkerName = "rollups" | "imm-events" | "gateway-health" | "integration-events";
-const WORKER_NAMES: readonly WorkerName[] = ["rollups", "imm-events", "gateway-health", "integration-events"];
+type WorkerName = "rollups" | "imm-events" | "gateway-health" | "integration-events" | "hub-events";
+const WORKER_NAMES: readonly WorkerName[] = [
+  "rollups",
+  "imm-events",
+  "gateway-health",
+  "integration-events",
+  "hub-events",
+];
 
 function parseFlag(flag: string): string | null {
   const idx = process.argv.indexOf(flag);
@@ -33,6 +39,10 @@ async function loadWorker(name: WorkerName): Promise<{ start: () => Promise<void
     case "integration-events": {
       const m = await import("./integration-events.js");
       return { start: m.startIntegrationEvents, stop: m.stopIntegrationEvents };
+    }
+    case "hub-events": {
+      const m = await import("./hub-events.js");
+      return { start: m.startHubEvents, stop: m.stopHubEvents };
     }
   }
 }

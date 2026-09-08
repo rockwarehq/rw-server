@@ -24,6 +24,8 @@
     "./lifecycle": "./dist/lifecycle.js",
     "./job-payloads": "./dist/job-payloads.js",
     "./email": "./dist/email.js",
+    "./hub": "./dist/hub.js",
+    "./phone": "./dist/phone.js",
     "./storage": "./dist/storage.js"
   },
   "scripts": {

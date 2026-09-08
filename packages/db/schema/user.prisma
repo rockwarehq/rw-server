@@ -51,6 +51,9 @@ model User {
   productStockAdjustments ProductStockAdjustment[]
   apiTokensCreated      ApiToken[]
   savedViewsCreated     SavedView[]
+
+  // SMS consent decisions this user recorded
+  smsConsentEvents SmsConsentEvent[]
 }
 
 model RefreshToken {
