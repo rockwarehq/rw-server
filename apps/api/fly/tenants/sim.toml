@@ -4,6 +4,7 @@ app = 'sim-api'
 # - DATABASE_URL (pooled endpoint — port 6432 if PSDB / pgbouncer)
 # - DATABASE_URL_MIGRATION (direct endpoint — port 5432) — used by [deploy] release_command
 # - REDIS_URL, JWT_SECRET, RESEND_API_KEY, PROCESSOR_SHARED_SECRET
+# - HUB_URL, HUB_API_KEY (optional — unset means SMS records SKIPPED; rw-hub holds the Twilio creds)
 # - MQTT_GATEWAY_REALY_URL, MQTT_GATEWAY_REALY_USER, MQTT_GATEWAY_REALY_PASSWORD
 # - AWS_* + BUCKET_NAME (if S3 uploads enabled)
 [_meta]

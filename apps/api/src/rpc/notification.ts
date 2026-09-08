@@ -38,6 +38,8 @@ const sendInputSchema = z
     siteId: z.uuid(),
     groupIds: z.array(z.uuid()).max(50).optional(),
     employeeIds: z.array(z.uuid()).max(500).optional(),
+    // Groups bring their own channels; this is how directly-listed people get one.
+    channels: z.array(channelSchema).min(1).optional(),
     subject: z.string().min(1).max(500),
     body: z.string().min(1).max(10_000),
   })

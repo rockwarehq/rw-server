@@ -4,6 +4,7 @@ app = 'rw-dev-api'
 # - DATABASE_URL (pooled, port 6432)
 # - DATABASE_URL_MIGRATION (direct, port 5432) — used by [deploy] release_command
 # - REDIS_URL, JWT_SECRET, RESEND_API_KEY, PROCESSOR_SHARED_SECRET
+# - HUB_URL, HUB_API_KEY (optional — unset means SMS records SKIPPED; rw-hub holds the Twilio creds)
 # - MQTT_GATEWAY_REALY_*, AWS_*
 # - INTEGRATION_ENCRYPTION_KEY (64 hex; seals integration credentials — back up with the DB)
 [_meta]

@@ -29,6 +29,9 @@ model Workspace {
 
   // Customer/app API tokens issued for this workspace
   apiTokens ApiToken[]
+
+  // SMS consent, keyed by phone number rather than by person
+  smsConsents SmsConsent[]
 }
 
 /// Membership: links a User to a Workspace and owns that user's role assignments.

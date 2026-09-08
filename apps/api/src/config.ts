@@ -51,6 +51,9 @@ const EnvSchema = z.object({
   NATS_URL: z.string().optional(),
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().default("noreply@notify.rockware.io"),
+  // rw-hub carries SMS (holds the Twilio credentials); unset = the SMS channel records SKIPPED.
+  HUB_URL: z.string().optional(),
+  HUB_API_KEY: z.string().optional(),
   BUCKET_NAME: z.string().optional(),
   AWS_REGION: z.string().default("auto"),
   AWS_ENDPOINT_URL_S3: z.string().default("https://fly.storage.tigris.dev"),

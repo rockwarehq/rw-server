@@ -24,10 +24,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("notifications", () => {
   let siteA: { id: string };
   let withEmailId: string;
   let withoutEmailId: string;
+  let optedInId: string;
+  let neverAskedId: string;
+  let optedOutId: string;
   let faToken: string;
   let readerToken: string;
   let officeToken: string;
   const groupIds: string[] = [];
+  const consentPhones: string[] = [];
 
   beforeAll(async () => {
     server = buildServer();
@@ -76,10 +80,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("notifications", () => {
       if (!existing) await prisma.roleAssignment.create({ data: { membershipId: membership.id, roleId, siteId: siteA.id } });
     }
 
-    const employee = async (email: string | null) => {
+    const employee = async (email: string | null, phone?: string) => {
       const e = await prisma.employee.create({ data: { workspaceId }, select: { id: true } });
       const v = await prisma.employeeVersion.create({
-        data: { employeeId: e.id, version: 1, firstName: "Notif", lastName: "Test", email },
+        data: { employeeId: e.id, version: 1, firstName: "Notif", lastName: "Test", email, phone: phone ?? null },
         select: { id: true },
       });
       await prisma.employee.update({ where: { id: e.id }, data: { versionId: v.id } });
@@ -87,6 +91,19 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("notifications", () => {
     };
     withEmailId = await employee("notif-recipient@test.local");
     withoutEmailId = await employee(null);
+    // Consent is keyed by number, so it is recorded independently of the profile.
+    optedInId = await employee(null, "+15555550123");
+    neverAskedId = await employee(null, "+15555550124");
+    optedOutId = await employee(null, "+15555550125");
+    consentPhones.push("+15555550123", "+15555550125");
+    await notification.recordConsent({ workspaceId, phone: "+15555550123", status: "OPTED_IN", method: "VERBAL" });
+    await notification.recordConsent({
+      workspaceId,
+      phone: "+15555550125",
+      status: "OPTED_OUT",
+      method: "STOP_KEYWORD",
+      source: "SYSTEM",
+    });
 
     faToken = (await loginAs(server, FA_EMAIL, PASSWORD)).accessToken;
     readerToken = (await loginAs(server, READER_EMAIL, PASSWORD)).accessToken;
@@ -96,7 +113,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("notifications", () => {
   afterAll(async () => {
     await prisma.notification.deleteMany({ where: { groupId: { in: groupIds } } });
     await prisma.notificationGroup.deleteMany({ where: { id: { in: groupIds } } });
-    await prisma.employee.deleteMany({ where: { id: { in: [withEmailId, withoutEmailId] } } });
+    await prisma.smsConsent.deleteMany({ where: { workspaceId, phone: { in: consentPhones } } });
+    await prisma.employee.deleteMany({
+      where: { id: { in: [withEmailId, withoutEmailId, optedInId, neverAskedId, optedOutId] } },
+    });
     await prisma.user.deleteMany({ where: { email: { in: [FA_EMAIL, READER_EMAIL, OFFICE_EMAIL] } } });
     await prisma.role.deleteMany({ where: { name: "notif-test-sender", isSystem: false } });
     await server.close();
@@ -195,6 +215,73 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("notifications", () => {
 
     const noSite = await notification.send({ employeeIds: [withEmailId], subject: "D", body: "B" });
     expect("error" in noSite && noSite.code).toBe("NO_RECIPIENTS");
+  });
+
+  it("send: requested channels reach directly-listed people, and SMS needs recorded consent", async () => {
+    const texts: string[] = [];
+    const unconfigured = notification.notifier.adapter("SMS");
+    notification.setChannelAdapter("SMS", {
+      async send(to) {
+        texts.push(to);
+        return { ok: true, providerMessageId: "sms-1" };
+      },
+    });
+    try {
+      const res = await notification.send({
+        siteId: siteA.id,
+        employeeIds: [optedInId, neverAskedId, optedOutId],
+        channels: ["SMS"],
+        subject: "Line down",
+        body: "Please respond",
+      });
+      if (!("data" in res)) throw new Error(res.error);
+      const byEmployee = Object.fromEntries(res.data.deliveries.map((d) => [d.employeeId, d]));
+      expect(byEmployee[optedInId]).toMatchObject({ channel: "SMS", status: "SENT", address: "+15555550123" });
+      // Never asked and asked-us-to-stop are different states, and say different things.
+      expect(byEmployee[neverAskedId]).toMatchObject({
+        channel: "SMS",
+        status: "SKIPPED",
+        address: null,
+        error: "recipient has not opted in to text messages",
+      });
+      expect(byEmployee[optedOutId]).toMatchObject({
+        channel: "SMS",
+        status: "SKIPPED",
+        address: null,
+        error: "recipient has opted out of text messages",
+      });
+      expect(texts).toEqual(["+15555550123"]);
+    } finally {
+      notification.setChannelAdapter("SMS", unconfigured); // the state the other tests assume
+    }
+  });
+
+  it("consent: a decision replaces the state and appends to the number's history", async () => {
+    const phone = "(555) 555-0126";
+    consentPhones.push("+15555550126");
+
+    await notification.recordConsent({ workspaceId, phone, status: "OPTED_IN", method: "PAPER", note: "form on file" });
+    // Hand-typed above, stored in E.164: the same number in any spelling resolves to one row.
+    const optedIn = await notification.getConsent(workspaceId, "+1 555-555-0126");
+    expect(optedIn).toMatchObject({ phone: "+15555550126", status: "OPTED_IN", method: "PAPER" });
+
+    await notification.recordConsent({
+      workspaceId,
+      phone: "+15555550126",
+      status: "OPTED_OUT",
+      method: "STOP_KEYWORD",
+      source: "SYSTEM",
+    });
+    expect(await notification.getConsent(workspaceId, phone)).toMatchObject({
+      id: optedIn?.id,
+      status: "OPTED_OUT",
+      method: "STOP_KEYWORD",
+    });
+
+    const history = await notification.listConsentHistory(workspaceId, phone);
+    expect(history.map((e) => e.status)).toEqual(["OPTED_OUT", "OPTED_IN"]);
+    expect(history[1]).toMatchObject({ method: "PAPER", source: "MANUAL", note: "form on file" });
+    expect(history[0]).toMatchObject({ source: "SYSTEM" });
   });
 
   it("send: dedupeKey makes a repeat return the original; a channel with no provider is SKIPPED and emits failed", async () => {

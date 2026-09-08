@@ -84,3 +84,82 @@ model NotificationDelivery {
   @@index([notificationId])
   @@index([employeeId])
 }
+
+// ── SMS consent ──────────────────────────────────────────────────────────
+// Keyed by phone number, not person: carriers track STOP by number, and a number can outlive
+// the employee record it was typed on. No row means nobody ever asked, which is not OPTED_OUT.
+
+enum SmsConsentStatus {
+  OPTED_IN
+  OPTED_OUT
+}
+
+/// How a decision was captured; A2P 10DLC requires the method on file, not just the answer.
+enum SmsConsentMethod {
+  WEB_FORM /// Ticked (or unticked) a consent box in the app
+  VERBAL /// Told a supervisor, who recorded it
+  PAPER /// Signed form on file
+  TEXT_KEYWORD /// Texted a join keyword to the number
+  STOP_KEYWORD /// Replied STOP; the carrier and Twilio enforce this independently
+  IMPORTED /// Carried over from a prior system
+}
+
+/// Current consent for one number per workspace; `events` is the history behind it.
+model SmsConsent {
+  id String @id @default(uuid()) @db.Uuid
+
+  workspaceId String    @db.Uuid
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  /// E.164; reads normalize too, so a hand-typed profile number still matches.
+  phone String
+
+  status SmsConsentStatus
+  method SmsConsentMethod
+  /// When the CURRENT status was decided (not when the row was last touched).
+  statusAt DateTime @default(now()) @db.Timestamptz(3)
+
+  events SmsConsentEvent[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([workspaceId, phone])
+  @@index([workspaceId, status])
+}
+
+/// Append-only history: the proof a text was permitted when it was sent.
+model SmsConsentEvent {
+  id String @id @default(uuid()) @db.Uuid
+
+  consentId String     @db.Uuid
+  consent   SmsConsent @relation(fields: [consentId], references: [id], onDelete: Cascade)
+
+  status SmsConsentStatus
+  method SmsConsentMethod
+
+  /// MANUAL = a person recorded it in the app; SYSTEM = Twilio/carrier told us (STOP).
+  source ActionSource @default(MANUAL)
+  /// The signed-in user who recorded it, when there was one.
+  actorUserId String? @db.Uuid
+  actor       User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  /// Free text: where a paper form is filed, what the person actually said, ...
+  note String?
+
+  /// rw-hub event this was replicated from; unique per consent row, since one event lands once
+  /// per workspace holding the number.
+  relayEventId String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([consentId, relayEventId])
+  @@index([consentId, createdAt(sort: Desc)])
+}
+
+/// Where the rw-hub poll left off. One row: the hub knows tenants, not workspaces.
+model HubCursor {
+  id     String @id @default("singleton")
+  cursor String @default("0")
+
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+}

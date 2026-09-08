@@ -1,6 +1,8 @@
 import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
 import { hashPassword } from "@rw/auth/password";
+import { toE164 } from "@rw/runtime/phone";
+import { consentByPhone } from "@rw/services/notification/consent";
 import { publishStationCurrentLogonsMetric } from "./logon.js";
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
@@ -61,6 +63,20 @@ const employeeInclude = {
     orderBy: { createdAt: "asc" as const },
   },
 } as const;
+
+/** Joins per-number SMS consent onto employee reads; callers always scope to one workspace. */
+async function withSmsConsent<T extends { workspaceId: string; version: { phone: string | null } | null }>(rows: T[]) {
+  const workspaceId = rows[0]?.workspaceId;
+  if (!workspaceId) return [];
+  const byPhone = await consentByPhone(
+    workspaceId,
+    rows.map((r) => r.version?.phone),
+  );
+  return rows.map((row) => ({
+    ...row,
+    smsConsent: (row.version?.phone ? byPhone.get(toE164(row.version.phone)) : null) ?? null,
+  }));
+}
 
 function employeeIncludeForSite(siteId: string) {
   return {
@@ -250,7 +266,7 @@ export async function list(filter: ListEmployeesFilter) {
     prisma.employee.count({ where }),
   ]);
 
-  return { data, total };
+  return { data: await withSmsConsent(data), total };
 }
 
 export async function getById(id: string) {
@@ -260,7 +276,8 @@ export async function getById(id: string) {
   });
 
   if (!employee) return null;
-  return { data: employee };
+  const [data] = await withSmsConsent([employee]);
+  return { data };
 }
 
 export async function getByEmployeeNumber(siteId: string, employeeNumber: string) {

@@ -17,7 +17,8 @@ export type DbRole =
   | "processor-consumer"
   | "livestore"
   | "imm-events"
-  | "integration-events";
+  | "integration-events"
+  | "hub-events";
 
 const DEFAULT_POOL: Record<DbRole, number> = {
   api: 5,
@@ -29,6 +30,8 @@ const DEFAULT_POOL: Record<DbRole, number> = {
   "imm-events": 15,
   // Sequential dispatch: trigger match + run bookkeeping per event.
   "integration-events": 5,
+  // One poll every 30s, a handful of rows per batch.
+  "hub-events": 2,
 };
 
 let cached: PrismaClient | null = null;

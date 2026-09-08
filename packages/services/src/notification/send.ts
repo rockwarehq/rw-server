@@ -1,10 +1,14 @@
 import prisma, { type Prisma } from "@rw/db";
-import type { ActionSource } from "@rw/db";
+import type { ActionSource, NotificationChannel } from "@rw/db";
 import { summarize } from "@rw/notifications";
 import type { EventCause } from "@rw/runtime/domain-events";
+import { toE164 } from "@rw/runtime/phone";
+import { type ConsentState, consentByPhone } from "./consent.js";
 import { publishNotificationEvent } from "./events.js";
 import { isUniqueViolation } from "./group.js";
 import { notifier } from "./notifier.js";
+
+const contactSelect = { email: true, phone: true } as const;
 
 const notificationInclude = {
   deliveries: { orderBy: { createdAt: "asc" } },
@@ -23,6 +27,8 @@ export interface SendNotificationInput {
   employeeIds?: string[];
   /** Required when no group is given (a group's site is used otherwise). */
   siteId?: string;
+  /** Added to whatever the groups ask for; how directly-listed people get a channel. Default EMAIL. */
+  channels?: NotificationChannel[];
   subject: string;
   body: string;
   /** MANUAL = a person sending from the UI; SYSTEM (default) = automation/alarm. */
@@ -49,7 +55,7 @@ export async function send(
       name: true,
       siteId: true,
       channels: true,
-      members: { select: { id: true, version: { select: { email: true, phone: true } } } },
+      members: { select: { id: true, version: { select: contactSelect } } },
     },
   });
   if (groups.length !== groupIds.length) return { error: "Notification group not found", code: "GROUP_NOT_FOUND" };
@@ -61,7 +67,7 @@ export async function send(
 
   const people = await prisma.employee.findMany({
     where: { id: { in: employeeIds }, workspaceId: site.workspaceId },
-    select: { id: true, version: { select: { email: true, phone: true } } },
+    select: { id: true, version: { select: contactSelect } },
   });
   if (people.length !== employeeIds.length) {
     return { error: "One or more employees not found for this workspace", code: "EMPLOYEE_NOT_FOUND" };
@@ -70,7 +76,8 @@ export async function send(
   // Each person once, even if they are in two groups and listed directly.
   const members = new Map([...groups.flatMap((g) => g.members), ...people].map((m) => [m.id, m]));
   if (members.size === 0) return { error: "No recipients", code: "NO_RECIPIENTS" };
-  const channels = [...new Set([...groups.flatMap((g) => g.channels), ...(people.length ? ["EMAIL" as const] : [])])];
+  const requested = [...new Set([...groups.flatMap((g) => g.channels), ...(input.channels ?? [])])];
+  const channels = requested.length ? requested : ["EMAIL" as const];
   const groupName = groups.length ? groups.map((g) => g.name).join(", ") : null;
 
   if (input.dedupeKey) {
@@ -101,16 +108,34 @@ export async function send(
     throw err;
   }
 
-  const recipients = [...members.values()].map((m) => ({
-    id: m.id,
-    addresses: { EMAIL: m.version?.email, SMS: m.version?.phone },
-  }));
+  // SMS only goes to a number currently opted in; never-asked and opted-out are logged apart.
+  const everyone = [...members.values()];
+  const consent = channels.includes("SMS")
+    ? await consentByPhone(
+        site.workspaceId,
+        everyone.map((m) => m.version?.phone),
+      )
+    : new Map<string, ConsentState>();
+  const smsSkipReason = new Map<string, string>();
+  const recipients = everyone.map((m) => {
+    const phone = m.version?.phone ? toE164(m.version.phone) : null;
+    const status = phone ? consent.get(phone)?.status : undefined;
+    if (phone && status !== "OPTED_IN") {
+      smsSkipReason.set(
+        m.id,
+        `recipient has ${status === "OPTED_OUT" ? "opted out of" : "not opted in to"} text messages`,
+      );
+    }
+    return { id: m.id, addresses: { EMAIL: m.version?.email, SMS: status === "OPTED_IN" ? phone : null } };
+  });
+
   const deliveries = await notifier.deliver(recipients, channels, { subject: input.subject, body: input.body });
   await prisma.notificationDelivery.createMany({
     data: deliveries.map(({ recipientId, ...row }) => ({
       notificationId: notification.id,
       employeeId: recipientId,
       ...row,
+      error: row.channel === "SMS" ? (smsSkipReason.get(recipientId) ?? row.error) : row.error,
     })),
   });
 
