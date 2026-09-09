@@ -21,11 +21,13 @@ model Tool {
 
   labels Label[]
 
-  toolCavities ToolCavity[]
-  jobs         JobTool[]
-  jobProducts  JobProduct[]
-  calls        Call[]
-  modeLogs     StationModeLog[]
+  toolCavities        ToolCavity[]
+  jobs                JobTool[]
+  jobProducts         JobProduct[]
+  calls               Call[]
+  modeLogs            StationModeLog[]
+  inventoryItems      InventoryItem[]
+  itemDispositionLogs ItemDispositionLog[]
 
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
@@ -114,12 +116,16 @@ model Job {
   orders      WorkOrder[]
   labels      Label[]
 
-  currentOfStations  Station[]            @relation("StationCurrentJob")
-  stationJobs        StationJob[]
-  stationJobLogs     StationJobLog[]
-  materialShiftUsage MaterialShiftUsage[]
-  calls              Call[]
-  modeLogs           StationModeLog[]
+  currentOfStations   Station[]            @relation("StationCurrentJob")
+  stationJobs         StationJob[]
+  stationJobLogs      StationJobLog[]
+  materialShiftUsage  MaterialShiftUsage[]
+  calls               Call[]
+  modeLogs            StationModeLog[]
+  cycles              Cycle[]
+  inventoryItems      InventoryItem[]
+  itemDispositionLogs ItemDispositionLog[]
+  stateLogs           StationStateLog[]
 
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)

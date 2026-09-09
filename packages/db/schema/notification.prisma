@@ -114,10 +114,10 @@ model SmsConsent {
   /// E.164; reads normalize too, so a hand-typed profile number still matches.
   phone String
 
-  status SmsConsentStatus
-  method SmsConsentMethod
+  status   SmsConsentStatus
+  method   SmsConsentMethod
   /// When the CURRENT status was decided (not when the row was last touched).
-  statusAt DateTime @default(now()) @db.Timestamptz(3)
+  statusAt DateTime         @default(now()) @db.Timestamptz(3)
 
   events SmsConsentEvent[]
 
@@ -139,12 +139,12 @@ model SmsConsentEvent {
   method SmsConsentMethod
 
   /// MANUAL = a person recorded it in the app; SYSTEM = Twilio/carrier told us (STOP).
-  source ActionSource @default(MANUAL)
+  source      ActionSource @default(MANUAL)
   /// The signed-in user who recorded it, when there was one.
-  actorUserId String? @db.Uuid
-  actor       User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  actorUserId String?      @db.Uuid
+  actor       User?        @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
   /// Free text: where a paper form is filed, what the person actually said, ...
-  note String?
+  note        String?
 
   /// rw-hub event this was replicated from; unique per consent row, since one event lands once
   /// per workspace holding the number.

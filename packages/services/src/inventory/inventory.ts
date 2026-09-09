@@ -1,5 +1,6 @@
 import prisma from "@rw/db";
 import { Prisma, type WeightUnit } from "@rw/db";
+import { type StampDims, toDateString } from "../facility/work-context.js";
 import { convertWeight } from "../lib/units/index.js";
 
 type TransactionClient = Prisma.TransactionClient;
@@ -26,12 +27,19 @@ export interface ListInventoryFilter {
  * downstream is SUM(quantity), never row counts. Accepts a transaction client
  * so cycle-close + inventory creation stay atomic.
  */
+/** Star-pattern dimension stamps carried onto every item (and material staging row). */
+export interface ItemDims extends StampDims {
+  siteId: string;
+  stationId: string;
+}
+
 export async function createFromCycle(
   tx: TransactionClient,
   cycleId: string,
   jobId: string,
-  stamp?: { quantity: number | null; quantityUnit: string },
-  modeId?: string | null,
+  stamp: { quantity: number | null; quantityUnit: string } | undefined,
+  modeId: string | null | undefined,
+  dims: ItemDims,
 ) {
   // Fetch active JobProducts with version refs in a single raw query
   const jobProducts = await (tx as unknown as { $queryRaw: typeof prisma.$queryRaw }).$queryRaw<
@@ -40,6 +48,7 @@ export async function createFromCycle(
       currentVersionId: string;
       quantity: number;
       productVersionId: string;
+      toolId: string | null;
       toolVersionId: string | null;
       toolCavityVersionId: string | null;
       materialVersionIds: string[];
@@ -50,6 +59,7 @@ export async function createFromCycle(
       jp."currentVersionId",
       COALESCE(jpb.quantity, 1)::int AS quantity,
       p."currentVersionId" AS "productVersionId",
+      jp."toolId" AS "toolId",
       t."currentVersionId" AS "toolVersionId",
       tc."currentVersionId" AS "toolCavityVersionId",
       COALESCE(
@@ -95,14 +105,15 @@ export async function createFromCycle(
   }
 
   // Batch INSERT all inventory items in one query
+  const businessDate = toDateString(dims.businessDate) ?? null;
   const insertValues = Prisma.join(
     itemSpecs.map(
       (s) =>
-        Prisma.sql`(gen_random_uuid(), ${cycleId}::uuid, ${s.currentVersionId}::uuid, ${s.productVersionId}::uuid, ${s.toolVersionId}::uuid, ${s.toolCavityVersionId}::uuid, ${s.itemQuantity}, ${unit}, ${modeId ?? null}::uuid, NOW(), NOW())`,
+        Prisma.sql`(gen_random_uuid(), ${cycleId}::uuid, ${s.currentVersionId}::uuid, ${s.productVersionId}::uuid, ${s.toolVersionId}::uuid, ${s.toolCavityVersionId}::uuid, ${s.itemQuantity}, ${unit}, ${modeId ?? null}::uuid, ${dims.siteId}::uuid, ${dims.stationId}::uuid, ${dims.workcenterId}::uuid, ${dims.jobId}::uuid, ${s.productId}::uuid, ${s.toolId}::uuid, ${dims.shiftInstanceId}::uuid, ${businessDate}::date, NOW(), NOW())`,
     ),
   );
   const itemRows = await txRaw.$queryRaw<Array<{ id: string }>>`
-    INSERT INTO "InventoryItem" (id, "cycleId", "jobProductVersionId", "productVersionId", "toolVersionId", "toolCavityVersionId", quantity, "quantityUnit", "modeId", "createdAt", "updatedAt")
+    INSERT INTO "InventoryItem" (id, "cycleId", "jobProductVersionId", "productVersionId", "toolVersionId", "toolCavityVersionId", quantity, "quantityUnit", "modeId", "siteId", "stationId", "workcenterId", "jobId", "productId", "toolId", "shiftInstanceId", "businessDate", "createdAt", "updatedAt")
     VALUES ${insertValues}
     RETURNING id
   `;
@@ -116,6 +127,7 @@ export async function createFromCycle(
     quantity: itemSpecs[i].itemQuantity,
     productVersionId: itemSpecs[i].productVersionId,
     jobProductVersionId: itemSpecs[i].currentVersionId,
+    toolId: itemSpecs[i].toolId,
     toolVersionId: itemSpecs[i].toolVersionId,
     toolCavityVersionId: itemSpecs[i].toolCavityVersionId,
   }));
@@ -137,13 +149,13 @@ export async function createFromCycle(
     // `flushShiftUsage` converts each staging row into one immutable
     // PRODUCTION ledger entry.
     //
-    // Cycles without a resolved shift are silently skipped.
+    // Cycles without a resolved shift (dims.shiftInstanceId null) are
+    // silently skipped.
+    if (dims.shiftInstanceId === null) return createdItems;
+    const shiftInstanceId = dims.shiftInstanceId;
     const itemIds = itemRows.map((r) => r.id);
 
     type UsageRow = {
-      siteId: string;
-      shiftInstanceId: string;
-      stationId: string;
       productId: string;
       materialId: string;
       qty: Prisma.Decimal;
@@ -156,26 +168,7 @@ export async function createFromCycle(
       materialUnit: WeightUnit | null;
     };
     const want = await txRaw.$queryRaw<UsageRow[]>`
-      WITH cycle_shift AS (
-        SELECT
-          c."siteId"    AS "siteId",
-          c."stationId" AS "stationId",
-          si.id         AS "shiftInstanceId"
-        FROM "Cycle" c
-        JOIN "Station" s ON s.id = c."stationId"
-        LEFT JOIN "ShiftInstance" si
-          ON si."siteId" = c."siteId"
-         AND si."startTime" <= COALESCE(c."end", c."start")
-         AND si."endTime"   >  COALESCE(c."end", c."start")
-         AND (si."workCenterId" IS NULL OR si."workCenterId" = s."workcenterId")
-        WHERE c.id = ${cycleId}::uuid
-        ORDER BY (si."workCenterId" IS NOT NULL) DESC, si."startTime" DESC
-        LIMIT 1
-      )
       SELECT
-        cs."siteId"            AS "siteId",
-        cs."shiftInstanceId"   AS "shiftInstanceId",
-        cs."stationId"         AS "stationId",
         pb."productId"         AS "productId",
         mb."materialId"        AS "materialId",
         -- weight × quantity: rows carry quantity, not one row per unit
@@ -190,11 +183,9 @@ export async function createFromCycle(
       JOIN "MaterialVersion"         mb  ON mb.id = pmb."materialVersionId"
       JOIN "Material"             m   ON m.id  = mb."materialId"
       LEFT JOIN "MaterialVersion"    mbc ON mbc.id = m."currentVersionId"
-      CROSS JOIN cycle_shift cs
       WHERE x."A" = ANY(${itemIds}::uuid[])
         AND pmb.weight IS NOT NULL
-        AND cs."shiftInstanceId" IS NOT NULL
-      GROUP BY cs."siteId", cs."shiftInstanceId", cs."stationId", pb."productId", mb."materialId", pmb."weightUnits", mbc."weightUnits"
+      GROUP BY pb."productId", mb."materialId", pmb."weightUnits", mbc."weightUnits"
     `;
 
     if (want.length === 0) return createdItems;
@@ -204,8 +195,8 @@ export async function createFromCycle(
     for (const w of want) {
       const bindingKey = {
         shiftInstanceId_stationId_jobId_productId_materialId: {
-          shiftInstanceId: w.shiftInstanceId,
-          stationId: w.stationId,
+          shiftInstanceId,
+          stationId: dims.stationId,
           jobId,
           productId: w.productId,
           materialId: w.materialId,
@@ -239,7 +230,7 @@ export async function createFromCycle(
           // which shouldn't occur in normal flow but might via replay/import.
           // Loud, not silent — surface it.
           console.warn(
-            `[cycle ${cycleId}] staging row ${existing.id} for shift=${w.shiftInstanceId} already flushed; skipping increment`,
+            `[cycle ${cycleId}] staging row ${existing.id} for shift=${shiftInstanceId} already flushed; skipping increment`,
           );
           continue;
         }
@@ -253,9 +244,11 @@ export async function createFromCycle(
       } else {
         await tx.materialShiftUsage.create({
           data: {
-            siteId: w.siteId,
-            shiftInstanceId: w.shiftInstanceId,
-            stationId: w.stationId,
+            siteId: dims.siteId,
+            shiftInstanceId,
+            stationId: dims.stationId,
+            workcenterId: dims.workcenterId,
+            businessDate: dims.businessDate,
             jobId,
             productId: w.productId,
             materialId: w.materialId,

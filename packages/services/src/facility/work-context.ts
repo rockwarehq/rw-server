@@ -1,5 +1,7 @@
 import type { RefSource } from "@rw/automations";
 import prisma from "@rw/db";
+import type { Prisma } from "@rw/db";
+import { getLocalCalendarDate, getSiteTimezone } from "../metrics/bucket.js";
 
 // Resolves "where did this happen" for domain events: the running shift for a station's work
 // center (falling back to the site-wide shift), and the flat WorkContext carried on the event.
@@ -14,12 +16,13 @@ export async function resolveShiftContext(
   siteId: string,
   workcenterId: string | null,
   at: Date,
+  client: Prisma.TransactionClient | typeof prisma = prisma,
 ): Promise<ShiftContext | null> {
   const select = { id: true, shiftName: true, businessDate: true } as const;
   const toContext = (row: { id: string; shiftName: string; businessDate: Date } | null) =>
     row ? { id: row.id, name: row.shiftName, businessDate: row.businessDate } : null;
   if (workcenterId) {
-    const scoped = await prisma.shiftInstance.findFirst({
+    const scoped = await client.shiftInstance.findFirst({
       where: { siteId, workCenterId: workcenterId, startTime: { lte: at }, endTime: { gt: at } },
       select,
       orderBy: { startTime: "desc" },
@@ -27,12 +30,41 @@ export async function resolveShiftContext(
     if (scoped) return toContext(scoped);
   }
   return toContext(
-    await prisma.shiftInstance.findFirst({
+    await client.shiftInstance.findFirst({
       where: { siteId, workCenterId: null, startTime: { lte: at }, endTime: { gt: at } },
       select,
       orderBy: { startTime: "desc" },
     }),
   );
+}
+
+/** The shift columns a stamped fact row carries (star pattern for BI). */
+export interface ShiftStamp {
+  shiftInstanceId: string | null;
+  businessDate: Date | null;
+}
+
+/** The dimension stamps the cycle pipeline resolves once per event and threads through. */
+export interface StampDims extends ShiftStamp {
+  workcenterId: string | null;
+  jobId: string;
+}
+
+/**
+ * Resolve the shift stamp for a fact row. When no shift covers the instant,
+ * shiftInstanceId stays null but businessDate falls back to the site-local
+ * calendar date (the MetricBucket convention), so facts recorded on
+ * unscheduled days still land in date-grouped reports.
+ */
+export async function resolveShiftStamp(
+  siteId: string,
+  workcenterId: string | null,
+  at: Date,
+  client: Prisma.TransactionClient | typeof prisma = prisma,
+): Promise<ShiftStamp> {
+  const shift = await resolveShiftContext(siteId, workcenterId, at, client);
+  if (shift) return { shiftInstanceId: shift.id, businessDate: shift.businessDate };
+  return { shiftInstanceId: null, businessDate: getLocalCalendarDate(at, await getSiteTimezone(siteId)) };
 }
 
 export const toDateString = (d: Date | null | undefined) => d?.toISOString().slice(0, 10);
@@ -91,16 +123,15 @@ export async function snapshotDimensions(
   },
   at: Date,
 ) {
-  const [shift, jobDims] = await Promise.all([
-    resolveShiftContext(station.siteId, station.workcenterId, at),
+  const [stamp, jobDims] = await Promise.all([
+    resolveShiftStamp(station.siteId, station.workcenterId, at),
     resolveJobDimensions(station.currentJobId),
   ]);
   return {
     workcenterId: station.workcenterId,
     stationVersionId: station.currentVersionId,
     ...jobDims,
-    shiftInstanceId: shift?.id ?? null,
-    businessDate: shift?.businessDate ?? null,
+    ...stamp,
   };
 }
 

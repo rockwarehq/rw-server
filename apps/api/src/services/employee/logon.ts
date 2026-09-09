@@ -2,7 +2,7 @@ import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
 import { publishMetricValueChange } from "@rw/services/rpc/metrics-bus";
 import { logEvent } from "@rw/services/audit/index";
-import { getCurrentShift } from "@rw/services/facility/shift/current";
+import { resolveShiftStamp } from "@rw/services/facility/work-context";
 import { resolveEntityPath } from "@rw/services/metrics/hierarchy";
 
 // ============================================================================
@@ -142,21 +142,22 @@ export async function logon(input: LogonInput) {
     if (existing) return { error: "Employee is already logged on at this display", code: "ALREADY_LOGGED_ON" };
   }
 
-  let shiftInstanceId: string | null = null;
-  const shiftResult = await getCurrentShift(station.siteId, station.workcenterId ?? undefined);
-  if ("success" in shiftResult && shiftResult.data.shift) {
-    shiftInstanceId = shiftResult.data.shift.shiftInstanceId;
-  }
+  // Star-pattern stamps — same resolver as every other fact table, so the
+  // session's shift/businessDate matches the cycles recorded under it.
+  const { shiftInstanceId, businessDate } = await resolveShiftStamp(station.siteId, station.workcenterId, new Date());
 
   const session = await prisma.stationLogonSession.create({
     data: {
       employeeId,
       versionId,
       stationId,
+      siteId: station.siteId,
+      workcenterId: station.workcenterId,
       displayId,
       logonMethod,
       genericName: genericName || null,
       shiftInstanceId,
+      businessDate,
     },
     select: sessionSelect,
   });

@@ -12,6 +12,7 @@ import {
 } from "../state.js";
 import type { StationActionDefinition } from "./types.js";
 import { resolveEffectiveStandards } from "../effective-standards.js";
+import { createStationJobLog } from "../jobs.js";
 
 interface JobChangeInput {
   jobId?: string;
@@ -84,6 +85,7 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
         select: {
           id: true,
           siteId: true,
+          workcenterId: true,
           currentJobId: true,
           site: { select: { workspaceId: true } },
         },
@@ -132,9 +134,10 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
         const std = await resolveEffectiveStandards(tx, stationId, newJobId);
         effectiveStandardCycle = std.standardCycleSeconds;
 
-        await tx.stationJobLog.create({
-          data: {
-            stationId,
+        await createStationJobLog(
+          tx,
+          { id: stationId, siteId: station.siteId, workcenterId: station.workcenterId },
+          {
             jobId: newJobId,
             // biome-ignore lint/style/noNonNullAssertion: throws above (line 55-57) if job.currentVersionId is null; narrowing lost across closure
             jobVersionId: job.currentVersionId!,
@@ -143,11 +146,11 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
             standardQuantity: std.standardQuantity,
             quantityUnit: std.quantityUnit,
           },
-        });
+        );
       }
 
       // Keep state-log entries job-homogeneous under the period model.
-      await splitOpenStateEntryForJobChange(tx, stationId, timestamp, job?.currentVersionId ?? null);
+      await splitOpenStateEntryForJobChange(tx, stationId, timestamp, job?.id ?? null, job?.currentVersionId ?? null);
 
       return { station, closedLogs, effectiveStandardCycle };
     });

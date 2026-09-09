@@ -2,6 +2,7 @@ import prisma, { Prisma } from "@rw/db";
 import { updateDispositionBadItems } from "@rw/services/metrics/recalc";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
+import { resolveShiftStamp, toDateString } from "../facility/work-context.js";
 import { applyScrapDelta } from "./stock.js";
 
 /** Post-commit refresh hint: dispositions change the product's on-hand stock. */
@@ -25,6 +26,9 @@ export interface CreateDispositionLogInput {
   dispositionReasonId?: string;
   cycleId?: string;
   shiftInstanceId?: string;
+  /** Star-pattern stamps paired with the version snapshots below. */
+  jobId?: string;
+  toolId?: string;
   /** If not provided, version IDs are auto-resolved from current station/job state */
   productVersionId: string;
   stationVersionId?: string;
@@ -244,12 +248,14 @@ export async function record(input: RecordDispositionLogInput): Promise<ServiceE
   // Resolve toolCavity → toolCavityVersionId + toolVersionId (if provided)
   let toolCavityVersionId: string | undefined;
   let toolVersionId: string | undefined;
+  let toolId: string | undefined;
   if (toolCavityId) {
     const toolCavity = await prisma.toolCavity.findUnique({
       where: { id: toolCavityId },
       select: {
         currentVersionId: true,
         deletedAt: true,
+        toolId: true,
         tool: { select: { currentVersionId: true } },
       },
     });
@@ -262,6 +268,7 @@ export async function record(input: RecordDispositionLogInput): Promise<ServiceE
     }
     toolCavityVersionId = toolCavity.currentVersionId;
     toolVersionId = toolCavity.tool.currentVersionId ?? undefined;
+    toolId = toolCavity.toolId;
   }
 
   // Resolve product material version IDs
@@ -272,6 +279,8 @@ export async function record(input: RecordDispositionLogInput): Promise<ServiceE
   const result = await create({
     siteId,
     stationId,
+    jobId,
+    toolId,
     productVersionId: product.currentVersionId,
     stationVersionId: station.currentVersionId ?? undefined,
     jobProductVersionId,
@@ -290,12 +299,13 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
   const {
     siteId,
     stationId,
-    workcenterId,
     quantity,
     itemDispositionId,
     dispositionReasonId,
     cycleId,
     shiftInstanceId,
+    jobId,
+    toolId,
     productVersionId,
     stationVersionId,
     jobProductVersionId,
@@ -307,7 +317,7 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
   // Validate station exists and belongs to site
   const station = await prisma.station.findUnique({
     where: { id: stationId },
-    select: { id: true, siteId: true, site: { select: { workspaceId: true } } },
+    select: { id: true, siteId: true, workcenterId: true, site: { select: { workspaceId: true } } },
   });
 
   if (!station) {
@@ -338,6 +348,43 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
     return { error: "Product version not found", code: "PRODUCT_VERSION_NOT_FOUND" };
   }
 
+  // Star-pattern stamps: an explicit shiftInstanceId (backdated entry) wins and
+  // supplies the business date; otherwise resolve the shift running now.
+  const workcenterId = input.workcenterId ?? station.workcenterId ?? null;
+  let shiftId: string | null = shiftInstanceId ?? null;
+  let businessDate: Date | null = null;
+  if (shiftId) {
+    const instance = await prisma.shiftInstance.findUnique({
+      where: { id: shiftId },
+      select: { businessDate: true },
+    });
+    businessDate = instance?.businessDate ?? null;
+  } else {
+    const stamp = await resolveShiftStamp(siteId, workcenterId, new Date());
+    shiftId = stamp.shiftInstanceId;
+    businessDate = stamp.businessDate;
+  }
+
+  // Stable ids paired with the version snapshots: derive from the versions
+  // when the caller didn't pass them, so rpc callers that only know version
+  // ids still produce fully-stamped rows.
+  let stampJobId = jobId ?? null;
+  if (!stampJobId && jobProductVersionId) {
+    const jpv = await prisma.jobProductVersion.findUnique({
+      where: { id: jobProductVersionId },
+      select: { jobProduct: { select: { jobId: true } } },
+    });
+    stampJobId = jpv?.jobProduct.jobId ?? null;
+  }
+  let stampToolId = toolId ?? null;
+  if (!stampToolId && toolVersionId) {
+    const tv = await prisma.toolVersion.findUnique({
+      where: { id: toolVersionId },
+      select: { toolId: true },
+    });
+    stampToolId = tv?.toolId ?? null;
+  }
+
   // Log write + stock scrap delta stay atomic: scrap only ever affects
   // inventory (never orders), and the aggregate must match the fact.
   const log = await prisma.$transaction(async (tx) => {
@@ -345,12 +392,16 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
       data: {
         siteId,
         stationId,
-        workcenterId: workcenterId ?? null,
+        workcenterId,
         quantity: quantity ?? 1,
         itemDispositionId: dispositionPair.data.itemDispositionId,
         dispositionReasonId: dispositionPair.data.dispositionReasonId,
         cycleId: cycleId ?? null,
-        shiftInstanceId: shiftInstanceId ?? null,
+        shiftInstanceId: shiftId,
+        businessDate,
+        jobId: stampJobId,
+        productId: productVersion.productId,
+        toolId: stampToolId,
         productVersionId,
         stationVersionId: stationVersionId ?? null,
         jobProductVersionId: jobProductVersionId ?? null,
@@ -391,6 +442,11 @@ export async function autoScrapCycleItems(
     modeId: string;
     itemDispositionId: string;
     dispositionReasonId: string;
+    // Star-pattern stamps, resolved once by the cycle path.
+    workcenterId: string | null;
+    jobId: string;
+    shiftInstanceId: string | null;
+    businessDate: Date | null;
     items: Array<{
       id: string;
       cycleId: string;
@@ -398,6 +454,7 @@ export async function autoScrapCycleItems(
       quantity: number;
       productVersionId: string;
       jobProductVersionId: string | null;
+      toolId: string | null;
       toolVersionId: string | null;
       toolCavityVersionId: string | null;
     }>;
@@ -405,36 +462,22 @@ export async function autoScrapCycleItems(
 ): Promise<number> {
   if (input.items.length === 0) return 0;
 
-  const now = new Date();
   const station = await tx.station.findUniqueOrThrow({
     where: { id: input.stationId },
-    select: { workcenterId: true, currentVersionId: true },
+    select: { currentVersionId: true },
   });
-  // Active shift: workcenter-scoped instance wins over the site-wide one.
-  const shiftWhere = { siteId: input.siteId, startTime: { lte: now }, endTime: { gt: now } };
-  const shift =
-    (station.workcenterId
-      ? await tx.shiftInstance.findFirst({
-          where: { ...shiftWhere, workCenterId: station.workcenterId },
-          select: { id: true },
-          orderBy: { startTime: "desc" },
-        })
-      : null) ??
-    (await tx.shiftInstance.findFirst({
-      where: { ...shiftWhere, workCenterId: null },
-      select: { id: true },
-      orderBy: { startTime: "desc" },
-    }));
 
+  const businessDate = toDateString(input.businessDate) ?? null;
   const values = Prisma.join(
     input.items.map(
       (item) =>
-        Prisma.sql`(gen_random_uuid(), ${item.quantity}, ${input.siteId}::uuid, ${input.stationId}::uuid, ${station.workcenterId}::uuid, ${item.cycleId}::uuid, ${shift?.id ?? null}::uuid, ${input.itemDispositionId}::uuid, ${input.dispositionReasonId}::uuid, ${item.productVersionId}::uuid, ${station.currentVersionId}::uuid, ${item.jobProductVersionId}::uuid, ${item.toolVersionId}::uuid, ${item.toolCavityVersionId}::uuid, ${input.modeId}::uuid, NOW(), NOW())`,
+        Prisma.sql`(gen_random_uuid(), ${item.quantity}, ${input.siteId}::uuid, ${input.stationId}::uuid, ${input.workcenterId}::uuid, ${item.cycleId}::uuid, ${input.shiftInstanceId}::uuid, ${businessDate}::date, ${input.jobId}::uuid, ${item.productId}::uuid, ${item.toolId}::uuid, ${input.itemDispositionId}::uuid, ${input.dispositionReasonId}::uuid, ${item.productVersionId}::uuid, ${station.currentVersionId}::uuid, ${item.jobProductVersionId}::uuid, ${item.toolVersionId}::uuid, ${item.toolCavityVersionId}::uuid, ${input.modeId}::uuid, NOW(), NOW())`,
     ),
   );
   await tx.$executeRaw`
     INSERT INTO "ItemDispositionLog"
       (id, quantity, "siteId", "stationId", "workcenterId", "cycleId", "shiftInstanceId",
+       "businessDate", "jobId", "productId", "toolId",
        "itemDispositionId", "dispositionReasonId", "productVersionId", "stationVersionId",
        "jobProductVersionId", "toolVersionId", "toolCavityVersionId", "modeId", "createdAt", "updatedAt")
     VALUES ${values}

@@ -2,6 +2,7 @@ import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
+import { resolveShiftStamp } from "../facility/work-context.js";
 import { computeCoverage, isQueueStatus } from "./coverage.js";
 
 // ============================================================================
@@ -640,6 +641,9 @@ async function completeOrder(orderId: string, siteId: string, workspaceId: strin
 
     const consuming = takes.filter((t) => t.take > 0);
     if (consuming.length > 0) {
+      // Star-pattern stamps: the site-level shift running at completion
+      // (calendar-date fallback when none — e.g. workcenter-scheduled sites).
+      const stamp = await resolveShiftStamp(siteId, null, new Date(), tx);
       await tx.orderConsumption.createMany({
         data: consuming.map((t) => ({
           siteId,
@@ -649,6 +653,7 @@ async function completeOrder(orderId: string, siteId: string, workspaceId: strin
           quantity: t.take,
           source,
           createdByUserId: userId,
+          ...stamp,
         })),
       });
       for (const t of consuming) {

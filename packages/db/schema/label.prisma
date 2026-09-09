@@ -6,8 +6,8 @@
 /// Labels replaced the old "process groups" (ProcessType) and the never-used
 /// ToolClassification/StationClassification tables.
 model Label {
-  id   String @id @default(uuid()) @db.Uuid
-  name String
+  id    String  @id @default(uuid()) @db.Uuid
+  name  String
   /// Display color as #rrggbb; null renders as a neutral chip.
   color String?
 

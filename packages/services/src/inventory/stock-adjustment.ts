@@ -2,6 +2,7 @@ import prisma from "@rw/db";
 import { Prisma, type StockAdjustmentReason } from "@rw/db";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
+import { resolveShiftStamp } from "../facility/work-context.js";
 import { checkAutoComplete } from "../order/auto-complete.js";
 import { getStock } from "./stock.js";
 
@@ -94,6 +95,10 @@ export async function adjustStock(input: AdjustStockInput) {
       });
     }
 
+    // Star-pattern stamps: the site-level shift running when the adjustment lands
+    // (calendar-date fallback when none — e.g. workcenter-scheduled sites).
+    const stamp = await resolveShiftStamp(input.siteId, null, new Date(), tx);
+
     const entry = await tx.productStockAdjustment.create({
       data: {
         siteId: input.siteId,
@@ -103,6 +108,7 @@ export async function adjustStock(input: AdjustStockInput) {
         reason: input.reason,
         note: input.note ?? null,
         performedByUserId: input.performedByUserId ?? null,
+        ...stamp,
       },
       include: adjustmentInclude,
     });

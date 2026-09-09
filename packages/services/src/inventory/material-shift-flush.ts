@@ -35,6 +35,12 @@ export async function flushShiftUsage(shiftInstanceId: string, tx?: TransactionC
 }
 
 async function flushShiftUsageInTx(tx: TransactionClient, shiftInstanceId: string): Promise<FlushResult> {
+  // Star-pattern stamps for the PRODUCTION ledger rows: the flushed shift itself.
+  const shiftInstance = await tx.shiftInstance.findUnique({
+    where: { id: shiftInstanceId },
+    select: { businessDate: true },
+  });
+
   // SELECT FOR UPDATE on the unflushed rows so a concurrent flush call sees
   // either all-flushed or none-flushed. Locks are released at end of tx.
   const rows = await tx.$queryRaw<
@@ -101,6 +107,8 @@ async function flushShiftUsageInTx(tx: TransactionClient, shiftInstanceId: strin
         // Stored negative — debit. Balance = SUM(ledger.quantity).
         quantity: g.total.negated(),
         unit: g.unit,
+        shiftInstanceId,
+        businessDate: shiftInstance?.businessDate ?? null,
       },
       select: { id: true },
     });

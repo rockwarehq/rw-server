@@ -218,12 +218,19 @@ model ShiftInstance {
   /// Absolute UTC end of this shift.
   endTime DateTime @db.Timestamptz(3)
 
-  itemDispositionLogs ItemDispositionLog[]
-  logonSessions       StationLogonSession[]
-  shiftComments       ShiftComment[]
-  materialShiftUsage  MaterialShiftUsage[]
-  calls               Call[]
-  modeLogs            StationModeLog[]
+  itemDispositionLogs     ItemDispositionLog[]
+  logonSessions           StationLogonSession[]
+  shiftComments           ShiftComment[]
+  materialShiftUsage      MaterialShiftUsage[]
+  calls                   Call[]
+  modeLogs                StationModeLog[]
+  cycles                  Cycle[]
+  inventoryItems          InventoryItem[]
+  stateLogs               StationStateLog[]
+  jobLogs                 StationJobLog[]
+  materialLedgerEntries   MaterialLedgerEntry[]
+  orderConsumptions       OrderConsumption[]
+  productStockAdjustments ProductStockAdjustment[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 

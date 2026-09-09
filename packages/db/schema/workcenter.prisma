@@ -27,6 +27,12 @@ model Workcenter {
   calls               Call[]
   modeLogs            StationModeLog[]
   grants              WorkcenterGrant[]
+  cycles              Cycle[]
+  inventoryItems      InventoryItem[]
+  stateLogs           StationStateLog[]
+  jobLogs             StationJobLog[]
+  logonSessions       StationLogonSession[]
+  materialShiftUsage  MaterialShiftUsage[]
 
   @@unique([siteId, parentId, name])
   @@index([siteId])
@@ -112,6 +118,7 @@ model Station {
   stationDatasources  StationDatasource[]
   events              StationEvent[]
   cycles              Cycle[]
+  inventoryItems      InventoryItem[]
   jobLogs             StationJobLog[]
   itemDispositionLogs ItemDispositionLog[]
   displays            Display[]
@@ -141,6 +148,24 @@ model StationStateLog {
   stationId String  @db.Uuid
   station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
 
+  // ── Dimension snapshots (star pattern for BI), captured when the row opens ──
+  siteId String? @db.Uuid
+  site   Site?   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id], onDelete: SetNull)
+
+  /// Stable job id paired with the jobVersionId snapshot below.
+  jobId String? @db.Uuid
+  job   Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  /// Shift the period started in.
+  shiftInstanceId String?        @db.Uuid
+  shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+
+  /// Business date of that shift.
+  businessDate DateTime? @db.Date
+
   stationVersionId String?         @db.Uuid
   stationVersion   StationVersion? @relation(fields: [stationVersionId], references: [id])
 
@@ -163,6 +188,9 @@ model StationStateLog {
   @@index([stationId, updatedAt])
   @@index([statusReasonId])
   @@index([jobVersionId])
+  @@index([siteId, businessDate])
+  @@index([shiftInstanceId])
+  @@index([workcenterId])
 }
 
 /// Assignment: links a Datasource to a Station
@@ -273,6 +301,20 @@ model StationJobLog {
   stationId String  @db.Uuid
   station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
 
+  // ── Dimension snapshots (star pattern for BI), captured at assignment ──
+  siteId String? @db.Uuid
+  site   Site?   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id], onDelete: SetNull)
+
+  /// Shift the assignment started in.
+  shiftInstanceId String?        @db.Uuid
+  shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+
+  /// Business date of that shift.
+  businessDate DateTime? @db.Date
+
   jobId String @db.Uuid
   job   Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
@@ -297,6 +339,8 @@ model StationJobLog {
   @@index([stationId, endTime])
   @@index([stationId, startTime])
   @@index([jobId])
+  @@index([siteId, businessDate])
+  @@index([shiftInstanceId])
 }
 
 /// Assignment: links allowed Jobs to a Station

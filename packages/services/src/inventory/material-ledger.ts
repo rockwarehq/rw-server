@@ -2,6 +2,7 @@ import prisma from "@rw/db";
 import { Prisma, type MaterialLedgerKind, type WeightUnit } from "@rw/db";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
+import { resolveShiftStamp } from "../facility/work-context.js";
 
 /** Post-commit refresh hint: ledger writes change the material's on-hand stock. */
 function publishStockEvent(siteId: string, workspaceId: string, materialId: string): void {
@@ -98,6 +99,10 @@ export async function create(input: CreateLedgerEntryInput) {
     return { error: `${input.kind} quantity must be positive`, code: "INVALID_SIGN" };
   }
 
+  // Star-pattern stamps: the site-level shift running when the event lands
+  // (calendar-date fallback when none — e.g. workcenter-scheduled sites).
+  const stamp = await resolveShiftStamp(input.siteId, null, new Date());
+
   const entry = await prisma.materialLedgerEntry.create({
     data: {
       siteId: input.siteId,
@@ -109,6 +114,7 @@ export async function create(input: CreateLedgerEntryInput) {
       reference: input.reference ?? null,
       note: input.note ?? null,
       performedByUserId: input.performedByUserId ?? null,
+      ...stamp,
     },
     include: ledgerInclude,
   });
@@ -195,6 +201,8 @@ export async function adjust(input: AdjustMaterialStockInput & AdjustMaterialSto
 
     const delta = input.mode === "set" ? requested.minus(currentBalance) : requested;
 
+    const stamp = await resolveShiftStamp(input.siteId, null, new Date(), tx);
+
     const entry = await tx.materialLedgerEntry.create({
       data: {
         siteId: input.siteId,
@@ -205,6 +213,7 @@ export async function adjust(input: AdjustMaterialStockInput & AdjustMaterialSto
         reference: input.reference ?? null,
         note: input.note ?? null,
         performedByUserId: input.performedByUserId ?? null,
+        ...stamp,
       },
       include: ledgerInclude,
     });

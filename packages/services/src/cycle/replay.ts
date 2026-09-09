@@ -23,6 +23,7 @@ import { Queue } from "bullmq";
 import prisma from "@rw/db";
 import { recalcAll } from "../metrics/recalc.js";
 import { scheduleDetection } from "../facility/station/state-detection.js";
+import { resolveShiftStamp, toDateString } from "../facility/work-context.js";
 import { MetricsContext } from "../metrics/context.js";
 import { bullmqConfig } from "../config.js";
 
@@ -227,29 +228,47 @@ async function fixStateEntries(tx: TransactionClient, stationId: string, minTs: 
 
   console.log(`[replay] Soft-deleted ${deleted} state entries for station ${stationId}`);
 
-  // Look up the active job version for the new state entries
+  // Look up the active job for the new state entries
   const activeJob = await tx.stationJobLog.findFirst({
     where: { stationId, endTime: null },
-    select: { jobVersionId: true },
+    select: { jobId: true, jobVersionId: true },
     orderBy: { startTime: "desc" },
   });
+  const jobId = activeJob?.jobId ?? null;
   const jobVersionId = activeJob?.jobVersionId ?? null;
+
+  // Star-pattern stamps, each entry's shift resolved at its startTime.
+  const station = await tx.station.findUnique({
+    where: { id: stationId },
+    select: { siteId: true, workcenterId: true },
+  });
+  const stampFor = async (at: Date) => {
+    if (!station) return { shiftInstanceId: null, businessDate: null };
+    const stamp = await resolveShiftStamp(station.siteId, station.workcenterId, at, tx);
+    return { shiftInstanceId: stamp.shiftInstanceId, businessDate: toDateString(stamp.businessDate) ?? null };
+  };
+  const closedStamp = await stampFor(minTs);
+  const openStamp = await stampFor(maxTs);
 
   // Create a closed UP entry spanning the replay window
   const blockId = randomUUID();
   await tx.$executeRaw`
     INSERT INTO "StationStateLog"
-      (id, "stationId", "startTime", "endTime", state, status, "blockId", "jobVersionId", "createdAt", "updatedAt")
+      (id, "stationId", "startTime", "endTime", state, status, "blockId", "jobId", "jobVersionId",
+       "siteId", "workcenterId", "shiftInstanceId", "businessDate", "createdAt", "updatedAt")
     VALUES
-      (gen_random_uuid(), ${stationId}, ${minTs}, ${maxTs}, 'UP', 'UP', ${blockId}, ${jobVersionId}, NOW(), NOW())
+      (gen_random_uuid(), ${stationId}, ${minTs}, ${maxTs}, 'UP', 'UP', ${blockId}, ${jobId}::uuid, ${jobVersionId},
+       ${station?.siteId ?? null}::uuid, ${station?.workcenterId ?? null}::uuid, ${closedStamp.shiftInstanceId}::uuid, ${closedStamp.businessDate}::date, NOW(), NOW())
   `;
 
   // Create an open UP entry from maxTs onward (station is live)
   await tx.$executeRaw`
     INSERT INTO "StationStateLog"
-      (id, "stationId", "startTime", state, status, "blockId", "jobVersionId", "createdAt", "updatedAt")
+      (id, "stationId", "startTime", state, status, "blockId", "jobId", "jobVersionId",
+       "siteId", "workcenterId", "shiftInstanceId", "businessDate", "createdAt", "updatedAt")
     VALUES
-      (gen_random_uuid(), ${stationId}, ${maxTs}, 'UP', 'UP', ${blockId}, ${jobVersionId}, NOW(), NOW())
+      (gen_random_uuid(), ${stationId}, ${maxTs}, 'UP', 'UP', ${blockId}, ${jobId}::uuid, ${jobVersionId},
+       ${station?.siteId ?? null}::uuid, ${station?.workcenterId ?? null}::uuid, ${openStamp.shiftInstanceId}::uuid, ${openStamp.businessDate}::date, NOW(), NOW())
   `;
 }
 

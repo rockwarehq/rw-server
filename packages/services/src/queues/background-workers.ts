@@ -25,6 +25,7 @@ import { jobEntityId } from "../metrics/cascade.js";
 import { scheduleShiftChanges } from "./shift-change.js";
 import { flushAllExpiredShiftUsage } from "../inventory/material-shift-flush.js";
 import { resolveEffectiveStandards } from "../facility/station/effective-standards.js";
+import { resolveShiftStamp, toDateString } from "../facility/work-context.js";
 
 const REDIS_URL = process.env.REDIS_URL;
 
@@ -230,12 +231,13 @@ export async function runMetricBucketEnsureTick(): Promise<{ checked: number; ar
       Array<{
         stationId: string;
         siteId: string;
+        workcenterId: string | null;
         jobId: string;
         jobVersionId: string;
         jobName: string;
       }>
     >`
-      SELECT s.id AS "stationId", s."siteId", s."currentJobId" AS "jobId",
+      SELECT s.id AS "stationId", s."siteId", s."workcenterId", s."currentJobId" AS "jobId",
              j."currentVersionId" AS "jobVersionId",
              COALESCE(jb.name, '') AS "jobName"
       FROM "Station" s
@@ -252,9 +254,10 @@ export async function runMetricBucketEnsureTick(): Promise<{ checked: number; ar
 
     for (const station of stationsNeedingLog) {
       const std = await resolveEffectiveStandards(prisma, station.stationId, station.jobId);
+      const stamp = await resolveShiftStamp(station.siteId, station.workcenterId, now);
       await prisma.$executeRaw`
-        INSERT INTO "StationJobLog" (id, "stationId", "jobId", "jobVersionId", "startTime", "standardCycle", "standardQuantity", "quantityUnit", "createdAt", "updatedAt")
-        VALUES (gen_random_uuid(), ${station.stationId}::uuid, ${station.jobId}::uuid, ${station.jobVersionId}::uuid, ${now}, ${std.standardCycleSeconds}, ${std.standardQuantity}, ${std.quantityUnit}, NOW(), NOW())
+        INSERT INTO "StationJobLog" (id, "stationId", "jobId", "jobVersionId", "startTime", "standardCycle", "standardQuantity", "quantityUnit", "siteId", "workcenterId", "shiftInstanceId", "businessDate", "createdAt", "updatedAt")
+        VALUES (gen_random_uuid(), ${station.stationId}::uuid, ${station.jobId}::uuid, ${station.jobVersionId}::uuid, ${now}, ${std.standardCycleSeconds}, ${std.standardQuantity}, ${std.quantityUnit}, ${station.siteId}::uuid, ${station.workcenterId}::uuid, ${stamp.shiftInstanceId}::uuid, ${toDateString(stamp.businessDate) ?? null}::date, NOW(), NOW())
       `;
       console.log(
         `[metric-bucket-ensure] Reconciled missing StationJobLog for station ${station.stationId}, job ${station.jobId}`,

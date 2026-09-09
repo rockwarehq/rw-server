@@ -128,6 +128,10 @@ model Site {
   notificationGroups      NotificationGroup[]
   notifications           Notification[]
   stationModeLogs         StationModeLog[]
+  inventoryItems          InventoryItem[]
+  stationStateLogs        StationStateLog[]
+  stationJobLogs          StationJobLog[]
+  stationLogonSessions    StationLogonSession[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId])

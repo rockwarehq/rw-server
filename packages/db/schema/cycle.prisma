@@ -37,6 +37,21 @@ model Cycle {
   stationId String  @db.Uuid
   station   Station @relation(fields: [stationId], references: [id])
 
+  // ── Dimension snapshots (star pattern for BI), captured at record time ──
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id], onDelete: SetNull)
+
+  /// Stable job id paired with the jobVersionId snapshot below.
+  jobId String? @db.Uuid
+  job   Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  /// Shift the cycle recorded in (resolved at cycle end).
+  shiftInstanceId String?        @db.Uuid
+  shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+
+  /// Business date of that shift.
+  businessDate DateTime? @db.Date
+
   orderId String?    @db.Uuid
   order   WorkOrder? @relation(fields: [orderId], references: [id])
 
@@ -69,4 +84,11 @@ model Cycle {
   @@index([jobVersionId])
   @@index([orderId])
   @@index([modeId])
+  // Star stamps: [siteId, businessDate] serves BI date slicing; shiftInstanceId
+  // and workcenterId back their SetNull FKs (shift rematerialization deletes
+  // instances routinely). Per-dimension indexes are deferred until a real
+  // query needs them — this is the hottest insert table.
+  @@index([siteId, businessDate])
+  @@index([shiftInstanceId])
+  @@index([workcenterId])
 }

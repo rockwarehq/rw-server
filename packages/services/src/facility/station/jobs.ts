@@ -10,10 +10,38 @@ import {
 import { publishEntityEvent } from "../../entity/events.js";
 import { resolveEffectiveStandards } from "./effective-standards.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
-import type { ActionSource } from "@rw/db";
+import type { ActionSource, Prisma } from "@rw/db";
 import type { EventCause } from "@rw/runtime/domain-events";
-import { employeeName, resolveShiftContext, toDateString } from "../work-context.js";
+import { employeeName, resolveShiftContext, resolveShiftStamp, toDateString } from "../work-context.js";
 import { publishJobEvent } from "./job-events.js";
+
+/**
+ * Create a StationJobLog entry, stamping the star-pattern dimensions
+ * (site, workcenter, shift, business date) resolved at startTime.
+ */
+export async function createStationJobLog(
+  tx: Prisma.TransactionClient,
+  station: { id: string; siteId: string; workcenterId: string | null },
+  data: {
+    jobId: string;
+    jobVersionId: string;
+    startTime: Date;
+    standardCycle: number | null;
+    standardQuantity: number | null;
+    quantityUnit: string;
+  },
+) {
+  const stamp = await resolveShiftStamp(station.siteId, station.workcenterId, data.startTime, tx);
+  await tx.stationJobLog.create({
+    data: {
+      stationId: station.id,
+      siteId: station.siteId,
+      workcenterId: station.workcenterId,
+      ...stamp,
+      ...data,
+    },
+  });
+}
 
 type ChangeJobResult =
   | {
@@ -163,9 +191,10 @@ export async function changeJob(
       const std = await resolveEffectiveStandards(tx, stationId, newJobId);
       effectiveStandardCycle = std.standardCycleSeconds;
 
-      await tx.stationJobLog.create({
-        data: {
-          stationId,
+      await createStationJobLog(
+        tx,
+        { id: stationId, siteId: station.siteId, workcenterId: station.workcenterId },
+        {
           jobId: newJobId,
           // biome-ignore lint/style/noNonNullAssertion: returns NO_CURRENT_VERSION above (line 47-49) if job.currentVersionId is null; narrowing lost across closure
           jobVersionId: job.currentVersionId!,
@@ -174,11 +203,11 @@ export async function changeJob(
           standardQuantity: std.standardQuantity,
           quantityUnit: std.quantityUnit,
         },
-      });
+      );
     }
 
     // Keep state-log entries job-homogeneous under the period model.
-    await splitOpenStateEntryForJobChange(tx, stationId, timestamp, job?.currentVersionId ?? null);
+    await splitOpenStateEntryForJobChange(tx, stationId, timestamp, job?.id ?? null, job?.currentVersionId ?? null);
 
     return { station, previousJobId, openLogs, effectiveStandardCycle };
   });
