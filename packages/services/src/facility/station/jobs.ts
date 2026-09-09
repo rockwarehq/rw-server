@@ -12,7 +12,7 @@ import { resolveEffectiveStandards } from "./effective-standards.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import type { ActionSource } from "@rw/db";
 import type { EventCause } from "@rw/runtime/domain-events";
-import { resolveShiftContext, toDateString } from "../work-context.js";
+import { employeeName, resolveShiftContext, toDateString } from "../work-context.js";
 import { publishJobEvent } from "./job-events.js";
 
 type ChangeJobResult =
@@ -247,7 +247,15 @@ export async function changeJob(
       })
     : null;
 
-  const shift = await resolveShiftContext(station.siteId, station.workcenterId, timestamp);
+  const [shift, changedBy] = await Promise.all([
+    resolveShiftContext(station.siteId, station.workcenterId, timestamp),
+    actor.employeeId
+      ? prisma.employee.findUnique({
+          where: { id: actor.employeeId },
+          select: { version: { select: { firstName: true, lastName: true } } },
+        })
+      : null,
+  ]);
   publishJobEvent({
     action: "changed",
     workspaceId: station.site.workspaceId,
@@ -258,6 +266,7 @@ export async function changeJob(
     previousJobName: previousJob?.currentVersion?.name ?? undefined,
     changedAt: timestamp.toISOString(),
     changedByEmployeeId: actor.employeeId,
+    changedByEmployeeName: employeeName(changedBy),
     source: actor.source ?? "MANUAL",
     sourceType: actor.sourceType,
     sourceRef: actor.sourceRef,

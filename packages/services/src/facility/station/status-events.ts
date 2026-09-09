@@ -56,9 +56,12 @@ export async function emitStationStatusChanged(
   if (!station || !open) return;
   const status = open.status ?? open.state;
   const now = new Date();
-  const [statusSince, shift] = await Promise.all([
+  const [statusSince, shift, previousReason] = await Promise.all([
     findStatusSince(stationId, status, open.blockId),
     resolveShiftContext(station.siteId, station.workcenterId, now),
+    previous.statusReasonId
+      ? prisma.statusReason.findUnique({ where: { id: previous.statusReasonId }, select: { name: true } })
+      : null,
   ]);
 
   publishStationStatusEvent({
@@ -72,6 +75,7 @@ export async function emitStationStatusChanged(
     statusReasonId: open.statusReasonId ?? undefined,
     statusReason: open.statusReason?.name,
     previousStatusReasonId: previous.statusReasonId ?? undefined,
+    previousStatusReason: previousReason?.name,
     statusSince: statusSince.toISOString(),
     source: actor.source ?? "SYSTEM",
     sourceType: actor.sourceType,
