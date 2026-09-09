@@ -37,8 +37,10 @@ export interface CallEvent extends WorkContext {
   message?: string;
   openedAt: string;
   openedByEmployeeId?: string;
+  openedByEmployeeName?: string;
   closedAt?: string; // closed events only
   closedByEmployeeId?: string;
+  closedByEmployeeName?: string;
   closeMessage?: string;
   /** Present when an automation caused this change. */
   cause?: EventCause;
@@ -75,8 +77,10 @@ export function isCallEvent(value: unknown): value is CallEvent {
     isOptionalString(event.message) &&
     typeof event.openedAt === "string" &&
     isOptionalString(event.openedByEmployeeId) &&
+    isOptionalString(event.openedByEmployeeName) &&
     isOptionalString(event.closedAt) &&
     isOptionalString(event.closedByEmployeeId) &&
+    isOptionalString(event.closedByEmployeeName) &&
     isOptionalString(event.closeMessage) &&
     isOptionalCause(event.cause) &&
     isOptionalWorkContext(event) &&

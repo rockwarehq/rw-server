@@ -115,3 +115,11 @@ export const shiftNamesAutomationRef: RefSource = {
     return rows.map((r) => ({ id: r.name, label: r.name }));
   },
 };
+
+/** "First Last" for an employee row loaded with its current version, or undefined when absent. */
+export function employeeName(
+  employee: { version: { firstName: string; lastName: string } | null } | null | undefined,
+): string | undefined {
+  const v = employee?.version;
+  return v ? `${v.firstName} ${v.lastName}`.trim() : undefined;
+}

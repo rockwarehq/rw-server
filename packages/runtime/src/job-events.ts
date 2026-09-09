@@ -30,6 +30,7 @@ export interface JobEvent extends WorkContext {
   previousJobName?: string;
   changedAt: string;
   changedByEmployeeId?: string;
+  changedByEmployeeName?: string;
   source: JobEventSource;
   sourceType?: string;
   sourceRef?: string;
@@ -62,6 +63,7 @@ export function isJobEvent(value: unknown): value is JobEvent {
     isOptionalString(event.previousJobName) &&
     typeof event.changedAt === "string" &&
     isOptionalString(event.changedByEmployeeId) &&
+    isOptionalString(event.changedByEmployeeName) &&
     (event.source === "MANUAL" || event.source === "SYSTEM") &&
     isOptionalString(event.sourceType) &&
     isOptionalString(event.sourceRef) &&

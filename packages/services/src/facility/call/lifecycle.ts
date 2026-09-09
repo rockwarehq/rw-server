@@ -4,7 +4,7 @@ import type { EventCause } from "@rw/runtime/domain-events";
 import { actorRoleAllowed, resolveEmployee } from "../../employee/actor-role.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
-import { snapshotDimensions, toDateString } from "../work-context.js";
+import { employeeName, snapshotDimensions, toDateString } from "../work-context.js";
 import { publishCallEvent } from "./events.js";
 
 const callInclude = {
@@ -99,8 +99,10 @@ function emitLifecycleEvents(
     message: call.message ?? undefined,
     openedAt: call.openedAt.toISOString(),
     openedByEmployeeId: call.openedByEmployeeId ?? undefined,
+    openedByEmployeeName: employeeName(call.openedByEmployee),
     closedAt: call.closedAt?.toISOString(),
     closedByEmployeeId: call.closedByEmployeeId ?? undefined,
+    closedByEmployeeName: employeeName(call.closedByEmployee),
     closeMessage: call.closeMessage ?? undefined,
     workcenterId: call.workcenterId ?? undefined,
     workcenterName: call.workcenter?.name,

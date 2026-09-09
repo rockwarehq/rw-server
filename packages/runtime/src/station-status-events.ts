@@ -35,6 +35,7 @@ export interface StationStatusEvent extends WorkContext {
   statusReasonId?: string;
   statusReason?: string;
   previousStatusReasonId?: string;
+  previousStatusReason?: string;
   /** ISO time the current status run began, across reason/job/mode splits. */
   statusSince: string;
   source: StationStatusEventSource;
@@ -67,6 +68,7 @@ export function isStationStatusEvent(value: unknown): value is StationStatusEven
     isOptionalString(event.statusReasonId) &&
     isOptionalString(event.statusReason) &&
     isOptionalString(event.previousStatusReasonId) &&
+    isOptionalString(event.previousStatusReason) &&
     typeof event.statusSince === "string" &&
     (event.source === "MANUAL" || event.source === "SYSTEM") &&
     isOptionalString(event.sourceType) &&

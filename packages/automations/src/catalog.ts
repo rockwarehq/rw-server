@@ -42,11 +42,14 @@ function factsFor(payload: EventSchemaVersion["payload"]): FactDef[] {
 
 /** Template variables insertable into action inputs: payload fields (for the selected version) + event/system tokens. */
 function variablesFor(schema: EventSchema, payload: EventSchemaVersion["payload"]): TemplateVariable[] {
+  // In a message the name is what people want: ids list after everything else and say "Id".
+  const isId = (key: string) => key.endsWith("Id");
+  const entries = Object.entries(payload);
   return [
-    ...Object.entries(payload).map(
+    ...[...entries.filter(([k]) => !isId(k)), ...entries.filter(([k]) => isId(k))].map(
       ([key, prop]): TemplateVariable => ({
         key: `event.payload.${key}`,
-        label: prop.title,
+        label: isId(key) && !/\bId\b/.test(prop.title) ? `${prop.title} Id` : prop.title,
         example: "",
       }),
     ),

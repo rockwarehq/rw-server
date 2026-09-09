@@ -23,6 +23,7 @@ export const schema: EventSchema = {
         sourceType: { type: "string", title: "Trigger Type", matchable: false },
         sourceRef: { type: "string", title: "Source Ref", matchable: false },
         changedByEmployeeId: { type: "string", title: "Changed By (Employee Id)", matchable: false },
+        changedByEmployeeName: { type: "string", title: "Changed By", matchable: false },
       },
     },
   },
@@ -42,5 +43,6 @@ export function fromJobEvent(e: JobEvent): Record<string, unknown> {
     sourceType: e.sourceType,
     sourceRef: e.sourceRef,
     changedByEmployeeId: e.changedByEmployeeId,
+    changedByEmployeeName: e.changedByEmployeeName,
   };
 }
