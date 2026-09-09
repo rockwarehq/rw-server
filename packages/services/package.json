@@ -27,6 +27,7 @@
     "./order/*": "./dist/order/*.js",
     "./processor/*": "./dist/processor/*.js",
     "./queues/*": "./dist/queues/*.js",
+    "./reporting/*": "./dist/reporting/*.js",
     "./rpc/*": "./dist/rpc/*.js",
     "./saved-view/*": "./dist/saved-view/*.js",
     "./types/*": "./dist/types/*.js",

@@ -23,6 +23,7 @@ import * as disposition from "./disposition.js";
 import * as pointValue from "./point-value.js";
 import * as shiftRecap from "./shift-recap.js";
 import * as logs from "./logs.js";
+import * as report from "./report.js";
 import * as historian from "./historian.js";
 import * as employee from "./employee.js";
 import * as employeeRole from "./employee-role.js";
@@ -472,6 +473,10 @@ export const router = {
     cycleSearch: logs.cycleSearch,
     logonSearch: logs.logonLogSearch,
     partLogSearch: logs.partLogSearch,
+  },
+  report: {
+    schema: report.schema,
+    query: report.query,
   },
   historian: {
     query: historian.query,
