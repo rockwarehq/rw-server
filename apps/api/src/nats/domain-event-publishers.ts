@@ -18,6 +18,12 @@ import {
   type JobEvent,
 } from "@rw/runtime/job-events";
 import {
+  deriveJobHistoryEventSubject,
+  JOB_HISTORY_EVENT_STREAM,
+  JOB_HISTORY_EVENT_SUBJECT_FILTER,
+  type JobHistoryAmendedEvent,
+} from "@rw/runtime/job-history-events";
+import {
   deriveModeEventSubject,
   MODE_EVENT_STREAM,
   MODE_EVENT_SUBJECT_FILTER,
@@ -37,6 +43,7 @@ import {
 } from "@rw/runtime/station-status-events";
 import { setEntityEventSink } from "@rw/services/entity/index";
 import { call, productionMode, station } from "@rw/services/facility/index";
+import { setJobHistoryEventSink } from "@rw/services/history/index";
 import { setNotificationEventSink } from "@rw/services/notification/index";
 import { moduleLogger } from "../logger.js";
 import { ensureStream, getNatsConnection } from "./util.js";
@@ -136,4 +143,13 @@ export const startJobEventPublisher = () =>
     filter: JOB_EVENT_SUBJECT_FILTER,
     subjectFor: (e) => deriveJobEventSubject({ siteId: e.siteId, stationId: e.stationId, action: e.action }),
     setSink: station.setJobEventSink,
+  });
+
+export const startJobHistoryEventPublisher = () =>
+  startDomainEventPublisher<JobHistoryAmendedEvent>({
+    name: "job-history-events",
+    stream: JOB_HISTORY_EVENT_STREAM,
+    filter: JOB_HISTORY_EVENT_SUBJECT_FILTER,
+    subjectFor: (e) => deriveJobHistoryEventSubject({ siteId: e.siteId, stationId: e.stationId, action: e.action }),
+    setSink: setJobHistoryEventSink,
   });

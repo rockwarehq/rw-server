@@ -114,19 +114,20 @@ model Station {
   statusReasons StatusReason[]
 
   // Relations
-  stateLogs           StationStateLog[]
-  stationDatasources  StationDatasource[]
-  events              StationEvent[]
-  cycles              Cycle[]
-  inventoryItems      InventoryItem[]
-  jobLogs             StationJobLog[]
-  itemDispositionLogs ItemDispositionLog[]
-  displays            Display[]
-  logonSessions       StationLogonSession[]
-  shiftComments       ShiftComment[]
-  materialShiftUsage  MaterialShiftUsage[]
-  calls               Call[]
-  modeLogs            StationModeLog[]
+  stateLogs            StationStateLog[]
+  stationDatasources   StationDatasource[]
+  events               StationEvent[]
+  cycles               Cycle[]
+  inventoryItems       InventoryItem[]
+  jobLogs              StationJobLog[]
+  itemDispositionLogs  ItemDispositionLog[]
+  displays             Display[]
+  logonSessions        StationLogonSession[]
+  shiftComments        ShiftComment[]
+  materialShiftUsage   MaterialShiftUsage[]
+  calls                Call[]
+  modeLogs             StationModeLog[]
+  jobHistoryAmendments JobHistoryAmendment[]
 
   @@unique([siteId, name])
   @@index([siteId])
@@ -341,6 +342,54 @@ model StationJobLog {
   @@index([jobId])
   @@index([siteId, businessDate])
   @@index([shiftInstanceId])
+}
+
+enum JobHistoryAmendmentStatus {
+  PENDING_REBUILD
+  APPLIED
+  FAILED
+}
+
+/// A retroactive correction of which job a station ran over [fromTime, toTime).
+/// The facts (job log, cycles, items, state log, calls, mode logs) are rewritten
+/// in the same transaction; metric buckets are rebuilt asynchronously and the
+/// status tracks that rebuild.
+model JobHistoryAmendment {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  /// null = the station ran no job over the window.
+  jobId        String? @db.Uuid
+  job          Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  jobVersionId String? @db.Uuid
+
+  fromTime DateTime  @db.Timestamptz(3)
+  /// null = through now; the amendment also changed Station.currentJobId.
+  toTime   DateTime? @db.Timestamptz(3)
+
+  /// StationJobLog rows that overlapped the window before the rewrite.
+  previousTimeline Json
+  /// Row counts touched per module.
+  summary          Json @default("{}")
+
+  status       JobHistoryAmendmentStatus @default(PENDING_REBUILD)
+  rebuildError String?
+  rebuiltAt    DateTime?                 @db.Timestamptz(3)
+
+  source          ActionSource @default(MANUAL)
+  actorEmployeeId String?      @db.Uuid
+  actorUserId     String?      @db.Uuid
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([stationId, createdAt])
+  @@index([siteId, status])
 }
 
 /// Assignment: links allowed Jobs to a Station

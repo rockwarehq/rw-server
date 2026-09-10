@@ -9,12 +9,14 @@ type Client = Prisma.TransactionClient | typeof prisma;
  * Resolve the effective standards for a station+job pairing from the CURRENT
  * station and job versions; callers snapshot the result (StationJobLog at
  * assignment, Cycle at record time). DISCRETE resolves to the job's entered
- * standardCycle — unchanged behavior.
+ * standardCycle — unchanged behavior. History amendments pass the job version
+ * that was current at the amended time.
  */
 export async function resolveEffectiveStandards(
   client: Client,
   stationId: string,
   jobId: string,
+  jobVersionId?: string,
 ): Promise<ResolvedStandards> {
   const [stationVersion, jobVersion] = await Promise.all([
     client.stationVersion.findFirst({
@@ -30,7 +32,7 @@ export async function resolveEffectiveStandards(
       },
     }),
     client.jobVersion.findFirst({
-      where: { job: { id: jobId }, currentOfJob: { isNot: null } },
+      where: jobVersionId ? { id: jobVersionId } : { job: { id: jobId }, currentOfJob: { isNot: null } },
       select: {
         standardCycle: true,
         standardRate: true,

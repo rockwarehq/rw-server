@@ -22,6 +22,7 @@ import { Redis } from "ioredis";
 import { Queue } from "bullmq";
 import prisma from "@rw/db";
 import { recalcAll } from "../metrics/recalc.js";
+import { jobEntityId } from "../metrics/cascade.js";
 import { scheduleDetection } from "../facility/station/state-detection.js";
 import { resolveShiftStamp, toDateString } from "../facility/work-context.js";
 import { MetricsContext } from "../metrics/context.js";
@@ -279,16 +280,22 @@ async function fixStateEntries(tx: TransactionClient, stationId: string, minTs: 
  * recalcAll can recompute them. The normal 60s archive worker will
  * re-archive them once their time windows have elapsed.
  */
-async function unarchiveAffectedBuckets(stationId: string, siteId: string, minTs: Date, maxTs: Date): Promise<void> {
+export async function unarchiveAffectedBuckets(
+  stationId: string,
+  siteId: string,
+  minTs: Date,
+  maxTs: Date,
+  extraEntityIds: string[] = [],
+): Promise<void> {
   // Find all entity IDs that need un-archiving:
   // the station itself, its workcenter (if any), the site, and the current job
-  const entityIds = [stationId, siteId];
+  const entityIds = [stationId, siteId, ...extraEntityIds];
 
   const station = await prisma.$queryRaw<Array<{ workcenterId: string | null; currentJobId: string | null }>>`
     SELECT "workcenterId", "currentJobId" FROM "Station" WHERE id = ${stationId}::uuid
   `;
   if (station[0]?.workcenterId) entityIds.push(station[0].workcenterId);
-  if (station[0]?.currentJobId) entityIds.push(station[0].currentJobId);
+  if (station[0]?.currentJobId) entityIds.push(jobEntityId(stationId, station[0].currentJobId));
 
   // Find archived buckets that overlap the replay window.
   // A bucket overlaps if: startTime < maxTs AND startTime + durationSeconds > minTs

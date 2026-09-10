@@ -530,7 +530,7 @@ async function queryAndTallyCycles(
       ? await prisma.$queryRaw<Array<{ cycleId: string; count: number }>>`
           SELECT "cycleId", COALESCE(SUM(quantity), 0)::float8 AS "count"
           FROM "InventoryItem"
-          WHERE "cycleId" = ANY(${cycleIds}::uuid[])
+          WHERE "cycleId" = ANY(${cycleIds}::uuid[]) AND "deletedAt" IS NULL
           GROUP BY "cycleId"
         `
       : [];

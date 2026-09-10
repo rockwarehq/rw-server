@@ -74,6 +74,10 @@ const EXACT: Record<string, OrpcErrorCode> = {
   // (retry with allowPartial: true).
   PARTIAL_COVERAGE: "CONFLICT",
 
+  // History amendment windows must be past, bounded, and non-empty.
+  INVALID_RANGE: "BAD_REQUEST",
+  RANGE_TOO_LARGE: "BAD_REQUEST",
+
   EXECUTION_ENQUEUE_FAILED: "INTERNAL_SERVER_ERROR",
   INTERNAL_SERVER_ERROR: "INTERNAL_SERVER_ERROR",
 };

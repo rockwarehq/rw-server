@@ -23,6 +23,7 @@ Five tightly-coupled pieces in one process (they share `MetricsContext` caches a
 - **shift-change** — BullMQ delayed jobs firing at shift boundaries; triggers an ensure tick
 - **combined metrics tick** — 5s `setInterval` advancing live calculations (elapsed windows, downtime accumulation) plus the dirty-bucket consumer that batch-recomputes
 - **archive** — called from inside the ensure tick; moves past-business-date buckets to `MetricBucketLog`
+- **job-history-rebuild** — durable JetStream consumer of `job-history.*` (ADR-0013); un-archives and recalcs buckets over an amended window. Lives here rather than in its own mode because it needs the direct DB URL and must not race the tick
 
 > **Rollups is a singleton.** Run exactly one rollups machine per tenant — the
 > combined tick assumes it is alone; a second instance double-counts. The fly

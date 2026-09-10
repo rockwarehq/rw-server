@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import prisma from "@rw/db";
 import { resolveEffectiveStandards } from "./effective-standards.js";
-import type { Prisma } from "@rw/db";
+import type { Prisma, StationStateLog } from "@rw/db";
 import { publishMetricValueChange } from "../../rpc/metrics-bus.js";
 import { publishStationShiftContext } from "../../metrics/graph-context.js";
 import { updateTimeBased } from "../../metrics/recalc.js";
@@ -1007,28 +1007,30 @@ export async function splitDownEntry(entryId: string, splitAt: Date): Promise<Sp
       };
     }
 
-    // Update the original entry: truncate its endTime to the split point
-    const first = await tx.stationStateLog.update({
-      where: { id: entry.id },
-      data: { endTime: splitAt },
-    });
-
-    // Create the second entry: from the split point to the original endTime
-    const second = await createStateEntry(tx, {
-      stationId: entry.stationId,
-      startTime: splitAt,
-      endTime: entry.endTime, // null stays null for open entries
-      state: entry.state,
-      status: entry.status,
-      blockId: entry.blockId,
-      statusReasonId: entry.statusReasonId,
-      jobId: entry.jobId,
-      jobVersionId: entry.jobVersionId,
-      modeId: entry.modeId,
-    });
-
-    return { success: true as const, entries: [first, second] };
+    return { success: true as const, entries: await splitStateEntryAt(tx, entry, splitAt) };
   });
+}
+
+/**
+ * Cut a state entry at `splitAt`: the original keeps its start and ends at the
+ * cut, a copy continues to the original endTime (null stays open). Caller
+ * holds the station lock.
+ */
+export async function splitStateEntryAt(tx: TransactionClient, entry: StationStateLog, splitAt: Date) {
+  const first = await tx.stationStateLog.update({ where: { id: entry.id }, data: { endTime: splitAt } });
+  const second = await createStateEntry(tx, {
+    stationId: entry.stationId,
+    startTime: splitAt,
+    endTime: entry.endTime,
+    state: entry.state,
+    status: entry.status,
+    blockId: entry.blockId,
+    statusReasonId: entry.statusReasonId,
+    jobId: entry.jobId,
+    jobVersionId: entry.jobVersionId,
+    modeId: entry.modeId,
+  });
+  return [first, second] as [typeof first, typeof second];
 }
 
 // ── Assign downtime reason ───────────────────────────────────────

@@ -232,6 +232,9 @@ export const router = {
     splitDowntime: station.splitDowntime,
     assignDowntimeReason: station.assignDowntimeReason,
     changeJob: station.changeJob,
+    amendJobHistory: station.amendJobHistory,
+    listJobHistoryAmendments: station.listJobHistoryAmendments,
+    retryJobHistoryRebuild: station.retryJobHistoryRebuild,
     listStateLogs: station.listStateLogs,
     // Label filters
     setLabelFilter: station.setLabelFilter,
