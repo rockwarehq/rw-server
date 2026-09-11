@@ -151,7 +151,10 @@ async function fetchRange(
   });
 
   const hasMore = rows.length > page.limit;
-  const data = hasMore ? rows.slice(0, page.limit) : rows;
+  // Clients read the planned flag off the reason; the period's own stamp is the truth.
+  const data = (hasMore ? rows.slice(0, page.limit) : rows).map((r) =>
+    r.statusReason ? { ...r, statusReason: { ...r.statusReason, isPlannedDown: r.isPlannedDown } } : r,
+  );
   const last = data[data.length - 1];
 
   return {

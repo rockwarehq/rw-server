@@ -101,6 +101,15 @@ export interface StateEntryStamp {
   businessDate: Date | null;
 }
 
+async function isPlannedReason(client: TransactionClient | typeof prisma, statusReasonId: string | null) {
+  if (!statusReasonId) return false;
+  const reason = await client.statusReason.findUnique({
+    where: { id: statusReasonId },
+    select: { isPlannedDown: true },
+  });
+  return reason?.isPlannedDown ?? false;
+}
+
 /**
  * Create a new state log entry, stamping the star-pattern dimensions
  * (site, workcenter, shift, business date). Callers that already resolved
@@ -121,10 +130,13 @@ async function createStateEntry(
     jobVersionId?: string | null;
     modeId?: string | null;
     statusReasonId?: string | null;
+    /** Copies pass the row's own flag; omitted = stamp it from the reason. */
+    isPlannedDown?: boolean;
     /** Valid only when the stamps were resolved at this row's startTime. */
     stamp?: StateEntryStamp;
   },
 ) {
+  const isPlannedDown = data.isPlannedDown ?? (await isPlannedReason(client, data.statusReasonId ?? null));
   let stamp = data.stamp;
   if (!stamp) {
     const station = await client.station.findUnique({
@@ -151,6 +163,7 @@ async function createStateEntry(
       jobVersionId: data.jobVersionId ?? null,
       modeId: data.modeId ?? null,
       statusReasonId: data.statusReasonId ?? null,
+      isPlannedDown,
       siteId: stamp?.siteId ?? null,
       workcenterId: stamp?.workcenterId ?? null,
       shiftInstanceId: stamp?.shiftInstanceId ?? null,
@@ -633,6 +646,7 @@ async function splitOpenStateEntry(
     status: current.status,
     blockId: current.blockId,
     statusReasonId: current.statusReasonId,
+    isPlannedDown: "statusReasonId" in patch ? undefined : current.isPlannedDown,
     jobId: current.jobId,
     jobVersionId: current.jobVersionId,
     modeId: current.modeId,
@@ -1008,6 +1022,7 @@ export async function splitStateEntryAt(
     status: entry.status,
     blockId: entry.blockId,
     statusReasonId: entry.statusReasonId,
+    isPlannedDown: entry.isPlannedDown,
     jobId: entry.jobId,
     jobVersionId: entry.jobVersionId,
     modeId: entry.modeId,
@@ -1068,9 +1083,10 @@ type AssignDowntimeReasonResult =
 export async function assignDowntimeReason(
   entryId: string,
   statusReasonId: string | null,
-  options?: { applyToBlock?: boolean },
+  options?: { applyToBlock?: boolean; isPlannedDown?: boolean },
 ): Promise<AssignDowntimeReasonResult> {
   const applyToBlock = options?.applyToBlock ?? true;
+  let isPlannedDown = options?.isPlannedDown ?? false;
 
   // Look up the target entry
   const entry = await prisma.stationStateLog.findFirst({
@@ -1091,11 +1107,12 @@ export async function assignDowntimeReason(
   if (statusReasonId != null) {
     const reason = await prisma.statusReason.findUnique({
       where: { id: statusReasonId },
-      select: { id: true, siteId: true, labels: { select: { id: true } } },
+      select: { id: true, siteId: true, isPlannedDown: true, labels: { select: { id: true } } },
     });
     if (!reason || reason.siteId !== entry.station.siteId) {
       return { error: "Status reason not found", code: "REASON_NOT_FOUND" };
     }
+    isPlannedDown = options?.isPlannedDown ?? reason.isPlannedDown;
     const filter = await prisma.labelFilter.findUnique({
       where: { stationId_target: { stationId: entry.stationId, target: "STATUS_REASON" } },
       select: { labels: { select: { id: true } } },
@@ -1117,9 +1134,12 @@ export async function assignDowntimeReason(
     ? { blockId: entry.blockId, state: "DOWN" as const, deletedAt: null }
     : { id: entryId, deletedAt: null };
 
+  // Only a planned/unplanned flip moves the buckets; a reason swap within the same class does not.
+  const flipped =
+    (await prisma.stationStateLog.count({ where: { ...where, isPlannedDown: { not: isPlannedDown } } })) > 0;
   const result = await prisma.stationStateLog.updateMany({
     where,
-    data: { statusReasonId },
+    data: { statusReasonId, isPlannedDown },
   });
 
   // Determine the affected time range across all entries in the block.
@@ -1149,10 +1169,12 @@ export async function assignDowntimeReason(
   console.log(
     `[assignDowntimeReason] station=${entry.stationId} reason=${statusReasonId} range=${rangeStart.toISOString()}..${rangeEnd.toISOString()} updatedCount=${result.count}`,
   );
-  updateTimeBased(entry.stationId, siteId, rangeStart, rangeEnd).then(
-    () => console.log(`[assignDowntimeReason] updateTimeBased completed`),
-    (err) => console.error(`[assignDowntimeReason] updateTimeBased FAILED for station ${entry.stationId}:`, err),
-  );
+  if (flipped) {
+    updateTimeBased(entry.stationId, siteId, rangeStart, rangeEnd).then(
+      () => console.log(`[assignDowntimeReason] updateTimeBased completed`),
+      (err) => console.error(`[assignDowntimeReason] updateTimeBased FAILED for station ${entry.stationId}:`, err),
+    );
+  }
 
   // Publish statusReason live metric only if the open row was part of the update.
   const openAffected = applyToBlock
@@ -1177,7 +1199,7 @@ export async function assignDowntimeReason(
       workspaceId: entry.station.site.workspaceId,
       changedFields: ["statusReasonId"],
     });
-    if (statusReasonId !== entry.statusReasonId) {
+    if (statusReasonId !== entry.statusReasonId || isPlannedDown !== entry.isPlannedDown) {
       void emitStationStatusChanged(entry.stationId, previousStatusOf(entry), { source: "MANUAL" }).catch(
         logStatusEventError(entry.stationId),
       );

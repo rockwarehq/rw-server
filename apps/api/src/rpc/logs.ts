@@ -534,11 +534,11 @@ export const downtimeLogSearch = authRequired
       startTime: true,
       endTime: true,
       statusReasonId: true,
+      isPlannedDown: true,
       statusReason: {
         select: {
           id: true,
           name: true,
-          isPlannedDown: true,
           category: { select: { id: true, name: true } },
         },
       },
@@ -565,7 +565,7 @@ export const downtimeLogSearch = authRequired
       durationSeconds: number | null;
       statusReasonId: string | null;
       statusReasonName: string | null;
-      isPlannedDown: boolean | null;
+      isPlannedDown: boolean;
       categoryName: string | null;
       jobVersionId: string | null;
       jobName: string | null;
@@ -605,7 +605,7 @@ export const downtimeLogSearch = authRequired
             durationSeconds,
             statusReasonId: entry.statusReasonId,
             statusReasonName: entry.statusReason?.name ?? null,
-            isPlannedDown: entry.statusReason?.isPlannedDown ?? null,
+            isPlannedDown: entry.isPlannedDown,
             categoryName: entry.statusReason?.category?.name ?? null,
             jobVersionId: entry.jobVersionId ?? null,
             jobName: entry.jobVersion?.name ?? null,
@@ -630,7 +630,7 @@ export const downtimeLogSearch = authRequired
           durationSeconds,
           statusReasonId: entry.statusReasonId,
           statusReasonName: entry.statusReason?.name ?? null,
-          isPlannedDown: entry.statusReason?.isPlannedDown ?? null,
+          isPlannedDown: entry.isPlannedDown,
           categoryName: entry.statusReason?.category?.name ?? null,
           jobVersionId: entry.jobVersionId ?? null,
           jobName: entry.jobVersion?.name ?? null,
