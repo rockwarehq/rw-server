@@ -5,8 +5,8 @@
  * injected here — the compiler refuses to run without a scope.
  */
 
-import { authorizeList } from "@rw/auth/iam/policy";
-import { reportSchema, runReportQuery } from "@rw/services/reporting/index";
+import { authorizeList, type Permission } from "@rw/auth/iam/policy";
+import { FACTS, reportSchema, runReportQuery } from "@rw/services/reporting/index";
 import { z } from "zod";
 import { grant } from "./authz.js";
 import { throwServiceError } from "./errors.js";
@@ -31,6 +31,7 @@ const querySchema = z.object({
     .optional(),
   dateFrom: dateString.optional(),
   dateTo: dateString.optional(),
+  dateGranularity: z.enum(["hour", "day", "week", "month", "year"]).optional(),
   orderBy: z.object({ field: z.string().max(64), dir: z.enum(["asc", "desc"]) }).optional(),
   limit: z.number().int().min(1).max(10000).optional(),
   offset: z.number().int().min(0).optional(),
@@ -39,12 +40,30 @@ const querySchema = z.object({
 export const schema = userOrDisplayRequired
   .input(z.object({ siteId: z.uuid() }))
   .handler(async ({ input, context }) => {
-    grant(await authorizeList(context.iam, { permission: "job:read", requestedSiteId: input.siteId }));
-    return { facts: reportSchema() };
+    // Each fact is gated by the permission its sibling routers use for the
+    // same tables; the schema lists only facts the caller can actually query.
+    const permissions = [...new Set(Object.values(FACTS).map((fact) => fact.permission))];
+    const granted = new Set<string>();
+    for (const permission of permissions) {
+      const result = await authorizeList(context.iam, {
+        permission: permission as Permission,
+        requestedSiteId: input.siteId,
+      });
+      if (result.ok) granted.add(permission);
+    }
+    if (granted.size === 0) {
+      // No catalog access at all — surface the denial instead of an empty list.
+      grant(await authorizeList(context.iam, { permission: "job:read", requestedSiteId: input.siteId }));
+    }
+    return { facts: reportSchema(granted) };
   });
 
 export const query = userOrDisplayRequired.input(querySchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "job:read", requestedSiteId: input.siteId }));
+  const fact = FACTS[input.fact];
+  if (!fact) throwServiceError({ error: `Unknown fact: ${input.fact}`, code: "UNKNOWN_FACT" });
+  const scope = grant(
+    await authorizeList(context.iam, { permission: fact.permission as Permission, requestedSiteId: input.siteId }),
+  );
 
   const { siteId, ...reportQuery } = input;
   const result = await runReportQuery(reportQuery, { siteId, workcenterIds: scope.workcenterIds });
