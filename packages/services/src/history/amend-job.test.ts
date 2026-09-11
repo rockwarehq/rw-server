@@ -175,12 +175,13 @@ describe.skipIf(!process.env.DATABASE_URL)("amendJobHistory", () => {
     expect(openState).toMatchObject({ status: "DOWN", jobId: j2.id, startTime: at(5.5) });
   });
 
-  test("is idempotent: asserting the timeline that already exists changes nothing", async () => {
+  test("refuses to assert the timeline that already exists", async () => {
     const before = await prisma.stationJobLog.findMany({ where: { stationId }, orderBy: { startTime: "asc" } });
+    const amendments = await prisma.jobHistoryAmendment.count({ where: { stationId } });
     const result = await amendJobHistory({ stationId, jobId: j2.id, from: at(2.5), to: at(4.5) });
-    if ("error" in result) throw new Error(result.error);
+    expect(result).toMatchObject({ code: "NO_CHANGE" });
     const after = await prisma.stationJobLog.findMany({ where: { stationId }, orderBy: { startTime: "asc" } });
     expect(after.map((l) => l.id)).toEqual(before.map((l) => l.id));
-    expect(result.data.summary).toMatchObject({ cycles: 2, itemsRemoved: 2, itemsCreated: 2 });
+    expect(await prisma.jobHistoryAmendment.count({ where: { stationId } })).toBe(amendments);
   });
 });

@@ -134,17 +134,17 @@ describe.skipIf(!process.env.DATABASE_URL)("shift period splits", () => {
         r.isPlannedDown,
       ]);
 
-    expect(await assignDowntimeReason(open.id, planned.id)).toMatchObject({ success: true, updatedCount: 2 });
+    expect(await assignDowntimeReason(open.id, planned.id, { applyToBlock: true })).toMatchObject({ success: true, updatedCount: 2 });
     expect(await flags()).toEqual([
       [true, true],
       [true, true],
     ]);
-    expect(await assignDowntimeReason(open.id, planned.id, { isPlannedDown: false })).toMatchObject({ success: true });
+    expect(await assignDowntimeReason(open.id, planned.id, { applyToBlock: true, isPlannedDown: false })).toMatchObject({ success: true });
     expect(await flags()).toEqual([
       [true, false],
       [true, false],
     ]);
-    expect(await assignDowntimeReason(open.id, null)).toMatchObject({ success: true });
+    expect(await assignDowntimeReason(open.id, null, { applyToBlock: true })).toMatchObject({ success: true });
     expect(await flags()).toEqual([
       [false, false],
       [false, false],

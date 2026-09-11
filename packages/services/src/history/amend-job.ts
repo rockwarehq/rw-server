@@ -40,7 +40,9 @@ export type AmendJobHistoryResult =
         | "SITE_MISMATCH"
         | "LABEL_FILTER_MISMATCH"
         | "INVALID_RANGE"
-        | "RANGE_TOO_LARGE";
+        | "RANGE_TOO_LARGE"
+        | "JOB_REQUIRED"
+        | "NO_CHANGE";
     };
 
 export async function amendJobHistory(input: AmendJobHistoryInput): Promise<AmendJobHistoryResult> {
@@ -48,6 +50,7 @@ export async function amendJobHistory(input: AmendJobHistoryInput): Promise<Amen
   const { stationId, from, to } = input;
   const actor = input.actor ?? {};
   const toEff = to ?? now;
+  if (!input.jobId) return { error: "An amendment must name a job", code: "JOB_REQUIRED" };
   if (from >= toEff || toEff > now) return { error: "Window must lie in the past", code: "INVALID_RANGE" };
   if (toEff.getTime() - from.getTime() > MAX_WINDOW_MS) {
     return { error: "Window may span at most 24 hours", code: "RANGE_TOO_LARGE" };
@@ -111,6 +114,10 @@ export async function amendJobHistory(input: AmendJobHistoryInput): Promise<Amen
       const rows = await loadTimelineRows(tx, stationId, from, to);
       const previous = rows.filter((r) => r.startTime < toEff && (r.endTime === null || r.endTime > from));
       const displacedJobIds = [...new Set(previous.map((r) => r.jobId))].filter((id) => id !== job?.id);
+      const plan = planTimelineRewrite(rows, from, to, job && jobVersionId ? { jobId: job.id, jobVersionId } : null);
+      if (plan.updates.length + plan.inserts.length + plan.deletes.length === 0) {
+        return { error: "That job is already recorded for this window" as const, code: "NO_CHANGE" as const };
+      }
 
       // Created first so the rewritten rows can reference it; the summary lands at the end.
       const created = await tx.jobHistoryAmendment.create({
@@ -147,12 +154,6 @@ export async function amendJobHistory(input: AmendJobHistoryInput): Promise<Amen
             : null,
       };
 
-      const plan = planTimelineRewrite(
-        rows,
-        from,
-        to,
-        ctx.job ? { jobId: ctx.job.id, jobVersionId: ctx.job.versionId } : null,
-      );
       await applyTimelinePlan(
         tx,
         station,
@@ -162,6 +163,7 @@ export async function amendJobHistory(input: AmendJobHistoryInput): Promise<Amen
           standardCycle: ctx.job?.standardCycle ?? null,
           standardQuantity: ctx.job?.standardQuantity ?? null,
           quantityUnit: ctx.job?.quantityUnit ?? "",
+          amendmentId: created.id,
         },
       );
 
@@ -254,10 +256,22 @@ export async function listAmendments(filter: { siteId: string; stationId?: strin
       job: { select: { currentVersion: { select: { name: true } } } },
     },
   });
+  const ids = (k: "actorEmployeeId" | "actorUserId") => [...new Set(rows.map((r) => r[k]).filter((x): x is string => !!x))];
+  const [employees, users] = await Promise.all([
+    prisma.employee.findMany({
+      where: { id: { in: ids("actorEmployeeId") } },
+      select: { id: true, version: { select: { firstName: true, lastName: true } } },
+    }),
+    prisma.user.findMany({ where: { id: { in: ids("actorUserId") } }, select: { id: true, email: true } }),
+  ]);
   return rows.map(({ station, job, ...row }) => ({
     ...row,
     stationName: station.name,
     jobName: job?.currentVersion?.name ?? null,
+    actorName:
+      employeeName(employees.find((e) => e.id === row.actorEmployeeId)) ??
+      users.find((u) => u.id === row.actorUserId)?.email ??
+      null,
   }));
 }
 

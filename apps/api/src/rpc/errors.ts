@@ -76,6 +76,8 @@ const EXACT: Record<string, OrpcErrorCode> = {
 
   // History amendment windows must be past, bounded, and non-empty.
   INVALID_RANGE: "BAD_REQUEST",
+  JOB_REQUIRED: "BAD_REQUEST",
+  NO_CHANGE: "BAD_REQUEST",
   RANGE_TOO_LARGE: "BAD_REQUEST",
 
   EXECUTION_ENQUEUE_FAILED: "INTERNAL_SERVER_ERROR",

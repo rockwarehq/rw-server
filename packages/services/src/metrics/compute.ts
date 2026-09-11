@@ -398,7 +398,9 @@ function resolveItemsPerCycle(cycleTally: CycleTally): number {
  * The log's createdAt determines which hour bucket it falls into.
  *
  * When a jobFilter is provided, dispositions are attributed to the job via
- * two paths, in order of preference:
+ * three paths, in order of preference:
+ *   0. ItemDispositionLog.jobId — what the operator entered; amendments never
+ *      rewrite it, so it wins over the cycle's (possibly amended) job
  *   1. ItemDispositionLog.cycleId → Cycle → JobVersion → jobId
  *      (used when the disposition was tied to a specific cycle)
  *   2. ItemDispositionLog.jobProductVersionId → JobProductVersion → JobProduct.jobId
@@ -422,6 +424,7 @@ async function queryDispositionBadItems(
         AND idl."createdAt" < ${bucketEnd}
         AND idl."deletedAt" IS NULL
         AND COALESCE(
+          idl."jobId",
           (SELECT jb."jobId" FROM "Cycle" c
              JOIN "JobVersion" jb ON jb.id = c."jobVersionId"
              WHERE c.id = idl."cycleId"),

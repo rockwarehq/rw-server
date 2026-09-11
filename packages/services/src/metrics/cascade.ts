@@ -267,7 +267,8 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
         AND c."end" >= ${hourStart}::timestamptz AND c."end" < ${hourEnd}::timestamptz
     ),
     -- Sum dispositioned items for this job in this hour.
-    -- Attribute via two paths, in order of preference:
+    -- Attribute via three paths, in order of preference:
+    --   0. ItemDispositionLog.jobId (what the operator entered; never amended)
     --   1. ItemDispositionLog.cycleId → Cycle → JobVersion.jobId
     --      (used when the disposition was tied to a specific cycle)
     --   2. ItemDispositionLog.jobProductVersionId → JobProductVersion → JobProduct.jobId
@@ -284,6 +285,7 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
         AND idl."deletedAt" IS NULL
         AND idl."createdAt" >= p.hour_start AND idl."createdAt" < p.hour_end
         AND COALESCE(
+          idl."jobId",
           (SELECT jbd."jobId" FROM "Cycle" cd
              JOIN "JobVersion" jbd ON jbd.id = cd."jobVersionId"
              WHERE cd.id = idl."cycleId"),

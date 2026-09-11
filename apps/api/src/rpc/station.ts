@@ -530,7 +530,7 @@ const changeJobInputSchema = z.object({
 
 const amendJobHistoryInputSchema = z.object({
   stationId: z.uuid(),
-  jobId: z.uuid().nullable(),
+  jobId: z.uuid(),
   from: z.coerce.date(),
   to: z.coerce.date().nullable(),
   employeeId: z.uuid().optional(),

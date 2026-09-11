@@ -33,6 +33,7 @@ export async function createStationJobLog(
     standardCycle: number | null;
     standardQuantity: number | null;
     quantityUnit: string;
+    amendmentId?: string | null;
   },
 ) {
   const stamp = await resolveShiftStamp(station.siteId, station.workcenterId, data.startTime, tx);

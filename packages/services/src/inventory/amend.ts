@@ -5,7 +5,6 @@ import { applyShiftUsage, materialUsage, type ShiftUsageScope } from "./inventor
 export interface ReassignItemsSummary {
   itemsRemoved: number;
   itemsCreated: number;
-  dispositions: number;
   /** ADJUSTMENT ledger rows posted for shifts whose usage was already flushed. */
   ledgerAdjustments: number;
 }
@@ -24,12 +23,12 @@ interface ItemRow {
  * lock is held throughout, so this must not scale per cycle). Material staging
  * moves with them for shifts that are still open; a flushed shift's PRODUCTION
  * entries are immutable, so the material difference is posted as a signed
- * ADJUSTMENT per material instead. Scrap logs follow their cycle, or the
- * station within the window when they have none.
+ * ADJUSTMENT per material instead. Scrap rows are left alone: the job on a
+ * scrap row is what the operator entered and only they change it.
  */
 export async function reassignItems(ctx: AmendContext, cycleIds: string[]): Promise<ReassignItemsSummary> {
   const { tx, siteId, stationId, from, toEff, job, amendmentId } = ctx;
-  const summary: ReassignItemsSummary = { itemsRemoved: 0, itemsCreated: 0, dispositions: 0, ledgerAdjustments: 0 };
+  const summary: ReassignItemsSummary = { itemsRemoved: 0, itemsCreated: 0, ledgerAdjustments: 0 };
   if (!job || cycleIds.length === 0) return summary;
 
   const removed = await tx.$queryRaw<ItemRow[]>`
@@ -125,22 +124,6 @@ export async function reassignItems(ctx: AmendContext, cycleIds: string[]): Prom
     );
   }
 
-  summary.dispositions = await tx.$executeRaw`
-    UPDATE "ItemDispositionLog" d
-    SET "jobId" = ${job.id}::uuid,
-        "jobProductVersionId" = (
-          SELECT jp."currentVersionId" FROM "JobProduct" jp
-          WHERE jp."jobId" = ${job.id}::uuid AND jp."productId" = d."productId" AND jp."deletedAt" IS NULL
-          LIMIT 1
-        ),
-        "updatedAt" = NOW()
-    WHERE d."deletedAt" IS NULL
-      AND (
-        d."cycleId" = ANY(${cycleIds}::uuid[])
-        OR (d."cycleId" IS NULL AND d."stationId" = ${stationId}::uuid
-            AND d."createdAt" >= ${from} AND d."createdAt" < ${toEff})
-      )
-  `;
   return summary;
 }
 
