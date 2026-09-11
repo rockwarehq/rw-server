@@ -3,7 +3,7 @@ import { beforeAll, describe, expect, test } from "vitest";
 import prisma from "@rw/db";
 import { amendJobHistory } from "../../history/amend-job.js";
 import { splitOpenPeriodsForAllStations } from "./periods.js";
-import { transitionToDown } from "./state.js";
+import { assignDowntimeReason, transitionToDown } from "./state.js";
 
 // Integration test: requires DATABASE_URL. Two back-to-back shifts A and B;
 // the station's open state row and job log started in A and now is in B.
@@ -123,6 +123,32 @@ describe.skipIf(!process.env.DATABASE_URL)("shift period splits", () => {
     const downBlocks = new Set(states.filter((r) => r.status === "DOWN").map((r) => r.blockId));
     expect(downBlocks.size).toBe(1);
     expect(downBlocks.has("up-1")).toBe(false);
+  });
+
+  test("a reason stamps its planned flag on every piece of the block; the period can override it", async () => {
+    const planned = await prisma.statusReason.create({ data: { siteId, name: "PM", isPlannedDown: true } });
+    const open = await prisma.stationStateLog.findFirstOrThrow({ where: { stationId, state: "DOWN", endTime: null } });
+    const flags = async () =>
+      (await prisma.stationStateLog.findMany({ where: { stationId, state: "DOWN", deletedAt: null } })).map((r) => [
+        r.statusReasonId === planned.id,
+        r.isPlannedDown,
+      ]);
+
+    expect(await assignDowntimeReason(open.id, planned.id)).toMatchObject({ success: true, updatedCount: 2 });
+    expect(await flags()).toEqual([
+      [true, true],
+      [true, true],
+    ]);
+    expect(await assignDowntimeReason(open.id, planned.id, { isPlannedDown: false })).toMatchObject({ success: true });
+    expect(await flags()).toEqual([
+      [true, false],
+      [true, false],
+    ]);
+    expect(await assignDowntimeReason(open.id, null)).toMatchObject({ success: true });
+    expect(await flags()).toEqual([
+      [false, false],
+      [false, false],
+    ]);
   });
 
   test("per-shift amendments of the same job stitch into one run, in either order", async () => {

@@ -519,6 +519,8 @@ const assignDowntimeReasonInputSchema = z.object({
   entryId: z.uuid(),
   statusReasonId: z.uuid().nullable(),
   applyToBlock: z.boolean().optional(),
+  /** Per-period override of the reason's planned flag. */
+  isPlannedDown: z.boolean().optional(),
 });
 
 const changeJobInputSchema = z.object({
@@ -584,6 +586,7 @@ export const assignDowntimeReason = userOrDisplayRequired
 
     const result = await station.assignDowntimeReason(input.entryId, input.statusReasonId, {
       applyToBlock: input.applyToBlock,
+      isPlannedDown: input.isPlannedDown,
     });
     if ("error" in result) throwServiceError(result);
     return result;

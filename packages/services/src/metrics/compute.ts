@@ -647,13 +647,11 @@ async function queryAndTallyStateLogs(
       startTime: Date;
       endTime: Date | null;
       state: string;
-      isPlannedDown: boolean | null;
+      isPlannedDown: boolean;
     }>
   >`
-    SELECT ssl."startTime", ssl."endTime", ssl."state",
-           sr."isPlannedDown"
+    SELECT ssl."startTime", ssl."endTime", ssl."state", ssl."isPlannedDown"
     FROM "StationStateLog" ssl
-    LEFT JOIN "StatusReason" sr ON sr."id" = ssl."statusReasonId"
     WHERE ssl."stationId" = ${stationId}::uuid
       AND ssl."deletedAt" IS NULL
       AND ssl."startTime" < ${bucketEnd}

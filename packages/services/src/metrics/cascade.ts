@@ -320,16 +320,15 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
           LEAST(COALESCE(ssl."endTime", p.v_now), LEAST(p.hour_end, p.v_now, COALESCE(jm.job_end, p.v_now)))
           - GREATEST(ssl."startTime", p.hour_start, jm.job_start)
         )) ELSE 0 END))::int, 0) AS down_seconds,
-        COALESCE(ROUND(SUM(CASE WHEN ssl.state = 'DOWN' AND sr."isPlannedDown" = true THEN EXTRACT(EPOCH FROM (
+        COALESCE(ROUND(SUM(CASE WHEN ssl.state = 'DOWN' AND ssl."isPlannedDown" THEN EXTRACT(EPOCH FROM (
           LEAST(COALESCE(ssl."endTime", p.v_now), LEAST(p.hour_end, p.v_now, COALESCE(jm.job_end, p.v_now)))
           - GREATEST(ssl."startTime", p.hour_start, jm.job_start)
         )) ELSE 0 END))::int, 0) AS planned_down_seconds,
-        COALESCE(ROUND(SUM(CASE WHEN ssl.state = 'DOWN' AND (sr."isPlannedDown" IS NULL OR sr."isPlannedDown" = false) THEN EXTRACT(EPOCH FROM (
+        COALESCE(ROUND(SUM(CASE WHEN ssl.state = 'DOWN' AND NOT ssl."isPlannedDown" THEN EXTRACT(EPOCH FROM (
           LEAST(COALESCE(ssl."endTime", p.v_now), LEAST(p.hour_end, p.v_now, COALESCE(jm.job_end, p.v_now)))
           - GREATEST(ssl."startTime", p.hour_start, jm.job_start)
         )) ELSE 0 END))::int, 0) AS unplanned_down_seconds
       FROM state_slice ssl
-      LEFT JOIN "StatusReason" sr ON sr.id = ssl."statusReasonId"
       CROSS JOIN params p
       CROSS JOIN job_meta jm
       WHERE ssl."startTime" < LEAST(p.hour_end, p.v_now, COALESCE(jm.job_end, p.v_now))
@@ -675,10 +674,9 @@ export async function batchDurationRollup(timestamp: Date): Promise<Array<{ stat
             SELECT
               COALESCE(ROUND(SUM(CASE WHEN ssl.state = 'UP' THEN EXTRACT(EPOCH FROM (LEAST(COALESCE(ssl."endTime", p.v_now), LEAST(p.hour_end, p.v_now)) - GREATEST(ssl."startTime", p.hour_start))) ELSE 0 END))::int, 0) AS run_seconds,
               COALESCE(ROUND(SUM(CASE WHEN ssl.state = 'DOWN' THEN EXTRACT(EPOCH FROM (LEAST(COALESCE(ssl."endTime", p.v_now), LEAST(p.hour_end, p.v_now)) - GREATEST(ssl."startTime", p.hour_start))) ELSE 0 END))::int, 0) AS down_seconds,
-              COALESCE(ROUND(SUM(CASE WHEN ssl.state = 'DOWN' AND sr."isPlannedDown" = true THEN EXTRACT(EPOCH FROM (LEAST(COALESCE(ssl."endTime", p.v_now), LEAST(p.hour_end, p.v_now)) - GREATEST(ssl."startTime", p.hour_start))) ELSE 0 END))::int, 0) AS planned_down_seconds,
-              COALESCE(ROUND(SUM(CASE WHEN ssl.state = 'DOWN' AND (sr."isPlannedDown" IS NULL OR sr."isPlannedDown" = false) THEN EXTRACT(EPOCH FROM (LEAST(COALESCE(ssl."endTime", p.v_now), LEAST(p.hour_end, p.v_now)) - GREATEST(ssl."startTime", p.hour_start))) ELSE 0 END))::int, 0) AS unplanned_down_seconds
+              COALESCE(ROUND(SUM(CASE WHEN ssl.state = 'DOWN' AND ssl."isPlannedDown" THEN EXTRACT(EPOCH FROM (LEAST(COALESCE(ssl."endTime", p.v_now), LEAST(p.hour_end, p.v_now)) - GREATEST(ssl."startTime", p.hour_start))) ELSE 0 END))::int, 0) AS planned_down_seconds,
+              COALESCE(ROUND(SUM(CASE WHEN ssl.state = 'DOWN' AND NOT ssl."isPlannedDown" THEN EXTRACT(EPOCH FROM (LEAST(COALESCE(ssl."endTime", p.v_now), LEAST(p.hour_end, p.v_now)) - GREATEST(ssl."startTime", p.hour_start))) ELSE 0 END))::int, 0) AS unplanned_down_seconds
             FROM state_slice ssl
-            LEFT JOIN "StatusReason" sr ON sr.id = ssl."statusReasonId"
             CROSS JOIN params p
             WHERE ssl."startTime" < LEAST(p.hour_end, p.v_now)
               AND (ssl."endTime" > p.hour_start OR ssl."endTime" IS NULL)

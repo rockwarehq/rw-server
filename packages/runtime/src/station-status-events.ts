@@ -36,6 +36,8 @@ export interface StationStatusEvent extends WorkContext {
   statusReason?: string;
   previousStatusReasonId?: string;
   previousStatusReason?: string;
+  /** DOWN periods: whether the downtime is planned (per-period flag, defaults from the reason). */
+  isPlannedDown?: boolean;
   /** ISO time the current status run began, across reason/job/mode splits. */
   statusSince: string;
   source: StationStatusEventSource;
@@ -69,6 +71,7 @@ export function isStationStatusEvent(value: unknown): value is StationStatusEven
     isOptionalString(event.statusReason) &&
     isOptionalString(event.previousStatusReasonId) &&
     isOptionalString(event.previousStatusReason) &&
+    (event.isPlannedDown === undefined || typeof event.isPlannedDown === "boolean") &&
     typeof event.statusSince === "string" &&
     (event.source === "MANUAL" || event.source === "SYSTEM") &&
     isOptionalString(event.sourceType) &&

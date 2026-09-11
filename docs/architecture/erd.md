@@ -190,6 +190,7 @@ erDiagram
     uuid stationVersionId FK "nullable"
     uuid jobVersionId FK "nullable"
     uuid statusReasonId FK "nullable, SetNull"
+    boolean isPlannedDown
     StationState state "UP or DOWN"
     StationStatus status "nullable"
     datetime deletedAt

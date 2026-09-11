@@ -54,8 +54,8 @@ Each state-log period overlapping the bucket is clipped to the bucket bounds (an
 | --- | --- |
 | `runSeconds` | Time in state `UP` (this includes *Slow* — slow is a status within UP, not downtime). |
 | `downSeconds` | Time in state `DOWN`. |
-| `plannedDownSeconds` | Subset of `downSeconds` where the entry's `StatusReason.isPlannedDown = true`. |
-| `unplannedDownSeconds` | Subset of `downSeconds` with no reason or `isPlannedDown` false/null. Unattributed downtime is unplanned: `plannedDownSeconds + unplannedDownSeconds = downSeconds`. |
+| `plannedDownSeconds` | Subset of `downSeconds` where the entry's own `StationStateLog.isPlannedDown` is true (stamped from the reason when assigned, editable per period). |
+| `unplannedDownSeconds` | Subset of `downSeconds` where it is false. Unattributed downtime is unplanned: `plannedDownSeconds + unplannedDownSeconds = downSeconds`. |
 | `plannedProductionSeconds` | *Generated:* `durationSeconds - plannedDownSeconds`. The **full-window** production target — how much production time this bucket holds once planned stops are removed, regardless of how much of the bucket has elapsed. |
 | `elapsedPlannedProductionSeconds` | `runSeconds + unplannedDownSeconds`. The production time that has actually **elapsed so far**, derived from the same state rows as `runSeconds` — which guarantees `availability <= 1.0` and makes in-progress buckets show live OEE instead of a number that climbs toward its final value as the hour fills in. Time not covered by any state log counts as neither run nor down. |
 

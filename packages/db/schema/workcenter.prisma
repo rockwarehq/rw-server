@@ -176,6 +176,9 @@ model StationStateLog {
   status         StationStatus?
   statusReasonId String?        @db.Uuid
   statusReason   StatusReason?  @relation(fields: [statusReasonId], references: [id], onDelete: SetNull)
+  /// Whether this period counts as planned downtime: stamped from the reason when it is
+  /// assigned and editable per period, so later reason edits do not rewrite history.
+  isPlannedDown  Boolean        @default(false)
 
   /// Production mode the station was in during this status period.
   modeId String?         @db.Uuid
