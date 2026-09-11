@@ -1119,6 +1119,7 @@ const CYCLE_FIELD_TO_SQL: Record<string, Prisma.Sql> = {
   businessDate: Prisma.sql`"businessDate"`,
   startTime: Prisma.sql`"startTime"`,
   endTime: Prisma.sql`"endTime"`,
+  amendmentId: Prisma.sql`"amendmentId"`,
 };
 
 export const cycleSearch = authRequired.input(cycleSearchInputSchema).handler(async ({ input, context }) => {
@@ -1195,6 +1196,7 @@ export const cycleSearch = authRequired.input(cycleSearchInputSchema).handler(as
     actualCycleSeconds: number | null;
     shiftName: string | null;
     businessDate: string | null;
+    amendmentId: string | null;
     totalCount: bigint;
   };
 
@@ -1217,7 +1219,8 @@ export const cycleSearch = authRequired.input(cycleSearchInputSchema).handler(as
         COALESCE(
           to_char(si_wc."businessDate", 'YYYY-MM-DD'),
           to_char(si_site."businessDate", 'YYYY-MM-DD')
-        )                  AS "businessDate"
+        )                  AS "businessDate",
+        c."amendmentId"
       FROM "Cycle" c
       JOIN "Station" s ON s.id = c."stationId"
       JOIN "JobVersion" jb ON jb.id = c."jobVersionId"
