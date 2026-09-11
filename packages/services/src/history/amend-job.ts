@@ -244,12 +244,21 @@ async function publishAmended(
 }
 
 export async function listAmendments(filter: { siteId: string; stationId?: string; limit?: number; offset?: number }) {
-  return prisma.jobHistoryAmendment.findMany({
+  const rows = await prisma.jobHistoryAmendment.findMany({
     where: { siteId: filter.siteId, ...(filter.stationId ? { stationId: filter.stationId } : {}) },
     orderBy: { createdAt: "desc" },
     take: filter.limit ?? 50,
     skip: filter.offset ?? 0,
+    include: {
+      station: { select: { name: true } },
+      job: { select: { currentVersion: { select: { name: true } } } },
+    },
   });
+  return rows.map(({ station, job, ...row }) => ({
+    ...row,
+    stationName: station.name,
+    jobName: job?.currentVersion?.name ?? null,
+  }));
 }
 
 /** Re-publish the amended event so the rebuild consumer picks the amendment up again. */

@@ -190,6 +190,8 @@ export const stationJobLogList = authRequired
       select: {
         id: true,
         stationId: true,
+        jobId: true,
+        blockId: true,
         startTime: true,
         endTime: true,
         standardCycle: true,
@@ -200,6 +202,9 @@ export const stationJobLogList = authRequired
     return rows.map((r) => ({
       id: r.id,
       stationId: r.stationId,
+      jobId: r.jobId,
+      blockId: r.blockId,
+      isOpen: r.endTime == null,
       startTime: r.startTime < shiftInstance.startTime ? shiftInstance.startTime : r.startTime,
       endTime: r.endTime == null || r.endTime > shiftInstance.endTime ? shiftInstance.endTime : r.endTime,
       standardCycle: r.standardCycle ? Number(r.standardCycle) : null,
@@ -364,7 +369,8 @@ export const downtimeLogList = userOrDisplayRequired
         startTime: true,
         endTime: true,
         statusReasonId: true,
-        statusReason: { select: { id: true, name: true } },
+        isPlannedDown: true,
+        statusReason: { select: { id: true, name: true, isPlannedDown: true } },
       },
     });
 
@@ -380,6 +386,8 @@ export const downtimeLogList = userOrDisplayRequired
         rawEndTime: clamped ? (r.endTime ?? null) : null,
         statusReasonId: r.statusReasonId,
         statusReasonName: r.statusReason?.name ?? null,
+        isPlannedDown: r.isPlannedDown,
+        reasonIsPlannedDown: r.statusReason?.isPlannedDown ?? null,
       };
     });
   });
