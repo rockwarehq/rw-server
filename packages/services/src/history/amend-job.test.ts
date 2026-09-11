@@ -115,6 +115,8 @@ describe.skipIf(!process.env.DATABASE_URL)("amendJobHistory", () => {
       [j2.id, at(2.5).getTime(), at(4.5).getTime()],
       [j1.id, at(4.5).getTime(), null],
     ]);
+    // J1 is now two runs; J2 is its own.
+    expect(new Set(logs.map((l) => l.blockId)).size).toBe(3);
 
     const cycles = await prisma.cycle.findMany({ where: { stationId }, orderBy: { end: "asc" } });
     expect(cycles.map((c) => c.amendmentId !== null)).toEqual([false, false, true, true, false]);

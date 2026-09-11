@@ -307,12 +307,13 @@ export async function unarchiveAffectedBuckets(
   if (station[0]?.currentJobId) entityIds.push(jobEntityId(stationId, station[0].currentJobId));
 
   // Find archived buckets that overlap the replay window.
-  // A bucket overlaps if: startTime < maxTs AND startTime + durationSeconds > minTs
+  // A bucket overlaps if: startTime < maxTs AND startTime + durationSeconds > minTs;
+  // no bucket is longer than a day, so the scan starts one day before the window.
   const candidates = await prisma.metricBucketLog.findMany({
     where: {
       siteId,
       entityId: { in: entityIds },
-      startTime: { lt: maxTs },
+      startTime: { lt: maxTs, gte: new Date(minTs.getTime() - 86_400_000) },
     },
   });
 

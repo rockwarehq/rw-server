@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, test } from "vitest";
 import prisma from "@rw/db";
+import { amendJobHistory } from "../../history/amend-job.js";
 import { splitOpenPeriodsForAllStations } from "./periods.js";
 import { transitionToDown } from "./state.js";
 
@@ -13,6 +14,7 @@ describe.skipIf(!process.env.DATABASE_URL)("shift period splits", () => {
   let siteId: string;
   let stationId: string;
   let jobId: string;
+  let job2Id: string;
   let shiftA: string;
   let shiftB: string;
   const now = new Date();
@@ -56,6 +58,10 @@ describe.skipIf(!process.env.DATABASE_URL)("shift period splits", () => {
     const jv = await prisma.jobVersion.create({ data: { jobId: job.id, version: 1, name: "J" } });
     await prisma.job.update({ where: { id: job.id }, data: { currentVersionId: jv.id } });
     jobId = job.id;
+    const job2 = await prisma.job.create({ data: { siteId } });
+    const jv2 = await prisma.jobVersion.create({ data: { jobId: job2.id, version: 1, name: "J2" } });
+    await prisma.job.update({ where: { id: job2.id }, data: { currentVersionId: jv2.id } });
+    job2Id = job2.id;
     stationId = (await prisma.station.create({ data: { siteId, name: "Press", currentJobId: jobId } })).id;
 
     await prisma.stationJobLog.create({
@@ -117,5 +123,49 @@ describe.skipIf(!process.env.DATABASE_URL)("shift period splits", () => {
     const downBlocks = new Set(states.filter((r) => r.status === "DOWN").map((r) => r.blockId));
     expect(downBlocks.size).toBe(1);
     expect(downBlocks.has("up-1")).toBe(false);
+  });
+
+  test("per-shift amendments of the same job stitch into one run, in either order", async () => {
+    // Shift B first (open-ended), then the tail of shift A: the second piece joins the first's block.
+    for (const [from, to] of [
+      [boundary, null],
+      [at(-1), boundary],
+    ] as const) {
+      const result = await amendJobHistory({ stationId, jobId: job2Id, from, to });
+      if ("error" in result) throw new Error(result.error);
+    }
+    const jobs = await prisma.stationJobLog.findMany({ where: { stationId }, orderBy: { startTime: "asc" } });
+    expect(jobs.map((r) => [r.jobId, r.shiftInstanceId, r.startTime.getTime(), r.endTime?.getTime() ?? null])).toEqual([
+      [jobId, shiftA, at(-3).getTime(), at(-1).getTime()],
+      [job2Id, shiftA, at(-1).getTime(), boundary.getTime()],
+      [job2Id, shiftB, boundary.getTime(), null],
+    ]);
+    expect(jobs[1]?.blockId).toBe(jobs[2]?.blockId);
+    expect(jobs[0]?.blockId).toBe("run-1");
+
+    // Reverse order on a second station whose run is already cut at the boundary.
+    const other = (await prisma.station.create({ data: { siteId, name: "Press 2", currentJobId: jobId } })).id;
+    const jv = (await prisma.job.findUniqueOrThrow({ where: { id: jobId } })).currentVersionId ?? "";
+    const piece = { stationId: other, siteId, blockId: "run-2", jobId, jobVersionId: jv };
+    await prisma.stationJobLog.createMany({
+      data: [
+        { ...piece, startTime: at(-3), endTime: boundary, shiftInstanceId: shiftA },
+        { ...piece, startTime: boundary, shiftInstanceId: shiftB },
+      ],
+    });
+    for (const [from, to] of [
+      [at(-1), boundary],
+      [boundary, null],
+    ] as const) {
+      const result = await amendJobHistory({ stationId: other, jobId: job2Id, from, to });
+      if ("error" in result) throw new Error(result.error);
+    }
+    const jobs2 = await prisma.stationJobLog.findMany({ where: { stationId: other }, orderBy: { startTime: "asc" } });
+    expect(jobs2.map((r) => [r.jobId, r.blockId === "run-2", r.startTime.getTime()])).toEqual([
+      [jobId, true, at(-3).getTime()],
+      [job2Id, false, at(-1).getTime()],
+      [job2Id, false, boundary.getTime()],
+    ]);
+    expect(jobs2[1]?.blockId).toBe(jobs2[2]?.blockId);
   });
 });

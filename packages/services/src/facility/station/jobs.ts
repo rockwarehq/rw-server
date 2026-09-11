@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import prisma from "@rw/db";
-import { recalcAll } from "../../metrics/recalc.js";
+import { recalcJobLogClose } from "../../metrics/recalc.js";
 import { ensureBuckets } from "../../metrics/bucket.js";
 import { jobEntityId } from "../../metrics/cascade.js";
 import {
@@ -225,9 +225,9 @@ export async function changeJob(
   const { station, previousJobId, openLogs, effectiveStandardCycle } = result;
 
   // Fire-and-forget side effects after the transaction commits
-  for (const log of openLogs) {
-    recalcAll(stationId, station.siteId, log.startTime, timestamp).catch((err) => {
-      console.error(`[changeJob] Failed to recalc for closed job log ${log.id}:`, err);
+  if (openLogs.length > 0) {
+    recalcJobLogClose(stationId, station.siteId, timestamp).catch((err) => {
+      console.error(`[changeJob] Failed to recalc for closed job log:`, err);
     });
   }
 
