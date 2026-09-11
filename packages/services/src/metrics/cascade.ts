@@ -297,13 +297,13 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
     -- entries hit the partial unique index — "OR endTime IS NULL" alone
     -- can't be seeked and forces a full per-station history scan.
     state_slice AS (
-      SELECT ssl.id, ssl."stationId", ssl."startTime", ssl."endTime", ssl.state, ssl."statusReasonId"
+      SELECT ssl.id, ssl."stationId", ssl."startTime", ssl."endTime", ssl.state, ssl."isPlannedDown"
       FROM "StationStateLog" ssl, params p
       WHERE ssl."stationId" = p.station_id
         AND ssl."deletedAt" IS NULL
         AND ssl."endTime" >= p.hour_start
       UNION ALL
-      SELECT ssl.id, ssl."stationId", ssl."startTime", ssl."endTime", ssl.state, ssl."statusReasonId"
+      SELECT ssl.id, ssl."stationId", ssl."startTime", ssl."endTime", ssl.state, ssl."isPlannedDown"
       FROM "StationStateLog" ssl, params p
       WHERE ssl."stationId" = p.station_id
         AND ssl."deletedAt" IS NULL
@@ -658,13 +658,13 @@ export async function batchDurationRollup(timestamp: Date): Promise<Array<{ stat
           -- UNION so closed entries seek (stationId, endTime) and open
           -- entries hit the partial unique index.
           state_slice AS (
-            SELECT ssl.id, ssl."stationId", ssl."startTime", ssl."endTime", ssl.state, ssl."statusReasonId"
+            SELECT ssl.id, ssl."stationId", ssl."startTime", ssl."endTime", ssl.state, ssl."isPlannedDown"
             FROM "StationStateLog" ssl, params p
             WHERE ssl."stationId" = ${s.station_id}::uuid
               AND ssl."deletedAt" IS NULL
               AND ssl."endTime" >= p.hour_start
             UNION ALL
-            SELECT ssl.id, ssl."stationId", ssl."startTime", ssl."endTime", ssl.state, ssl."statusReasonId"
+            SELECT ssl.id, ssl."stationId", ssl."startTime", ssl."endTime", ssl.state, ssl."isPlannedDown"
             FROM "StationStateLog" ssl
             WHERE ssl."stationId" = ${s.station_id}::uuid
               AND ssl."deletedAt" IS NULL
