@@ -12,6 +12,7 @@
     "./mode-events": "./dist/mode-events.js",
     "./station-status-events": "./dist/station-status-events.js",
     "./job-events": "./dist/job-events.js",
+    "./job-history-events": "./dist/job-history-events.js",
     "./notification-events": "./dist/notification-events.js",
     "./domain-events": "./dist/domain-events.js",
     "./graph-subjects": "./dist/graph-subjects.js",

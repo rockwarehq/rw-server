@@ -209,6 +209,7 @@ async function recomputeJobBucketsForRange(
   businessDate: Date | null,
   businessShift: string | null,
   ctx?: MetricsContext,
+  extraJobIds: string[] = [],
 ): Promise<void> {
   if (baseBuckets.length === 0) return;
 
@@ -217,7 +218,7 @@ async function recomputeJobBucketsForRange(
   const rangeEnd = new Date(Math.max(...baseBuckets.map((b) => b.startTime.getTime() + b.durationSeconds * 1000)));
 
   const jobLogs = await getActiveJobLogsForRange(stationId, rangeStart, rangeEnd);
-  if (jobLogs.length === 0) return;
+  if (jobLogs.length === 0 && extraJobIds.length === 0) return;
 
   // Resolve the station's path once — all JOB paths are derived from it
   const stationPath = await resolveEntityPath("STATION", stationId, siteId, undefined, ctx);
@@ -226,10 +227,12 @@ async function recomputeJobBucketsForRange(
   const jobBucketChanges: BucketChange[] = [];
 
   // Track affected JOB buckets per jobId for rollup cascading
-  const jobAffectedBuckets = new Map<
-    string,
-    { jobLog: ActiveJobLog; buckets: BucketWindow[]; jobPath: string; jobName: string }
-  >();
+  const jobAffectedBuckets = new Map<string, { buckets: BucketWindow[]; jobPath: string; jobName: string }>();
+  const trackAffected = (jobId: string, buckets: BucketWindow[], jobPath: string, jobName: string) => {
+    const entry = jobAffectedBuckets.get(jobId);
+    if (entry) entry.buckets.push(...buckets);
+    else jobAffectedBuckets.set(jobId, { buckets: [...buckets], jobPath, jobName });
+  };
 
   for (const jobLog of jobLogs) {
     const jobFilter = toJobFilter(jobLog);
@@ -369,9 +372,28 @@ async function recomputeJobBucketsForRange(
       affectedForJob.push(bucket);
     }
 
-    if (affectedForJob.length > 0) {
-      jobAffectedBuckets.set(jobLog.jobId, { jobLog, buckets: affectedForJob, jobPath, jobName });
-    }
+    if (affectedForJob.length > 0) trackAffected(jobLog.jobId, affectedForJob, jobPath, jobName);
+  }
+
+  // A job displaced from part of the range (history amendment) keeps stale HOUR
+  // rows there: zero the ones no log covers so its SHIFT/DAY rollups re-sum.
+  for (const jobId of extraJobIds) {
+    const covered = new Set(jobAffectedBuckets.get(jobId)?.buckets.map((b) => b.startTime.getTime()) ?? []);
+    const stale = baseBuckets.filter((b) => !covered.has(b.startTime.getTime()));
+    if (stale.length === 0) continue;
+    const zeroed = await prisma.$executeRaw`
+      UPDATE "MetricBucket"
+      SET ${Prisma.join(ADDITIVE_KPI_KEYS.map((key) => Prisma.sql`"${Prisma.raw(key)}" = 0`))},
+          "currentStandardCycle" = NULL,
+          "updatedAt" = NOW()
+      WHERE "entityType" = 'JOB'::"BucketEntityType"
+        AND "entityId" = ${jobEntityId(stationId, jobId)}
+        AND granularity = 'HOUR'::"BucketGranularity"
+        AND "startTime" = ANY(${stale.map((b) => b.startTime)}::timestamptz[])
+    `;
+    if (zeroed === 0) continue;
+    const jobName = await resolveEntityName("JOB", jobId, undefined, ctx);
+    trackAffected(jobId, stale, `${stationPath}.job.${jobId}`, jobName);
   }
 
   // Emit HOUR+JOB bucket changes
@@ -382,7 +404,7 @@ async function recomputeJobBucketsForRange(
   }
 
   // Cascade JOB time rollups (HOUR+JOB → SHIFT+JOB, DAY+JOB)
-  for (const [, { jobLog, buckets, jobPath, jobName }] of jobAffectedBuckets) {
+  for (const [jobId, { buckets, jobPath, jobName }] of jobAffectedBuckets) {
     await rollupBuckets({
       stationId,
       siteId,
@@ -390,11 +412,7 @@ async function recomputeJobBucketsForRange(
       timezone,
       businessDate,
       businessShift,
-      jobEntity: {
-        jobId: jobLog.jobId,
-        jobName,
-        jobPath,
-      },
+      jobEntity: { jobId, jobName, jobPath },
       ctx,
     });
   }
@@ -1280,6 +1298,8 @@ export async function recalcAll(
   startTime: Date,
   endTime: Date,
   ctx?: MetricsContext,
+  /** Jobs whose JOB buckets must be zeroed where no job log covers them any more. */
+  extraJobIds: string[] = [],
 ): Promise<void> {
   const pipelineCtx = ctx ?? new MetricsContext();
 
@@ -1291,23 +1311,6 @@ export async function recalcAll(
   const businessDate = await resolveBusinessDate(startTime, shift?.shiftInstanceId ?? null, timezone);
   const businessShift = shift?.shiftName ?? null;
 
-  // Resolve current job for the station
-  const stationJobRows4 = await prisma.$queryRaw<
-    Array<{
-      currentJobId: string | null;
-      currentJobName: string | null;
-    }>
-  >`
-    SELECT s."currentJobId",
-           jb.name AS "currentJobName"
-    FROM "Station" s
-    LEFT JOIN "Job" j ON j.id = s."currentJobId"
-    LEFT JOIN "JobVersion" jb ON jb.id = j."currentVersionId"
-    WHERE s.id = ${stationId}
-  `;
-  const currentJobId = stationJobRows4[0]?.currentJobId ?? null;
-  const currentJobName = stationJobRows4[0]?.currentJobName ?? null;
-
   console.log(
     `[metrics:recalc] recalcAll for station ${stationId}: ${baseBuckets.length} base buckets ` +
       `from ${startTime.toISOString()} to ${endTime.toISOString()}`,
@@ -1316,6 +1319,22 @@ export async function recalcAll(
   // Recompute ALL KPIs for each affected base bucket
   for (const bucket of baseBuckets) {
     const kpis = await computeBucketFromEvents(stationId, bucket.startTime, bucket.durationSeconds);
+
+    // The job that was running in this bucket (latest overlapping log), not the station's job today.
+    const bucketEnd = new Date(bucket.startTime.getTime() + bucket.durationSeconds * 1000);
+    const [jobRow] = await prisma.$queryRaw<Array<{ currentJobId: string | null; currentJobName: string | null }>>`
+      SELECT sjl."jobId" AS "currentJobId", jb.name AS "currentJobName"
+      FROM "StationJobLog" sjl
+      LEFT JOIN "Job" j ON j.id = sjl."jobId"
+      LEFT JOIN "JobVersion" jb ON jb.id = j."currentVersionId"
+      WHERE sjl."stationId" = ${stationId}
+        AND sjl."startTime" < ${bucketEnd}
+        AND (sjl."endTime" > ${bucket.startTime} OR sjl."endTime" IS NULL)
+      ORDER BY sjl."startTime" DESC
+      LIMIT 1
+    `;
+    const currentJobId = jobRow?.currentJobId ?? null;
+    const currentJobName = jobRow?.currentJobName ?? null;
 
     // Build full KPI data including currentStandardCycle
     const kpiData: Record<string, number | null> = {};
@@ -1366,6 +1385,7 @@ export async function recalcAll(
       businessDate,
       businessShift,
       pipelineCtx,
+      extraJobIds,
     );
   } catch (err) {
     console.error(`[metrics:recalc] Failed to recompute JOB buckets for station ${stationId}:`, err);

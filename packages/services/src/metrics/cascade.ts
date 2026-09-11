@@ -250,7 +250,7 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
       SELECT
         COUNT(*)::int AS total_cycles,
         -- SUM(quantity), not COUNT(*): legacy rows default to 1
-        ROUND(COALESCE(SUM((SELECT COALESCE(SUM(ii.quantity), 0) FROM "InventoryItem" ii WHERE ii."cycleId" = c.id)), 0))::int AS total_items,
+        ROUND(COALESCE(SUM((SELECT COALESCE(SUM(ii.quantity), 0) FROM "InventoryItem" ii WHERE ii."cycleId" = c.id AND ii."deletedAt" IS NULL)), 0))::int AS total_items,
         -- prefer the cycle's earned-standard snapshot; fall back to the job-log snapshot
         COALESCE(SUM(CASE WHEN c."standardCycle" IS NOT NULL THEN ROUND(c."standardCycle")::int WHEN jm.std_cycle > 0 THEN ROUND(jm.std_cycle)::int ELSE 0 END), 0)::int AS ideal_cycle_seconds,
         COALESCE(SUM(EXTRACT(EPOCH FROM (c."end" - c.start))::int), 0)::int AS total_cycle_seconds

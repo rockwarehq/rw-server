@@ -131,6 +131,7 @@ model Site {
   inventoryItems          InventoryItem[]
   stationStateLogs        StationStateLog[]
   stationJobLogs          StationJobLog[]
+  jobHistoryAmendments    JobHistoryAmendment[]
   stationLogonSessions    StationLogonSession[]
 
   @@unique([workspaceId, name])

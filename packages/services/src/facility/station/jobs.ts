@@ -26,6 +26,7 @@ export async function createStationJobLog(
     jobId: string;
     jobVersionId: string;
     startTime: Date;
+    endTime?: Date | null;
     standardCycle: number | null;
     standardQuantity: number | null;
     quantityUnit: string;
@@ -219,6 +220,64 @@ export async function changeJob(
 
   const { station, previousJobId, openLogs, effectiveStandardCycle } = result;
 
+  // Fire-and-forget side effects after the transaction commits
+  for (const log of openLogs) {
+    recalcAll(stationId, station.siteId, log.startTime, timestamp).catch((err) => {
+      console.error(`[changeJob] Failed to recalc for closed job log ${log.id}:`, err);
+    });
+  }
+
+  const previousJob = await publishJobChangeSideEffects({
+    station,
+    previousJobId,
+    job,
+    effectiveStandardCycle,
+    timestamp,
+    actor,
+  });
+
+  return {
+    data: {
+      siteId: station.siteId,
+      stationId,
+      stationName: station.name,
+      previousJobId,
+      previousJobName: previousJob?.currentVersion?.name ?? null,
+      newJobId,
+      currentJobName: job?.currentVersion?.name ?? null,
+      workCenterId: station.workcenterId,
+      workCenterName: station.workcenter?.name ?? null,
+    },
+  };
+}
+
+export interface JobChangeStation {
+  id: string;
+  name: string;
+  siteId: string;
+  workcenterId: string | null;
+  site: { workspaceId: string };
+  workcenter: { name: string } | null;
+}
+
+/**
+ * Everything a current-job change publishes after its transaction commits:
+ * the station entity event, JOB bucket scaffold, live metrics, and the
+ * job.changed domain event. Shared by changeJob and history amendments that
+ * reach the open job log. Returns the previous job (for display names).
+ */
+export async function publishJobChangeSideEffects(args: {
+  station: JobChangeStation;
+  previousJobId: string | null;
+  job: { id: string; currentVersion: { name: string } | null } | null;
+  effectiveStandardCycle: number | null;
+  timestamp: Date;
+  actor: ChangeJobActor;
+}) {
+  const { station, previousJobId, job, effectiveStandardCycle, timestamp, actor } = args;
+  const stationId = station.id;
+  const newJobId = job?.id ?? null;
+
   publishEntityEvent({
     action: "updated",
     entityKey: SYSTEM_ENTITY_KEYS.Station,
@@ -234,38 +293,23 @@ export async function changeJob(
     ],
   });
 
-  // Fire-and-forget side effects after the transaction commits
-  for (const log of openLogs) {
-    recalcAll(stationId, station.siteId, log.startTime, timestamp).catch((err) => {
-      console.error(`[changeJob] Failed to recalc for closed job log ${log.id}:`, err);
-    });
-  }
-
-  if (newJobId && job) {
+  if (job) {
     ensureBuckets({
       siteId: station.siteId,
       entityType: "JOB",
-      entityId: jobEntityId(stationId, newJobId),
+      entityId: jobEntityId(stationId, job.id),
       entityName: job.currentVersion?.name ?? "",
       timestamp,
     }).catch((err) => {
-      console.error(`[changeJob] Failed to ensure JOB buckets for job ${newJobId}:`, err);
-    });
-
-    publishStationCurrentJobMetric(stationId, job.currentVersion?.name ?? null, timestamp).catch((err) => {
-      console.error(`[changeJob] publishStationCurrentJobMetric failed for station ${stationId}:`, err);
-    });
-    publishStationStandardCycleMetric(stationId, effectiveStandardCycle, timestamp).catch((err) => {
-      console.error(`[changeJob] publishStationStandardCycleMetric failed for station ${stationId}:`, err);
-    });
-  } else {
-    publishStationCurrentJobMetric(stationId, null, timestamp).catch((err) => {
-      console.error(`[changeJob] publishStationCurrentJobMetric failed for station ${stationId}:`, err);
-    });
-    publishStationStandardCycleMetric(stationId, null, timestamp).catch((err) => {
-      console.error(`[changeJob] publishStationStandardCycleMetric failed for station ${stationId}:`, err);
+      console.error(`[changeJob] Failed to ensure JOB buckets for job ${job.id}:`, err);
     });
   }
+  publishStationCurrentJobMetric(stationId, job?.currentVersion?.name ?? null, timestamp).catch((err) => {
+    console.error(`[changeJob] publishStationCurrentJobMetric failed for station ${stationId}:`, err);
+  });
+  publishStationStandardCycleMetric(stationId, job ? effectiveStandardCycle : null, timestamp).catch((err) => {
+    console.error(`[changeJob] publishStationStandardCycleMetric failed for station ${stationId}:`, err);
+  });
 
   // Resolve the previous job's display name (the new job's name is already loaded above). Used to
   // populate the job.changed automation event payload so messages can show names, not uuids.
@@ -308,18 +352,5 @@ export async function changeJob(
     businessDate: toDateString(shift?.businessDate),
     cause: actor.cause,
   });
-
-  return {
-    data: {
-      siteId: station.siteId,
-      stationId,
-      stationName: station.name,
-      previousJobId,
-      previousJobName: previousJob?.currentVersion?.name ?? null,
-      newJobId,
-      currentJobName: job?.currentVersion?.name ?? null,
-      workCenterId: station.workcenterId,
-      workCenterName: station.workcenter?.name ?? null,
-    },
-  };
+  return previousJob;
 }

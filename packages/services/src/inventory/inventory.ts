@@ -90,7 +90,7 @@ export async function createFromCycle(
     return [];
   }
 
-  const txRaw = tx as unknown as { $queryRaw: typeof prisma.$queryRaw; $executeRaw: typeof prisma.$executeRaw };
+  const txRaw = tx as unknown as RawClient;
 
   // Non-positive product quantities produce nothing (as the old one-row-per-unit loop did).
   const quantity = stamp?.quantity;
@@ -152,116 +152,137 @@ export async function createFromCycle(
     // Cycles without a resolved shift (dims.shiftInstanceId null) are
     // silently skipped.
     if (dims.shiftInstanceId === null) return createdItems;
-    const shiftInstanceId = dims.shiftInstanceId;
-    const itemIds = itemRows.map((r) => r.id);
-
-    type UsageRow = {
-      productId: string;
-      materialId: string;
-      qty: Prisma.Decimal;
-      itemCount: number;
-      // Unit declared on the ProductMaterialVersion (how the operator entered weight
-      // for this product). May differ from the material's canonical unit.
-      pmUnit: WeightUnit | null;
-      // Material's canonical/storage unit (from currentVersion). All staging and
-      // ledger writes are normalized to this unit.
-      materialUnit: WeightUnit | null;
-    };
-    const want = await txRaw.$queryRaw<UsageRow[]>`
-      SELECT
-        pb."productId"         AS "productId",
-        mb."materialId"        AS "materialId",
-        -- weight × quantity: rows carry quantity, not one row per unit
-        SUM(pmb.weight * ii.quantity) AS "qty",
-        ROUND(SUM(ii.quantity))::int  AS "itemCount",
-        pmb."weightUnits"      AS "pmUnit",
-        mbc."weightUnits"      AS "materialUnit"
-      FROM "_InventoryItemToProductMaterialVersion" x
-      JOIN "InventoryItem"        ii  ON ii.id = x."A"
-      JOIN "ProductVersion"          pb  ON pb.id = ii."productVersionId"
-      JOIN "ProductMaterialVersion"  pmb ON pmb.id = x."B"
-      JOIN "MaterialVersion"         mb  ON mb.id = pmb."materialVersionId"
-      JOIN "Material"             m   ON m.id  = mb."materialId"
-      LEFT JOIN "MaterialVersion"    mbc ON mbc.id = m."currentVersionId"
-      WHERE x."A" = ANY(${itemIds}::uuid[])
-        AND pmb.weight IS NOT NULL
-      GROUP BY pb."productId", mb."materialId", pmb."weightUnits", mbc."weightUnits"
-    `;
-
-    if (want.length === 0) return createdItems;
-
-    // For each (shift, station, job, product, material) scope: get-or-create
-    // the staging row and bump its quantity + itemCount. Ledger is untouched.
-    for (const w of want) {
-      const bindingKey = {
-        shiftInstanceId_stationId_jobId_productId_materialId: {
-          shiftInstanceId,
-          stationId: dims.stationId,
-          jobId,
-          productId: w.productId,
-          materialId: w.materialId,
-        },
-      };
-
-      // Normalize to the material's canonical unit. PM weight may be entered
-      // in a different unit (e.g. material stocked in KG, product consumes G);
-      // staging and downstream ledger entries are always in the material unit.
-      // If the material has no canonical unit, discard the usage — assuming a
-      // default would silently mis-stamp ledger entries.
-      if (w.materialUnit === null) {
-        console.warn(
-          `[cycle ${cycleId}] material ${w.materialId} has no weightUnit set; discarding usage qty=${w.qty} for product ${w.productId}`,
-        );
-        continue;
-      }
-      const canonicalUnit: WeightUnit = w.materialUnit;
-      const pmUnit: WeightUnit = w.pmUnit ?? canonicalUnit;
-      const qtyDelta = convertWeight(w.qty, pmUnit, canonicalUnit);
-
-      const existing = await tx.materialShiftUsage.findUnique({
-        where: bindingKey,
-        select: { id: true, flushedAt: true },
-      });
-
-      if (existing) {
-        if (existing.flushedAt) {
-          // The staging row is already flushed — don't mutate a frozen audit
-          // record. This indicates a cycle close happened on a closed shift,
-          // which shouldn't occur in normal flow but might via replay/import.
-          // Loud, not silent — surface it.
-          console.warn(
-            `[cycle ${cycleId}] staging row ${existing.id} for shift=${shiftInstanceId} already flushed; skipping increment`,
-          );
-          continue;
-        }
-        await tx.materialShiftUsage.update({
-          where: { id: existing.id },
-          data: {
-            quantity: { increment: qtyDelta },
-            itemCount: { increment: w.itemCount },
-          },
-        });
-      } else {
-        await tx.materialShiftUsage.create({
-          data: {
-            siteId: dims.siteId,
-            shiftInstanceId,
-            stationId: dims.stationId,
-            workcenterId: dims.workcenterId,
-            businessDate: dims.businessDate,
-            jobId,
-            productId: w.productId,
-            materialId: w.materialId,
-            quantity: qtyDelta,
-            unit: canonicalUnit,
-            itemCount: w.itemCount,
-          },
-        });
-      }
-    }
+    await applyShiftUsage(
+      tx,
+      { ...dims, shiftInstanceId: dims.shiftInstanceId, jobId },
+      itemRows.map((r) => r.id),
+      1,
+    );
   }
 
   return createdItems;
+}
+
+type RawClient = { $queryRaw: typeof prisma.$queryRaw; $executeRaw: typeof prisma.$executeRaw };
+
+export interface ShiftUsageScope {
+  siteId: string;
+  shiftInstanceId: string;
+  stationId: string;
+  workcenterId: string | null;
+  businessDate: Date | null;
+  jobId: string;
+}
+
+/**
+ * Add (sign 1) or remove (sign -1) the material consumption of `itemIds` to
+ * the (shift, station, job, product, material) staging rows. Flushed rows are
+ * frozen and skipped; rows that reach zero are deleted.
+ */
+export async function applyShiftUsage(
+  tx: TransactionClient,
+  scope: ShiftUsageScope,
+  itemIds: string[],
+  sign: 1 | -1,
+): Promise<number> {
+  if (itemIds.length === 0) return 0;
+  type UsageRow = {
+    productId: string;
+    materialId: string;
+    qty: Prisma.Decimal;
+    itemCount: number;
+    // Unit declared on the ProductMaterialVersion (how the operator entered weight
+    // for this product). May differ from the material's canonical unit.
+    pmUnit: WeightUnit | null;
+    // Material's canonical/storage unit (from currentVersion). All staging and
+    // ledger writes are normalized to this unit.
+    materialUnit: WeightUnit | null;
+  };
+  const want = await (tx as unknown as RawClient).$queryRaw<UsageRow[]>`
+    SELECT
+      pb."productId"         AS "productId",
+      mb."materialId"        AS "materialId",
+      -- weight × quantity: rows carry quantity, not one row per unit
+      SUM(pmb.weight * ii.quantity) AS "qty",
+      ROUND(SUM(ii.quantity))::int  AS "itemCount",
+      pmb."weightUnits"      AS "pmUnit",
+      mbc."weightUnits"      AS "materialUnit"
+    FROM "_InventoryItemToProductMaterialVersion" x
+    JOIN "InventoryItem"        ii  ON ii.id = x."A"
+    JOIN "ProductVersion"          pb  ON pb.id = ii."productVersionId"
+    JOIN "ProductMaterialVersion"  pmb ON pmb.id = x."B"
+    JOIN "MaterialVersion"         mb  ON mb.id = pmb."materialVersionId"
+    JOIN "Material"             m   ON m.id  = mb."materialId"
+    LEFT JOIN "MaterialVersion"    mbc ON mbc.id = m."currentVersionId"
+    WHERE x."A" = ANY(${itemIds}::uuid[])
+      AND pmb.weight IS NOT NULL
+    GROUP BY pb."productId", mb."materialId", pmb."weightUnits", mbc."weightUnits"
+  `;
+
+  let touched = 0;
+  for (const w of want) {
+    // Normalize to the material's canonical unit. PM weight may be entered
+    // in a different unit (e.g. material stocked in KG, product consumes G);
+    // staging and downstream ledger entries are always in the material unit.
+    // If the material has no canonical unit, discard the usage — assuming a
+    // default would silently mis-stamp ledger entries.
+    if (w.materialUnit === null) {
+      console.warn(
+        `[inventory] material ${w.materialId} has no weightUnit set; discarding usage qty=${w.qty} for product ${w.productId}`,
+      );
+      continue;
+    }
+    const canonicalUnit: WeightUnit = w.materialUnit;
+    const qtyDelta = convertWeight(w.qty, w.pmUnit ?? canonicalUnit, canonicalUnit).mul(sign);
+    const itemDelta = w.itemCount * sign;
+
+    const existing = await tx.materialShiftUsage.findUnique({
+      where: {
+        shiftInstanceId_stationId_jobId_productId_materialId: {
+          shiftInstanceId: scope.shiftInstanceId,
+          stationId: scope.stationId,
+          jobId: scope.jobId,
+          productId: w.productId,
+          materialId: w.materialId,
+        },
+      },
+      select: { id: true, flushedAt: true, quantity: true, itemCount: true },
+    });
+
+    if (existing?.flushedAt) {
+      console.warn(
+        `[inventory] staging row ${existing.id} for shift=${scope.shiftInstanceId} already flushed; skipping`,
+      );
+      continue;
+    }
+    touched++;
+    if (existing) {
+      const quantity = existing.quantity.add(qtyDelta);
+      const itemCount = existing.itemCount + itemDelta;
+      if (quantity.lte(0) && itemCount <= 0) {
+        await tx.materialShiftUsage.delete({ where: { id: existing.id } });
+      } else {
+        await tx.materialShiftUsage.update({ where: { id: existing.id }, data: { quantity, itemCount } });
+      }
+    } else if (sign > 0) {
+      await tx.materialShiftUsage.create({
+        data: {
+          siteId: scope.siteId,
+          shiftInstanceId: scope.shiftInstanceId,
+          stationId: scope.stationId,
+          workcenterId: scope.workcenterId,
+          businessDate: scope.businessDate,
+          jobId: scope.jobId,
+          productId: w.productId,
+          materialId: w.materialId,
+          quantity: qtyDelta,
+          unit: canonicalUnit,
+          itemCount: itemDelta,
+        },
+      });
+    }
+  }
+  return touched;
 }
 
 // ============================================================================

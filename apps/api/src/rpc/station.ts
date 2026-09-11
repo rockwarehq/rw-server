@@ -2,6 +2,8 @@ import { z } from "zod";
 import { ORPCError } from "@orpc/server";
 import { authRequired, processorRequired, userOrDisplayRequired } from "./middleware.js";
 import { station } from "@rw/services/facility/index";
+import { Principal } from "../auth/index.js";
+import { amendJobHistory as amendJobHistoryService, listAmendments, retryRebuild } from "@rw/services/history/index";
 import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
 import { type CodeOverrides, throwServiceError } from "./errors.js";
@@ -524,6 +526,21 @@ const changeJobInputSchema = z.object({
   jobId: z.uuid().nullable(),
 });
 
+const amendJobHistoryInputSchema = z.object({
+  stationId: z.uuid(),
+  jobId: z.uuid().nullable(),
+  from: z.coerce.date(),
+  to: z.coerce.date().nullable(),
+  employeeId: z.uuid().optional(),
+});
+
+const listJobHistoryAmendmentsInputSchema = z.object({
+  siteId: z.uuid(),
+  stationId: z.uuid().optional(),
+  limit: z.number().min(1).max(200).default(50),
+  offset: z.number().min(0).default(0),
+});
+
 const listStateLogsInputSchema = z.object({
   stationId: z.uuid(),
   startTime: z.coerce.date().optional(),
@@ -588,6 +605,56 @@ export const changeJob = userOrDisplayRequired.input(changeJobInputSchema).handl
 
   return result.data;
 });
+
+/**
+ * Retroactively assert which job the station ran over [from, to). to = null
+ * means through now and changes the current job. Facts are rewritten at once;
+ * metric buckets rebuild asynchronously (see listJobHistoryAmendments.status).
+ */
+export const amendJobHistory = userOrDisplayRequired
+  .input(amendJobHistoryInputSchema)
+  .handler(async ({ input, context }) => {
+    grant(
+      await authorize(context.iam, {
+        permission: "job:write",
+        scope: { kind: "station", id: input.stationId },
+      }),
+    );
+
+    const { employeeId, ...window } = input;
+    const result = await amendJobHistoryService({
+      ...window,
+      actor: { employeeId, userId: context.iam.principal === Principal.USER ? context.iam.id : undefined },
+    });
+    if ("error" in result) throwServiceError(result);
+    return result.data;
+  });
+
+export const listJobHistoryAmendments = authRequired
+  .input(listJobHistoryAmendmentsInputSchema)
+  .handler(async ({ input, context }) => {
+    grant(
+      await authorize(context.iam, {
+        permission: "job:read",
+        scope: { kind: "site", siteId: input.siteId },
+      }),
+    );
+    return listAmendments(input);
+  });
+
+export const retryJobHistoryRebuild = authRequired
+  .input(z.object({ amendmentId: z.uuid(), stationId: z.uuid() }))
+  .handler(async ({ input, context }) => {
+    grant(
+      await authorize(context.iam, {
+        permission: "job:write",
+        scope: { kind: "station", id: input.stationId },
+      }),
+    );
+    const result = await retryRebuild(input.amendmentId);
+    if ("error" in result) throwServiceError(result);
+    return result.data;
+  });
 
 /**
  * List state logs for a station

@@ -5,6 +5,7 @@
 //   - shift-change         (BullMQ delayed; triggers ensure tick at boundary)
 //   - metrics combined tick + observer (5s setInterval, dirty-bucket consumer)
 //   - archive              (called from inside the ensure tick)
+//   - job-history-rebuild  (NATS consumer; recalcs buckets after an amendment)
 //
 // All five are tightly coupled (ensure ↔ shift-change callback, ensure ↔
 // archive ↔ tick share MetricsContext caches, etc.) so they live in one
@@ -30,6 +31,7 @@ import {
   stopShiftChangeQueue,
 } from "@rw/services/queues/shift-change";
 import { startDirtyBucketConsumer, stopDirtyBucketConsumer } from "@rw/services/metrics/batcher";
+import { startJobHistoryRebuild, stopJobHistoryRebuild } from "./job-history-rebuild.js";
 
 let cleanupBridge: (() => Promise<void>) | null = null;
 let cleanupMetricsBridge: (() => Promise<void>) | null = null;
@@ -49,12 +51,14 @@ export async function startRollups(): Promise<void> {
   await registerShiftChangeWorker(scheduleNextEnsureTick);
   await startMetricBucketEnsure();
   startDirtyBucketConsumer();
+  await startJobHistoryRebuild();
 
   console.log("[rollups] all workers started");
 }
 
 export async function stopRollups(): Promise<void> {
   await stopDirtyBucketConsumer();
+  await stopJobHistoryRebuild();
   await Promise.all([stopMetricBucketEnsure(), stopMetricBucketQueues(), stopShiftChangeQueue()]);
   if (cleanupGraphBridge) await cleanupGraphBridge();
   if (cleanupBridge) await cleanupBridge();

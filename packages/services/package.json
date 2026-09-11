@@ -17,6 +17,7 @@
     "./employee/*": "./dist/employee/*.js",
     "./entity/*": "./dist/entity/*.js",
     "./facility/*": "./dist/facility/*.js",
+    "./history/*": "./dist/history/*.js",
     "./integration/*": "./dist/integration/*.js",
     "./inventory/*": "./dist/inventory/*.js",
     "./job/*": "./dist/job/*.js",
