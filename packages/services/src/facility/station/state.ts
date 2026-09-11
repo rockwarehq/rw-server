@@ -7,10 +7,10 @@ import { publishStationShiftContext } from "../../metrics/graph-context.js";
 import { updateTimeBased } from "../../metrics/recalc.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import type { StationStatus } from "@rw/runtime/station-status-events";
-import { emitStationStatusChanged } from "./status-events.js";
+import { emitStationStatusChanged, findStatusSince } from "./status-events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { findOpenModeLog } from "../production-mode/open-log.js";
-import { resolveShiftStamp } from "../work-context.js";
+import { resolveShiftStamp, type ShiftStamp } from "../work-context.js";
 
 type TransactionClient = Prisma.TransactionClient;
 
@@ -590,27 +590,17 @@ export async function applyCycleCompleteTransition(
     return { newStatus: "UP", statusChanged: true, closedEntry: closed(timestamp) };
   }
 
-  // RUNNING + slow cycle. Backdate SLOW to the overlong cycle's start;
-  // convert in place when the row opened there (no zero-duration rows).
-  const slowStart = new Date(
-    Math.min(Math.max(opts.cycleStart.getTime(), openRow.startTime.getTime()), timestamp.getTime()),
-  );
-  if (openRow.startTime >= slowStart) {
-    await tx.stationStateLog.update({ where: { id: openRow.id }, data: { status: "SLOW" } });
-    return { newStatus: "SLOW", statusChanged: true, closedEntry: null };
-  }
-  await closeOpenStateEntries(tx, stationId, slowStart);
-  await createStateEntry(tx, {
-    stationId,
-    startTime: slowStart,
-    state: "UP",
-    status: "SLOW",
-    blockId: openRow.blockId,
-    jobId: opts.jobId,
-    jobVersionId: opts.jobVersionId,
-    modeId: opts.modeId,
-  });
-  return { newStatus: "SLOW", statusChanged: true, closedEntry: closed(slowStart) };
+  // RUNNING + slow cycle. Backdate SLOW to the overlong cycle's start, but
+  // never before this RUNNING run began (it may span per-shift pieces).
+  const runStart = await findStatusSince(tx, stationId, "UP", openRow.blockId);
+  const slowStart = new Date(Math.min(Math.max(opts.cycleStart.getTime(), runStart.getTime()), timestamp.getTime()));
+  const current = await tx.stationStateLog.findUniqueOrThrow({ where: { id: openRow.id } });
+  await restatusFrom(tx, current, slowStart, { status: "SLOW" });
+  return {
+    newStatus: "SLOW",
+    statusChanged: true,
+    closedEntry: slowStart <= runStart ? null : { ...closed(slowStart), startTime: runStart },
+  };
 }
 
 /**
@@ -819,38 +809,25 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
       };
     }
 
-    // State change UP → DOWN — DOWN starts at the last cycle time,
-    // not the timer fire time.
-    const downStart = await lastCycleEndClamped(tx, stationId, current.startTime, timestamp);
+    // State change UP → DOWN — DOWN starts at the last cycle time, not the
+    // timer fire time, and never before this UP run began.
+    const runStart = await findStatusSince(tx, stationId, current.status ?? current.state, current.blockId);
+    const downStart = await lastCycleEndClamped(tx, stationId, runStart, timestamp);
     const blockId = randomUUID();
 
-    let entry: Awaited<ReturnType<typeof createStateEntry>>;
-    if (current.startTime >= downStart) {
-      // Young entry (opened at that cycle, or a backdated SLOW) — convert in place.
-      // Defensive: close any orphaned open entries (not the one we're converting)
-      await tx.stationStateLog.updateMany({
-        where: { stationId, endTime: null, deletedAt: null, id: { not: current.id } },
-        data: { endTime: timestamp },
-      });
-      entry = await tx.stationStateLog.update({
-        where: { id: current.id },
-        data: { state: "DOWN", status: "DOWN", blockId, jobId, jobVersionId, statusReasonId: defaultReasonId },
-      });
-    } else {
-      // Long-lived RUNNING entry — close it at the last cycle and continue as DOWN.
-      await closeOpenStateEntries(tx, stationId, downStart);
-      entry = await createStateEntry(tx, {
-        stationId,
-        startTime: downStart,
-        state: "DOWN",
-        status: "DOWN",
-        blockId,
-        jobId,
-        jobVersionId,
-        modeId: current.modeId,
-        statusReasonId: defaultReasonId,
-      });
-    }
+    // Defensive: close any orphaned open entries (not the one we're converting)
+    await tx.stationStateLog.updateMany({
+      where: { stationId, endTime: null, deletedAt: null, id: { not: current.id } },
+      data: { endTime: timestamp },
+    });
+    const entry = await restatusFrom(tx, current, downStart, {
+      state: "DOWN",
+      status: "DOWN",
+      blockId,
+      jobId,
+      jobVersionId,
+      statusReasonId: defaultReasonId,
+    });
 
     // Range that changed from UP→DOWN, needed for metrics recalc
     const convertedRange = { startTime: downStart, endTime: timestamp };
@@ -1016,7 +993,12 @@ export async function splitDownEntry(entryId: string, splitAt: Date): Promise<Sp
  * cut, a copy continues to the original endTime (null stays open). Caller
  * holds the station lock.
  */
-export async function splitStateEntryAt(tx: TransactionClient, entry: StationStateLog, splitAt: Date) {
+export async function splitStateEntryAt(
+  tx: TransactionClient,
+  entry: StationStateLog,
+  splitAt: Date,
+  stamp?: ShiftStamp,
+) {
   const first = await tx.stationStateLog.update({ where: { id: entry.id }, data: { endTime: splitAt } });
   const second = await createStateEntry(tx, {
     stationId: entry.stationId,
@@ -1029,8 +1011,38 @@ export async function splitStateEntryAt(tx: TransactionClient, entry: StationSta
     jobId: entry.jobId,
     jobVersionId: entry.jobVersionId,
     modeId: entry.modeId,
+    stamp: stamp && entry.siteId ? { siteId: entry.siteId, workcenterId: entry.workcenterId, ...stamp } : undefined,
   });
   return [first, second] as [typeof first, typeof second];
+}
+
+/**
+ * Backdate a status change to `fromTime`: every piece of the open row's block
+ * from that instant on takes `patch`, and the piece containing `fromTime` is
+ * cut there first. Rows are per-shift pieces, so a backdate may reach into an
+ * earlier shift's piece. Returns the open row.
+ */
+async function restatusFrom(
+  tx: TransactionClient,
+  current: StationStateLog,
+  fromTime: Date,
+  patch: Prisma.StationStateLogUncheckedUpdateInput,
+): Promise<StationStateLog> {
+  const pieces = await tx.stationStateLog.findMany({
+    where: {
+      stationId: current.stationId,
+      blockId: current.blockId,
+      deletedAt: null,
+      OR: [{ endTime: { gt: fromTime } }, { endTime: null }],
+    },
+    orderBy: { startTime: "asc" },
+  });
+  let open = current;
+  for (const piece of pieces) {
+    const target = piece.startTime < fromTime ? (await splitStateEntryAt(tx, piece, fromTime))[1] : piece;
+    open = await tx.stationStateLog.update({ where: { id: target.id }, data: patch });
+  }
+  return open;
 }
 
 // ── Assign downtime reason ───────────────────────────────────────

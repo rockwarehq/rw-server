@@ -27,3 +27,4 @@ They are immutable once accepted — a change of course gets a **new** ADR that 
 | [0011](./0011-labels.md) | Labels and Station Filters | Accepted | 2026-08-24 |
 | [0012](./0012-sms-consent-flow.md) | SMS Consent: Keyed by Phone Number, Owned by rw-hub | Accepted | 2026-09-08 |
 | [0013](./0013-retroactive-job-history-amendment.md) | Retroactive Job History Amendment | Accepted | 2026-09-10 |
+| [0014](./0014-period-rows-per-shift.md) | Period Rows Are Cut at Shift Boundaries | Accepted | 2026-09-10 |

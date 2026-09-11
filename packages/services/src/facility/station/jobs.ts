@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import prisma from "@rw/db";
 import { recalcAll } from "../../metrics/recalc.js";
 import { ensureBuckets } from "../../metrics/bucket.js";
@@ -23,6 +24,8 @@ export async function createStationJobLog(
   tx: Prisma.TransactionClient,
   station: { id: string; siteId: string; workcenterId: string | null },
   data: {
+    /** Omit for a new assignment; a per-shift continuation passes its run's block. */
+    blockId?: string;
     jobId: string;
     jobVersionId: string;
     startTime: Date;
@@ -33,12 +36,13 @@ export async function createStationJobLog(
   },
 ) {
   const stamp = await resolveShiftStamp(station.siteId, station.workcenterId, data.startTime, tx);
-  await tx.stationJobLog.create({
+  return tx.stationJobLog.create({
     data: {
       stationId: station.id,
       siteId: station.siteId,
       workcenterId: station.workcenterId,
       ...stamp,
+      blockId: randomUUID(),
       ...data,
     },
   });

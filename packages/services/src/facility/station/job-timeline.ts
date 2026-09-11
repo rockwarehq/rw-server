@@ -1,6 +1,7 @@
-import type { Prisma } from "@rw/db";
+import type { Prisma, StationJobLog } from "@rw/db";
 import { resolveShiftStamp } from "../work-context.js";
 import { createStationJobLog } from "./jobs.js";
+import { cutAtShiftBoundaries, cutJobLog } from "./periods.js";
 
 // Rewrites a station's StationJobLog timeline so [from, to) holds exactly one
 // job (or none). The planner is pure: it turns the rows touching the window
@@ -13,6 +14,8 @@ export interface JobLogRow {
   jobVersionId: string;
   startTime: Date;
   endTime: Date | null;
+  /** Rows are per-shift pieces; touching pieces only merge within one shift. */
+  shiftInstanceId?: string | null;
 }
 
 export interface TimelineTarget {
@@ -34,6 +37,9 @@ interface Piece<R> {
   endTime: Date | null;
   source: R | null;
 }
+
+const sameShift = (a: { shiftInstanceId?: string | null }, b: { shiftInstanceId?: string | null }) =>
+  a.shiftInstanceId === undefined || b.shiftInstanceId === undefined || a.shiftInstanceId === b.shiftInstanceId;
 
 const ms = (d: Date | null) => (d ? d.getTime() : Number.POSITIVE_INFINITY);
 
@@ -74,7 +80,8 @@ export function planTimelineRewrite<R extends JobLogRow>(
       last?.endTime &&
       last.endTime.getTime() === p.startTime.getTime() &&
       last.jobId === p.jobId &&
-      last.jobVersionId === p.jobVersionId
+      last.jobVersionId === p.jobVersionId &&
+      sameShift(last.source ?? {}, p.source ?? {})
     ) {
       last.endTime = p.endTime;
       last.source ??= p.source;
@@ -113,20 +120,16 @@ export async function loadTimelineRows(tx: Prisma.TransactionClient, stationId: 
   });
 }
 
-/** Apply a plan under the station lock. Rows re-resolve their shift stamp at their (new) startTime. */
+/**
+ * Apply a plan under the station lock. Rows re-resolve their shift stamp at
+ * their (new) startTime, and every row touching the window is then cut at
+ * the shift boundaries it spans.
+ */
 export async function applyTimelinePlan(
   tx: Prisma.TransactionClient,
   station: { id: string; siteId: string; workcenterId: string | null },
-  plan: TimelinePlan<{
-    id: string;
-    jobId: string;
-    jobVersionId: string;
-    startTime: Date;
-    endTime: Date | null;
-    standardCycle: Prisma.Decimal | null;
-    standardQuantity: Prisma.Decimal | null;
-    quantityUnit: string;
-  }>,
+  plan: TimelinePlan<StationJobLog>,
+  window: { from: Date; toEff: Date },
   targetStandards: { standardCycle: number | null; standardQuantity: number | null; quantityUnit: string },
 ) {
   if (plan.deletes.length > 0) await tx.stationJobLog.deleteMany({ where: { id: { in: plan.deletes } } });
@@ -137,6 +140,7 @@ export async function applyTimelinePlan(
   for (const i of plan.inserts) {
     const std = i.copyOf
       ? {
+          blockId: i.copyOf.blockId,
           standardCycle: i.copyOf.standardCycle?.toNumber() ?? null,
           standardQuantity: i.copyOf.standardQuantity?.toNumber() ?? null,
           quantityUnit: i.copyOf.quantityUnit,
@@ -144,4 +148,12 @@ export async function applyTimelinePlan(
       : targetStandards;
     await createStationJobLog(tx, station, { ...jobOf(i), startTime: i.startTime, endTime: i.endTime, ...std });
   }
+  const touched = await tx.stationJobLog.findMany({
+    where: {
+      stationId: station.id,
+      startTime: { lt: window.toEff },
+      OR: [{ endTime: { gt: window.from } }, { endTime: null }],
+    },
+  });
+  for (const row of touched) await cutAtShiftBoundaries(tx, station, row, window.toEff, cutJobLog(tx, station));
 }

@@ -26,6 +26,7 @@ import { scheduleShiftChanges } from "./shift-change.js";
 import { flushAllExpiredShiftUsage } from "../inventory/material-shift-flush.js";
 import { resolveEffectiveStandards } from "../facility/station/effective-standards.js";
 import { resolveShiftStamp, toDateString } from "../facility/work-context.js";
+import { splitOpenPeriodsForAllStations } from "../facility/station/periods.js";
 
 const REDIS_URL = process.env.REDIS_URL;
 
@@ -256,8 +257,8 @@ export async function runMetricBucketEnsureTick(): Promise<{ checked: number; ar
       const std = await resolveEffectiveStandards(prisma, station.stationId, station.jobId);
       const stamp = await resolveShiftStamp(station.siteId, station.workcenterId, now);
       await prisma.$executeRaw`
-        INSERT INTO "StationJobLog" (id, "stationId", "jobId", "jobVersionId", "startTime", "standardCycle", "standardQuantity", "quantityUnit", "siteId", "workcenterId", "shiftInstanceId", "businessDate", "createdAt", "updatedAt")
-        VALUES (gen_random_uuid(), ${station.stationId}::uuid, ${station.jobId}::uuid, ${station.jobVersionId}::uuid, ${now}, ${std.standardCycleSeconds}, ${std.standardQuantity}, ${std.quantityUnit}, ${station.siteId}::uuid, ${station.workcenterId}::uuid, ${stamp.shiftInstanceId}::uuid, ${toDateString(stamp.businessDate) ?? null}::date, NOW(), NOW())
+        INSERT INTO "StationJobLog" (id, "blockId", "stationId", "jobId", "jobVersionId", "startTime", "standardCycle", "standardQuantity", "quantityUnit", "siteId", "workcenterId", "shiftInstanceId", "businessDate", "createdAt", "updatedAt")
+        VALUES (gen_random_uuid(), gen_random_uuid()::text, ${station.stationId}::uuid, ${station.jobId}::uuid, ${station.jobVersionId}::uuid, ${now}, ${std.standardCycleSeconds}, ${std.standardQuantity}, ${std.quantityUnit}, ${station.siteId}::uuid, ${station.workcenterId}::uuid, ${stamp.shiftInstanceId}::uuid, ${toDateString(stamp.businessDate) ?? null}::date, NOW(), NOW())
       `;
       console.log(
         `[metric-bucket-ensure] Reconciled missing StationJobLog for station ${station.stationId}, job ${station.jobId}`,
@@ -276,6 +277,13 @@ export async function runMetricBucketEnsureTick(): Promise<{ checked: number; ar
     }
   } catch (err) {
     console.error("[metric-bucket-ensure] Failed to reconcile StationJobLog entries:", err);
+  }
+
+  try {
+    const split = await splitOpenPeriodsForAllStations(now);
+    if (split > 0) console.log(`[metric-bucket-ensure] Cut open periods at shift boundaries on ${split} station(s)`);
+  } catch (err) {
+    console.error("[metric-bucket-ensure] Failed to split periods at shift boundaries:", err);
   }
 
   const allStations = await prisma.$queryRaw<Array<{ entityId: string; siteId: string; entityName: string }>>`

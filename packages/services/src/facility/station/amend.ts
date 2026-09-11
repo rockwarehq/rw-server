@@ -1,5 +1,6 @@
 import type { AmendContext } from "../../history/context.js";
 import { resolveJobDimensions } from "../work-context.js";
+import { cutAtShiftBoundaries, cutStateEntry } from "./periods.js";
 import { splitStateEntryAt } from "./state.js";
 
 /**
@@ -19,6 +20,11 @@ export async function restampStateLog(ctx: AmendContext, to: Date | null): Promi
     where: { stationId, deletedAt: null, startTime: { gte: from, ...(to ? { lt: to } : {}) } },
     data: { jobId: job?.id ?? null, jobVersionId: job?.versionId ?? null },
   });
+  const station = { id: stationId, siteId: ctx.siteId, workcenterId: ctx.workcenterId };
+  const rows = await tx.stationStateLog.findMany({
+    where: { stationId, deletedAt: null, startTime: { gte: from, lt: ctx.toEff } },
+  });
+  for (const row of rows) await cutAtShiftBoundaries(tx, station, row, ctx.toEff, cutStateEntry(tx));
   return count;
 }
 
