@@ -21,7 +21,10 @@ in those dimensions; shift was the one dimension it did not enforce.
 2. **`blockId` ties the pieces together on both tables.** `StationStateLog.blockId` keeps
    its ADR-0005 meaning (a contiguous UP run or downtime, across splits). `StationJobLog`
    gains a `blockId`: one value per job assignment, shared by its per-shift pieces.
-   Existing rows are their own block.
+   Existing rows are their own block. A block is always one contiguous run, so its
+   first and last piece bound the run: an amendment that carves the middle out of a run
+   gives the remainder a new block, and an asserted piece touching a same-job piece
+   continues that block, so per-shift amendments stitch into one run in either order.
 3. **The cut runs as an idempotent catch-up in the ensure tick**, not from a precisely
    timed job. Every minute, `splitOpenPeriodsForAllStations` finds stations whose open
    rows are stamped with a shift other than the one running now and cuts them at every

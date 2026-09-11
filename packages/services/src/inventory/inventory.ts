@@ -174,18 +174,18 @@ export interface ShiftUsageScope {
   jobId: string;
 }
 
-/**
- * Add (sign 1) or remove (sign -1) the material consumption of `itemIds` to
- * the (shift, station, job, product, material) staging rows. Flushed rows are
- * frozen and skipped; rows that reach zero are deleted.
- */
-export async function applyShiftUsage(
-  tx: TransactionClient,
-  scope: ShiftUsageScope,
-  itemIds: string[],
-  sign: 1 | -1,
-): Promise<number> {
-  if (itemIds.length === 0) return 0;
+export interface MaterialUsage {
+  productId: string;
+  materialId: string;
+  /** The material's canonical unit; `qty` is converted to it. */
+  unit: WeightUnit;
+  qty: Prisma.Decimal;
+  itemCount: number;
+}
+
+/** Material consumed by `itemIds`, per (product, material). Materials without a canonical unit are discarded. */
+export async function materialUsage(tx: TransactionClient, itemIds: string[]): Promise<MaterialUsage[]> {
+  if (itemIds.length === 0) return [];
   type UsageRow = {
     productId: string;
     materialId: string;
@@ -198,7 +198,7 @@ export async function applyShiftUsage(
     // ledger writes are normalized to this unit.
     materialUnit: WeightUnit | null;
   };
-  const want = await (tx as unknown as RawClient).$queryRaw<UsageRow[]>`
+  const rows = await (tx as unknown as RawClient).$queryRaw<UsageRow[]>`
     SELECT
       pb."productId"         AS "productId",
       mb."materialId"        AS "materialId",
@@ -218,22 +218,41 @@ export async function applyShiftUsage(
       AND pmb.weight IS NOT NULL
     GROUP BY pb."productId", mb."materialId", pmb."weightUnits", mbc."weightUnits"
   `;
-
-  let touched = 0;
-  for (const w of want) {
-    // Normalize to the material's canonical unit. PM weight may be entered
-    // in a different unit (e.g. material stocked in KG, product consumes G);
-    // staging and downstream ledger entries are always in the material unit.
-    // If the material has no canonical unit, discard the usage — assuming a
-    // default would silently mis-stamp ledger entries.
+  const usage: MaterialUsage[] = [];
+  for (const w of rows) {
+    // Assuming a default unit would silently mis-stamp ledger entries.
     if (w.materialUnit === null) {
       console.warn(
         `[inventory] material ${w.materialId} has no weightUnit set; discarding usage qty=${w.qty} for product ${w.productId}`,
       );
       continue;
     }
-    const canonicalUnit: WeightUnit = w.materialUnit;
-    const qtyDelta = convertWeight(w.qty, w.pmUnit ?? canonicalUnit, canonicalUnit).mul(sign);
+    usage.push({
+      productId: w.productId,
+      materialId: w.materialId,
+      unit: w.materialUnit,
+      qty: convertWeight(w.qty, w.pmUnit ?? w.materialUnit, w.materialUnit),
+      itemCount: w.itemCount,
+    });
+  }
+  return usage;
+}
+
+/**
+ * Add (sign 1) or remove (sign -1) the material consumption of `itemIds` to
+ * the (shift, station, job, product, material) staging rows. Flushed rows are
+ * frozen and skipped; rows that reach zero are deleted.
+ */
+export async function applyShiftUsage(
+  tx: TransactionClient,
+  scope: ShiftUsageScope,
+  itemIds: string[],
+  sign: 1 | -1,
+): Promise<number> {
+  let touched = 0;
+  for (const w of await materialUsage(tx, itemIds)) {
+    const canonicalUnit = w.unit;
+    const qtyDelta = w.qty.mul(sign);
     const itemDelta = w.itemCount * sign;
 
     const existing = await tx.materialShiftUsage.findUnique({

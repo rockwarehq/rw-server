@@ -22,7 +22,9 @@ station's current job.
 1. **The job log timeline is rewritten by a pure planner.** Rows touching the window are
    cut into the pieces that survive outside it, the asserted piece is added, touching
    pieces of the same job merge, and the result is diffed against the input rows. A row
-   already matching the assertion is kept, so re-asserting is a no-op.
+   already matching the assertion is kept, so re-asserting is a no-op. Applying the plan
+   keeps `blockId` contiguous (ADR-0014): the asserted piece joins a touching same-job
+   run, and a run cut in two by the window gets a new block for its remainder.
 2. **Each module rewrites its own facts inside the same transaction** under the station
    advisory lock. The handlers are independent of each other (they only need the window
    and the job); the one ordering is items after cycles. Running them atomically means no
@@ -37,8 +39,10 @@ station's current job.
      one set-based insert, so the lock hold does not grow per cycle. Recreated items carry
      the same `amendmentId` marker as the cycles.
      Material staging moves with them for shifts that are still open. A flushed shift's
-     ledger is immutable and is left alone; the amendment summary reports how many were
-     skipped. Item sums in the metrics compute and cascade now filter `deletedAt`.
+     PRODUCTION entries are immutable, so the net material difference (removed items
+     credited, created items debited) is posted as one signed ADJUSTMENT per material,
+     stamped with that shift and referencing the amendment id. Item sums in the metrics
+     compute and cascade now filter `deletedAt`.
    - State log: split at the window edges and restamped; statuses, reasons and blocks
      stay as recorded (ADR-0005: one status and one job per row). SLOW is not re-derived
      against the new standard.
@@ -73,5 +77,4 @@ station's current job.
 ## Deferred
 
 Undo (the previous timeline is stored for it), re-deriving SLOW against the new
-standard, a ledger adjustment for flushed material shifts, an automation bridge for the
-event, and a sweep that retries `PENDING_REBUILD` amendments automatically.
+standard, an automation bridge for the event, and a sweep that retries `PENDING_REBUILD` amendments automatically.

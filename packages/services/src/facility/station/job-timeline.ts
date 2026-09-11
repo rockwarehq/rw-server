@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Prisma, StationJobLog } from "@rw/db";
 import { resolveShiftStamp } from "../work-context.js";
 import { createStationJobLog } from "./jobs.js";
@@ -123,7 +124,10 @@ export async function loadTimelineRows(tx: Prisma.TransactionClient, stationId: 
 /**
  * Apply a plan under the station lock. Rows re-resolve their shift stamp at
  * their (new) startTime, and every row touching the window is then cut at
- * the shift boundaries it spans.
+ * the shift boundaries it spans. A blockId is one contiguous run: the asserted
+ * piece continues a touching run of the same job (so per-shift amendments
+ * stitch together), and a run the window carved in two gets a new blockId
+ * for its remainder.
  */
 export async function applyTimelinePlan(
   tx: Prisma.TransactionClient,
@@ -145,7 +149,7 @@ export async function applyTimelinePlan(
           standardQuantity: i.copyOf.standardQuantity?.toNumber() ?? null,
           quantityUnit: i.copyOf.quantityUnit,
         }
-      : targetStandards;
+      : { ...targetStandards, blockId: await joinBlockId(tx, station.id, i) };
     await createStationJobLog(tx, station, { ...jobOf(i), startTime: i.startTime, endTime: i.endTime, ...std });
   }
   const touched = await tx.stationJobLog.findMany({
@@ -156,4 +160,44 @@ export async function applyTimelinePlan(
     },
   });
   for (const row of touched) await cutAtShiftBoundaries(tx, station, row, window.toEff, cutJobLog(tx, station));
+  await splitBrokenBlocks(tx, station.id, window);
+}
+
+/** The block of a same-job piece ending at the start (or starting at the end); both sides become one run. */
+async function joinBlockId(
+  tx: Prisma.TransactionClient,
+  stationId: string,
+  piece: { jobId: string; jobVersionId: string; startTime: Date; endTime: Date | null },
+): Promise<string> {
+  const run = { stationId, jobId: piece.jobId, jobVersionId: piece.jobVersionId };
+  const left = await tx.stationJobLog.findFirst({
+    where: { ...run, endTime: piece.startTime },
+    select: { blockId: true },
+  });
+  const right = piece.endTime
+    ? await tx.stationJobLog.findFirst({ where: { ...run, startTime: piece.endTime }, select: { blockId: true } })
+    : null;
+  const blockId = left?.blockId ?? right?.blockId ?? randomUUID();
+  if (right && right.blockId !== blockId) {
+    await tx.stationJobLog.updateMany({ where: { stationId, blockId: right.blockId }, data: { blockId } });
+  }
+  return blockId;
+}
+
+/** Blocks with pieces on both sides of the window but none inside it: the part after the window is a new run. */
+async function splitBrokenBlocks(tx: Prisma.TransactionClient, stationId: string, window: { from: Date; toEff: Date }) {
+  await tx.$executeRaw`
+    WITH broken AS (
+      SELECT "blockId", gen_random_uuid()::text AS "newId"
+      FROM "StationJobLog"
+      WHERE "stationId" = ${stationId}::uuid
+      GROUP BY "blockId"
+      HAVING bool_or("startTime" < ${window.from})
+         AND bool_or("startTime" >= ${window.toEff})
+         AND NOT bool_or("startTime" < ${window.toEff} AND COALESCE("endTime", 'infinity'::timestamptz) > ${window.from})
+    )
+    UPDATE "StationJobLog" l SET "blockId" = b."newId"
+    FROM broken b
+    WHERE l."stationId" = ${stationId}::uuid AND l."blockId" = b."blockId" AND l."startTime" >= ${window.toEff}
+  `;
 }

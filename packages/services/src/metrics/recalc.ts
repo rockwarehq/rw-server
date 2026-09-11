@@ -1316,13 +1316,16 @@ export async function recalcAll(
       `from ${startTime.toISOString()} to ${endTime.toISOString()}`,
   );
 
-  // Recompute ALL KPIs for each affected base bucket
+  // Recompute ALL KPIs for each affected base bucket. The station lock keeps a
+  // concurrent cycle completion from incrementing between our read and the SET.
   for (const bucket of baseBuckets) {
-    const kpis = await computeBucketFromEvents(stationId, bucket.startTime, bucket.durationSeconds);
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${stationId}))::text`;
+      const kpis = await computeBucketFromEvents(stationId, bucket.startTime, bucket.durationSeconds);
 
-    // The job that was running in this bucket (latest overlapping log), not the station's job today.
-    const bucketEnd = new Date(bucket.startTime.getTime() + bucket.durationSeconds * 1000);
-    const [jobRow] = await prisma.$queryRaw<Array<{ currentJobId: string | null; currentJobName: string | null }>>`
+      // The job that was running in this bucket (latest overlapping log), not the station's job today.
+      const bucketEnd = new Date(bucket.startTime.getTime() + bucket.durationSeconds * 1000);
+      const [jobRow] = await prisma.$queryRaw<Array<{ currentJobId: string | null; currentJobName: string | null }>>`
       SELECT sjl."jobId" AS "currentJobId", jb.name AS "currentJobName"
       FROM "StationJobLog" sjl
       LEFT JOIN "Job" j ON j.id = sjl."jobId"
@@ -1333,24 +1336,24 @@ export async function recalcAll(
       ORDER BY sjl."startTime" DESC
       LIMIT 1
     `;
-    const currentJobId = jobRow?.currentJobId ?? null;
-    const currentJobName = jobRow?.currentJobName ?? null;
+      const currentJobId = jobRow?.currentJobId ?? null;
+      const currentJobName = jobRow?.currentJobName ?? null;
 
-    // Build full KPI data including currentStandardCycle
-    const kpiData: Record<string, number | null> = {};
-    for (const key of ADDITIVE_KPI_KEYS) {
-      kpiData[key] = kpis[key];
-    }
-    kpiData.currentStandardCycle = kpis.currentStandardCycle;
+      // Build full KPI data including currentStandardCycle
+      const kpiData: Record<string, number | null> = {};
+      for (const key of ADDITIVE_KPI_KEYS) {
+        kpiData[key] = kpis[key];
+      }
+      kpiData.currentStandardCycle = kpis.currentStandardCycle;
 
-    // Replace all KPIs (both count and duration)
-    const kpiSetFragments = Object.entries(kpiData).map(([key, val]) =>
-      val != null ? Prisma.sql`"${Prisma.raw(key)}" = ${val}` : Prisma.sql`"${Prisma.raw(key)}" = NULL`,
-    );
-    kpiSetFragments.push(Prisma.sql`"currentJobId" = ${currentJobId}`);
-    kpiSetFragments.push(Prisma.sql`"currentJobName" = ${currentJobName}`);
+      // Replace all KPIs (both count and duration)
+      const kpiSetFragments = Object.entries(kpiData).map(([key, val]) =>
+        val != null ? Prisma.sql`"${Prisma.raw(key)}" = ${val}` : Prisma.sql`"${Prisma.raw(key)}" = NULL`,
+      );
+      kpiSetFragments.push(Prisma.sql`"currentJobId" = ${currentJobId}`);
+      kpiSetFragments.push(Prisma.sql`"currentJobName" = ${currentJobName}`);
 
-    await prisma.$executeRaw`
+      await tx.$executeRaw`
       UPDATE "MetricBucket"
       SET ${Prisma.join(kpiSetFragments)},
           "updatedAt" = NOW()
@@ -1359,6 +1362,7 @@ export async function recalcAll(
         AND granularity = 'HOUR'::"BucketGranularity"
         AND "startTime" = ${bucket.startTime}
     `;
+    });
   }
 
   // Emit full snapshot for all affected HOUR+STATION buckets
@@ -1390,6 +1394,16 @@ export async function recalcAll(
   } catch (err) {
     console.error(`[metrics:recalc] Failed to recompute JOB buckets for station ${stationId}:`, err);
   }
+}
+
+/**
+ * Closing a job log only changes the bucket containing the close; earlier
+ * JOB hours were kept current by the tick while the job ran.
+ */
+export async function recalcJobLogClose(stationId: string, siteId: string, closedAt: Date): Promise<void> {
+  const ctx = new MetricsContext();
+  const bucket = await getBaseBucketForTimestamp(stationId, siteId, closedAt, await getSiteTimezone(siteId, ctx), ctx);
+  await recalcAll(stationId, siteId, bucket.startTime, closedAt, ctx);
 }
 
 // ── Helpers ──────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import prisma from "@rw/db";
-import { recalcAll } from "../../../metrics/recalc.js";
+import { recalcJobLogClose } from "../../../metrics/recalc.js";
 import { ensureBuckets } from "../../../metrics/bucket.js";
 import { jobEntityId } from "../../../metrics/cascade.js";
 import { publishEntityEvent } from "../../../entity/events.js";
@@ -174,9 +174,9 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
 
     // ── Fire-and-forget side effects after the transaction commits ──
     // Recompute KPIs for each closed log's time range.
-    for (const log of closedLogs) {
-      recalcAll(stationId, station.siteId, log.startTime, timestamp).catch((err) => {
-        console.error(`[job.change] Failed to recalc for closed job log ${log.id}:`, err);
+    if (closedLogs.length > 0) {
+      recalcJobLogClose(stationId, station.siteId, timestamp).catch((err) => {
+        console.error(`[job.change] Failed to recalc for closed job log:`, err);
       });
     }
 

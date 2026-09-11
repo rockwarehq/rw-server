@@ -1,11 +1,13 @@
+import { Prisma, type WeightUnit } from "@rw/db";
 import type { AmendContext } from "../history/context.js";
-import { applyShiftUsage, type ShiftUsageScope } from "./inventory.js";
+import { applyShiftUsage, materialUsage, type ShiftUsageScope } from "./inventory.js";
 
 export interface ReassignItemsSummary {
   itemsRemoved: number;
   itemsCreated: number;
   dispositions: number;
-  flushedShiftsSkipped: number;
+  /** ADJUSTMENT ledger rows posted for shifts whose usage was already flushed. */
+  ledgerAdjustments: number;
 }
 
 interface ItemRow {
@@ -20,13 +22,14 @@ interface ItemRow {
  * Items were produced from the old job's products, so they are soft-deleted
  * and recreated from the amended job in one set-based insert (the station
  * lock is held throughout, so this must not scale per cycle). Material staging
- * moves with them for shifts that are still open; a flushed shift's ledger is
- * immutable and is left alone. Scrap logs follow their cycle, or the station
- * within the window when they have none.
+ * moves with them for shifts that are still open; a flushed shift's PRODUCTION
+ * entries are immutable, so the material difference is posted as a signed
+ * ADJUSTMENT per material instead. Scrap logs follow their cycle, or the
+ * station within the window when they have none.
  */
 export async function reassignItems(ctx: AmendContext, cycleIds: string[]): Promise<ReassignItemsSummary> {
   const { tx, siteId, stationId, from, toEff, job, amendmentId } = ctx;
-  const summary: ReassignItemsSummary = { itemsRemoved: 0, itemsCreated: 0, dispositions: 0, flushedShiftsSkipped: 0 };
+  const summary: ReassignItemsSummary = { itemsRemoved: 0, itemsCreated: 0, dispositions: 0, ledgerAdjustments: 0 };
   if (!job || cycleIds.length === 0) return summary;
 
   const removed = await tx.$queryRaw<ItemRow[]>`
@@ -86,7 +89,6 @@ export async function reassignItems(ctx: AmendContext, cycleIds: string[]): Prom
       })
     ).map((r) => r.shiftInstanceId),
   );
-  summary.flushedShiftsSkipped = flushed.size;
 
   for (const [rows, sign] of [
     [removed, -1],
@@ -112,6 +114,16 @@ export async function reassignItems(ctx: AmendContext, cycleIds: string[]): Prom
     }
     for (const { scope, ids } of groups.values()) await applyShiftUsage(tx, scope, ids, sign);
   }
+  for (const shiftInstanceId of flushed) {
+    const of = (rows: ItemRow[]) => rows.filter((r) => r.shiftInstanceId === shiftInstanceId).map((r) => r.id);
+    const businessDate = removed.find((r) => r.shiftInstanceId === shiftInstanceId)?.businessDate ?? null;
+    summary.ledgerAdjustments += await adjustLedger(
+      tx,
+      { siteId, shiftInstanceId, businessDate, reference: amendmentId },
+      of(removed),
+      of(created),
+    );
+  }
 
   summary.dispositions = await tx.$executeRaw`
     UPDATE "ItemDispositionLog" d
@@ -130,4 +142,34 @@ export async function reassignItems(ctx: AmendContext, cycleIds: string[]): Prom
       )
   `;
   return summary;
+}
+
+/** Credit the removed items' material back and debit the created items'; one ADJUSTMENT per material with a non-zero net. */
+async function adjustLedger(
+  tx: AmendContext["tx"],
+  stamp: { siteId: string; shiftInstanceId: string; businessDate: Date | null; reference: string },
+  removedIds: string[],
+  createdIds: string[],
+): Promise<number> {
+  const net = new Map<string, { materialId: string; unit: WeightUnit; qty: Prisma.Decimal }>();
+  for (const [ids, sign] of [
+    [removedIds, 1],
+    [createdIds, -1],
+  ] as const) {
+    for (const u of await materialUsage(tx, ids)) {
+      const key = `${u.materialId}|${u.unit}`;
+      const entry = net.get(key) ?? { materialId: u.materialId, unit: u.unit, qty: new Prisma.Decimal(0) };
+      entry.qty = entry.qty.add(u.qty.mul(sign));
+      net.set(key, entry);
+    }
+  }
+  let posted = 0;
+  for (const { materialId, unit, qty } of net.values()) {
+    if (qty.isZero()) continue;
+    await tx.materialLedgerEntry.create({
+      data: { ...stamp, materialId, kind: "ADJUSTMENT", quantity: qty, unit, note: "Job history amendment" },
+    });
+    posted++;
+  }
+  return posted;
 }
