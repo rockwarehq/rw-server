@@ -1,4 +1,5 @@
 import prisma from "@rw/db";
+import { publishUiChange } from "../events/ui-changes.js";
 import { unarchiveAffectedBuckets } from "../cycle/replay.js";
 import { rederiveProductStock } from "../inventory/stock.js";
 import { ensureBuckets } from "../metrics/bucket.js";
@@ -47,11 +48,13 @@ export async function rebuildForAmendment(amendmentId: string, displacedJobIds: 
       where: { id: amendmentId },
       data: { status: "APPLIED", rebuiltAt: new Date(), rebuildError: null },
     });
+    publishUiChange({ kind: "job-history.rebuilt", siteId, stationId, amendmentId, status: "APPLIED" });
   } catch (err) {
     await prisma.jobHistoryAmendment.update({
       where: { id: amendmentId },
       data: { status: "FAILED", rebuildError: err instanceof Error ? err.message : String(err) },
     });
+    publishUiChange({ kind: "job-history.rebuilt", siteId, stationId, amendmentId, status: "FAILED" });
     throw err;
   }
 }

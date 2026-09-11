@@ -18,6 +18,8 @@ import {
   JOB_HISTORY_EVENT_SUBJECT_FILTER,
   parseJobHistoryAmendedEvent,
 } from "@rw/runtime/job-history-events";
+import { deriveUiChangeSubject } from "@rw/runtime/ui-change-events";
+import { setUiChangeSink } from "@rw/services/events/ui-changes";
 import { rebuildForAmendment } from "@rw/services/history/index";
 
 const DURABLE = "rw-workers-job-history-rebuild";
@@ -25,6 +27,7 @@ const ACK_WAIT_NANOS = 10 * 60 * 1_000_000_000;
 const WEEK_NANOS = 7 * 24 * 60 * 60 * 1_000_000_000;
 const TWO_MINUTES_NANOS = 2 * 60 * 1_000_000_000;
 const decoder = new TextDecoder();
+const encoder = new TextEncoder();
 
 let nc: NatsConnection | null = null;
 let messages: ConsumerMessages | null = null;
@@ -35,6 +38,10 @@ export async function startJobHistoryRebuild(): Promise<void> {
     name: "rw-workers-job-history-rebuild",
     maxReconnectAttempts: -1,
     waitOnFirstConnect: true,
+  });
+  const conn = nc;
+  setUiChangeSink(async (event) => {
+    conn.publish(deriveUiChangeSubject(event.siteId), encoder.encode(JSON.stringify(event)));
   });
   const jsm = await jetstreamManager(nc);
   // Same config apps/api ensureStream uses, so whichever process comes up first creates it identically.
@@ -88,6 +95,7 @@ export async function startJobHistoryRebuild(): Promise<void> {
 }
 
 export async function stopJobHistoryRebuild(): Promise<void> {
+  setUiChangeSink(null);
   messages?.stop();
   messages = null;
   if (nc && !nc.isClosed()) await nc.drain();

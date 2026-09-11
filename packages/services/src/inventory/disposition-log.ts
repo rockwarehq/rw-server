@@ -1,6 +1,7 @@
 import prisma, { Prisma } from "@rw/db";
 import { updateDispositionBadItems } from "@rw/services/metrics/recalc";
 import { publishEntityEvent } from "../entity/events.js";
+import { publishUiChange } from "../events/ui-changes.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { resolveShiftStamp, toDateString } from "../facility/work-context.js";
 import { applyScrapDelta } from "./stock.js";
@@ -419,7 +420,9 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
   });
 
   // Trigger metric recalculation for badItems
-  updateDispositionBadItems(stationId, siteId, log.createdAt, quantity ?? 1).catch((err) => {
+  updateDispositionBadItems(stationId, siteId, log.createdAt, quantity ?? 1)
+    .then(() => publishUiChange({ kind: "scrap.recorded", siteId, stationId }))
+    .catch((err) => {
     console.error(`[disposition-log] Failed to update badItems metrics for station ${stationId}:`, err);
   });
 
@@ -613,7 +616,9 @@ export async function update(
 
   // If quantity changed, trigger metric recalc with delta
   if (quantityDelta !== 0) {
-    updateDispositionBadItems(current.stationId, current.siteId, log.createdAt, quantityDelta).catch((err) => {
+    updateDispositionBadItems(current.stationId, current.siteId, log.createdAt, quantityDelta)
+      .then(() => publishUiChange({ kind: "scrap.recorded", siteId: current.siteId, stationId: current.stationId }))
+      .catch((err) => {
       console.error(`[disposition-log] Failed to update badItems metrics for station ${current.stationId}:`, err);
     });
     publishStockEvent(current.siteId, current.site.workspaceId, current.productVersion.productId);
@@ -650,7 +655,9 @@ export async function remove(id: string) {
   });
 
   // Subtract the removed quantity from metrics
-  updateDispositionBadItems(log.stationId, log.siteId, log.createdAt, -Number(log.quantity)).catch((err) => {
+  updateDispositionBadItems(log.stationId, log.siteId, log.createdAt, -Number(log.quantity))
+    .then(() => publishUiChange({ kind: "scrap.recorded", siteId: log.siteId, stationId: log.stationId }))
+    .catch((err) => {
     console.error(`[disposition-log] Failed to update badItems metrics for station ${log.stationId}:`, err);
   });
 

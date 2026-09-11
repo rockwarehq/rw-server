@@ -40,6 +40,7 @@ import {
   startModeEventPublisher,
   startNotificationEventPublisher,
   startStationStatusEventPublisher,
+  startUiChangePublisher,
 } from "./nats/domain-event-publishers.js";
 import { getAutomationFramework } from "./automations/index.js";
 import { startAutomationEventConsumer } from "./nats/automation-event-consumer.js";
@@ -108,6 +109,7 @@ async function main() {
     startJobEventPublisher,
     startJobHistoryEventPublisher,
     startStationStatusEventPublisher,
+    startUiChangePublisher,
     startAutomationEventConsumer,
     async () => (await getAutomationFramework()).engine.startScheduled(),
     startCommandBus,

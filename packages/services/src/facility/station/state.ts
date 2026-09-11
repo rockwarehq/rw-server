@@ -5,6 +5,7 @@ import type { Prisma, StationStateLog } from "@rw/db";
 import { publishMetricValueChange } from "../../rpc/metrics-bus.js";
 import { publishStationShiftContext } from "../../metrics/graph-context.js";
 import { updateTimeBased } from "../../metrics/recalc.js";
+import { publishUiChange } from "../../events/ui-changes.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import type { StationStatus } from "@rw/runtime/station-status-events";
 import { emitStationStatusChanged, findStatusSince } from "./status-events.js";
@@ -1171,7 +1172,7 @@ export async function assignDowntimeReason(
   );
   if (flipped) {
     updateTimeBased(entry.stationId, siteId, rangeStart, rangeEnd).then(
-      () => console.log(`[assignDowntimeReason] updateTimeBased completed`),
+      () => publishUiChange({ kind: "downtime.recalculated", siteId, stationId: entry.stationId }),
       (err) => console.error(`[assignDowntimeReason] updateTimeBased FAILED for station ${entry.stationId}:`, err),
     );
   }
