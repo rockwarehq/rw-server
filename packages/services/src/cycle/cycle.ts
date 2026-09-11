@@ -21,6 +21,7 @@ import {
   type StationMetricContext,
 } from "../facility/station/state.js";
 import { enqueueDetection, prepareDetection, type PreparedDetection } from "../facility/station/state-detection.js";
+import { resolveShiftStamp, type StampDims, toDateString } from "../facility/work-context.js";
 import { emitStationStatusChanged } from "../facility/station/status-events.js";
 import { batchedMetricsUpdate } from "../metrics/batcher.js";
 import { incrementHourCounts } from "../metrics/cascade.js";
@@ -60,6 +61,7 @@ type CycleItems = Array<{
   quantity: number;
   productVersionId: string;
   jobProductVersionId: string | null;
+  toolId: string | null;
   toolVersionId: string | null;
   toolCavityVersionId: string | null;
 }>;
@@ -118,6 +120,7 @@ async function applyModeScrap(
   stationId: string,
   mode: OpenModeLog | null,
   items: CycleItems,
+  dims: StampDims,
 ): Promise<number> {
   if (!mode?.scrapAll || !mode.itemDispositionId || !mode.dispositionReasonId || items.length === 0) return 0;
   return autoScrapCycleItems(tx, {
@@ -127,6 +130,7 @@ async function applyModeScrap(
     itemDispositionId: mode.itemDispositionId,
     dispositionReasonId: mode.dispositionReasonId,
     items,
+    ...dims,
   });
 }
 
@@ -167,6 +171,7 @@ export async function complete(input: StartCycleInput) {
     Array<{
       siteId: string;
       workspaceId: string;
+      workcenterId: string | null;
       jobSiteId: string;
       currentVersionId: string | null;
       standardCycle: number | null;
@@ -191,6 +196,7 @@ export async function complete(input: StartCycleInput) {
       SELECT
         s."siteId",
         si."workspaceId",
+        s."workcenterId",
         j."siteId" AS "jobSiteId",
         j."currentVersionId",
         jb."standardCycle"::float8 AS "standardCycle",
@@ -224,7 +230,7 @@ export async function complete(input: StartCycleInput) {
            COALESCE(array_agg(DISTINCT t."toolVersionId") FILTER (WHERE t."toolVersionId" IS NOT NULL), '{}') AS "toolVersionIds"
     FROM setup s
     LEFT JOIN tools t ON true
-    GROUP BY s."siteId", s."workspaceId", s."jobSiteId", s."currentVersionId", s."standardCycle", s."slowDetect",
+    GROUP BY s."siteId", s."workspaceId", s."workcenterId", s."jobSiteId", s."currentVersionId", s."standardCycle", s."slowDetect",
              s."cycleMode", s."stationStandardQuantity", s."stationQuantityUnit", s."stationStandardCycle",
              s."stationStandardRate", s."stationStandardRateUnit", s."stationStandardRatePeriod",
              s."standardRate", s."standardRateUnit", s."standardRatePeriod", s."jobStandardQuantity"
@@ -276,14 +282,40 @@ export async function complete(input: StartCycleInput) {
     toolVersions: setup.toolVersionIds.length > 0 ? { connect: setup.toolVersionIds.map((id) => ({ id })) } : undefined,
   };
 
+  // Star-pattern stamps, resolved before the tx so the lock-holding
+  // transaction pays no extra reads.
+  const dims: StampDims = {
+    workcenterId: setup.workcenterId,
+    jobId,
+    ...(await resolveShiftStamp(siteId, setup.workcenterId, timestamp)),
+  };
+
   // ── Execute strategy (single transaction handles ALL DB writes) ──
   // Earned standard — for DISCRETE identical to the old standardCycle round.
   const idealCycleIncrement = cycleStamp.standardCycle != null ? Math.round(cycleStamp.standardCycle) : 0;
 
   const result = replayed
     ? keepOpen
-      ? await completeOpenCloseReplay(stationId, siteId, timestamp, jobId, versionConnects, sourceEventId, cycleStamp)
-      : await completeImmediateReplay(stationId, siteId, timestamp, jobId, versionConnects, sourceEventId, cycleStamp)
+      ? await completeOpenCloseReplay(
+          stationId,
+          siteId,
+          timestamp,
+          jobId,
+          versionConnects,
+          sourceEventId,
+          cycleStamp,
+          dims,
+        )
+      : await completeImmediateReplay(
+          stationId,
+          siteId,
+          timestamp,
+          jobId,
+          versionConnects,
+          sourceEventId,
+          cycleStamp,
+          dims,
+        )
     : keepOpen
       ? await completeOpenClose(
           stationId,
@@ -297,6 +329,7 @@ export async function complete(input: StartCycleInput) {
           cycleStamp,
           slowByQuantity,
           std,
+          dims,
         )
       : await completeImmediate(
           stationId,
@@ -310,6 +343,7 @@ export async function complete(input: StartCycleInput) {
           cycleStamp,
           slowByQuantity,
           std,
+          dims,
         );
 
   // Null strategy result = lost the sourceEventId insert race to a concurrent
@@ -429,6 +463,7 @@ async function completeImmediate(
   stamp: CycleStamp,
   slowByQuantity: boolean,
   std: ResolvedStandards,
+  dims: StampDims,
 ): Promise<StrategyResult | null> {
   return prisma.$transaction(async (tx) => {
     // Per-station advisory lock as its own statement BEFORE the prev-cycle
@@ -458,7 +493,7 @@ async function completeImmediate(
         ORDER BY "end" DESC LIMIT 1
       ),
       new_cycle AS (
-        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", quantity, "quantityUnit", "standardCycle", "standardQuantity", "siteId", "stationId", "jobVersionId", "sourceEventId", "modeId", attrs, "createdAt", "updatedAt")
+        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", quantity, "quantityUnit", "standardCycle", "standardQuantity", "siteId", "stationId", "jobVersionId", "sourceEventId", "modeId", "workcenterId", "jobId", "shiftInstanceId", "businessDate", attrs, "createdAt", "updatedAt")
         VALUES (
           gen_random_uuid(),
           COALESCE((SELECT "end" FROM prev), ${timestamp}),
@@ -473,6 +508,10 @@ async function completeImmediate(
           ${versionConnects.jobVersionId},
           ${sourceEventId}::uuid,
           ${mode?.modeId ?? null}::uuid,
+          ${dims.workcenterId}::uuid,
+          ${dims.jobId}::uuid,
+          ${dims.shiftInstanceId}::uuid,
+          ${toDateString(dims.businessDate) ?? null}::date,
           '{}',
           NOW(),
           NOW()
@@ -535,13 +574,24 @@ async function completeImmediate(
     const transition = await applyCycleCompleteTransition(tx, stationId, timestamp, {
       cycleWasSlow: isSlow,
       cycleStart: cycle.start,
+      jobId,
       jobVersionId: versionConnects.jobVersionId,
       modeId: mode?.modeId ?? null,
+      stamp: {
+        siteId,
+        workcenterId: dims.workcenterId,
+        shiftInstanceId: dims.shiftInstanceId,
+        businessDate: dims.businessDate,
+      },
       openRow,
     });
 
-    const items = await inventory.createFromCycle(tx, cycle.id, jobId, stamp, mode?.modeId);
-    const scrappedQuantity = await applyModeScrap(tx, siteId, stationId, mode, items);
+    const items = await inventory.createFromCycle(tx, cycle.id, jobId, stamp, mode?.modeId, {
+      siteId,
+      stationId,
+      ...dims,
+    });
+    const scrappedQuantity = await applyModeScrap(tx, siteId, stationId, mode, items, dims);
 
     // Live-publish & detection-schedule data — read inside the tx so the
     // post-commit fire-and-forget block holds no DB connection.
@@ -593,6 +643,7 @@ async function completeOpenClose(
   stamp: CycleStamp,
   slowByQuantity: boolean,
   std: ResolvedStandards,
+  dims: StampDims,
 ): Promise<StrategyResult | null> {
   return prisma
     .$transaction(async (tx) => {
@@ -609,16 +660,37 @@ async function completeOpenClose(
       let items: CycleItems = [];
 
       if (openCycles.length > 0) {
-        const itemArrays = await Promise.all(
-          openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId, stamp, mode?.modeId)),
-        );
+        // Stamps for the cycles being closed: end-time dims, except when the
+        // close lands in a shift gap — then fall back to the cycle's own start
+        // so a known-good stamp is never overwritten with null and material
+        // staging isn't dropped. jobId stays what the cycle opened with (it
+        // pairs with jobVersionId); items instead carry the closing event's
+        // job, since they are built from its JobProducts.
+        const itemArrays: CycleItems[] = [];
+        for (const oc of openCycles) {
+          const closeDims: StampDims = dims.shiftInstanceId
+            ? dims
+            : { ...dims, ...(await resolveShiftStamp(siteId, dims.workcenterId, oc.start, tx)) };
+          itemArrays.push(
+            await inventory.createFromCycle(tx, oc.id, jobId, stamp, mode?.modeId, {
+              siteId,
+              stationId,
+              ...closeDims,
+            }),
+          );
+          // The closing event's quantity/earned-standard belong to the cycle being closed.
+          await tx.cycle.update({
+            where: { id: oc.id },
+            data: {
+              end: timestamp,
+              ...stamp,
+              workcenterId: closeDims.workcenterId,
+              shiftInstanceId: closeDims.shiftInstanceId,
+              businessDate: closeDims.businessDate,
+            },
+          });
+        }
         items = itemArrays.flat();
-
-        // The closing event's quantity/earned-standard belong to the cycle being closed.
-        await tx.cycle.updateMany({
-          where: { stationId, end: null },
-          data: { end: timestamp, ...stamp },
-        });
       } else {
         const hasPrevious = await tx.cycle.findFirst({
           where: { stationId },
@@ -636,14 +708,19 @@ async function completeOpenClose(
               stationId,
               modeId: mode?.modeId ?? null,
               ...versionConnects,
+              ...dims,
             },
           });
 
-          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId, stamp, mode?.modeId);
+          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId, stamp, mode?.modeId, {
+            siteId,
+            stationId,
+            ...dims,
+          });
         }
       }
 
-      const scrappedQuantity = await applyModeScrap(tx, siteId, stationId, mode, items);
+      const scrappedQuantity = await applyModeScrap(tx, siteId, stationId, mode, items, dims);
 
       const openEntry = await findOpenStateEntry(tx, stationId);
       const cycleDurationSeconds =
@@ -658,8 +735,15 @@ async function completeOpenClose(
       const transition = await applyCycleCompleteTransition(tx, stationId, timestamp, {
         cycleWasSlow: isSlow,
         cycleStart: openCycles[0]?.start ?? timestamp,
+        jobId,
         jobVersionId: versionConnects.jobVersionId,
         modeId: mode?.modeId ?? null,
+        stamp: {
+          siteId,
+          workcenterId: dims.workcenterId,
+          shiftInstanceId: dims.shiftInstanceId,
+          businessDate: dims.businessDate,
+        },
         openRow: openEntry
           ? {
               id: openEntry.id,
@@ -684,6 +768,7 @@ async function completeOpenClose(
           sourceEventId,
           modeId: mode?.modeId ?? null,
           ...versionConnects,
+          ...dims,
         },
       });
 
@@ -735,6 +820,7 @@ async function completeImmediateReplay(
   versionConnects: VersionConnects,
   sourceEventId: string | null,
   stamp: CycleStamp,
+  dims: StampDims,
 ): Promise<StrategyResult | null> {
   return prisma.$transaction(async (tx) => {
     // Cross-process serialization, before the prev read — see completeImmediate.
@@ -755,7 +841,7 @@ async function completeImmediateReplay(
         ORDER BY "end" DESC LIMIT 1
       ),
       new_cycle AS (
-        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", quantity, "quantityUnit", "standardCycle", "standardQuantity", "siteId", "stationId", "jobVersionId", "sourceEventId", "modeId", attrs, "createdAt", "updatedAt")
+        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", quantity, "quantityUnit", "standardCycle", "standardQuantity", "siteId", "stationId", "jobVersionId", "sourceEventId", "modeId", "workcenterId", "jobId", "shiftInstanceId", "businessDate", attrs, "createdAt", "updatedAt")
         VALUES (
           gen_random_uuid(),
           COALESCE((SELECT "end" FROM prev), ${timestamp}),
@@ -770,6 +856,10 @@ async function completeImmediateReplay(
           ${versionConnects.jobVersionId},
           ${sourceEventId}::uuid,
           ${mode?.modeId ?? null}::uuid,
+          ${dims.workcenterId}::uuid,
+          ${dims.jobId}::uuid,
+          ${dims.shiftInstanceId}::uuid,
+          ${toDateString(dims.businessDate) ?? null}::date,
           '{}',
           NOW(),
           NOW()
@@ -800,8 +890,12 @@ async function completeImmediateReplay(
       await tx.$executeRaw`INSERT INTO "_CycleToJobTool" ("A", "B") VALUES ${values} ON CONFLICT DO NOTHING`;
     }
 
-    const items = await inventory.createFromCycle(tx, cycle.id, jobId, stamp, mode?.modeId);
-    const scrappedQuantity = await applyModeScrap(tx, siteId, stationId, mode, items);
+    const items = await inventory.createFromCycle(tx, cycle.id, jobId, stamp, mode?.modeId, {
+      siteId,
+      stationId,
+      ...dims,
+    });
+    const scrappedQuantity = await applyModeScrap(tx, siteId, stationId, mode, items, dims);
 
     // Stock facts are never skipped: replayed cycles update on-hand too, even
     // though the replay path skips state transitions, detection, and metrics.
@@ -830,6 +924,7 @@ async function completeOpenCloseReplay(
   versionConnects: VersionConnects,
   sourceEventId: string | null,
   stamp: CycleStamp,
+  dims: StampDims,
 ): Promise<StrategyResult | null> {
   return prisma
     .$transaction(async (tx) => {
@@ -846,15 +941,31 @@ async function completeOpenCloseReplay(
       let items: CycleItems = [];
 
       if (openCycles.length > 0) {
-        const itemArrays = await Promise.all(
-          openCycles.map((oc) => inventory.createFromCycle(tx, oc.id, jobId, stamp, mode?.modeId)),
-        );
+        // End-time stamps with gap fallback to cycle start — see completeOpenClose.
+        const itemArrays: CycleItems[] = [];
+        for (const oc of openCycles) {
+          const closeDims: StampDims = dims.shiftInstanceId
+            ? dims
+            : { ...dims, ...(await resolveShiftStamp(siteId, dims.workcenterId, oc.start, tx)) };
+          itemArrays.push(
+            await inventory.createFromCycle(tx, oc.id, jobId, stamp, mode?.modeId, {
+              siteId,
+              stationId,
+              ...closeDims,
+            }),
+          );
+          await tx.cycle.update({
+            where: { id: oc.id },
+            data: {
+              end: timestamp,
+              ...stamp,
+              workcenterId: closeDims.workcenterId,
+              shiftInstanceId: closeDims.shiftInstanceId,
+              businessDate: closeDims.businessDate,
+            },
+          });
+        }
         items = itemArrays.flat();
-
-        await tx.cycle.updateMany({
-          where: { stationId, end: null },
-          data: { end: timestamp, ...stamp },
-        });
       } else {
         const hasPrevious = await tx.cycle.findFirst({
           where: { stationId },
@@ -872,14 +983,19 @@ async function completeOpenCloseReplay(
               stationId,
               modeId: mode?.modeId ?? null,
               ...versionConnects,
+              ...dims,
             },
           });
 
-          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId, stamp, mode?.modeId);
+          items = await inventory.createFromCycle(tx, zeroCycle.id, jobId, stamp, mode?.modeId, {
+            siteId,
+            stationId,
+            ...dims,
+          });
         }
       }
 
-      const scrappedQuantity = await applyModeScrap(tx, siteId, stationId, mode, items);
+      const scrappedQuantity = await applyModeScrap(tx, siteId, stationId, mode, items, dims);
 
       // Stamped on the new open cycle — see completeOpenClose.
       const newCycle = await tx.cycle.create({
@@ -891,6 +1007,7 @@ async function completeOpenCloseReplay(
           sourceEventId,
           modeId: mode?.modeId ?? null,
           ...versionConnects,
+          ...dims,
         },
       });
 

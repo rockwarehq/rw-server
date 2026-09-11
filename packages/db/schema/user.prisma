@@ -44,13 +44,13 @@ model User {
   updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
 
   // Relations
-  memberships           WorkspaceMembership[]
-  refreshTokens         RefreshToken[]
-  shiftComments         ShiftComment[]
-  materialLedgerEntries MaterialLedgerEntry[]
+  memberships             WorkspaceMembership[]
+  refreshTokens           RefreshToken[]
+  shiftComments           ShiftComment[]
+  materialLedgerEntries   MaterialLedgerEntry[]
   productStockAdjustments ProductStockAdjustment[]
-  apiTokensCreated      ApiToken[]
-  savedViewsCreated     SavedView[]
+  apiTokensCreated        ApiToken[]
+  savedViewsCreated       SavedView[]
 
   // SMS consent decisions this user recorded
   smsConsentEvents SmsConsentEvent[]

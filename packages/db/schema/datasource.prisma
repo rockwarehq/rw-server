@@ -62,9 +62,9 @@ model Point {
   staticValue Json? // Manually-entered value for STATIC points; delivered via entity.changes, never polled
   address     String
   dataType    String
-  scaleFactor Float  @default(1.0) // Multiplier to convert raw to engineering units
-  offset      Float  @default(0.0) // Additive offset after scaling
-  config      Json   @default("{}")
+  scaleFactor Float           @default(1.0) // Multiplier to convert raw to engineering units
+  offset      Float           @default(0.0) // Additive offset after scaling
+  config      Json            @default("{}")
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)

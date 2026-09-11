@@ -121,6 +121,16 @@ model StationLogonSession {
   stationId String  @db.Uuid
   station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
 
+  // ── Dimension snapshots (star pattern for BI), captured at logon ──
+  siteId String? @db.Uuid
+  site   Site?   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id], onDelete: SetNull)
+
+  /// Business date of the shift the session logged on in.
+  businessDate DateTime? @db.Date
+
   displayId String  @db.Uuid
   display   Display @relation(fields: [displayId], references: [id], onDelete: Cascade)
 
@@ -140,4 +150,5 @@ model StationLogonSession {
   @@index([stationId, logoffTime])
   @@index([employeeId])
   @@index([displayId])
+  @@index([siteId, businessDate])
 }

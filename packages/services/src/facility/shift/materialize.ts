@@ -419,31 +419,44 @@ function buildInstanceRows(
 // ── Helpers ──────────────────────────────────────────────────────
 
 /**
- * Find which ShiftInstance IDs are "in use" — referenced by at least
- * one MetricBucket or ItemDispositionLog row.
- *
- * Uses two batched queries instead of N individual lookups.
+ * Every table that stamps shiftInstanceId on its rows. A ShiftInstance
+ * referenced by ANY of these is "in use" and must survive rematerialization —
+ * deleting it would SET NULL (or cascade-delete, for MaterialShiftUsage) the
+ * shift dimension on historical fact rows, unrecoverably.
+ */
+const SHIFT_REFERENCING_TABLES = [
+  "MetricBucket", // no FK constraint — informational column
+  "MetricBucketLog",
+  "ItemDispositionLog",
+  "Cycle",
+  "InventoryItem",
+  "StationStateLog",
+  "StationJobLog",
+  "StationLogonSession",
+  "MaterialShiftUsage",
+  "MaterialLedgerEntry",
+  "OrderConsumption",
+  "ProductStockAdjustment",
+  "Call",
+  "StationModeLog",
+] as const;
+
+/**
+ * Find which ShiftInstance IDs are "in use" — referenced by at least one row
+ * in any shift-stamped table. One batched DISTINCT query per table.
  */
 async function findInUseShiftInstanceIds(instanceIds: string[]): Promise<Set<string>> {
   if (instanceIds.length === 0) return new Set();
 
-  // MetricBucket.shiftInstanceId has no FK constraint — raw query for DISTINCT
-  const metricRefs = await prisma.$queryRawUnsafe<Array<{ shiftInstanceId: string }>>(
-    `SELECT DISTINCT "shiftInstanceId" FROM "MetricBucket"
-     WHERE "shiftInstanceId" = ANY($1::uuid[])`,
-    instanceIds,
-  );
-
-  // ItemDispositionLog.shiftInstanceId has a real FK
-  const dispositionRefs = await prisma.$queryRawUnsafe<Array<{ shiftInstanceId: string }>>(
-    `SELECT DISTINCT "shiftInstanceId" FROM "ItemDispositionLog"
-     WHERE "shiftInstanceId" = ANY($1::uuid[])`,
-    instanceIds,
-  );
-
   const inUse = new Set<string>();
-  for (const row of metricRefs) inUse.add(row.shiftInstanceId);
-  for (const row of dispositionRefs) inUse.add(row.shiftInstanceId);
+  for (const table of SHIFT_REFERENCING_TABLES) {
+    const refs = await prisma.$queryRawUnsafe<Array<{ shiftInstanceId: string }>>(
+      `SELECT DISTINCT "shiftInstanceId" FROM "${table}"
+       WHERE "shiftInstanceId" = ANY($1::uuid[])`,
+      instanceIds,
+    );
+    for (const row of refs) inUse.add(row.shiftInstanceId);
+  }
 
   return inUse;
 }
