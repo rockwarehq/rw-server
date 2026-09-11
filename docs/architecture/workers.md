@@ -18,7 +18,7 @@ Every mode gets the shared http-host (`/healthz`, `/readyz`, `/metrics`) and lif
 
 Five tightly-coupled pieces in one process (they share `MetricsContext` caches and callback-chain into each other — see the header comment in `src/rollups.ts`):
 
-- **metric-bucket-ensure** — self-chaining ~60s tick that materializes upcoming `MetricBucket` rows per entity/granularity so ingestion never misses a bucket
+- **metric-bucket-ensure** — self-chaining ~60s tick that materializes upcoming `MetricBucket` rows per entity/granularity so ingestion never misses a bucket; also cuts open state/job-log rows at any shift boundary they have crossed (ADR-0014)
 - **shift-bucket-create** — BullMQ producer+consumer creating shift-scoped buckets
 - **shift-change** — BullMQ delayed jobs firing at shift boundaries; triggers an ensure tick
 - **combined metrics tick** — 5s `setInterval` advancing live calculations (elapsed windows, downtime accumulation) plus the dirty-bucket consumer that batch-recomputes

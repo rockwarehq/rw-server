@@ -66,6 +66,10 @@ model Cycle {
   modeId String?         @db.Uuid
   mode   ProductionMode? @relation(fields: [modeId], references: [id], onDelete: SetNull)
 
+  /// Set when a job history amendment rewrote this cycle's job; null = as recorded.
+  amendmentId String?              @db.Uuid
+  amendment   JobHistoryAmendment? @relation(fields: [amendmentId], references: [id], onDelete: SetNull)
+
   toolVersions ToolVersion[]
 
   jobTools JobTool[]
@@ -84,6 +88,7 @@ model Cycle {
   @@index([jobVersionId])
   @@index([orderId])
   @@index([modeId])
+  @@index([amendmentId])
   // Star stamps: [siteId, businessDate] serves BI date slicing; shiftInstanceId
   // and workcenterId back their SetNull FKs (shift rematerialization deletes
   // instances routinely). Per-dimension indexes are deferred until a real

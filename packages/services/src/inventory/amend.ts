@@ -25,7 +25,7 @@ interface ItemRow {
  * within the window when they have none.
  */
 export async function reassignItems(ctx: AmendContext, cycleIds: string[]): Promise<ReassignItemsSummary> {
-  const { tx, siteId, stationId, from, toEff, job } = ctx;
+  const { tx, siteId, stationId, from, toEff, job, amendmentId } = ctx;
   const summary: ReassignItemsSummary = { itemsRemoved: 0, itemsCreated: 0, dispositions: 0, flushedShiftsSkipped: 0 };
   if (!job || cycleIds.length === 0) return summary;
 
@@ -41,11 +41,11 @@ export async function reassignItems(ctx: AmendContext, cycleIds: string[]): Prom
   const created = await tx.$queryRaw<ItemRow[]>`
     INSERT INTO "InventoryItem" (id, "cycleId", "jobProductVersionId", "productVersionId", "toolVersionId", "toolCavityVersionId",
       quantity, "quantityUnit", "modeId", "siteId", "stationId", "workcenterId", "jobId", "productId", "toolId",
-      "shiftInstanceId", "businessDate", "createdAt", "updatedAt")
+      "shiftInstanceId", "businessDate", "amendmentId", "createdAt", "updatedAt")
     SELECT gen_random_uuid(), c.id, jp."currentVersionId", p."currentVersionId", t."currentVersionId", tc."currentVersionId",
       (CASE WHEN c.quantity > 0 THEN c.quantity ELSE 1 END) * jpb.quantity, c."quantityUnit", c."modeId",
       c."siteId", c."stationId", c."workcenterId", ${job.id}::uuid, jp."productId", jp."toolId",
-      c."shiftInstanceId", c."businessDate", NOW(), NOW()
+      c."shiftInstanceId", c."businessDate", ${amendmentId}::uuid, NOW(), NOW()
     FROM "Cycle" c
     CROSS JOIN "JobProduct" jp
     JOIN "JobProductVersion" jpb ON jpb.id = jp."currentVersionId"

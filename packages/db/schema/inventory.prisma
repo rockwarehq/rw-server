@@ -451,6 +451,10 @@ model InventoryItem {
   cycleId String @db.Uuid
   cycle   Cycle  @relation(fields: [cycleId], references: [id], onDelete: Cascade)
 
+  /// Set on items created by a job history amendment; null = produced as recorded.
+  amendmentId String?              @db.Uuid
+  amendment   JobHistoryAmendment? @relation(fields: [amendmentId], references: [id], onDelete: SetNull)
+
   // ── Dimension snapshots (star pattern for BI), captured at record time ──
   // Denormalized from the cycle so item-grain queries need no joins.
   siteId String? @db.Uuid
@@ -505,6 +509,7 @@ model InventoryItem {
 
   @@index([cycleId])
   @@index([cycleId, deletedAt])
+  @@index([amendmentId])
   @@index([jobProductVersionId])
   @@index([productVersionId])
   @@index([toolVersionId])

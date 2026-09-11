@@ -66,13 +66,40 @@ describe.skipIf(!process.env.DATABASE_URL)("amendJobHistory", () => {
 
     // J1 ran from t0 and is still the open assignment; cycles every hour; one UP period, one DOWN period.
     await prisma.stationJobLog.create({
-      data: { stationId, siteId, jobId: j1.id, jobVersionId: j1.versionId, startTime: at(0), standardCycle: 10 },
+      data: {
+        stationId,
+        siteId,
+        blockId: randomUUID(),
+        jobId: j1.id,
+        jobVersionId: j1.versionId,
+        startTime: at(0),
+        standardCycle: 10,
+      },
     });
     for (const h of [1, 2, 3, 4, 5]) await recordCycle(at(h), j1);
     await prisma.stationStateLog.createMany({
       data: [
-        { stationId, siteId, jobId: j1.id, jobVersionId: j1.versionId, startTime: at(0), endTime: at(3.5), state: "UP", status: "UP", blockId: randomUUID() },
-        { stationId, siteId, jobId: j1.id, jobVersionId: j1.versionId, startTime: at(3.5), state: "DOWN", status: "DOWN", blockId: randomUUID() },
+        {
+          stationId,
+          siteId,
+          jobId: j1.id,
+          jobVersionId: j1.versionId,
+          startTime: at(0),
+          endTime: at(3.5),
+          state: "UP",
+          status: "UP",
+          blockId: randomUUID(),
+        },
+        {
+          stationId,
+          siteId,
+          jobId: j1.id,
+          jobVersionId: j1.versionId,
+          startTime: at(3.5),
+          state: "DOWN",
+          status: "DOWN",
+          blockId: randomUUID(),
+        },
       ],
     });
   });
@@ -90,13 +117,29 @@ describe.skipIf(!process.env.DATABASE_URL)("amendJobHistory", () => {
     ]);
 
     const cycles = await prisma.cycle.findMany({ where: { stationId }, orderBy: { end: "asc" } });
-    expect(cycles.map((c) => c.jobVersionId)).toEqual([j1.versionId, j1.versionId, j2.versionId, j2.versionId, j1.versionId]);
+    expect(cycles.map((c) => c.amendmentId !== null)).toEqual([false, false, true, true, false]);
+    expect(cycles.map((c) => c.jobVersionId)).toEqual([
+      j1.versionId,
+      j1.versionId,
+      j2.versionId,
+      j2.versionId,
+      j1.versionId,
+    ]);
 
-    const live = await prisma.inventoryItem.findMany({ where: { stationId, deletedAt: null }, orderBy: { createdAt: "asc" } });
-    expect(live.map((i) => i.productId).sort()).toEqual([j1.productId, j1.productId, j1.productId, j2.productId, j2.productId].sort());
+    const live = await prisma.inventoryItem.findMany({
+      where: { stationId, deletedAt: null },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(live.map((i) => i.productId).sort()).toEqual(
+      [j1.productId, j1.productId, j1.productId, j2.productId, j2.productId].sort(),
+    );
     expect(await prisma.inventoryItem.count({ where: { stationId, deletedAt: { not: null } } })).toBe(2);
+    expect(live.map((i) => i.amendmentId !== null).sort()).toEqual([false, false, false, true, true]);
 
-    const states = await prisma.stationStateLog.findMany({ where: { stationId, deletedAt: null }, orderBy: { startTime: "asc" } });
+    const states = await prisma.stationStateLog.findMany({
+      where: { stationId, deletedAt: null },
+      orderBy: { startTime: "asc" },
+    });
     expect(states.map((s) => [s.status, s.jobId, s.startTime.getTime()])).toEqual([
       ["UP", j1.id, at(0).getTime()],
       ["UP", j2.id, at(2.5).getTime()],
@@ -107,10 +150,13 @@ describe.skipIf(!process.env.DATABASE_URL)("amendJobHistory", () => {
     const amendment = await prisma.jobHistoryAmendment.findFirstOrThrow({ where: { stationId } });
     expect(amendment.status).toBe("PENDING_REBUILD");
     expect(amendment.previousTimeline).toHaveLength(1);
+    expect(cycles.filter((c) => c.amendmentId).every((c) => c.amendmentId === amendment.id)).toBe(true);
   });
 
   test("rejects windows that are not in the past or that exceed the bound", async () => {
-    expect(await amendJobHistory({ stationId, jobId: j2.id, from: at(5), to: at(4) })).toMatchObject({ code: "INVALID_RANGE" });
+    expect(await amendJobHistory({ stationId, jobId: j2.id, from: at(5), to: at(4) })).toMatchObject({
+      code: "INVALID_RANGE",
+    });
     expect(
       await amendJobHistory({ stationId, jobId: j2.id, from: new Date(t0.getTime() - 10 * 24 * hour), to: at(1) }),
     ).toMatchObject({ code: "RANGE_TOO_LARGE" });

@@ -21,10 +21,12 @@ import { randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
 import { Queue } from "bullmq";
 import prisma from "@rw/db";
+import type { StationStateLog } from "@rw/db";
 import { recalcAll } from "../metrics/recalc.js";
 import { jobEntityId } from "../metrics/cascade.js";
 import { scheduleDetection } from "../facility/station/state-detection.js";
 import { resolveShiftStamp, toDateString } from "../facility/work-context.js";
+import { cutAtShiftBoundaries, cutStateEntry } from "../facility/station/periods.js";
 import { MetricsContext } from "../metrics/context.js";
 import { bullmqConfig } from "../config.js";
 
@@ -251,26 +253,33 @@ async function fixStateEntries(tx: TransactionClient, stationId: string, minTs: 
   const closedStamp = await stampFor(minTs);
   const openStamp = await stampFor(maxTs);
 
-  // Create a closed UP entry spanning the replay window
+  // A closed UP entry spanning the replay window, then an open UP entry from
+  // maxTs onward (station is live); both cut at any shift boundary they span.
   const blockId = randomUUID();
-  await tx.$executeRaw`
+  const [closedRow] = await tx.$queryRaw<StationStateLog[]>`
     INSERT INTO "StationStateLog"
       (id, "stationId", "startTime", "endTime", state, status, "blockId", "jobId", "jobVersionId",
        "siteId", "workcenterId", "shiftInstanceId", "businessDate", "createdAt", "updatedAt")
     VALUES
       (gen_random_uuid(), ${stationId}, ${minTs}, ${maxTs}, 'UP', 'UP', ${blockId}, ${jobId}::uuid, ${jobVersionId},
        ${station?.siteId ?? null}::uuid, ${station?.workcenterId ?? null}::uuid, ${closedStamp.shiftInstanceId}::uuid, ${closedStamp.businessDate}::date, NOW(), NOW())
+    RETURNING *
   `;
-
-  // Create an open UP entry from maxTs onward (station is live)
-  await tx.$executeRaw`
+  const [openRow] = await tx.$queryRaw<StationStateLog[]>`
     INSERT INTO "StationStateLog"
       (id, "stationId", "startTime", state, status, "blockId", "jobId", "jobVersionId",
        "siteId", "workcenterId", "shiftInstanceId", "businessDate", "createdAt", "updatedAt")
     VALUES
       (gen_random_uuid(), ${stationId}, ${maxTs}, 'UP', 'UP', ${blockId}, ${jobId}::uuid, ${jobVersionId},
        ${station?.siteId ?? null}::uuid, ${station?.workcenterId ?? null}::uuid, ${openStamp.shiftInstanceId}::uuid, ${openStamp.businessDate}::date, NOW(), NOW())
+    RETURNING *
   `;
+  if (station) {
+    const scope = { id: stationId, ...station };
+    for (const row of [closedRow, openRow]) {
+      if (row) await cutAtShiftBoundaries(tx, scope, row, new Date(), cutStateEntry(tx));
+    }
+  }
 }
 
 // ── Un-archive affected metric buckets ──────────────────────────

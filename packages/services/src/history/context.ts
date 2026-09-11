@@ -3,6 +3,8 @@ import type { Prisma } from "@rw/db";
 /** What every module handler needs to rewrite its facts for one amendment. */
 export interface AmendContext {
   tx: Prisma.TransactionClient;
+  /** The JobHistoryAmendment row this rewrite belongs to (created before the handlers run). */
+  amendmentId: string;
   siteId: string;
   stationId: string;
   workcenterId: string | null;

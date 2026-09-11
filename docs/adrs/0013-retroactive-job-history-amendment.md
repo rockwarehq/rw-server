@@ -29,10 +29,13 @@ station's current job.
    reader ever sees cycles on Job2 and items on Job1.
    - Cycles: attributed by end time (an open cycle counts as ending now). `jobVersionId`
      is the field JOB buckets aggregate by, so it is restamped along with `jobId`, the
-     standards snapshot, and the tool join tables. A "no job" amendment leaves cycles as
+     standards snapshot, and the tool join tables. Each rewritten cycle's `amendmentId`
+     points at the amendment, so a manually overwritten cycle is distinguishable from one
+     recorded as-is and its previous job can be read off the amendment. A "no job" amendment leaves cycles as
      recorded because a cycle requires a job version.
    - Items: soft-deleted (`deletedAt`) and recreated from the amended job's products in
-     one set-based insert, so the lock hold does not grow per cycle.
+     one set-based insert, so the lock hold does not grow per cycle. Recreated items carry
+     the same `amendmentId` marker as the cycles.
      Material staging moves with them for shifts that are still open. A flushed shift's
      ledger is immutable and is left alone; the amendment summary reports how many were
      skipped. Item sums in the metrics compute and cascade now filter `deletedAt`.

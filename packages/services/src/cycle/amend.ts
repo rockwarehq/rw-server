@@ -7,7 +7,7 @@ import type { AmendContext } from "../history/context.js";
  * version, so a "no job" amendment leaves them as recorded.
  */
 export async function restampCycles(ctx: AmendContext): Promise<{ cycleIds: string[] }> {
-  const { tx, stationId, from, toEff, job } = ctx;
+  const { tx, stationId, from, toEff, job, amendmentId } = ctx;
   if (!job) return { cycleIds: [] };
 
   const rows = await tx.$queryRaw<Array<{ id: string }>>`
@@ -17,6 +17,7 @@ export async function restampCycles(ctx: AmendContext): Promise<{ cycleIds: stri
         "standardCycle" = ${job.standardCycle},
         "standardQuantity" = ${job.standardQuantity},
         "quantityUnit" = ${job.quantityUnit},
+        "amendmentId" = ${amendmentId}::uuid,
         "updatedAt" = NOW()
     WHERE "stationId" = ${stationId}::uuid
       AND "deletedAt" IS NULL

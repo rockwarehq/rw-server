@@ -31,6 +31,15 @@ import type { DimensionDef, FactDef, MeasureDef } from "./types.js";
 const periodSeconds = (start: string, end: string) =>
   `EXTRACT(EPOCH FROM (COALESCE(f."${end}", NOW()) - f."${start}"))`;
 
+/** 1 when a job history amendment rewrote the row (ADR-0013). */
+const amendedRow = `CASE WHEN f."amendmentId" IS NOT NULL THEN 1 ELSE 0 END`;
+const AMENDED_DESCRIPTION = "Rows whose job was rewritten by a job history amendment (manual override).";
+const amendmentDim: DimensionDef = { label: "Amendment", column: "amendmentId", type: "id" };
+
+/** 1 on the first per-shift piece of a block, so SUM counts each physical stretch once and stays additive. */
+const firstPieceOfBlock = (table: string, extra = "") =>
+  `CASE WHEN NOT EXISTS (SELECT 1 FROM "${table}" p WHERE p."blockId" = f."blockId" AND p."startTime" < f."startTime"${extra}) THEN 1 ELSE 0 END`;
+
 const WEIGHT_UNITS = ["KG", "LB", "G", "OZ", "MT", "TON"] as const;
 
 // ── Net production: produced items (+) ∪ scrap dispositions (−) ──────────────
@@ -176,6 +185,7 @@ export const FACTS: Record<string, FactDef> = {
         description: "Standard seconds earned by completed cycles.",
       },
       goodCycleRate: { kind: "ratio", label: "Good cycle rate", numerator: "goodCycles", denominator: "cycles" },
+      amendedCycles: { kind: "sum", label: "Amended cycles", expr: amendedRow, description: AMENDED_DESCRIPTION },
     },
     dimensions: {
       businessDate: businessDateDim(),
@@ -185,6 +195,7 @@ export const FACTS: Record<string, FactDef> = {
       job: jobDim(),
       mode: modeDim(),
       cycleStatus: enumDim("Cycle status", "cycleStatus", ["GOOD", "BAD", "DISCARD"]),
+      amendment: amendmentDim,
     },
   },
 
@@ -200,6 +211,7 @@ export const FACTS: Record<string, FactDef> = {
     measures: {
       rows: { kind: "count", label: "Item rows" },
       quantity: { kind: "sum", label: "Produced quantity", expr: `f."quantity"` },
+      amendedItems: { kind: "sum", label: "Amended items", expr: amendedRow, description: AMENDED_DESCRIPTION },
     },
     dimensions: {
       businessDate: businessDateDim(),
@@ -210,6 +222,7 @@ export const FACTS: Record<string, FactDef> = {
       product: productDim(),
       tool: toolDim(),
       mode: modeDim(),
+      amendment: amendmentDim,
     },
   },
 
@@ -243,7 +256,7 @@ export const FACTS: Record<string, FactDef> = {
   statePeriods: {
     label: "Station status periods",
     description:
-      "One row per station status stretch (period model). Periods spanning shift boundaries are stamped with the shift they started in.",
+      "One row per station status stretch per shift (period model). A stretch that crosses a shift boundary is cut there; blocks count each stretch once.",
     // Parity with logs.downtimeSearch, which gates the same data.
     permission: "status:read",
     table: "StationStateLog",
@@ -252,18 +265,25 @@ export const FACTS: Record<string, FactDef> = {
     timeColumn: "startTime",
     workcenterColumn: "workcenterId",
     measures: {
-      periods: { kind: "count", label: "Periods" },
+      periods: { kind: "count", label: "Periods", description: "Per-shift pieces." },
+      blocks: {
+        kind: "sum",
+        label: "Stretches",
+        expr: firstPieceOfBlock("StationStateLog", ` AND p."deletedAt" IS NULL`),
+        description: "Physical stretches, counted in the shift they started in.",
+      },
       durationSeconds: { kind: "sum", label: "Duration (s)", expr: periodSeconds("startTime", "endTime") },
       avgDurationSeconds: {
         kind: "avg",
         label: "Avg duration (s)",
         expr: periodSeconds("startTime", "endTime"),
-        description: "Average period length; filter state = DOWN for average downtime stretch.",
+        description: "Average per-shift piece length; filter state = DOWN for average downtime.",
       },
       maxDurationSeconds: {
         kind: "max",
         label: "Longest period (s)",
         expr: periodSeconds("startTime", "endTime"),
+        description: "Longest per-shift piece.",
       },
       downSeconds: {
         kind: "sum",
@@ -316,16 +336,22 @@ export const FACTS: Record<string, FactDef> = {
 
   jobRuns: {
     label: "Job runs",
-    description: "One row per job assignment stretch on a station.",
+    description: "One row per job assignment per shift on a station; runs count each assignment once.",
     permission: "job:read",
     table: "StationJobLog",
     dateColumn: "businessDate",
     timeColumn: "startTime",
     workcenterColumn: "workcenterId",
     measures: {
-      runs: { kind: "count", label: "Runs" },
+      runs: {
+        kind: "sum",
+        label: "Runs",
+        expr: firstPieceOfBlock("StationJobLog"),
+        description: "Assignments, counted in the shift they started in.",
+      },
+      periods: { kind: "count", label: "Periods", description: "Per-shift pieces." },
       durationSeconds: { kind: "sum", label: "Duration (s)", expr: periodSeconds("startTime", "endTime") },
-      avgDurationSeconds: { kind: "avg", label: "Avg run (s)", expr: periodSeconds("startTime", "endTime") },
+      avgDurationSeconds: { kind: "avg", label: "Avg piece (s)", expr: periodSeconds("startTime", "endTime") },
     },
     dimensions: {
       businessDate: businessDateDim(),

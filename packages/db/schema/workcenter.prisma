@@ -295,12 +295,17 @@ model StationVersion {
 
 /// Log of job assignments on a station. Each entry records when a job was
 /// assigned and (optionally) when it was replaced or cleared. The open entry
-/// (endTime IS NULL) represents the currently active job.
+/// (endTime IS NULL) represents the currently active job. Rows are cut at
+/// shift boundaries so every row belongs to one shift; blockId ties the
+/// pieces of one physical run together.
 model StationJobLog {
   id String @id @default(uuid()) @db.Uuid
 
   stationId String  @db.Uuid
   station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  /// One value per job assignment; shared by the per-shift pieces it was cut into.
+  blockId String
 
   // ── Dimension snapshots (star pattern for BI), captured at assignment ──
   siteId String? @db.Uuid
@@ -340,6 +345,7 @@ model StationJobLog {
   @@index([stationId, endTime])
   @@index([stationId, startTime])
   @@index([jobId])
+  @@index([blockId])
   @@index([siteId, businessDate])
   @@index([shiftInstanceId])
 }
@@ -384,6 +390,10 @@ model JobHistoryAmendment {
   source          ActionSource @default(MANUAL)
   actorEmployeeId String?      @db.Uuid
   actorUserId     String?      @db.Uuid
+
+  /// Cycles whose job this amendment rewrote, and the items it recreated.
+  cycles Cycle[]
+  items  InventoryItem[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)

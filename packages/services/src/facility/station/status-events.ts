@@ -1,4 +1,5 @@
 import prisma from "@rw/db";
+import type { Prisma } from "@rw/db";
 import type { EventCause } from "@rw/runtime/domain-events";
 import type { StationStatus, StationStatusEvent, StationStatusEventSource } from "@rw/runtime/station-status-events";
 import { createEventSink, type EventSink } from "../../events/sink.js";
@@ -57,7 +58,7 @@ export async function emitStationStatusChanged(
   const status = open.status ?? open.state;
   const now = new Date();
   const [statusSince, shift, previousReason] = await Promise.all([
-    findStatusSince(stationId, status, open.blockId),
+    findStatusSince(prisma, stationId, status, open.blockId),
     resolveShiftContext(station.siteId, station.workcenterId, now),
     previous.statusReasonId
       ? prisma.statusReason.findUnique({ where: { id: previous.statusReasonId }, select: { name: true } })
@@ -96,8 +97,13 @@ export async function emitStationStatusChanged(
  * the same block. A new downtime always opens a new block, so a DOWN row converted in place right
  * after an earlier DOWN block does not inherit that block's start.
  */
-async function findStatusSince(stationId: string, status: StationStatus, blockId: string): Promise<Date> {
-  const rows = await prisma.stationStateLog.findMany({
+export async function findStatusSince(
+  client: Prisma.TransactionClient | typeof prisma,
+  stationId: string,
+  status: StationStatus,
+  blockId: string,
+): Promise<Date> {
+  const rows = await client.stationStateLog.findMany({
     where: { stationId, deletedAt: null },
     orderBy: { startTime: "desc" },
     select: { state: true, status: true, blockId: true, startTime: true },

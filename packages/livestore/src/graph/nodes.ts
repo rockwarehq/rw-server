@@ -5,6 +5,7 @@ import { normalizeGraphTypeToken, parseGraphTypeRef } from "../catalog/graph-typ
 
 import { SYSTEM_ENTITY_KEYS, systemEntityCatalogEntryByKey } from "@rw/services/entity/registry";
 import { resolveEffectiveStandards } from "@rw/services/facility/station/effective-standards";
+import { findStatusSince } from "@rw/services/facility/station/status-events";
 import { publishGraphDefinitionEvent } from "./definition-events.js";
 import { activeHookIdsForProperties } from "./hooks.js";
 import * as nodeTypes from "./node-types.js";
@@ -395,6 +396,7 @@ async function resolveSystemEntityRecord(
           status: true,
           statusReasonId: true,
           startTime: true,
+          blockId: true,
           statusReason: { select: { name: true } },
         },
       }),
@@ -431,7 +433,10 @@ async function resolveSystemEntityRecord(
         status: openState ? (openState.status ?? openState.state) : null,
         statusReasonId: openState?.statusReasonId ?? null,
         statusReason: openState?.statusReason?.name ?? null,
-        statusStartAt: openState?.startTime ?? null,
+        // Rows are per-shift pieces: "since" is the start of the status run, not the open piece.
+        statusStartAt: openState
+          ? await findStatusSince(prisma, station.id, openState.status ?? openState.state, openState.blockId)
+          : null,
         productionMode: openMode?.mode.name ?? null,
         productionModeId: openMode?.modeId ?? null,
         productionModeStartAt: openMode?.startTime ?? null,

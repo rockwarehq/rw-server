@@ -108,8 +108,28 @@ export async function amendJobHistory(input: AmendJobHistoryInput): Promise<Amen
       }
 
       const std = job && jobVersionId ? await resolveEffectiveStandards(tx, stationId, job.id, jobVersionId) : null;
+      const rows = await loadTimelineRows(tx, stationId, from, to);
+      const previous = rows.filter((r) => r.startTime < toEff && (r.endTime === null || r.endTime > from));
+      const displacedJobIds = [...new Set(previous.map((r) => r.jobId))].filter((id) => id !== job?.id);
+
+      // Created first so the rewritten rows can reference it; the summary lands at the end.
+      const created = await tx.jobHistoryAmendment.create({
+        data: {
+          siteId: station.siteId,
+          stationId,
+          jobId: job?.id ?? null,
+          jobVersionId,
+          fromTime: from,
+          toTime: to,
+          previousTimeline: JSON.parse(JSON.stringify(previous)),
+          source: actor.source ?? "MANUAL",
+          actorEmployeeId: actor.employeeId ?? null,
+          actorUserId: actor.userId ?? null,
+        },
+      });
       const ctx: AmendContext = {
         tx,
+        amendmentId: created.id,
         siteId: station.siteId,
         stationId,
         workcenterId: station.workcenterId,
@@ -127,20 +147,23 @@ export async function amendJobHistory(input: AmendJobHistoryInput): Promise<Amen
             : null,
       };
 
-      const rows = await loadTimelineRows(tx, stationId, from, to);
-      const previous = rows.filter((r) => r.startTime < toEff && (r.endTime === null || r.endTime > from));
-      const displacedJobIds = [...new Set(previous.map((r) => r.jobId))].filter((id) => id !== job?.id);
       const plan = planTimelineRewrite(
         rows,
         from,
         to,
         ctx.job ? { jobId: ctx.job.id, jobVersionId: ctx.job.versionId } : null,
       );
-      await applyTimelinePlan(tx, station, plan, {
-        standardCycle: ctx.job?.standardCycle ?? null,
-        standardQuantity: ctx.job?.standardQuantity ?? null,
-        quantityUnit: ctx.job?.quantityUnit ?? "",
-      });
+      await applyTimelinePlan(
+        tx,
+        station,
+        plan,
+        { from, toEff },
+        {
+          standardCycle: ctx.job?.standardCycle ?? null,
+          standardQuantity: ctx.job?.standardQuantity ?? null,
+          quantityUnit: ctx.job?.quantityUnit ?? "",
+        },
+      );
 
       const { cycleIds } = await restampCycles(ctx);
       const items = await reassignItems(ctx, cycleIds);
@@ -150,21 +173,7 @@ export async function amendJobHistory(input: AmendJobHistoryInput): Promise<Amen
 
       if (!to) await tx.station.update({ where: { id: stationId }, data: { currentJobId: job?.id ?? null } });
 
-      const amendment = await tx.jobHistoryAmendment.create({
-        data: {
-          siteId: station.siteId,
-          stationId,
-          jobId: job?.id ?? null,
-          jobVersionId,
-          fromTime: from,
-          toTime: to,
-          previousTimeline: JSON.parse(JSON.stringify(previous)),
-          summary,
-          source: actor.source ?? "MANUAL",
-          actorEmployeeId: actor.employeeId ?? null,
-          actorUserId: actor.userId ?? null,
-        },
-      });
+      const amendment = await tx.jobHistoryAmendment.update({ where: { id: created.id }, data: { summary } });
       return { station, amendment, displacedJobIds, std, previousJobId: station.currentJobId };
     },
     { timeout: 120_000, maxWait: 10_000 },
