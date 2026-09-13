@@ -25,7 +25,8 @@ export interface TimelineTarget {
 }
 
 export interface TimelinePlan<R extends JobLogRow> {
-  updates: Array<{ id: string; startTime: Date; endTime: Date | null }>;
+  /** asserted = the row absorbed the asserted piece (same job, touching), so it is part of the amendment. */
+  updates: Array<{ id: string; startTime: Date; endTime: Date | null; asserted?: boolean }>;
   /** copyOf = the tail of a row that straddled the window; null = the asserted job. */
   inserts: Array<{ jobId: string; jobVersionId: string; startTime: Date; endTime: Date | null; copyOf: R | null }>;
   deletes: string[];
@@ -37,6 +38,7 @@ interface Piece<R> {
   startTime: Date;
   endTime: Date | null;
   source: R | null;
+  asserted?: boolean;
 }
 
 const sameShift = (a: { shiftInstanceId?: string | null }, b: { shiftInstanceId?: string | null }) =>
@@ -71,7 +73,7 @@ export function planTimelineRewrite<R extends JobLogRow>(
       pieces.push({ ...jobOf(r), startTime: start >= to.getTime() ? r.startTime : to, endTime: r.endTime, source: r });
     }
   }
-  if (target) pieces.push({ ...target, startTime: from, endTime: to, source: targetSource });
+  if (target) pieces.push({ ...target, startTime: from, endTime: to, source: targetSource, asserted: true });
   pieces.sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
 
   const merged: Piece<R>[] = [];
@@ -86,6 +88,7 @@ export function planTimelineRewrite<R extends JobLogRow>(
     ) {
       last.endTime = p.endTime;
       last.source ??= p.source;
+      last.asserted ||= p.asserted;
     } else {
       merged.push({ ...p });
     }
@@ -97,7 +100,12 @@ export function planTimelineRewrite<R extends JobLogRow>(
     if (p.source && !kept.has(p.source.id)) {
       kept.add(p.source.id);
       if (ms(p.startTime) !== ms(p.source.startTime) || ms(p.endTime) !== ms(p.source.endTime)) {
-        plan.updates.push({ id: p.source.id, startTime: p.startTime, endTime: p.endTime });
+        plan.updates.push({
+          id: p.source.id,
+          startTime: p.startTime,
+          endTime: p.endTime,
+          ...(p.asserted ? { asserted: true } : {}),
+        });
       }
     } else {
       plan.inserts.push({ ...jobOf(p), startTime: p.startTime, endTime: p.endTime, copyOf: p.source });
@@ -134,12 +142,19 @@ export async function applyTimelinePlan(
   station: { id: string; siteId: string; workcenterId: string | null },
   plan: TimelinePlan<StationJobLog>,
   window: { from: Date; toEff: Date },
-  targetStandards: { standardCycle: number | null; standardQuantity: number | null; quantityUnit: string },
+  targetStandards: {
+    standardCycle: number | null;
+    standardQuantity: number | null;
+    quantityUnit: string;
+    /** Stamped on the asserted pieces only; carved remainders keep their history. */
+    amendmentId?: string;
+  },
 ) {
   if (plan.deletes.length > 0) await tx.stationJobLog.deleteMany({ where: { id: { in: plan.deletes } } });
-  for (const u of plan.updates) {
+  for (const { asserted, ...u } of plan.updates) {
     const stamp = await resolveShiftStamp(station.siteId, station.workcenterId, u.startTime, tx);
-    await tx.stationJobLog.update({ where: { id: u.id }, data: { ...u, ...stamp, lastAccumulatedAt: null } });
+    const amendmentId = asserted ? targetStandards.amendmentId : undefined;
+    await tx.stationJobLog.update({ where: { id: u.id }, data: { ...u, ...stamp, lastAccumulatedAt: null, amendmentId } });
   }
   for (const i of plan.inserts) {
     const std = i.copyOf

@@ -341,6 +341,10 @@ model StationJobLog {
   /// advances this on each tick so only the delta since the last tick is processed.
   lastAccumulatedAt DateTime? @db.Timestamptz(3)
 
+  /// Set on pieces written by a job history amendment.
+  amendmentId String?              @db.Uuid
+  amendment   JobHistoryAmendment? @relation(fields: [amendmentId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
@@ -351,6 +355,7 @@ model StationJobLog {
   @@index([blockId])
   @@index([siteId, businessDate])
   @@index([shiftInstanceId])
+  @@index([amendmentId])
 }
 
 enum JobHistoryAmendmentStatus {
@@ -395,8 +400,9 @@ model JobHistoryAmendment {
   actorUserId     String?      @db.Uuid
 
   /// Cycles whose job this amendment rewrote, and the items it recreated.
-  cycles Cycle[]
-  items  InventoryItem[]
+  cycles  Cycle[]
+  items   InventoryItem[]
+  jobLogs StationJobLog[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)

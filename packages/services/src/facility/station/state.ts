@@ -5,6 +5,7 @@ import type { Prisma, StationStateLog } from "@rw/db";
 import { publishMetricValueChange } from "../../rpc/metrics-bus.js";
 import { publishStationShiftContext } from "../../metrics/graph-context.js";
 import { updateTimeBased } from "../../metrics/recalc.js";
+import { publishUiChange } from "../../events/ui-changes.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import type { StationStatus } from "@rw/runtime/station-status-events";
 import { emitStationStatusChanged, findStatusSince } from "./status-events.js";
@@ -1069,9 +1070,9 @@ type AssignDowntimeReasonResult =
 /**
  * Assign (or clear) a StatusReason on a DOWN state log entry.
  *
- * When `applyToBlock` is true (default), the reason is applied to
- * **all** entries sharing the same blockId — i.e. the entire
- * contiguous downtime period (including entries created by splits).
+ * By default only this period (one shift's piece) changes; a shift
+ * carry-over copies whatever the previous piece had. Pass `applyToBlock`
+ * to update every piece sharing the blockId — the whole downtime occurrence.
  *
  * After the update, triggers a metric recalculation for the
  * affected time range so that plannedDownSeconds / unplannedDownSeconds
@@ -1085,7 +1086,7 @@ export async function assignDowntimeReason(
   statusReasonId: string | null,
   options?: { applyToBlock?: boolean; isPlannedDown?: boolean },
 ): Promise<AssignDowntimeReasonResult> {
-  const applyToBlock = options?.applyToBlock ?? true;
+  const applyToBlock = options?.applyToBlock ?? false;
   let isPlannedDown = options?.isPlannedDown ?? false;
 
   // Look up the target entry
@@ -1171,7 +1172,7 @@ export async function assignDowntimeReason(
   );
   if (flipped) {
     updateTimeBased(entry.stationId, siteId, rangeStart, rangeEnd).then(
-      () => console.log(`[assignDowntimeReason] updateTimeBased completed`),
+      () => publishUiChange({ kind: "downtime.recalculated", siteId, stationId: entry.stationId }),
       (err) => console.error(`[assignDowntimeReason] updateTimeBased FAILED for station ${entry.stationId}:`, err),
     );
   }

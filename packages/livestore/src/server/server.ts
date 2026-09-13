@@ -1,6 +1,7 @@
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import { deriveUiChangeSubject, parseUiChangeEvent } from "@rw/runtime/ui-change-events";
 
 import type { GraphRuntime } from "../engine/runtime.js";
 import type { LivestoreLogger, ValueEnvelope } from "../types/index.js";
@@ -150,6 +151,8 @@ export function registerGraphRoutes(
   const graphSocketHandler = (socket: unknown, request: FastifyRequest) => {
     const ws = socket as WsLike;
     const watchers = new Map<string, { stop: () => void }>();
+    // UI change pings (ui.changes.<site>): one relay per connection, opted into by the client.
+    let stopChanges: (() => void) | null = null;
 
     // ---- Authentication state -------------------------------------------
     // Server clients authenticate via the Authorization header on the upgrade
@@ -319,6 +322,8 @@ export function registerGraphRoutes(
     let closed = false;
     const stopAll = () => {
       closed = true;
+      stopChanges?.();
+      stopChanges = null;
       for (const propertyId of watchers.keys()) stopWatcher(propertyId);
       pending.clear();
       lastSentTs.clear();
@@ -404,6 +409,20 @@ export function registerGraphRoutes(
           return;
         }
 
+        if (message.op === "subscribe-changes") {
+          // Scoped to the principal's site; the payload is ids only, so nothing to filter further.
+          stopChanges ??= runtime.subscribeSubject(deriveUiChangeSubject(principal.siteId), (data) => {
+            let event = null;
+            try {
+              event = parseUiChangeEvent(JSON.parse(changeDecoder.decode(data)));
+            } catch {
+              return;
+            }
+            if (event) sendJson({ op: "change", event });
+          });
+          return;
+        }
+
         sendJson({ op: "error", error: "unsupported op", code: "INVALID_MESSAGE" });
       };
       messageChain = messageChain.then(run).catch((err) => {
@@ -429,13 +448,18 @@ export function registerGraphRoutes(
   });
 }
 
-type ClientMessage = { op: "subscribe" | "unsubscribe"; propertyIds: string[] } | { op: "auth"; token: string };
+type ClientMessage =
+  | { op: "subscribe" | "unsubscribe"; propertyIds: string[] }
+  | { op: "auth"; token: string }
+  | { op: "subscribe-changes" };
+
+const changeDecoder = new TextDecoder();
 
 function parseClientMessage(raw: unknown, maxPropertyIds: number): ClientMessage | null {
   try {
     const parsed = JSON.parse(rawToString(raw)) as unknown;
     if (!isClientMessage(parsed)) return null;
-    if (parsed.op !== "auth" && parsed.propertyIds.length > maxPropertyIds) return null;
+    if ("propertyIds" in parsed && parsed.propertyIds.length > maxPropertyIds) return null;
     return parsed;
   } catch {
     return null;
@@ -454,6 +478,7 @@ function isClientMessage(value: unknown): value is ClientMessage {
   if (typeof value !== "object" || value === null) return false;
   const message = value as { op?: unknown; propertyIds?: unknown; token?: unknown };
   if (message.op === "auth") return typeof message.token === "string" && message.token.length > 0;
+  if (message.op === "subscribe-changes") return true;
   if (message.op !== "subscribe" && message.op !== "unsubscribe") return false;
   return (
     Array.isArray(message.propertyIds) && message.propertyIds.every((propertyId) => typeof propertyId === "string")

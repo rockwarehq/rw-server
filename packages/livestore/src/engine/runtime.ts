@@ -612,6 +612,15 @@ export class GraphRuntime {
     };
   }
 
+  /** Relay a core-NATS subject to a socket; returns the unsubscribe. The runtime owns the connection. */
+  subscribeSubject(subject: string, handler: (data: Uint8Array) => void): () => void {
+    const sub = this.options.nc.subscribe(subject);
+    void (async () => {
+      for await (const msg of sub) handler(msg.data);
+    })().catch((err) => this.options.logger.warn({ err, subject }, "livestore subject relay ended"));
+    return () => sub.unsubscribe();
+  }
+
   isReady(): boolean {
     return this.ready && (this.options.isNatsReady?.() ?? true);
   }

@@ -39,7 +39,7 @@ describe("planTimelineRewrite", () => {
     const plan = planTimelineRewrite(rows, t(2), t(6), J2);
     expect(plan.updates).toEqual([
       { id: "a", startTime: t(0), endTime: t(2) },
-      { id: "c", startTime: t(2), endTime: null },
+      { id: "c", startTime: t(2), endTime: null, asserted: true },
     ]);
     expect(plan.inserts).toEqual([]);
     expect(plan.deletes.sort()).toEqual(["b", "d"]);
@@ -47,7 +47,7 @@ describe("planTimelineRewrite", () => {
 
   it("extends a same-job row that ends exactly at the window start", () => {
     const plan = planTimelineRewrite([row("a", "J2", 0, 4), row("b", "J1", 4, 9)], t(4), t(9), J2);
-    expect(plan.updates).toEqual([{ id: "a", startTime: t(0), endTime: t(9) }]);
+    expect(plan.updates).toEqual([{ id: "a", startTime: t(0), endTime: t(9), asserted: true }]);
     expect(plan.inserts).toEqual([]);
     expect(plan.deletes).toEqual(["b"]);
   });

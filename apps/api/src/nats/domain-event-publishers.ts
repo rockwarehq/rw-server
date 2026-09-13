@@ -41,7 +41,9 @@ import {
   STATION_STATUS_SUBJECT_FILTER,
   type StationStatusEvent,
 } from "@rw/runtime/station-status-events";
+import { deriveUiChangeSubject } from "@rw/runtime/ui-change-events";
 import { setEntityEventSink } from "@rw/services/entity/index";
+import { setUiChangeSink } from "@rw/services/events/ui-changes";
 import { call, productionMode, station } from "@rw/services/facility/index";
 import { setJobHistoryEventSink } from "@rw/services/history/index";
 import { setNotificationEventSink } from "@rw/services/notification/index";
@@ -153,3 +155,14 @@ export const startJobHistoryEventPublisher = () =>
     subjectFor: (e) => deriveJobHistoryEventSubject({ siteId: e.siteId, stationId: e.stationId, action: e.action }),
     setSink: setJobHistoryEventSink,
   });
+
+/** UI change pings go over core NATS (no stream): livestore relays them to browsers, a miss only delays a refetch. */
+export async function startUiChangePublisher(): Promise<() => Promise<void>> {
+  const nc = await getNatsConnection();
+  if (!nc) return async () => {};
+  setUiChangeSink(async (event) => {
+    nc.publish(deriveUiChangeSubject(event.siteId), encoder.encode(JSON.stringify(event)));
+  });
+  moduleLogger("ui-changes-publisher").info("publishing ui-changes");
+  return async () => setUiChangeSink(null);
+}
