@@ -196,6 +196,36 @@ export async function computeBucketFromEvents(
   bucketDurationSeconds: number,
   jobFilter?: JobFilter,
 ): Promise<BucketKPIs> {
+  const durations = await computeBucketDurations(stationId, bucketStart, bucketDurationSeconds, jobFilter);
+  if (!durations) return { ...ZERO_KPIS };
+  const counts = await computeBucketCounts(stationId, bucketStart, bucketDurationSeconds, jobFilter);
+  return deriveBucketKPIs(durations, counts, jobFilter);
+}
+
+/** The state-log half of a bucket: what cycle completions never write. */
+export interface BucketDurations {
+  durationTally: DurationTally;
+  /** Window length the bucket's expectations are based on (job-clipped when scoped). */
+  effectiveDuration: number;
+}
+
+/** The half cycle completions and scrap entries increment. */
+export interface BucketCounts {
+  cycleTally: CycleTally;
+  badItems: number;
+}
+
+/**
+ * Duration KPIs from state logs — the expensive half. Cycles never write these
+ * fields, so a recalc may run this without holding the station lock. Returns
+ * null when a job filter is given and the job was not active in this bucket.
+ */
+export async function computeBucketDurations(
+  stationId: string,
+  bucketStart: Date,
+  bucketDurationSeconds: number,
+  jobFilter?: JobFilter,
+): Promise<BucketDurations | null> {
   const bucketStartMs = bucketStart.getTime();
   const bucketEndMs = bucketStartMs + bucketDurationSeconds * 1000;
   const bucketEnd = new Date(bucketEndMs);
@@ -204,20 +234,8 @@ export async function computeBucketFromEvents(
   // When computing for a job, determine the effective time window
   // where the job was active within this bucket.
   const jobClip = jobFilter ? resolveJobClip(jobFilter, bucketStartMs, bucketEndMs, now) : null;
+  if (jobFilter && !jobClip) return null;
 
-  // If the job wasn't active in this bucket at all, return zeros
-  if (jobFilter && !jobClip) {
-    return { ...ZERO_KPIS };
-  }
-
-  // ── 1. Tally count-based KPIs from cycles ──────────────────
-  const [cycleTally, badItems] = await Promise.all([
-    queryAndTallyCycles(stationId, bucketStart, bucketEnd, bucketStartMs, bucketEndMs, jobFilter),
-    // badItems is driven by ItemDispositionLog.quantity, not cycle status.
-    queryDispositionBadItems(stationId, bucketStart, bucketEnd, jobFilter),
-  ]);
-
-  // ── 2. Tally duration-based KPIs from state logs ───────────
   const durationTally = await queryAndTallyStateLogs(
     stationId,
     bucketStart,
@@ -227,10 +245,37 @@ export async function computeBucketFromEvents(
     now,
     jobClip,
   );
+  return { durationTally, effectiveDuration: jobClip ? jobClip.durationSeconds : bucketDurationSeconds };
+}
 
-  // ── 3. Derived KPIs ────────────────────────────────────────
-  const effectiveDuration = jobClip ? jobClip.durationSeconds : bucketDurationSeconds;
+/**
+ * Count KPIs from cycles and scrap — the cheap, indexed half. A recalc runs
+ * this under the station lock right before it overwrites the counters, so
+ * no increment can land between the read and the write.
+ */
+export async function computeBucketCounts(
+  stationId: string,
+  bucketStart: Date,
+  bucketDurationSeconds: number,
+  jobFilter?: JobFilter,
+): Promise<BucketCounts> {
+  const bucketStartMs = bucketStart.getTime();
+  const bucketEndMs = bucketStartMs + bucketDurationSeconds * 1000;
+  const bucketEnd = new Date(bucketEndMs);
+  const [cycleTally, badItems] = await Promise.all([
+    queryAndTallyCycles(stationId, bucketStart, bucketEnd, bucketStartMs, bucketEndMs, jobFilter),
+    // badItems is driven by ItemDispositionLog.quantity, not cycle status.
+    queryDispositionBadItems(stationId, bucketStart, bucketEnd, jobFilter),
+  ]);
+  return { cycleTally, badItems };
+}
 
+/** Combine the two halves into the full KPI set. */
+export function deriveBucketKPIs(
+  { durationTally, effectiveDuration }: BucketDurations,
+  { cycleTally, badItems }: BucketCounts,
+  jobFilter?: JobFilter,
+): BucketKPIs {
   // Planned production time = effective duration - planned downtime (full window).
   // Note: plannedProductionSeconds is a DB generated column
   // (durationSeconds - plannedDownSeconds). We compute it locally only

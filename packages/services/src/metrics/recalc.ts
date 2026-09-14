@@ -23,8 +23,11 @@
 import prisma from "@rw/db";
 import { Prisma } from "@rw/db";
 import {
+  computeBucketCounts,
+  computeBucketDurations,
   computeBucketFromEvents,
   computeDurationsForBucket,
+  deriveBucketKPIs,
   DURATION_KPI_KEYS,
   ADDITIVE_KPI_KEYS,
   type DurationKPIs,
@@ -1316,16 +1319,18 @@ export async function recalcAll(
       `from ${startTime.toISOString()} to ${endTime.toISOString()}`,
   );
 
-  // Recompute ALL KPIs for each affected base bucket. The station lock keeps a
-  // concurrent cycle completion from incrementing between our read and the SET.
+  // Recompute ALL KPIs for each affected base bucket. Durations come from the
+  // state log, which cycle completions never write, so they are computed
+  // before taking the station lock; the lock is held only for the indexed
+  // count queries and the write, so a rebuild stalls incoming cycles for
+  // milliseconds rather than the whole compute.
   for (const bucket of baseBuckets) {
-    await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${stationId}))::text`;
-      const kpis = await computeBucketFromEvents(stationId, bucket.startTime, bucket.durationSeconds);
+    const durations = await computeBucketDurations(stationId, bucket.startTime, bucket.durationSeconds);
+    if (!durations) continue; // only null for an inactive job filter; none here
 
-      // The job that was running in this bucket (latest overlapping log), not the station's job today.
-      const bucketEnd = new Date(bucket.startTime.getTime() + bucket.durationSeconds * 1000);
-      const [jobRow] = await prisma.$queryRaw<Array<{ currentJobId: string | null; currentJobName: string | null }>>`
+    // The job that was running in this bucket (latest overlapping log), not the station's job today.
+    const bucketEnd = new Date(bucket.startTime.getTime() + bucket.durationSeconds * 1000);
+    const [jobRow] = await prisma.$queryRaw<Array<{ currentJobId: string | null; currentJobName: string | null }>>`
       SELECT sjl."jobId" AS "currentJobId", jb.name AS "currentJobName"
       FROM "StationJobLog" sjl
       LEFT JOIN "Job" j ON j.id = sjl."jobId"
@@ -1336,24 +1341,30 @@ export async function recalcAll(
       ORDER BY sjl."startTime" DESC
       LIMIT 1
     `;
-      const currentJobId = jobRow?.currentJobId ?? null;
-      const currentJobName = jobRow?.currentJobName ?? null;
+    const currentJobId = jobRow?.currentJobId ?? null;
+    const currentJobName = jobRow?.currentJobName ?? null;
 
-      // Build full KPI data including currentStandardCycle
-      const kpiData: Record<string, number | null> = {};
-      for (const key of ADDITIVE_KPI_KEYS) {
-        kpiData[key] = kpis[key];
-      }
-      kpiData.currentStandardCycle = kpis.currentStandardCycle;
+    await prisma.$transaction(
+      async (tx) => {
+        // Counters are replaced, not added to: the lock keeps a cycle completion
+        // from incrementing between this count and the SET.
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${stationId}))::text`;
+        const counts = await computeBucketCounts(stationId, bucket.startTime, bucket.durationSeconds);
+        const kpis = deriveBucketKPIs(durations, counts);
 
-      // Replace all KPIs (both count and duration)
-      const kpiSetFragments = Object.entries(kpiData).map(([key, val]) =>
-        val != null ? Prisma.sql`"${Prisma.raw(key)}" = ${val}` : Prisma.sql`"${Prisma.raw(key)}" = NULL`,
-      );
-      kpiSetFragments.push(Prisma.sql`"currentJobId" = ${currentJobId}`);
-      kpiSetFragments.push(Prisma.sql`"currentJobName" = ${currentJobName}`);
+        const kpiData: Record<string, number | null> = {};
+        for (const key of ADDITIVE_KPI_KEYS) {
+          kpiData[key] = kpis[key];
+        }
+        kpiData.currentStandardCycle = kpis.currentStandardCycle;
 
-      await tx.$executeRaw`
+        const kpiSetFragments = Object.entries(kpiData).map(([key, val]) =>
+          val != null ? Prisma.sql`"${Prisma.raw(key)}" = ${val}` : Prisma.sql`"${Prisma.raw(key)}" = NULL`,
+        );
+        kpiSetFragments.push(Prisma.sql`"currentJobId" = ${currentJobId}`);
+        kpiSetFragments.push(Prisma.sql`"currentJobName" = ${currentJobName}`);
+
+        await tx.$executeRaw`
       UPDATE "MetricBucket"
       SET ${Prisma.join(kpiSetFragments)},
           "updatedAt" = NOW()
@@ -1362,7 +1373,10 @@ export async function recalcAll(
         AND granularity = 'HOUR'::"BucketGranularity"
         AND "startTime" = ${bucket.startTime}
     `;
-    });
+      },
+      // A slow tenant must not fail the rebuild outright; the lock is still only held for the counts.
+      { timeout: 60_000, maxWait: 10_000 },
+    );
   }
 
   // Emit full snapshot for all affected HOUR+STATION buckets
