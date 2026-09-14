@@ -1,5 +1,5 @@
 import prisma from "@rw/db";
-import type { Prisma } from "@rw/db";
+import { Prisma } from "@rw/db";
 
 type TransactionClient = Prisma.TransactionClient;
 type RawClient = { $queryRaw: typeof prisma.$queryRaw; $executeRaw: typeof prisma.$executeRaw };
@@ -116,12 +116,19 @@ export async function getStock(
  * Rebuild ProductStock from facts (InventoryItem, ItemDispositionLog,
  * OrderConsumption, ProductStockAdjustment). Idempotent; safe to run at any
  * time. Used by the post-deploy repair script and available for support.
+ * `productIds` narrows the rebuild to those products (an amendment only
+ * disturbs the products of the jobs it touched); omitted = every product.
  */
-export async function rederiveProductStock(siteId?: string): Promise<void> {
-  await prisma.$transaction(async (tx) => {
-    const txRaw = tx as unknown as RawClient;
-    // All four columns are fact-backed: adjustment = SUM(ledger deltas).
-    await txRaw.$executeRaw`
+export async function rederiveProductStock(siteId?: string, productIds?: string[]): Promise<void> {
+  // Emitted only when narrowing, so the planner can drive from the product
+  // index instead of scanning every item behind a `$1 IS NULL OR` guard.
+  const productOf = (column: string) =>
+    productIds ? Prisma.sql`AND ${Prisma.raw(column)} = ANY(${productIds}::uuid[])` : Prisma.empty;
+  await prisma.$transaction(
+    async (tx) => {
+      const txRaw = tx as unknown as RawClient;
+      // All four columns are fact-backed: adjustment = SUM(ledger deltas).
+      await txRaw.$executeRaw`
       WITH produced AS (
         SELECT cy."siteId", pv."productId", SUM(ii.quantity) AS total
         FROM "InventoryItem" ii
@@ -129,6 +136,7 @@ export async function rederiveProductStock(siteId?: string): Promise<void> {
         JOIN "ProductVersion" pv ON pv.id = ii."productVersionId"
         WHERE ii."deletedAt" IS NULL
           AND (${siteId ?? null}::uuid IS NULL OR cy."siteId" = ${siteId ?? null}::uuid)
+          ${productOf('pv."productId"')}
         GROUP BY cy."siteId", pv."productId"
       ),
       scrapped AS (
@@ -137,18 +145,21 @@ export async function rederiveProductStock(siteId?: string): Promise<void> {
         JOIN "ProductVersion" pv ON pv.id = idl."productVersionId"
         WHERE idl."deletedAt" IS NULL
           AND (${siteId ?? null}::uuid IS NULL OR idl."siteId" = ${siteId ?? null}::uuid)
+          ${productOf('pv."productId"')}
         GROUP BY idl."siteId", pv."productId"
       ),
       consumed AS (
         SELECT oc."siteId", oc."productId", SUM(oc.quantity) AS total
         FROM "OrderConsumption" oc
         WHERE (${siteId ?? null}::uuid IS NULL OR oc."siteId" = ${siteId ?? null}::uuid)
+          ${productOf('oc."productId"')}
         GROUP BY oc."siteId", oc."productId"
       ),
       adjusted AS (
         SELECT sa."siteId", sa."productId", SUM(sa.delta) AS total
         FROM "ProductStockAdjustment" sa
         WHERE (${siteId ?? null}::uuid IS NULL OR sa."siteId" = ${siteId ?? null}::uuid)
+          ${productOf('sa."productId"')}
         GROUP BY sa."siteId", sa."productId"
       ),
       merged AS (
@@ -176,11 +187,12 @@ export async function rederiveProductStock(siteId?: string): Promise<void> {
                     adjustment = EXCLUDED.adjustment,
                     "updatedAt" = NOW()
     `;
-    // Zero out rows whose facts have entirely disappeared (rare: deletions).
-    await txRaw.$executeRaw`
+      // Zero out rows whose facts have entirely disappeared (rare: deletions).
+      await txRaw.$executeRaw`
       UPDATE "ProductStock" ps
       SET produced = 0, scrapped = 0, consumed = 0, adjustment = 0, "updatedAt" = NOW()
       WHERE (${siteId ?? null}::uuid IS NULL OR ps."siteId" = ${siteId ?? null}::uuid)
+        ${productOf('ps."productId"')}
         AND (produced <> 0 OR scrapped <> 0 OR consumed <> 0 OR adjustment <> 0)
         AND NOT EXISTS (
           SELECT 1 FROM "InventoryItem" ii
@@ -202,5 +214,8 @@ export async function rederiveProductStock(siteId?: string): Promise<void> {
           WHERE sa."siteId" = ps."siteId" AND sa."productId" = ps."productId"
         )
     `;
-  });
+    },
+    // Site-wide repair scans every item; the default 5s dies on a real tenant.
+    { timeout: 300_000, maxWait: 10_000 },
+  );
 }
