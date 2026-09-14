@@ -22,6 +22,14 @@ export async function rebuildForAmendment(amendmentId: string, displacedJobIds: 
   const { siteId, stationId, fromTime: from } = amendment;
   const to = amendment.toTime ?? new Date();
   const jobIds = [...new Set([...displacedJobIds, ...(amendment.jobId ? [amendment.jobId] : [])])];
+  // Per-phase timing so a slow tenant's log says where a rebuild spends its time.
+  const laps: string[] = [];
+  let lapStart = Date.now();
+  const lap = (label: string) => {
+    laps.push(`${label}=${Date.now() - lapStart}ms`);
+    lapStart = Date.now();
+  };
+  const t0 = lapStart;
   try {
     await unarchiveAffectedBuckets(
       stationId,
@@ -30,6 +38,7 @@ export async function rebuildForAmendment(amendmentId: string, displacedJobIds: 
       to,
       jobIds.map((id) => jobEntityId(stationId, id)),
     );
+    lap("unarchive");
     const ctx = new MetricsContext();
     if (amendment.jobId) {
       const entity = {
@@ -41,7 +50,9 @@ export async function rebuildForAmendment(amendmentId: string, displacedJobIds: 
       await ensureBuckets({ ...entity, timestamp: from }, ctx);
       if (!amendment.toTime) await ensureBuckets({ ...entity, timestamp: to }, ctx);
     }
+    lap("ensure");
     await recalcAll(stationId, siteId, from, to, ctx, jobIds);
+    lap("recalc");
     const summary = amendment.summary as { itemsCreated?: number };
     if (summary.itemsCreated) {
       // Only the products of the jobs involved changed hands.
@@ -50,11 +61,16 @@ export async function rebuildForAmendment(amendmentId: string, displacedJobIds: 
         select: { productId: true },
       });
       await rederiveProductStock(siteId, [...new Set(products.map((p) => p.productId))]);
+      lap("stock");
     }
     await prisma.jobHistoryAmendment.update({
       where: { id: amendmentId },
       data: { status: "APPLIED", rebuiltAt: new Date(), rebuildError: null },
     });
+    console.log(
+      `[job-history-rebuild] amendment ${amendmentId} station=${stationId} ${from.toISOString()}..${to.toISOString()} ` +
+        `${laps.join(" ")} total=${Date.now() - t0}ms`,
+    );
     publishUiChange({ kind: "job-history.rebuilt", siteId, stationId, amendmentId, status: "APPLIED" });
   } catch (err) {
     await prisma.jobHistoryAmendment.update({

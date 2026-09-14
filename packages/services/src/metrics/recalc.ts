@@ -1318,6 +1318,14 @@ export async function recalcAll(
     `[metrics:recalc] recalcAll for station ${stationId}: ${baseBuckets.length} base buckets ` +
       `from ${startTime.toISOString()} to ${endTime.toISOString()}`,
   );
+  // Phase timing: a slow tenant's log must say which phase is slow.
+  const laps: string[] = [];
+  let lapStart = Date.now();
+  const lap = (label: string) => {
+    laps.push(`${label}=${Date.now() - lapStart}ms`);
+    lapStart = Date.now();
+  };
+  const t0 = lapStart;
 
   // Recompute ALL KPIs for each affected base bucket. Durations come from the
   // state log, which cycle completions never write, so they are computed
@@ -1379,8 +1387,11 @@ export async function recalcAll(
     );
   }
 
+  lap("buckets");
+
   // Emit full snapshot for all affected HOUR+STATION buckets
   await emitBaseBucketChanges(siteId, stationId, baseBuckets);
+  lap("emit");
 
   // Cascade rollups
   await rollupBuckets({
@@ -1392,6 +1403,7 @@ export async function recalcAll(
     businessShift,
     ctx: pipelineCtx,
   });
+  lap("rollups");
 
   // Recompute JOB buckets for active job logs in the range
   try {
@@ -1408,6 +1420,8 @@ export async function recalcAll(
   } catch (err) {
     console.error(`[metrics:recalc] Failed to recompute JOB buckets for station ${stationId}:`, err);
   }
+  lap("jobs");
+  console.log(`[metrics:recalc] recalcAll station=${stationId} ${laps.join(" ")} total=${Date.now() - t0}ms`);
 }
 
 /**
