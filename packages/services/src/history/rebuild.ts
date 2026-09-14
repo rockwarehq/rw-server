@@ -43,7 +43,14 @@ export async function rebuildForAmendment(amendmentId: string, displacedJobIds: 
     }
     await recalcAll(stationId, siteId, from, to, ctx, jobIds);
     const summary = amendment.summary as { itemsCreated?: number };
-    if (summary.itemsCreated) await rederiveProductStock(siteId);
+    if (summary.itemsCreated) {
+      // Only the products of the jobs involved changed hands.
+      const products = await prisma.jobProduct.findMany({
+        where: { jobId: { in: jobIds } },
+        select: { productId: true },
+      });
+      await rederiveProductStock(siteId, [...new Set(products.map((p) => p.productId))]);
+    }
     await prisma.jobHistoryAmendment.update({
       where: { id: amendmentId },
       data: { status: "APPLIED", rebuiltAt: new Date(), rebuildError: null },
