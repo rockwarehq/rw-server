@@ -1,16 +1,15 @@
 import prisma from "@rw/db";
 import { publishUiChange } from "../events/ui-changes.js";
 import { unarchiveAffectedBuckets } from "../cycle/replay.js";
-import { rederiveProductStock } from "../inventory/stock.js";
 import { ensureBuckets } from "../metrics/bucket.js";
 import { jobEntityId } from "../metrics/cascade.js";
 import { MetricsContext } from "../metrics/context.js";
 import { recalcAll } from "../metrics/recalc.js";
 
 /**
- * Rebuild the derived data for one amendment: metric buckets over the window
- * (including zeroing the displaced jobs' buckets) and product stock when items
- * were recreated. Idempotent — an APPLIED amendment is a no-op.
+ * Rebuild the metric buckets over one amendment's window (including zeroing
+ * the displaced jobs' buckets). Stock already moved with the items in the
+ * amendment transaction. Idempotent — an APPLIED amendment is a no-op.
  */
 export async function rebuildForAmendment(amendmentId: string, displacedJobIds: string[]): Promise<void> {
   const amendment = await prisma.jobHistoryAmendment.findUnique({
@@ -53,16 +52,9 @@ export async function rebuildForAmendment(amendmentId: string, displacedJobIds: 
     lap("ensure");
     await recalcAll(stationId, siteId, from, to, ctx, jobIds);
     lap("recalc");
-    const summary = amendment.summary as { itemsCreated?: number };
-    if (summary.itemsCreated) {
-      // Only the products of the jobs involved changed hands.
-      const products = await prisma.jobProduct.findMany({
-        where: { jobId: { in: jobIds } },
-        select: { productId: true },
-      });
-      await rederiveProductStock(siteId, [...new Set(products.map((p) => p.productId))]);
-      lap("stock");
-    }
+    // Stock moved with the items inside the amendment transaction (see
+    // reassignItems); re-deriving a product's total from all history here
+    // scaled with the tenant, not the amendment (188s on dev).
     await prisma.jobHistoryAmendment.update({
       where: { id: amendmentId },
       data: { status: "APPLIED", rebuiltAt: new Date(), rebuildError: null },
