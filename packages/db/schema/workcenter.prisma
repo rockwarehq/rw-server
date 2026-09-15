@@ -20,6 +20,7 @@ model Workcenter {
   stations            Station[]
   shiftAssignment     ShiftAssignment[]
   shiftInstances      ShiftInstance[]
+  shiftOverrides      ShiftOverride[]
   statusReasons       StatusReason[]
   displays            Display[]
   itemDispositionLogs ItemDispositionLog[]

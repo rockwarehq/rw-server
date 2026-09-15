@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ORPCError } from "@orpc/server";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
@@ -79,7 +80,7 @@ const definitionCreateInputSchema = z.object({
   patternId: z.uuid(),
   dayOfRotation: z.number().int().min(1),
   sortOrder: z.number().int().min(1),
-  startDayOffset: z.number().int().min(0).optional(),
+  startDayOffset: z.number().int().min(-1).optional(),
   startTime: z.string().regex(/^\d{2}:\d{2}$/, "Must be HH:mm format"),
   durationHrs: z.number().positive(),
   shiftName: z.string().min(1),
@@ -89,7 +90,7 @@ const definitionUpdateInputSchema = z.object({
   id: z.uuid(),
   dayOfRotation: z.number().int().min(1).optional(),
   sortOrder: z.number().int().min(1).optional(),
-  startDayOffset: z.number().int().min(0).optional(),
+  startDayOffset: z.number().int().min(-1).optional(),
   startTime: z
     .string()
     .regex(/^\d{2}:\d{2}$/, "Must be HH:mm format")
@@ -271,12 +272,105 @@ export const assignmentUpdate = authRequired.input(assignmentUpdateInputSchema).
   return result.data;
 });
 
+const assignmentPreviewInputSchema = z.object({
+  id: z.uuid(),
+  from: z.iso.date(),
+  to: z.iso.date(),
+});
+
+/** Calendar rows for [from, to]: what materialization would produce, overrides applied. Read-only. */
+export const assignmentPreview = authRequired
+  .input(assignmentPreviewInputSchema)
+  .handler(async ({ input, context }) => {
+    grant(
+      await authorize(context.iam, { permission: "schedule:read", scope: { kind: "shiftAssignment", id: input.id } }),
+    );
+    const from = new Date(`${input.from}T00:00:00Z`);
+    const to = new Date(`${input.to}T00:00:00Z`);
+    if (to < from || to.getTime() - from.getTime() > 400 * 86_400_000) {
+      throw new ORPCError("BAD_REQUEST", { message: "Preview range must be 0-400 days" });
+    }
+    const rows = await shift.previewShiftInstances(input.id, from, to);
+    return rows.map(({ assignmentId: _a, siteId: _s, ...row }) => row);
+  });
+
 export const assignmentDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   grant(
     await authorize(context.iam, { permission: "schedule:admin", scope: { kind: "shiftAssignment", id: input.id } }),
   );
 
   const result = await shift.assignment.remove(input.id);
+  if (result.error !== undefined) throwServiceError(result);
+  return { success: true };
+});
+
+// ============================================================================
+// ShiftOverride Procedures
+// ============================================================================
+
+const businessDateSchema = z.iso.date().transform((d) => new Date(`${d}T00:00:00Z`));
+
+const overrideCreateInputSchema = z.object({
+  siteId: z.uuid(),
+  workCenterId: z.uuid().nullable().optional(),
+  businessDate: businessDateSchema,
+  shiftName: z.string().min(1).nullable().optional(),
+  startTime: z.coerce.date().nullable().optional(),
+  endTime: z.coerce.date().nullable().optional(),
+  cancelled: z.boolean().optional(),
+  label: z.string().min(1).nullable().optional(),
+});
+
+const overrideUpdateInputSchema = z.object({
+  id: z.uuid(),
+  startTime: z.coerce.date().nullable().optional(),
+  endTime: z.coerce.date().nullable().optional(),
+  cancelled: z.boolean().optional(),
+  label: z.string().min(1).nullable().optional(),
+});
+
+const overrideListInputSchema = z.object({
+  siteId: z.uuid(),
+  workCenterId: z.uuid().nullable().optional(),
+  from: businessDateSchema.optional(),
+  to: businessDateSchema.optional(),
+});
+
+/** Overrides are authorized through their site. */
+async function authorizedOverride(
+  iam: Parameters<typeof authorize>[0],
+  id: string,
+  permission: "schedule:read" | "schedule:write",
+) {
+  const override = unwrap(await shift.override.getById(id), { notFoundMessage: "Shift override not found" });
+  grant(await authorize(iam, { permission, scope: { kind: "site", siteId: override.siteId } }));
+  return override;
+}
+
+export const overrideCreate = authRequired.input(overrideCreateInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "site", siteId: input.siteId } }));
+
+  return unwrap(await shift.override.create(input));
+});
+
+export const overrideList = authRequired.input(overrideListInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "site", siteId: input.siteId } }));
+  return shift.override.list(input);
+});
+
+export const overrideGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  return authorizedOverride(context.iam, input.id, "schedule:read");
+});
+
+export const overrideUpdate = authRequired.input(overrideUpdateInputSchema).handler(async ({ input, context }) => {
+  await authorizedOverride(context.iam, input.id, "schedule:write");
+  const { id, ...updateData } = input;
+  return unwrap(await shift.override.update(id, updateData));
+});
+
+export const overrideDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await authorizedOverride(context.iam, input.id, "schedule:write");
+  const result = await shift.override.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });

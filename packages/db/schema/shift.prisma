@@ -83,13 +83,14 @@ model ShiftDefinition {
   sortOrder Int
 
   /// How many calendar days after the rotation day's anchor date this
-  /// shift starts. 0 = same calendar day, 1 = next calendar day.
+  /// shift starts. 0 = same calendar day, 1 = next calendar day,
+  /// -1 = the evening before (e.g. a 23:00 shift that belongs to the next day).
   /// Eliminates midnight-crossing ambiguity — no runtime inference needed.
   startDayOffset Int @default(0)
 
-  /// Start time in "HH:mm" format (local site time, e.g., "08:30", "22:45").
-  /// Combined with startDayOffset, the runtime can directly compute the
-  /// absolute calendar day and time.
+  /// Start time in "HH:mm" format, site LOCAL wall-clock time (e.g., "08:30",
+  /// "23:00"). Materialization converts it to UTC per day with the site
+  /// timezone, so shifts follow daylight saving (ADR-0015).
   startTime String
 
   /// Duration in fractional hours (e.g., 8.5 = 8 hours 30 minutes).
@@ -194,8 +195,9 @@ model ShiftInstance {
   assignment   ShiftAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
 
   /// The template definition this instance was materialized from.
-  definitionId String          @db.Uuid
-  definition   ShiftDefinition @relation(fields: [definitionId], references: [id])
+  /// Null for filler rows (gaps between scheduled shifts).
+  definitionId String?          @db.Uuid
+  definition   ShiftDefinition? @relation(fields: [definitionId], references: [id])
 
   /// Site this shift belongs to (always set).
   siteId String @db.Uuid
@@ -205,8 +207,13 @@ model ShiftInstance {
   workCenterId String?     @db.Uuid
   workCenter   Workcenter? @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
 
-  /// Human-readable shift name copied from the definition (e.g., "Shift 1").
+  /// Human-readable shift name copied from the definition (e.g., "Shift 1"),
+  /// "Not Scheduled" for gap fillers, or the override label for a cancelled shift.
   shiftName String
+
+  /// False for gap fillers and cancelled shifts: the window exists so facts
+  /// get a shift stamp, but it is not production time.
+  isScheduled Boolean @default(true)
 
   /// Pre-computed business date derived from the pattern's
   /// useEndDateForBusinessDate flag and the rotation day's shift block.
@@ -237,6 +244,40 @@ model ShiftInstance {
   @@unique([assignmentId, startTime])
   @@index([workCenterId, startTime, endTime])
   @@index([siteId, startTime, endTime])
+  @@index([siteId, businessDate])
+  @@index([workCenterId, businessDate])
+}
+
+/// One-off change to the shifts of a specific business date, applied when
+/// instances are materialized: cancel a shift (holiday, scheduled down) or
+/// replace its window. Keyed by shift name so it survives pattern changes.
+///
+///   shiftName = null → every shift on that date
+///   cancelled        → the window is kept as an unscheduled row named `label`
+///   startTime/endTime → replacement window (both or neither)
+model ShiftOverride {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  /// Null = site-level schedule.
+  workCenterId String?     @db.Uuid
+  workCenter   Workcenter? @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
+
+  businessDate DateTime @db.Date
+  shiftName    String?
+
+  startTime DateTime? @db.Timestamptz(3)
+  endTime   DateTime? @db.Timestamptz(3)
+
+  cancelled Boolean @default(false)
+  /// Display name for a cancelled shift (e.g. "Holiday"). Defaults to "Not Scheduled".
+  label     String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
   @@index([siteId, businessDate])
   @@index([workCenterId, businessDate])
 }

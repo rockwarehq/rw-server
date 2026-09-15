@@ -14,18 +14,30 @@
 //      b. Get ShiftDefinitions for that rotation day
 //      c. Convert local start times to UTC using site timezone
 //      d. Compute businessDate using pattern's useEndDateForBusinessDate
-//   3. Batch insert all new ShiftInstance rows
+//      e. Apply ShiftOverride rows for that businessDate (cancel / retime)
+//   3. Fill the gaps between consecutive shifts with "Not Scheduled" rows
+//      (isScheduled = false) so every instant in the window has a stamp
+//   4. Batch insert all new ShiftInstance rows
+//
+// Gap rows take the business date of the shift before them; a gap longer
+// than the rest of that business day (weekend, shutdown) is cut every 24h
+// from the day's first shift start so each piece lives in one business date.
+// The gap after the last built shift is not emitted (its end is unknown);
+// it appears once the next shift enters the window.
 
 import prisma from "@rw/db";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { getSiteTimezone, getLocalCalendarDate } from "../../metrics/bucket.js";
+import { getTimezoneOffsetMs } from "../../metrics/shift.js";
 
-const MS_PER_DAY = 86_400_000;
+export const MS_PER_DAY = 86_400_000;
 const MS_PER_HOUR = 3_600_000;
 const MS_PER_MINUTE = 60_000;
 
 const DEFAULT_LOOKAHEAD_DAYS = 7;
+
+export const NOT_SCHEDULED_NAME = "Not Scheduled";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -53,19 +65,31 @@ export interface ReconcileResult {
 }
 
 /** Shape of a single ShiftInstance row before insertion. */
-interface InstanceRow {
+export interface InstanceRow {
   assignmentId: string;
-  definitionId: string;
+  definitionId: string | null;
   siteId: string;
   workCenterId: string | null;
   shiftName: string;
   businessDate: Date;
   startTime: Date;
   endTime: Date;
+  isScheduled: boolean;
+}
+
+/** The parts of a ShiftOverride the row builder consults. */
+export interface OverrideRule {
+  businessDate: Date;
+  /** null = every shift on that business date. */
+  shiftName: string | null;
+  startTime: Date | null;
+  endTime: Date | null;
+  cancelled: boolean;
+  label: string | null;
 }
 
 /** Minimal assignment shape needed by the materialization helpers. */
-interface AssignmentWithPattern {
+export interface AssignmentWithPattern {
   id: string;
   siteId: string;
   workCenterId: string | null;
@@ -90,12 +114,6 @@ interface AssignmentWithPattern {
   };
 }
 
-/** A reserved time window that new shifts must not overlap with. */
-interface ReservedWindow {
-  startMs: number;
-  endMs: number;
-}
-
 interface ShiftInstanceEventRow {
   id: string;
   siteId: string;
@@ -104,7 +122,7 @@ interface ShiftInstanceEventRow {
 
 // ── Include used to fetch assignments with everything we need ────
 
-const assignmentIncludeForMaterialize = {
+export const assignmentIncludeForMaterialize = {
   pattern: {
     include: {
       shifts: {
@@ -151,13 +169,11 @@ export async function materializeShiftInstances(options?: { lookaheadDays?: numb
 
   const allRows: InstanceRow[] = [];
   for (const assignment of assignments) {
-    const timezone = await getSiteTimezone(assignment.siteId);
     // Start 1 day before UTC today to ensure shifts for the current
     // local business day are materialized even when the UTC date is
     // ahead of the site's local date (e.g., 9pm ET = next day UTC).
     const fromMs = todayMs - MS_PER_DAY;
-    const rows = buildInstanceRows(assignment, fromMs, lookaheadDays + 1, [], timezone);
-    allRows.push(...rows);
+    allRows.push(...(await buildRowsForAssignment(assignment, fromMs, lookaheadDays + 1, [])));
   }
 
   const candidates: ShiftBoundaryCandidate[] = allRows.map((r) => ({
@@ -191,17 +207,9 @@ export async function materializeShiftInstances(options?: { lookaheadDays?: numb
  * Handles the full transition between old and new shift schedules:
  *   1. Finds overlapping old assignments for the same (siteId, workCenterId)
  *   2. Auto-sets rotationEndDate on old assignments
- *   3. Identifies which old ShiftInstances are "in use" (referenced by
- *      MetricBucket or ItemDispositionLog)
- *   4. Deletes unused old instances from the new assignment's start onward
- *   5. Materializes the new assignment's shifts, skipping any that overlap
- *      with preserved (in-use) old instances
+ *   3. Rebuilds instances from the new start (see rebuildShiftInstances)
  */
 export async function reconcileShiftInstances(assignmentId: string): Promise<ReconcileResult> {
-  const now = new Date();
-  const todayMs = Math.floor(now.getTime() / MS_PER_DAY) * MS_PER_DAY;
-
-  // ── 1. Load the new assignment with pattern + shifts ──────────
   const newAssignment = await prisma.shiftAssignment.findUnique({
     where: { id: assignmentId },
     include: assignmentIncludeForMaterialize,
@@ -211,9 +219,6 @@ export async function reconcileShiftInstances(assignmentId: string): Promise<Rec
     return { created: 0, deleted: 0, preserved: 0 };
   }
 
-  const timezone = await getSiteTimezone(newAssignment.siteId);
-
-  // ── 2. Find overlapping old assignments for same scope ────────
   const oldAssignments = await prisma.shiftAssignment.findMany({
     where: {
       id: { not: newAssignment.id },
@@ -221,98 +226,106 @@ export async function reconcileShiftInstances(assignmentId: string): Promise<Rec
       workCenterId: newAssignment.workCenterId,
       OR: [{ rotationEndDate: null }, { rotationEndDate: { gte: newAssignment.rotationStartDate } }],
     },
-    select: { id: true, rotationEndDate: true },
+    include: assignmentIncludeForMaterialize,
+  });
+
+  if (oldAssignments.length > 0) {
+    await prisma.shiftAssignment.updateMany({
+      where: {
+        id: { in: oldAssignments.map((a) => a.id) },
+        OR: [{ rotationEndDate: null }, { rotationEndDate: { gt: newAssignment.rotationStartDate } }],
+      },
+      data: { rotationEndDate: newAssignment.rotationStartDate },
+    });
+  }
+
+  // Old assignments only lose their stale rows; the new one is rebuilt.
+  return rebuildShiftInstances(
+    [...oldAssignments.map((a) => a.id), newAssignment.id],
+    [newAssignment],
+    newAssignment.rotationStartDate,
+  );
+}
+
+/**
+ * Rebuild instances from `fromTime` onward: rows of `staleAssignmentIds`
+ * ending after `fromTime` that are not yet stamped on any fact row are
+ * deleted; in-use ones are preserved and become reserved windows the rows
+ * regenerated for `build` must avoid. Used by assignment reconcile and by
+ * override changes (a changed shift also changes the gap rows around it).
+ */
+export async function rebuildShiftInstances(
+  staleAssignmentIds: string[],
+  build: AssignmentWithPattern[],
+  fromTime: Date,
+): Promise<ReconcileResult> {
+  const todayMs = Math.floor(Date.now() / MS_PER_DAY) * MS_PER_DAY;
+
+  const stale = await prisma.shiftInstance.findMany({
+    where: { assignmentId: { in: staleAssignmentIds }, endTime: { gt: fromTime } },
+    include: { site: { select: { workspaceId: true } } },
   });
 
   let deleted = 0;
-  let preserved = 0;
-  const reservedWindows: ReservedWindow[] = [];
+  // In-use rows stay as they are; the builder avoids them and fills gaps around them.
+  const preserved: InstanceRow[] = [];
 
-  if (oldAssignments.length > 0) {
-    const oldAssignmentIds = oldAssignments.map((a) => a.id);
-
-    // ── 3. Auto-end old assignments ───────────────────────────
-    await prisma.shiftAssignment.updateMany({
-      where: {
-        id: { in: oldAssignmentIds },
-        OR: [{ rotationEndDate: null }, { rotationEndDate: { gt: newAssignment.rotationStartDate } }],
-      },
-      data: {
-        rotationEndDate: newAssignment.rotationStartDate,
-      },
-    });
-
-    // ── 4. Find old ShiftInstances from new start onward ──────
-    const oldInstances = await prisma.shiftInstance.findMany({
-      where: {
-        assignmentId: { in: oldAssignmentIds },
-        // Any instance whose time window intersects the new assignment's
-        // effective period: endTime > newStartDate (started before but
-        // extends into) OR startTime >= newStartDate (starts after)
-        endTime: { gt: newAssignment.rotationStartDate },
-      },
-      select: {
-        id: true,
-        siteId: true,
-        site: { select: { workspaceId: true } },
-        startTime: true,
-        endTime: true,
-      },
-    });
-
-    if (oldInstances.length > 0) {
-      const oldInstanceIds = oldInstances.map((i) => i.id);
-
-      // ── 5. Check which are "in use" ──────────────────────────
-      const inUseIds = await findInUseShiftInstanceIds(oldInstanceIds);
-
-      const toDelete: string[] = [];
-      for (const instance of oldInstances) {
-        if (inUseIds.has(instance.id)) {
-          // Preserve: record its time window so new shifts avoid it
-          preserved++;
-          reservedWindows.push({
-            startMs: instance.startTime.getTime(),
-            endMs: instance.endTime.getTime(),
-          });
-        } else {
-          toDelete.push(instance.id);
-        }
-      }
-
-      // ── 6. Delete unused old instances ─────────────────────
-      if (toDelete.length > 0) {
-        const deleteResult = await prisma.shiftInstance.deleteMany({
-          where: { id: { in: toDelete } },
-        });
-        deleted = deleteResult.count;
-        publishShiftInstanceEvents(
-          "deleted",
-          oldInstances.filter((instance) => toDelete.includes(instance.id)),
-        );
-      }
+  if (stale.length > 0) {
+    const inUseIds = await findInUseShiftInstanceIds(stale.map((i) => i.id));
+    const toDelete = stale.filter((i) => !inUseIds.has(i.id));
+    for (const { id: _id, site: _site, createdAt: _c, ...row } of stale.filter((i) => inUseIds.has(i.id))) {
+      preserved.push(row);
+    }
+    if (toDelete.length > 0) {
+      const result = await prisma.shiftInstance.deleteMany({ where: { id: { in: toDelete.map((i) => i.id) } } });
+      deleted = result.count;
+      publishShiftInstanceEvents("deleted", toDelete);
     }
   }
 
-  // ── 7. Materialize new assignment's shifts ──────────────────
-  // Start 1 day before UTC today to cover the current local business day
-  const fromMs = todayMs - MS_PER_DAY;
-  const rows = buildInstanceRows(newAssignment, fromMs, DEFAULT_LOOKAHEAD_DAYS + 1, reservedWindows, timezone);
+  const rows: InstanceRow[] = [];
+  for (const assignment of build) {
+    rows.push(
+      ...(await buildRowsForAssignment(assignment, todayMs - MS_PER_DAY, DEFAULT_LOOKAHEAD_DAYS + 1, preserved)),
+    );
+  }
 
   let created = 0;
   if (rows.length > 0) {
     const existingKeys = await findExistingShiftInstanceKeys(rows);
-    const result = await prisma.shiftInstance.createMany({
-      data: rows,
-      skipDuplicates: true,
-    });
+    const result = await prisma.shiftInstance.createMany({ data: rows, skipDuplicates: true });
     created = result.count;
-    if (created > 0) {
-      await publishCreatedShiftInstanceEvents(rows, existingKeys);
-    }
+    if (created > 0) await publishCreatedShiftInstanceEvents(rows, existingKeys);
   }
 
-  return { created, deleted, preserved };
+  return { created, deleted, preserved: preserved.length };
+}
+
+/** Load the site timezone and the scope's overrides, then build scheduled + gap rows. */
+async function buildRowsForAssignment(
+  assignment: AssignmentWithPattern,
+  fromDayMs: number,
+  lookaheadDays: number,
+  preserved: InstanceRow[],
+): Promise<InstanceRow[]> {
+  const timezone = await getSiteTimezone(assignment.siteId);
+  const overrides = await loadOverrides(assignment, fromDayMs, fromDayMs + (lookaheadDays + 2) * MS_PER_DAY);
+  return buildInstanceRows(assignment, fromDayMs, lookaheadDays, preserved, timezone, overrides);
+}
+
+export async function loadOverrides(
+  scope: { siteId: string; workCenterId: string | null },
+  fromMs: number,
+  toMs: number,
+): Promise<OverrideRule[]> {
+  return prisma.shiftOverride.findMany({
+    where: {
+      siteId: scope.siteId,
+      workCenterId: scope.workCenterId,
+      businessDate: { gte: new Date(fromMs - MS_PER_DAY), lte: new Date(toMs) },
+    },
+    select: { businessDate: true, shiftName: true, startTime: true, endTime: true, cancelled: true, label: true },
+  });
 }
 
 // ── Core Materialization Logic ──────────────────────────────────
@@ -323,31 +336,28 @@ export async function reconcileShiftInstances(assignmentId: string): Promise<Rec
  * @param assignment      - The assignment with its pattern and shifts
  * @param fromDayMs       - Start of the date range (UTC midnight ms)
  * @param lookaheadDays   - How many days forward to generate
- * @param reservedWindows - Optional time windows to avoid (from preserved old shifts)
- * @returns Array of instance rows ready for insertion
+ * @param preserved       - Existing in-use rows to keep: generated rows may not overlap them
+ * @param overrides       - ShiftOverride rules for the assignment's scope
+ * @returns Scheduled rows plus "Not Scheduled" gap rows (preserved rows included), sorted by start
  */
-function buildInstanceRows(
+export function buildInstanceRows(
   assignment: AssignmentWithPattern,
   fromDayMs: number,
   lookaheadDays: number,
-  reservedWindows: ReservedWindow[] = [],
+  preserved: InstanceRow[] = [],
   timezone: string = "UTC",
+  overrides: OverrideRule[] = [],
 ): InstanceRow[] {
   const { pattern } = assignment;
   const rotationStartMs = floorToDay(assignment.rotationStartDate).getTime();
+  const rotationEndMs = assignment.rotationEndDate ? floorToDay(assignment.rotationEndDate).getTime() : Infinity;
+  const inRotation = (dayMs: number) => dayMs >= rotationStartMs && dayMs <= rotationEndMs;
   const rows: InstanceRow[] = [];
+  const applied = new Set<OverrideRule>();
 
   for (let dayOffset = 0; dayOffset <= lookaheadDays; dayOffset++) {
     const targetMs = fromDayMs + dayOffset * MS_PER_DAY;
-
-    // Skip dates before the assignment takes effect
-    if (targetMs < rotationStartMs) continue;
-
-    // Skip dates after the assignment ends
-    if (assignment.rotationEndDate) {
-      const endMs = floorToDay(assignment.rotationEndDate).getTime();
-      if (targetMs > endMs) continue;
-    }
+    if (!inRotation(targetMs)) continue;
 
     // Compute which rotation day applies
     const startDay = assignment.rotationStartDefinition?.dayOfRotation ?? 1;
@@ -365,30 +375,11 @@ function buildInstanceRows(
       if (defsForDay.length === 0) continue;
     }
 
-    // Compute UTC start/end for each shift definition
-    const shiftsForDay: Array<{
-      definition: (typeof defsForDay)[0];
-      utcStartMs: number;
-      utcEndMs: number;
-    }> = [];
-
-    for (const def of defsForDay) {
-      const { utcStartMs, utcEndMs } = computeShiftUtcTimes(
-        targetMs,
-        def.startDayOffset,
-        def.startTime,
-        def.durationHrs,
-      );
-
-      // Skip shifts that overlap with reserved windows (in-use old shifts)
-      if (reservedWindows.length > 0 && overlapsAny(utcStartMs, utcEndMs, reservedWindows)) {
-        continue;
-      }
-
-      shiftsForDay.push({ definition: def, utcStartMs, utcEndMs });
-    }
-
-    if (shiftsForDay.length === 0) continue;
+    // Pattern times decide the business date; overrides are applied after.
+    const shiftsForDay = defsForDay.map((def) => ({
+      definition: def,
+      ...computeShiftUtcTimes(targetMs, def.startDayOffset, def.startTime, def.durationHrs, timezone),
+    }));
 
     // Compute business date using local calendar dates (not UTC)
     const businessDate = computeBusinessDate(
@@ -398,22 +389,152 @@ function buildInstanceRows(
       timezone,
     );
 
-    // Build instance data for each shift
-    for (const { definition, utcStartMs, utcEndMs } of shiftsForDay) {
+    for (const shift of shiftsForDay) {
+      const { definition } = shift;
+      let { utcStartMs, utcEndMs } = shift;
+      const override = findOverride(overrides, businessDate, definition.shiftName);
+      if (override) applied.add(override);
+      if (override?.startTime && override.endTime) {
+        utcStartMs = override.startTime.getTime();
+        utcEndMs = override.endTime.getTime();
+      }
+
+      if (overlapsAny(utcStartMs, utcEndMs, preserved)) continue;
+
+      const cancelled = override?.cancelled ?? false;
       rows.push({
         assignmentId: assignment.id,
         definitionId: definition.id,
         siteId: assignment.siteId,
         workCenterId: assignment.workCenterId,
-        shiftName: definition.shiftName,
+        shiftName: cancelled ? (override?.label ?? NOT_SCHEDULED_NAME) : definition.shiftName,
         businessDate,
         startTime: new Date(utcStartMs),
         endTime: new Date(utcEndMs),
+        isScheduled: !cancelled,
       });
     }
   }
 
-  return rows;
+  // A timed override naming a shift the pattern does not have that day adds
+  // one (e.g. working a Saturday). It has no definition but is scheduled.
+  const rangeStartMs = fromDayMs - MS_PER_DAY;
+  const rangeEndMs = fromDayMs + (lookaheadDays + 1) * MS_PER_DAY;
+  for (const o of overrides) {
+    if (applied.has(o) || !o.shiftName || !o.startTime || !o.endTime || o.cancelled) continue;
+    const dateMs = o.businessDate.getTime();
+    if (dateMs < rangeStartMs || dateMs > rangeEndMs || !inRotation(dateMs)) continue;
+    if (overlapsAny(o.startTime.getTime(), o.endTime.getTime(), preserved)) continue;
+    rows.push({
+      assignmentId: assignment.id,
+      definitionId: null,
+      siteId: assignment.siteId,
+      workCenterId: assignment.workCenterId,
+      shiftName: o.shiftName,
+      businessDate: o.businessDate,
+      startTime: o.startTime,
+      endTime: o.endTime,
+      isScheduled: true,
+    });
+  }
+
+  return fillNotScheduledGaps([...rows, ...preserved]);
+}
+
+/** Gap fillers are the only rows with neither a definition nor a schedule. */
+export const isGapRow = (row: { definitionId: string | null; isScheduled: boolean }) =>
+  row.definitionId === null && !row.isScheduled;
+
+/**
+ * Virtual rows for a calendar: what the materializer would write for
+ * [from, to] with today's overrides applied. Nothing is persisted.
+ */
+export async function previewShiftInstances(
+  assignmentId: string,
+  from: Date,
+  to: Date,
+): Promise<Array<InstanceRow & { definitionName: string | null }>> {
+  const assignment = await prisma.shiftAssignment.findUnique({
+    where: { id: assignmentId },
+    include: assignmentIncludeForMaterialize,
+  });
+  if (!assignment) return [];
+  const fromMs = floorToDay(from).getTime();
+  const days = Math.max(0, Math.round((floorToDay(to).getTime() - fromMs) / MS_PER_DAY));
+  // A day of lead so the first date's gaps are anchored like the tick builds
+  // them, and two of tail so the last visible day's gaps get closed; then trim.
+  const rows = await buildRowsForAssignment(assignment, fromMs - MS_PER_DAY, days + 3, []);
+  const cutoffMs = fromMs + (days + 1) * MS_PER_DAY;
+  const nameById = new Map(assignment.pattern.shifts.map((d) => [d.id, d.shiftName]));
+  return rows
+    .filter((r) => r.startTime.getTime() < cutoffMs)
+    .map((r) => ({ ...r, definitionName: r.definitionId ? (nameById.get(r.definitionId) ?? null) : null }));
+}
+
+/** Shift-specific override wins over a whole-day one. */
+function findOverride(overrides: OverrideRule[], businessDate: Date, shiftName: string): OverrideRule | undefined {
+  const dateMs = businessDate.getTime();
+  let dayWide: OverrideRule | undefined;
+  for (const o of overrides) {
+    if (o.businessDate.getTime() !== dateMs) continue;
+    if (o.shiftName === shiftName) return o;
+    if (o.shiftName === null) dayWide = o;
+  }
+  return dayWide;
+}
+
+/**
+ * Fill the gaps between consecutive rows with "Not Scheduled" rows.
+ *
+ * A gap belongs to the business date of the row before it and is cut every
+ * 24h from that business day's first row start, so a weekend becomes one row
+ * per date. The gap after the last row is not emitted (its end is unknown).
+ */
+export function fillNotScheduledGaps(rows: InstanceRow[]): InstanceRow[] {
+  const sorted = [...rows].sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+
+  const dayAnchor = new Map<number, number>();
+  for (const row of sorted) {
+    const key = row.businessDate.getTime();
+    dayAnchor.set(key, Math.min(dayAnchor.get(key) ?? Infinity, row.startTime.getTime()));
+  }
+
+  const gaps: InstanceRow[] = [];
+  let prev: InstanceRow | null = null;
+  for (const row of sorted) {
+    const startMs = row.startTime.getTime();
+    if (prev && startMs > prev.endTime.getTime()) {
+      const anchor = dayAnchor.get(prev.businessDate.getTime()) ?? prev.startTime.getTime();
+      for (let t = prev.endTime.getTime(); t < startMs; ) {
+        const dayIndex = Math.floor((t - anchor) / MS_PER_DAY);
+        const chunkEnd = Math.min(startMs, anchor + (dayIndex + 1) * MS_PER_DAY);
+        gaps.push({
+          assignmentId: prev.assignmentId,
+          definitionId: null,
+          siteId: prev.siteId,
+          workCenterId: prev.workCenterId,
+          shiftName: NOT_SCHEDULED_NAME,
+          businessDate: new Date(prev.businessDate.getTime() + dayIndex * MS_PER_DAY),
+          startTime: new Date(t),
+          endTime: new Date(chunkEnd),
+          isScheduled: false,
+        });
+        t = chunkEnd;
+      }
+    }
+    if (!prev || row.endTime > prev.endTime) prev = row;
+  }
+
+  return [...sorted, ...gaps].sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+}
+
+/** True when any two rows overlap in time (used to validate override windows). */
+export function hasOverlappingRows(rows: InstanceRow[]): boolean {
+  const sorted = [...rows].sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i].startTime < sorted[i - 1].endTime) return true;
+  }
+  return false;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -519,23 +640,15 @@ function shiftInstanceUniqueKey(row: { assignmentId: string; startTime: Date }) 
   return `${row.assignmentId}:${row.startTime.getTime()}`;
 }
 
-/**
- * Check whether a time window [startMs, endMs) overlaps with any
- * of the reserved windows.
- *
- * Two windows overlap if: startA < endB AND endA > startB
- */
-function overlapsAny(startMs: number, endMs: number, windows: ReservedWindow[]): boolean {
-  for (const w of windows) {
-    if (startMs < w.endMs && endMs > w.startMs) return true;
-  }
-  return false;
+/** True when [startMs, endMs) overlaps any of `rows`. */
+function overlapsAny(startMs: number, endMs: number, rows: InstanceRow[]): boolean {
+  return rows.some((r) => startMs < r.endTime.getTime() && endMs > r.startTime.getTime());
 }
 
 /**
  * Floor a Date to UTC midnight (start of day).
  */
-function floorToDay(date: Date): Date {
+export function floorToDay(date: Date): Date {
   return new Date(Math.floor(date.getTime() / MS_PER_DAY) * MS_PER_DAY);
 }
 
@@ -549,27 +662,48 @@ function parseLocalTime(timeStr: string): number {
 
 /**
  * Compute the absolute UTC start and end times for a shift definition
- * on a given target date.
+ * on a given rotation day.
  *
- * ShiftDefinition.startTime is stored as UTC "HH:mm" — the frontend
- * converts from the user's local timezone to UTC before saving.
+ * ShiftDefinition.startTime is the site's LOCAL wall-clock time ("HH:mm"),
+ * so a 23:00 shift starts at 23:00 local all year and the UTC instant moves
+ * with daylight saving; its end is start + duration on the same local clock.
+ * The rotation day is a calendar date (UTC-midnight key); startDayOffset
+ * shifts that date (-1 = the evening before).
  *
- * @param targetDayMs   - The target date as UTC midnight ms
- * @param startDayOffset - Number of calendar days after targetDay the shift starts
- * @param startTimeStr  - UTC start time in "HH:mm" format
+ * @param targetDayMs   - The rotation day as UTC midnight ms (calendar-date key)
+ * @param startDayOffset - Calendar days after (or before) the rotation day the shift starts
+ * @param startTimeStr  - Local start time in "HH:mm" format
  * @param durationHrs   - Shift duration in fractional hours
+ * @param timezone      - IANA site timezone
  */
 function computeShiftUtcTimes(
   targetDayMs: number,
   startDayOffset: number,
   startTimeStr: string,
   durationHrs: number,
+  timezone: string,
 ): { utcStartMs: number; utcEndMs: number } {
-  const timeMs = parseLocalTime(startTimeStr);
-  const utcStartMs = targetDayMs + startDayOffset * MS_PER_DAY + timeMs;
-  const utcEndMs = utcStartMs + durationHrs * MS_PER_HOUR;
+  // Duration is wall-clock too: a 23:00 + 8h shift ends at 07:00 local even on
+  // a DST changeover night, when that is 9 (or 7) elapsed hours.
+  const naiveStart = targetDayMs + startDayOffset * MS_PER_DAY + parseLocalTime(startTimeStr);
+  const utcStartMs = localWallClockToUtcMs(naiveStart, timezone);
+  const utcEndMs = localWallClockToUtcMs(naiveStart + durationHrs * MS_PER_HOUR, timezone);
 
   return { utcStartMs, utcEndMs };
+}
+
+/**
+ * The UTC instant of a local wall-clock time expressed as "naive" ms (the
+ * local date and time laid out as if it were UTC).
+ *
+ * The offsets 12h either side of the time cover any DST change near it. A
+ * time that happens twice (fall) takes its first occurrence; one that never
+ * happens (spring) resolves forward past the skipped hour.
+ */
+function localWallClockToUtcMs(naiveMs: number, timezone: string): number {
+  const candidates = [-12, 12].map((h) => naiveMs - getTimezoneOffsetMs(timezone, new Date(naiveMs + h * MS_PER_HOUR)));
+  const valid = candidates.filter((c) => getTimezoneOffsetMs(timezone, new Date(c)) === naiveMs - c);
+  return valid.length > 0 ? Math.min(...valid) : Math.max(...candidates);
 }
 
 /**

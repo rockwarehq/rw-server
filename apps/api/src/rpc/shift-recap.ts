@@ -23,6 +23,7 @@ const shiftInstanceSelect = {
   startTime: true,
   endTime: true,
   workCenterId: true,
+  isScheduled: true,
 } as const;
 
 export const shiftInstanceList = authRequired

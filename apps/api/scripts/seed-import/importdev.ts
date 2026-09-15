@@ -563,10 +563,11 @@ async function main() {
       },
     });
 
+    // Local (America/New_York) wall-clock times; Shift 1 starts the evening before.
     const shifts = [
-      { sortOrder: 1, shiftName: "Shift 1", startTime: "03:00", durationHrs: 8 },
-      { sortOrder: 2, shiftName: "Shift 2", startTime: "11:00", durationHrs: 8 },
-      { sortOrder: 3, shiftName: "Shift 3", startTime: "19:00", durationHrs: 8 },
+      { sortOrder: 1, shiftName: "Shift 1", startTime: "23:00", startDayOffset: -1, durationHrs: 8 },
+      { sortOrder: 2, shiftName: "Shift 2", startTime: "07:00", startDayOffset: 0, durationHrs: 8 },
+      { sortOrder: 3, shiftName: "Shift 3", startTime: "15:00", startDayOffset: 0, durationHrs: 8 },
     ];
 
     const definitions = await Promise.all(
@@ -576,7 +577,7 @@ async function main() {
             patternId: pattern.id,
             dayOfRotation: 1,
             sortOrder: s.sortOrder,
-            startDayOffset: 0,
+            startDayOffset: s.startDayOffset,
             startTime: s.startTime,
             durationHrs: s.durationHrs,
             shiftName: s.shiftName,
