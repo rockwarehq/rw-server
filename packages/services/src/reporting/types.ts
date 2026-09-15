@@ -58,6 +58,12 @@ export interface DimensionDef {
    */
   nameColumn?: string;
   enumValues?: readonly string[];
+  /**
+   * SQL expression ordering this dimension by something
+   * other than its value — e.g. shift instances by start time, so a night
+   * shift that opens the business day sorts first regardless of name. 
+   */
+  sortExpr?: string;
 }
 
 export interface FactDef {
