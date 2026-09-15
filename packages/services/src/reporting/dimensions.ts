@@ -4,11 +4,12 @@ import type { DimensionDef } from "./types.js";
 // cross-fact drill-across groups on identical keys and identical name lookups.
 // Versioned entities resolve their display name through currentVersion.
 
-const idDim = (label: string, column: string, join: string, name: string): DimensionDef => ({
+const idDim = (label: string, column: string, join: string, name: string, sortExpr?: string): DimensionDef => ({
   label,
   column,
   type: "id",
   lookup: { join, name },
+  sortExpr,
 });
 
 export const stationDim = (column = "stationId") =>
@@ -50,7 +51,13 @@ export const materialDim = (column = "materialId") =>
   );
 
 export const shiftDim = (column = "shiftInstanceId") =>
-  idDim("Shift", column, `LEFT JOIN "ShiftInstance" {a} ON {a}."id" = f."${column}"`, `{a}."shiftName"`);
+  idDim(
+    "Shift",
+    column,
+    `LEFT JOIN "ShiftInstance" {a} ON {a}."id" = f."${column}"`,
+    `{a}."shiftName"`,
+    `{a}."startTime"`,
+  );
 
 export const modeDim = (column = "modeId") =>
   idDim("Production mode", column, `LEFT JOIN "ProductionMode" {a} ON {a}."id" = f."${column}"`, `{a}."name"`);

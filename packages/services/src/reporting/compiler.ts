@@ -87,6 +87,8 @@ export function compileReportQuery(query: ReportQuery, scope: ReportScope): Pris
   const groupBys: string[] = [];
   const joins: string[] = [];
   const outputKeys = new Set<string>();
+  /** Per-dimension ORDER BY expression: MIN(sortExpr) when declared, else the output alias. */
+  const dimOrderExprs = new Map<string, string>();
 
   const granularity = query.dateGranularity ?? "day";
   if (granularity === "hour" && !fact.timeColumn) {
@@ -123,6 +125,10 @@ export function compileReportQuery(query: ReportQuery, scope: ReportScope): Pris
       groupBys.push(col);
     }
     outputKeys.add(key);
+    dimOrderExprs.set(
+      key,
+      dim.sortExpr ? `MIN(${dim.sortExpr.replaceAll("{a}", `d${i}`).replaceAll("{b}", `d${i}b`)})` : `"${key}"`,
+    );
     if (dim.lookup) {
       const name = dim.lookup.name.replaceAll("{a}", `d${i}`).replaceAll("{b}", `d${i}b`);
       joins.push(dim.lookup.join.replaceAll("{a}", `d${i}`).replaceAll("{b}", `d${i}b`));
@@ -198,11 +204,18 @@ export function compileReportQuery(query: ReportQuery, scope: ReportScope): Pris
   }
 
   // ── ORDER BY a selected output key; default: first dimension, else first measure ──
+  // A dimension with a sortExpr orders by that key (e.g. shifts by start time,
+  // not name). The remaining selected dimensions follow as ascending
+  // tie-breakers so grouped rows come back in a deterministic order.
   const orderKey = query.orderBy?.field ?? query.dimensions[0] ?? query.measures[0];
   if (!outputKeys.has(orderKey)) {
     return { error: `orderBy field must be a selected dimension or measure: ${orderKey}`, code: "INVALID_QUERY" };
   }
   const orderDir = query.orderBy?.dir === "desc" ? "DESC" : "ASC";
+  const orderParts = [`${dimOrderExprs.get(orderKey) ?? `"${orderKey}"`} ${orderDir} NULLS LAST`];
+  for (const key of query.dimensions) {
+    if (key !== orderKey) orderParts.push(`${dimOrderExprs.get(key)} ASC NULLS LAST`);
+  }
 
   const limit = clampLimit(query.limit);
   const offset = Math.max(query.offset ?? 0, 0);
@@ -216,7 +229,7 @@ export function compileReportQuery(query: ReportQuery, scope: ReportScope): Pris
     ${Prisma.raw(joins.join(" "))}
     WHERE ${Prisma.join(where, " AND ")}
     ${Prisma.raw(groupBys.length > 0 ? `GROUP BY ${groupBys.join(", ")}` : "")}
-    ORDER BY ${Prisma.raw(`"${orderKey}" ${orderDir} NULLS LAST`)}
+    ORDER BY ${Prisma.raw(orderParts.join(", "))}
     LIMIT ${limit + 1} OFFSET ${offset}
   `;
 }
