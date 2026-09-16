@@ -117,7 +117,9 @@ async function archiveSiteBuckets(siteId: string, ctx: MetricsContext): Promise<
       // items-per-cycle); recomputing them here would use the station-level
       // standardCycle and itemsPerCycle=1, undercounting expectedItems for
       // any multi-item job.
-      await prisma.metricBucket.update({
+      // updateMany, not update: a rebuild may have deleted this bucket since the
+      // scan read it, and that is not an error — the rebuild rewrites it.
+      await prisma.metricBucket.updateMany({
         where: { id: bucket.id },
         data: {
           runSeconds: d.runSeconds,
@@ -212,6 +214,7 @@ async function archiveSiteBuckets(siteId: string, ctx: MetricsContext): Promise<
     currentStandardCycle: row.currentStandardCycle,
     currentJobId: row.currentJobId,
     currentJobName: row.currentJobName,
+    isScheduled: row.isScheduled,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }));

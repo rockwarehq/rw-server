@@ -15,6 +15,7 @@ interface ItemRow {
   shiftInstanceId: string | null;
   workcenterId: string | null;
   businessDate: Date | null;
+  isScheduled: boolean;
 }
 
 /**
@@ -34,7 +35,7 @@ export async function reassignItems(ctx: AmendContext, cycleIds: string[]): Prom
   const removed = await tx.$queryRaw<ItemRow[]>`
     UPDATE "InventoryItem" SET "deletedAt" = NOW(), "updatedAt" = NOW()
     WHERE "cycleId" = ANY(${cycleIds}::uuid[]) AND "deletedAt" IS NULL
-    RETURNING id, "jobId", "shiftInstanceId", "workcenterId", "businessDate"
+    RETURNING id, "jobId", "shiftInstanceId", "workcenterId", "businessDate", "isScheduled"
   `;
   summary.itemsRemoved = removed.length;
 
@@ -43,11 +44,11 @@ export async function reassignItems(ctx: AmendContext, cycleIds: string[]): Prom
   const created = await tx.$queryRaw<ItemRow[]>`
     INSERT INTO "InventoryItem" (id, "cycleId", "jobProductVersionId", "productVersionId", "toolVersionId", "toolCavityVersionId",
       quantity, "quantityUnit", "modeId", "siteId", "stationId", "workcenterId", "jobId", "productId", "toolId",
-      "shiftInstanceId", "businessDate", "amendmentId", "createdAt", "updatedAt")
+      "shiftInstanceId", "businessDate", "isScheduled", "amendmentId", "createdAt", "updatedAt")
     SELECT gen_random_uuid(), c.id, jp."currentVersionId", p."currentVersionId", t."currentVersionId", tc."currentVersionId",
       (CASE WHEN c.quantity > 0 THEN c.quantity ELSE 1 END) * jpb.quantity, c."quantityUnit", c."modeId",
       c."siteId", c."stationId", c."workcenterId", ${job.id}::uuid, jp."productId", jp."toolId",
-      c."shiftInstanceId", c."businessDate", ${amendmentId}::uuid, NOW(), NOW()
+      c."shiftInstanceId", c."businessDate", c."isScheduled", ${amendmentId}::uuid, NOW(), NOW()
     FROM "Cycle" c
     CROSS JOIN "JobProduct" jp
     JOIN "JobProductVersion" jpb ON jpb.id = jp."currentVersionId"
@@ -57,7 +58,7 @@ export async function reassignItems(ctx: AmendContext, cycleIds: string[]): Prom
     WHERE c.id = ANY(${cycleIds}::uuid[])
       AND jp."jobId" = ${job.id}::uuid AND jp."deletedAt" IS NULL AND jpb."isActive" = true AND jpb.quantity > 0
       AND p."currentVersionId" IS NOT NULL
-    RETURNING id, "jobId", "shiftInstanceId", "workcenterId", "businessDate"
+    RETURNING id, "jobId", "shiftInstanceId", "workcenterId", "businessDate", "isScheduled"
   `;
   summary.itemsCreated = created.length;
 
@@ -124,6 +125,7 @@ export async function reassignItems(ctx: AmendContext, cycleIds: string[]): Prom
           jobId: it.jobId,
           workcenterId: it.workcenterId,
           businessDate: it.businessDate,
+          isScheduled: it.isScheduled,
         },
         ids: [],
       };

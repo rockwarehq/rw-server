@@ -109,11 +109,11 @@ export async function createFromCycle(
   const insertValues = Prisma.join(
     itemSpecs.map(
       (s) =>
-        Prisma.sql`(gen_random_uuid(), ${cycleId}::uuid, ${s.currentVersionId}::uuid, ${s.productVersionId}::uuid, ${s.toolVersionId}::uuid, ${s.toolCavityVersionId}::uuid, ${s.itemQuantity}, ${unit}, ${modeId ?? null}::uuid, ${dims.siteId}::uuid, ${dims.stationId}::uuid, ${dims.workcenterId}::uuid, ${dims.jobId}::uuid, ${s.productId}::uuid, ${s.toolId}::uuid, ${dims.shiftInstanceId}::uuid, ${businessDate}::date, NOW(), NOW())`,
+        Prisma.sql`(gen_random_uuid(), ${cycleId}::uuid, ${s.currentVersionId}::uuid, ${s.productVersionId}::uuid, ${s.toolVersionId}::uuid, ${s.toolCavityVersionId}::uuid, ${s.itemQuantity}, ${unit}, ${modeId ?? null}::uuid, ${dims.siteId}::uuid, ${dims.stationId}::uuid, ${dims.workcenterId}::uuid, ${dims.jobId}::uuid, ${s.productId}::uuid, ${s.toolId}::uuid, ${dims.shiftInstanceId}::uuid, ${businessDate}::date, ${dims.isScheduled}, NOW(), NOW())`,
     ),
   );
   const itemRows = await txRaw.$queryRaw<Array<{ id: string }>>`
-    INSERT INTO "InventoryItem" (id, "cycleId", "jobProductVersionId", "productVersionId", "toolVersionId", "toolCavityVersionId", quantity, "quantityUnit", "modeId", "siteId", "stationId", "workcenterId", "jobId", "productId", "toolId", "shiftInstanceId", "businessDate", "createdAt", "updatedAt")
+    INSERT INTO "InventoryItem" (id, "cycleId", "jobProductVersionId", "productVersionId", "toolVersionId", "toolCavityVersionId", quantity, "quantityUnit", "modeId", "siteId", "stationId", "workcenterId", "jobId", "productId", "toolId", "shiftInstanceId", "businessDate", "isScheduled", "createdAt", "updatedAt")
     VALUES ${insertValues}
     RETURNING id
   `;
@@ -171,6 +171,7 @@ export interface ShiftUsageScope {
   stationId: string;
   workcenterId: string | null;
   businessDate: Date | null;
+  isScheduled: boolean;
   jobId: string;
 }
 
@@ -291,6 +292,7 @@ export async function applyShiftUsage(
           stationId: scope.stationId,
           workcenterId: scope.workcenterId,
           businessDate: scope.businessDate,
+          isScheduled: scope.isScheduled,
           jobId: scope.jobId,
           productId: w.productId,
           materialId: w.materialId,

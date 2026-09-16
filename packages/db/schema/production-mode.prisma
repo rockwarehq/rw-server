@@ -87,6 +87,9 @@ model StationModeLog {
 
   shiftInstanceId String?        @db.Uuid
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled Boolean @default(true)
   /// Business date of the shift the mode was forced in.
   businessDate    DateTime?      @db.Date
 

@@ -144,7 +144,11 @@ export async function logon(input: LogonInput) {
 
   // Star-pattern stamps — same resolver as every other fact table, so the
   // session's shift/businessDate matches the cycles recorded under it.
-  const { shiftInstanceId, businessDate } = await resolveShiftStamp(station.siteId, station.workcenterId, new Date());
+  const { shiftInstanceId, businessDate, isScheduled } = await resolveShiftStamp(
+    station.siteId,
+    station.workcenterId,
+    new Date(),
+  );
 
   const session = await prisma.stationLogonSession.create({
     data: {
@@ -158,6 +162,7 @@ export async function logon(input: LogonInput) {
       genericName: genericName || null,
       shiftInstanceId,
       businessDate,
+      isScheduled,
     },
     select: sessionSelect,
   });

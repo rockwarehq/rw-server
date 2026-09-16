@@ -100,6 +100,7 @@ export interface StateEntryStamp {
   workcenterId: string | null;
   shiftInstanceId: string | null;
   businessDate: Date | null;
+  isScheduled: boolean;
 }
 
 async function isPlannedReason(client: TransactionClient | typeof prisma, statusReasonId: string | null) {
@@ -169,6 +170,7 @@ async function createStateEntry(
       workcenterId: stamp?.workcenterId ?? null,
       shiftInstanceId: stamp?.shiftInstanceId ?? null,
       businessDate: stamp?.businessDate ?? null,
+      isScheduled: stamp?.isScheduled ?? true,
     },
   });
 }

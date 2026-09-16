@@ -10,6 +10,7 @@ import {
   modeDim,
   orderDim,
   productDim,
+  scheduledDim,
   shiftDim,
   stationDim,
   statusReasonDim,
@@ -49,7 +50,7 @@ const WEIGHT_UNITS = ["KG", "LB", "G", "OZ", "MT", "TON"] as const;
 // stamps while legacy items lack siteId entirely, so unstamped rows would net
 // asymmetrically (scrap counted, production not). Backfilling the stamps
 // brings history into this fact on both sides at once.
-const PRODUCTION_COLUMNS = `"siteId", "businessDate", "shiftInstanceId", "stationId", "workcenterId", "jobId", "productId", "toolId", "modeId", "createdAt"`;
+const PRODUCTION_COLUMNS = `"siteId", "businessDate", "shiftInstanceId", "isScheduled", "stationId", "workcenterId", "jobId", "productId", "toolId", "modeId", "createdAt"`;
 const PRODUCTION_SOURCE = `
   SELECT ${PRODUCTION_COLUMNS}, "quantity", 'PRODUCED' AS "entryType"
   FROM "InventoryItem" WHERE "deletedAt" IS NULL AND "businessDate" IS NOT NULL
@@ -63,7 +64,7 @@ const PRODUCTION_SOURCE = `
 // active row wins. All KPI columns are additive components; availability/
 // performance/quality/OEE are ratio measures, so any slice aggregates as
 // ratio-of-sums (the correct way to combine OEE — never average per-row OEEs).
-const KPI_COLUMNS = `"id", "siteId", "entityId", "entityName", "granularity", "startTime", "shiftInstanceId", "businessDate", "totalCycles", "expectedCycles", "badCycles", "goodCycles", "totalItems", "badItems", "goodItems", "expectedItems", "runSeconds", "downSeconds", "plannedDownSeconds", "unplannedDownSeconds", "idealCycleSeconds", "totalCycleSeconds", "elapsedPlannedProductionSeconds"`;
+const KPI_COLUMNS = `"id", "siteId", "entityId", "entityName", "granularity", "startTime", "shiftInstanceId", "isScheduled", "businessDate", "totalCycles", "expectedCycles", "badCycles", "goodCycles", "totalItems", "badItems", "goodItems", "expectedItems", "runSeconds", "downSeconds", "plannedDownSeconds", "unplannedDownSeconds", "idealCycleSeconds", "totalCycleSeconds", "elapsedPlannedProductionSeconds"`;
 const kpiSource = (entityType: string) => `
   SELECT ${KPI_COLUMNS} FROM "MetricBucket" WHERE "entityType" = '${entityType}'
   UNION ALL
@@ -140,6 +141,7 @@ function kpiFact(
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      scheduled: scheduledDim(),
       granularity: enumDim("Bucket granularity", "granularity", ["MINUTE", "HOUR", "SHIFT", "DAY"]),
       ...entityDimensions,
     },
@@ -190,6 +192,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
       job: jobDim(),
@@ -216,6 +219,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
       job: jobDim(),
@@ -242,6 +246,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
       job: jobDim(),
@@ -299,6 +304,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
       job: jobDim(),
@@ -325,6 +331,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
       job: jobDim(),
@@ -356,6 +363,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
       job: jobDim(),
@@ -378,6 +386,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
       employee: employeeDim(),
@@ -408,6 +417,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
       job: jobDim(),
@@ -434,6 +444,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      scheduled: scheduledDim(),
       material: materialDim(),
       kind: enumDim("Kind", "kind", [
         "RECEIPT",
@@ -463,6 +474,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
       job: jobDim(),
@@ -488,6 +500,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      scheduled: scheduledDim(),
       order: orderDim(),
       product: productDim(),
       source: enumDim("Source", "source", ["MANUAL", "AUTO", "BACKFILL"]),
@@ -509,6 +522,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      scheduled: scheduledDim(),
       product: productDim(),
       reason: enumDim("Reason", "reason", ["CYCLE_COUNT", "DAMAGE", "FOUND", "INITIAL", "OTHER"]),
     },
@@ -542,6 +556,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
       job: jobDim(),
@@ -560,3 +575,11 @@ export const FACTS: Record<string, FactDef> = {
     jobRun: { label: "Job (per station)", column: "entityId", type: "id", nameColumn: "entityName" },
   }),
 };
+
+// Unscheduled time is hidden by default (ADR-0015). Grouping by `scheduled`,
+// or filtering it explicitly, shows what happened in it.
+for (const fact of Object.values(FACTS)) {
+  if (fact.dimensions.scheduled) {
+    fact.defaultFilters = [...(fact.defaultFilters ?? []), { dimension: "scheduled", op: "eq", value: "true" }];
+  }
+}

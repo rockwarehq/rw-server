@@ -246,9 +246,13 @@ async function fixStateEntries(tx: TransactionClient, stationId: string, minTs: 
     select: { siteId: true, workcenterId: true },
   });
   const stampFor = async (at: Date) => {
-    if (!station) return { shiftInstanceId: null, businessDate: null };
+    if (!station) return { shiftInstanceId: null, businessDate: null, isScheduled: true };
     const stamp = await resolveShiftStamp(station.siteId, station.workcenterId, at, tx);
-    return { shiftInstanceId: stamp.shiftInstanceId, businessDate: toDateString(stamp.businessDate) ?? null };
+    return {
+      shiftInstanceId: stamp.shiftInstanceId,
+      businessDate: toDateString(stamp.businessDate) ?? null,
+      isScheduled: stamp.isScheduled,
+    };
   };
   const closedStamp = await stampFor(minTs);
   const openStamp = await stampFor(maxTs);
@@ -259,19 +263,19 @@ async function fixStateEntries(tx: TransactionClient, stationId: string, minTs: 
   const [closedRow] = await tx.$queryRaw<StationStateLog[]>`
     INSERT INTO "StationStateLog"
       (id, "stationId", "startTime", "endTime", state, status, "blockId", "jobId", "jobVersionId",
-       "siteId", "workcenterId", "shiftInstanceId", "businessDate", "createdAt", "updatedAt")
+       "siteId", "workcenterId", "shiftInstanceId", "businessDate", "isScheduled", "createdAt", "updatedAt")
     VALUES
       (gen_random_uuid(), ${stationId}, ${minTs}, ${maxTs}, 'UP', 'UP', ${blockId}, ${jobId}::uuid, ${jobVersionId},
-       ${station?.siteId ?? null}::uuid, ${station?.workcenterId ?? null}::uuid, ${closedStamp.shiftInstanceId}::uuid, ${closedStamp.businessDate}::date, NOW(), NOW())
+       ${station?.siteId ?? null}::uuid, ${station?.workcenterId ?? null}::uuid, ${closedStamp.shiftInstanceId}::uuid, ${closedStamp.businessDate}::date, ${closedStamp.isScheduled}, NOW(), NOW())
     RETURNING *
   `;
   const [openRow] = await tx.$queryRaw<StationStateLog[]>`
     INSERT INTO "StationStateLog"
       (id, "stationId", "startTime", state, status, "blockId", "jobId", "jobVersionId",
-       "siteId", "workcenterId", "shiftInstanceId", "businessDate", "createdAt", "updatedAt")
+       "siteId", "workcenterId", "shiftInstanceId", "businessDate", "isScheduled", "createdAt", "updatedAt")
     VALUES
       (gen_random_uuid(), ${stationId}, ${maxTs}, 'UP', 'UP', ${blockId}, ${jobId}::uuid, ${jobVersionId},
-       ${station?.siteId ?? null}::uuid, ${station?.workcenterId ?? null}::uuid, ${openStamp.shiftInstanceId}::uuid, ${openStamp.businessDate}::date, NOW(), NOW())
+       ${station?.siteId ?? null}::uuid, ${station?.workcenterId ?? null}::uuid, ${openStamp.shiftInstanceId}::uuid, ${openStamp.businessDate}::date, ${openStamp.isScheduled}, NOW(), NOW())
     RETURNING *
   `;
   if (station) {
@@ -343,6 +347,7 @@ export async function unarchiveAffectedBuckets(
       shiftInstanceId: row.shiftInstanceId,
       businessDate: row.businessDate,
       businessShift: row.businessShift,
+      isScheduled: row.isScheduled,
       totalCycles: row.totalCycles,
       expectedCycles: row.expectedCycles,
       badCycles: row.badCycles,

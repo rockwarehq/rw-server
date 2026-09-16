@@ -10,6 +10,7 @@ export interface ShiftContext {
   id: string;
   name: string;
   businessDate: Date;
+  isScheduled: boolean;
 }
 
 export async function resolveShiftContext(
@@ -18,9 +19,9 @@ export async function resolveShiftContext(
   at: Date,
   client: Prisma.TransactionClient | typeof prisma = prisma,
 ): Promise<ShiftContext | null> {
-  const select = { id: true, shiftName: true, businessDate: true } as const;
-  const toContext = (row: { id: string; shiftName: string; businessDate: Date } | null) =>
-    row ? { id: row.id, name: row.shiftName, businessDate: row.businessDate } : null;
+  const select = { id: true, shiftName: true, businessDate: true, isScheduled: true } as const;
+  const toContext = (row: { id: string; shiftName: string; businessDate: Date; isScheduled: boolean } | null) =>
+    row ? { id: row.id, name: row.shiftName, businessDate: row.businessDate, isScheduled: row.isScheduled } : null;
   if (workcenterId) {
     const scoped = await client.shiftInstance.findFirst({
       where: { siteId, workCenterId: workcenterId, startTime: { lte: at }, endTime: { gt: at } },
@@ -42,6 +43,8 @@ export async function resolveShiftContext(
 export interface ShiftStamp {
   shiftInstanceId: string | null;
   businessDate: Date | null;
+  /** Mirrors the instance's flag; true when no shift covers the instant (nothing to exclude). */
+  isScheduled: boolean;
 }
 
 /** The dimension stamps the cycle pipeline resolves once per event and threads through. */
@@ -63,8 +66,12 @@ export async function resolveShiftStamp(
   client: Prisma.TransactionClient | typeof prisma = prisma,
 ): Promise<ShiftStamp> {
   const shift = await resolveShiftContext(siteId, workcenterId, at, client);
-  if (shift) return { shiftInstanceId: shift.id, businessDate: shift.businessDate };
-  return { shiftInstanceId: null, businessDate: getLocalCalendarDate(at, await getSiteTimezone(siteId)) };
+  if (shift) return { shiftInstanceId: shift.id, businessDate: shift.businessDate, isScheduled: shift.isScheduled };
+  return {
+    shiftInstanceId: null,
+    businessDate: getLocalCalendarDate(at, await getSiteTimezone(siteId)),
+    isScheduled: true,
+  };
 }
 
 export const toDateString = (d: Date | null | undefined) => d?.toISOString().slice(0, 10);

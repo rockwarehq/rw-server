@@ -45,13 +45,24 @@ export async function rebuildStationWindow(
   await recalcAll(stationId, siteId, window.start, window.end, ctx, jobIds);
 }
 
-/** Remove live HOUR and SHIFT buckets of these entities that touch the window; recalc rebuilds them on the new boundaries. */
+/**
+ * Remove HOUR and SHIFT buckets of these entities that touch the window; recalc
+ * rebuilds them on the new boundaries. The archive is cleared too: an old shift's
+ * buckets live there, and one left behind keeps a boundary that no longer exists.
+ */
 export async function dropShiftAlignedBuckets(siteId: string, entityIds: string[], window: { start: Date; end: Date }) {
-  await prisma.$executeRaw`
-    DELETE FROM "MetricBucket"
-    WHERE "siteId" = ${siteId}::uuid
-      AND "entityId" = ANY(${entityIds}::uuid[])
-      AND granularity IN ('HOUR'::"BucketGranularity", 'SHIFT'::"BucketGranularity")
-      AND "startTime" < ${window.end}
-      AND "startTime" + make_interval(secs => "durationSeconds") > ${window.start}`;
+  for (const table of ["MetricBucket", "MetricBucketLog"]) {
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM "${table}"
+       WHERE "siteId" = $1::uuid
+         AND "entityId" = ANY($2::uuid[])
+         AND granularity IN ('HOUR'::"BucketGranularity", 'SHIFT'::"BucketGranularity")
+         AND "startTime" < $3
+         AND "startTime" + make_interval(secs => "durationSeconds") > $4`,
+      siteId,
+      entityIds,
+      window.end,
+      window.start,
+    );
+  }
 }

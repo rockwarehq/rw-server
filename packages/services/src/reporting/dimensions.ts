@@ -96,6 +96,9 @@ export const businessDateDim = (column = "businessDate"): DimensionDef => ({
   type: "date",
 });
 
+/** The row's shift-stamp flag (ADR-0015); facts carry it so no join is needed. */
+export const scheduledDim = (column = "isScheduled") => enumDim("Scheduled time", column, ["true", "false"]);
+
 export const enumDim = (label: string, column: string, values: readonly string[]): DimensionDef => ({
   label,
   column,
