@@ -46,6 +46,13 @@ import { setEntityEventSink } from "@rw/services/entity/index";
 import { setUiChangeSink } from "@rw/services/events/ui-changes";
 import { call, productionMode, station } from "@rw/services/facility/index";
 import { setJobHistoryEventSink } from "@rw/services/history/index";
+import { setShiftHistoryEventSink } from "@rw/services/facility/shift/index";
+import {
+  deriveShiftHistoryEventSubject,
+  SHIFT_HISTORY_EVENT_STREAM,
+  SHIFT_HISTORY_EVENT_SUBJECT_FILTER,
+  type ShiftHistoryEvent,
+} from "@rw/runtime/shift-history-events";
 import { setNotificationEventSink } from "@rw/services/notification/index";
 import { moduleLogger } from "../logger.js";
 import { ensureStream, getNatsConnection } from "./util.js";
@@ -154,6 +161,16 @@ export const startJobHistoryEventPublisher = () =>
     filter: JOB_HISTORY_EVENT_SUBJECT_FILTER,
     subjectFor: (e) => deriveJobHistoryEventSubject({ siteId: e.siteId, stationId: e.stationId, action: e.action }),
     setSink: setJobHistoryEventSink,
+  });
+
+export const startShiftHistoryEventPublisher = () =>
+  startDomainEventPublisher<ShiftHistoryEvent>({
+    name: "shift-history-events",
+    stream: SHIFT_HISTORY_EVENT_STREAM,
+    filter: SHIFT_HISTORY_EVENT_SUBJECT_FILTER,
+    subjectFor: (e) =>
+      deriveShiftHistoryEventSubject({ siteId: e.siteId, workCenterId: e.workCenterId, action: e.action }),
+    setSink: setShiftHistoryEventSink,
   });
 
 /** UI change pings go over core NATS (no stream): livestore relays them to browsers, a miss only delays a refetch. */

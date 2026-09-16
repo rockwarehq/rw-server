@@ -224,7 +224,7 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
     ),
     shift_info AS (
       SELECT si.id AS shift_id, si."startTime" AS shift_start, si."endTime" AS shift_end, si."shiftName",
-             si."businessDate"
+             si."businessDate", si."isScheduled"
       FROM "ShiftInstance" si
       LEFT JOIN "ShiftAssignment" sa ON sa.id = si."assignmentId"
       WHERE si."startTime" <= (SELECT hour_start FROM params)
@@ -312,7 +312,7 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
         AND ssl."endTime" IS NULL
     ),
     -- Compute durations clipped to job window within hour
-    job_dur AS (
+    job_dur_raw AS (
       SELECT
         COALESCE(ROUND(SUM(CASE WHEN ssl.state = 'UP' THEN EXTRACT(EPOCH FROM (
           LEAST(COALESCE(ssl."endTime", p.v_now), LEAST(p.hour_end, p.v_now, COALESCE(jm.job_end, p.v_now)))
@@ -336,6 +336,21 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
       WHERE ssl."startTime" < LEAST(p.hour_end, p.v_now, COALESCE(jm.job_end, p.v_now))
         AND (ssl."endTime" > GREATEST(p.hour_start, jm.job_start) OR ssl."endTime" IS NULL)
     ),
+    -- Unscheduled hour (ADR-0015): all elapsed time is exempt, nothing runs against the job.
+    job_dur AS (
+      SELECT
+        CASE WHEN sch.ok THEN r.run_seconds ELSE 0 END AS run_seconds,
+        CASE WHEN sch.ok THEN r.down_seconds ELSE sch.elapsed END AS down_seconds,
+        CASE WHEN sch.ok THEN r.planned_down_seconds ELSE sch.elapsed END AS planned_down_seconds,
+        CASE WHEN sch.ok THEN r.unplanned_down_seconds ELSE 0 END AS unplanned_down_seconds
+      FROM job_dur_raw r,
+        (SELECT COALESCE((SELECT mb."isScheduled" FROM "MetricBucket" mb
+                          WHERE mb."entityType" = 'STATION' AND mb."entityId" = p.station_id
+                            AND mb.granularity = 'HOUR' AND mb."startTime" = p.hour_start), true) AS ok,
+                GREATEST(0, EXTRACT(EPOCH FROM (LEAST(p.hour_end, p.v_now, COALESCE(jm.job_end, p.v_now))
+                                                - GREATEST(p.hour_start, jm.job_start))))::int AS elapsed
+         FROM params p, job_meta jm) sch
+    ),
     job_derived AS (
       SELECT jd.*,
         jd.run_seconds + jd.unplanned_down_seconds AS elapsed_planned,
@@ -355,7 +370,7 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
         "expectedCycles", "expectedItems", "elapsedExpectedCycles", "elapsedExpectedItems",
         "elapsedPlannedProductionSeconds", "currentStandardCycle",
         "currentJobId", "currentJobName",
-        "shiftInstanceId", "businessDate", "businessShift",
+        "shiftInstanceId", "businessDate", "businessShift", "isScheduled",
         "createdAt", "updatedAt"
       )
       SELECT
@@ -368,7 +383,7 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
         jd.elapsed_expected_cycles, jd.elapsed_expected_cycles * jd.items_per_cycle,
         jd.elapsed_planned, jd.std_cycle,
         jd."jobId", jd.job_name,
-        si.shift_id, si."businessDate", si."shiftName",
+        si.shift_id, si."businessDate", si."shiftName", COALESCE(si."isScheduled", true),
         NOW(), NOW()
       FROM job_derived jd, cycle_stats cs, disposition_stats ds, params p
       LEFT JOIN shift_info si ON true
@@ -413,7 +428,7 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
         "expectedCycles", "expectedItems", "elapsedExpectedCycles", "elapsedExpectedItems",
         "elapsedPlannedProductionSeconds", "currentStandardCycle",
         "currentJobId", "currentJobName",
-        "shiftInstanceId", "businessDate", "businessShift",
+        "shiftInstanceId", "businessDate", "businessShift", "isScheduled",
         "createdAt", "updatedAt"
       )
       SELECT
@@ -426,7 +441,7 @@ export async function cascadeJobRollup(stationId: string, siteId: string, timest
         js."expectedCycles", js."expectedItems", js."elapsedExpectedCycles", js."elapsedExpectedItems",
         js."elapsedPlannedProductionSeconds", jd.std_cycle,
         jd."jobId", jd.job_name,
-        si.shift_id, si."businessDate", si."shiftName",
+        si.shift_id, si."businessDate", si."shiftName", COALESCE(si."isScheduled", true),
         NOW(), NOW()
       FROM job_shift_sum js, job_derived jd, params p
       LEFT JOIN shift_info si ON true
@@ -672,7 +687,7 @@ export async function batchDurationRollup(timestamp: Date): Promise<Array<{ stat
               AND ssl."deletedAt" IS NULL
               AND ssl."endTime" IS NULL
           ),
-          dur AS (
+          dur_raw AS (
             SELECT
               COALESCE(ROUND(SUM(CASE WHEN ssl.state = 'UP' THEN EXTRACT(EPOCH FROM (LEAST(COALESCE(ssl."endTime", p.v_now), LEAST(p.hour_end, p.v_now)) - GREATEST(ssl."startTime", p.hour_start))) ELSE 0 END))::int, 0) AS run_seconds,
               COALESCE(ROUND(SUM(CASE WHEN ssl.state = 'DOWN' THEN EXTRACT(EPOCH FROM (LEAST(COALESCE(ssl."endTime", p.v_now), LEAST(p.hour_end, p.v_now)) - GREATEST(ssl."startTime", p.hour_start))) ELSE 0 END))::int, 0) AS down_seconds,
@@ -682,6 +697,19 @@ export async function batchDurationRollup(timestamp: Date): Promise<Array<{ stat
             CROSS JOIN params p
             WHERE ssl."startTime" < LEAST(p.hour_end, p.v_now)
               AND (ssl."endTime" > p.hour_start OR ssl."endTime" IS NULL)
+          ),
+          dur AS (
+            SELECT
+              CASE WHEN sch.ok THEN r.run_seconds ELSE 0 END AS run_seconds,
+              CASE WHEN sch.ok THEN r.down_seconds ELSE sch.elapsed END AS down_seconds,
+              CASE WHEN sch.ok THEN r.planned_down_seconds ELSE sch.elapsed END AS planned_down_seconds,
+              CASE WHEN sch.ok THEN r.unplanned_down_seconds ELSE 0 END AS unplanned_down_seconds
+            FROM dur_raw r,
+              (SELECT COALESCE((SELECT mb."isScheduled" FROM "MetricBucket" mb
+                                WHERE mb."entityType" = 'STATION' AND mb."entityId" = ${s.station_id}::uuid
+                                  AND mb.granularity = 'HOUR' AND mb."startTime" = p.hour_start), true) AS ok,
+                      GREATEST(0, EXTRACT(EPOCH FROM (LEAST(p.hour_end, p.v_now) - p.hour_start)))::int AS elapsed
+               FROM params p) sch
           ),
           derived AS (
             SELECT d.*,

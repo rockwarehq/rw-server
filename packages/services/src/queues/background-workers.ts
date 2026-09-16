@@ -257,8 +257,8 @@ export async function runMetricBucketEnsureTick(): Promise<{ checked: number; ar
       const std = await resolveEffectiveStandards(prisma, station.stationId, station.jobId);
       const stamp = await resolveShiftStamp(station.siteId, station.workcenterId, now);
       await prisma.$executeRaw`
-        INSERT INTO "StationJobLog" (id, "blockId", "stationId", "jobId", "jobVersionId", "startTime", "standardCycle", "standardQuantity", "quantityUnit", "siteId", "workcenterId", "shiftInstanceId", "businessDate", "createdAt", "updatedAt")
-        VALUES (gen_random_uuid(), gen_random_uuid()::text, ${station.stationId}::uuid, ${station.jobId}::uuid, ${station.jobVersionId}::uuid, ${now}, ${std.standardCycleSeconds}, ${std.standardQuantity}, ${std.quantityUnit}, ${station.siteId}::uuid, ${station.workcenterId}::uuid, ${stamp.shiftInstanceId}::uuid, ${toDateString(stamp.businessDate) ?? null}::date, NOW(), NOW())
+        INSERT INTO "StationJobLog" (id, "blockId", "stationId", "jobId", "jobVersionId", "startTime", "standardCycle", "standardQuantity", "quantityUnit", "siteId", "workcenterId", "shiftInstanceId", "businessDate", "isScheduled", "createdAt", "updatedAt")
+        VALUES (gen_random_uuid(), gen_random_uuid()::text, ${station.stationId}::uuid, ${station.jobId}::uuid, ${station.jobVersionId}::uuid, ${now}, ${std.standardCycleSeconds}, ${std.standardQuantity}, ${std.quantityUnit}, ${station.siteId}::uuid, ${station.workcenterId}::uuid, ${stamp.shiftInstanceId}::uuid, ${toDateString(stamp.businessDate) ?? null}::date, ${stamp.isScheduled}, NOW(), NOW())
       `;
       console.log(
         `[metric-bucket-ensure] Reconciled missing StationJobLog for station ${station.stationId}, job ${station.jobId}`,

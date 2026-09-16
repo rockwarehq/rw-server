@@ -175,6 +175,9 @@ model ProductStockAdjustment {
   // when the adjustment was recorded ──
   shiftInstanceId String?        @db.Uuid
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled Boolean @default(true)
 
   /// Business date of that shift.
   businessDate DateTime? @db.Date
@@ -221,6 +224,9 @@ model OrderConsumption {
   // when the order completed ──
   shiftInstanceId String?        @db.Uuid
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled Boolean @default(true)
 
   /// Business date of that shift.
   businessDate DateTime? @db.Date
@@ -479,6 +485,9 @@ model InventoryItem {
   /// Shift the item was produced in (resolved at cycle end).
   shiftInstanceId String?        @db.Uuid
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled Boolean @default(true)
 
   /// Business date of that shift.
   businessDate DateTime? @db.Date
@@ -610,6 +619,9 @@ model ItemDispositionLog {
 
   shiftInstanceId String?        @db.Uuid // In the case there is an entry for a previous date/shift.
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id])
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled Boolean @default(true)
 
   /// Business date of the shift above (star pattern for BI).
   businessDate DateTime? @db.Date
@@ -700,6 +712,9 @@ model MaterialLedgerEntry {
   /// Manual rows: the site-level shift running when the event was recorded.
   shiftInstanceId String?        @db.Uuid
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled Boolean @default(true)
 
   /// Business date of that shift.
   businessDate DateTime? @db.Date
@@ -741,6 +756,9 @@ model MaterialShiftUsage {
 
   shiftInstanceId String        @db.Uuid
   shiftInstance   ShiftInstance @relation(fields: [shiftInstanceId], references: [id], onDelete: Cascade)
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled Boolean @default(true)
 
   stationId String  @db.Uuid
   station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)

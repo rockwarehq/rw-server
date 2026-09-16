@@ -87,6 +87,8 @@ model Site {
   shiftPattern            ShiftPattern[]
   shiftAssignment         ShiftAssignment[]
   shiftInstances          ShiftInstance[]
+  shiftOverrides          ShiftOverride[]
+  shiftAmendments         ShiftAmendment[]
   labels                  Label[]
   statusReasons           StatusReason[]
   metricBuckets           MetricBucket[]

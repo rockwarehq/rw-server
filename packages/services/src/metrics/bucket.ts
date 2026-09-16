@@ -308,6 +308,7 @@ async function ensureBucketsInternal(input: EnsureBucketsInput, timezone: string
         ${b.shiftInstanceId ?? null},
         ${b.businessDate ?? null},
         ${b.businessShift ?? null},
+        COALESCE((SELECT si2."isScheduled" FROM "ShiftInstance" si2 WHERE si2.id = ${b.shiftInstanceId ?? null}::uuid), true),
         ${b.currentJobId ?? null},
         ${b.currentJobName ?? null},
         NOW(), NOW()
@@ -325,7 +326,7 @@ async function ensureBucketsInternal(input: EnsureBucketsInput, timezone: string
         id, "siteId", "entityType", "entityId", "entityName", path,
         granularity, "granularityName", "startTime", "durationSeconds",
         "totalCycles",
-        "shiftInstanceId", "businessDate", "businessShift",
+        "shiftInstanceId", "businessDate", "businessShift", "isScheduled",
         "currentJobId", "currentJobName",
         "createdAt", "updatedAt"
       ) VALUES ${Prisma.join(valueRows)}

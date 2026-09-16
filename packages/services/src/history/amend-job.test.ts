@@ -52,6 +52,7 @@ describe.skipIf(!process.env.DATABASE_URL)("amendJobHistory", () => {
         jobId: job.id,
         shiftInstanceId: null,
         businessDate: null,
+        isScheduled: true,
       });
     });
   }

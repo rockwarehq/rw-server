@@ -429,7 +429,21 @@ export const router = {
     list: shift.assignmentList,
     get: shift.assignmentGet,
     update: shift.assignmentUpdate,
-    delete: shift.assignmentDelete,
+    unpublish: shift.assignmentUnpublish,
+    preview: shift.assignmentPreview,
+  },
+  shiftOverride: {
+    create: shift.overrideCreate,
+    list: shift.overrideList,
+    get: shift.overrideGet,
+    update: shift.overrideUpdate,
+    delete: shift.overrideDelete,
+  },
+  shiftAmendment: {
+    create: shift.amendmentCreate,
+    list: shift.amendmentList,
+    undo: shift.amendmentUndo,
+    retry: shift.amendmentRetry,
   },
   disposition: {
     create: disposition.dispositionCreate,

@@ -154,7 +154,10 @@ export async function applyTimelinePlan(
   for (const { asserted, ...u } of plan.updates) {
     const stamp = await resolveShiftStamp(station.siteId, station.workcenterId, u.startTime, tx);
     const amendmentId = asserted ? targetStandards.amendmentId : undefined;
-    await tx.stationJobLog.update({ where: { id: u.id }, data: { ...u, ...stamp, lastAccumulatedAt: null, amendmentId } });
+    await tx.stationJobLog.update({
+      where: { id: u.id },
+      data: { ...u, ...stamp, lastAccumulatedAt: null, amendmentId },
+    });
   }
   for (const i of plan.inserts) {
     const std = i.copyOf

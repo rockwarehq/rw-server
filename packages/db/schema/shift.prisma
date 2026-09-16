@@ -5,11 +5,9 @@
 /// Workflow:
 ///   1. Create a ShiftPattern with its ShiftDefinitions.
 ///   2. Assign it to a Site (and optionally a Workcenter) via ShiftAssignment.
-///      Once assigned, the pattern is effectively frozen — do not edit.
-///   3. To make changes, clone the pattern, modify the clone, and assign it.
-///      The clone's `clonedFromId` tracks lineage.
-///   4. Each assignment always points to a frozen pattern, so historical
-///      data stays consistent.
+///   3. A published pattern can still be edited: the edit rebuilds the days
+///      that have not run and leaves the rows that have (ADR-0015). Cloning it
+///      instead keeps the old schedule readable, tracked by `clonedFromId`.
 model ShiftPattern {
   id String @id @default(uuid()) @db.Uuid
 
@@ -49,7 +47,11 @@ model ShiftPattern {
   site   Site   @relation(fields: [siteId], references: [id], onDelete: Restrict)
 
   shifts     ShiftDefinition[]
-  assignment ShiftAssignment? // 1:1 — immutable once assigned
+  assignment ShiftAssignment? // 1:1 — a pattern is published at most once
+
+  /// Set instead of deleting once the pattern has been published: its
+  /// assignment and past instances are history other tables are stamped on.
+  deletedAt DateTime? @db.Timestamptz(3)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -83,13 +85,14 @@ model ShiftDefinition {
   sortOrder Int
 
   /// How many calendar days after the rotation day's anchor date this
-  /// shift starts. 0 = same calendar day, 1 = next calendar day.
+  /// shift starts. 0 = same calendar day, 1 = next calendar day,
+  /// -1 = the evening before (e.g. a 23:00 shift that belongs to the next day).
   /// Eliminates midnight-crossing ambiguity — no runtime inference needed.
   startDayOffset Int @default(0)
 
-  /// Start time in "HH:mm" format (local site time, e.g., "08:30", "22:45").
-  /// Combined with startDayOffset, the runtime can directly compute the
-  /// absolute calendar day and time.
+  /// Start time in "HH:mm" format, site LOCAL wall-clock time (e.g., "08:30",
+  /// "23:00"). Materialization converts it to UTC per day with the site
+  /// timezone, so shifts follow daylight saving (ADR-0015).
   startTime String
 
   /// Duration in fractional hours (e.g., 8.5 = 8 hours 30 minutes).
@@ -97,6 +100,11 @@ model ShiftDefinition {
 
   /// Human-readable name (e.g., "Shift 1", "Night Shift").
   shiftName String
+
+  /// False = defined but not worked by default (a weekend shift kept on the
+  /// rotation so it can be switched on for one date with its name and window
+  /// already right). Its instances are unscheduled time.
+  isScheduled Boolean @default(true)
 
   pattern   ShiftPattern @relation(fields: [patternId], references: [id], onDelete: Cascade)
   patternId String       @db.Uuid
@@ -147,7 +155,8 @@ model ShiftAssignment {
   workCenterId String?     @db.Uuid
   workCenter   Workcenter? @relation(fields: [workCenterId], references: [id])
 
-  instances ShiftInstance[]
+  instances  ShiftInstance[]
+  amendments ShiftAmendment[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -160,10 +169,10 @@ model ShiftAssignment {
 /// Materialized shift window — a concrete, pre-computed row representing
 /// one shift at a specific point in time for a specific entity.
 ///
-/// Created just-in-time at each shift boundary by the BullMQ shift
-/// boundary job (same job that creates MetricBuckets). Stores absolute
-/// UTC timestamps and the pre-computed business date, so runtime queries
-/// are simple indexed lookups with no rotation math.
+/// Written ahead by the 60-second materialize tick (a week of lookahead) and
+/// corrected in place by overrides and amendments. Stores absolute UTC
+/// timestamps and the pre-computed business date, so runtime queries are
+/// simple indexed lookups with no rotation math.
 ///
 /// Scope:
 ///   workCenterId = null → site-level instance (default for all workcenters)
@@ -194,8 +203,9 @@ model ShiftInstance {
   assignment   ShiftAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
 
   /// The template definition this instance was materialized from.
-  definitionId String          @db.Uuid
-  definition   ShiftDefinition @relation(fields: [definitionId], references: [id])
+  /// Null for filler rows (gaps between scheduled shifts).
+  definitionId String?          @db.Uuid
+  definition   ShiftDefinition? @relation(fields: [definitionId], references: [id])
 
   /// Site this shift belongs to (always set).
   siteId String @db.Uuid
@@ -205,8 +215,13 @@ model ShiftInstance {
   workCenterId String?     @db.Uuid
   workCenter   Workcenter? @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
 
-  /// Human-readable shift name copied from the definition (e.g., "Shift 1").
+  /// Human-readable shift name copied from the definition (e.g., "Shift 1"),
+  /// "Off Hours" for gap fillers; a switched-off shift keeps its own name.
   shiftName String
+
+  /// False for gap fillers and cancelled shifts: the window exists so facts
+  /// get a shift stamp, but it is not production time.
+  isScheduled Boolean @default(true)
 
   /// Pre-computed business date derived from the pattern's
   /// useEndDateForBusinessDate flag and the rotation day's shift block.
@@ -239,6 +254,105 @@ model ShiftInstance {
   @@index([siteId, startTime, endTime])
   @@index([siteId, businessDate])
   @@index([workCenterId, businessDate])
+}
+
+/// One-off change to the shifts of a specific business date, applied when
+/// instances are materialized: cancel a shift (holiday, scheduled down) or
+/// replace its window. Keyed by shift name so it survives pattern changes.
+///
+///   shiftName = null   → every shift on that date
+///   isScheduled        → null = as the definition says; false = not worked, the
+///                        window is kept as an unscheduled row (name unchanged);
+///                        true = worked (switches an unscheduled definition on)
+///   startTime/endTime  → replacement window (both or neither)
+model ShiftOverride {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  /// Null = site-level schedule.
+  workCenterId String?     @db.Uuid
+  workCenter   Workcenter? @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
+
+  businessDate DateTime @db.Date
+  shiftName    String?
+
+  startTime DateTime? @db.Timestamptz(3)
+  endTime   DateTime? @db.Timestamptz(3)
+
+  isScheduled Boolean?
+  /// Free text for the calendar (e.g. "Holiday", "Down for maintenance").
+  note        String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([siteId, businessDate])
+  @@index([workCenterId, businessDate])
+}
+
+/// A correction to a shift that is running or has finished (ADR-0015). The
+/// instance rows are edited in place when it is created; the facts inside the
+/// changed window are re-stamped in the same transaction; the metric buckets
+/// are rebuilt asynchronously and `status` tracks that. Undo is another
+/// amendment restoring `previous*`.
+///
+/// The builder treats amendments like overrides (latest per date + shift
+/// wins), so the ensure tick and the calendar preview reproduce amended days.
+model ShiftAmendment {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  workCenterId String?     @db.Uuid
+  workCenter   Workcenter? @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
+
+  assignmentId String          @db.Uuid
+  assignment   ShiftAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  businessDate DateTime @db.Date
+  /// Pattern shift name, or the name of an added shift.
+  shiftName    String
+
+  /// The window and state the shift had before this amendment. Null when the
+  /// amendment added a shift to a day that had already run: there was no shift
+  /// to describe, and undoing it removes the row rather than restoring one.
+  previousStartTime DateTime? @db.Timestamptz(3)
+  previousEndTime   DateTime? @db.Timestamptz(3)
+  previousScheduled Boolean?
+  previousName      String?
+
+  /// Same shape as ShiftOverride: replacement window and/or the three-way scheduled flag + note.
+  startTime   DateTime? @db.Timestamptz(3)
+  endTime     DateTime? @db.Timestamptz(3)
+  isScheduled Boolean?
+  note        String?
+
+  /// Union of the old and new windows: what was re-stamped and what the rebuild recomputes.
+  windowStart DateTime @db.Timestamptz(3)
+  windowEnd   DateTime @db.Timestamptz(3)
+
+  status       ShiftAmendmentStatus @default(PENDING_REBUILD)
+  rebuildError String?
+  rebuiltAt    DateTime?            @db.Timestamptz(3)
+
+  createdById String? @db.Uuid
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([siteId, businessDate])
+  @@index([workCenterId, businessDate])
+  @@index([siteId, status])
+}
+
+enum ShiftAmendmentStatus {
+  PENDING_REBUILD
+  APPLIED
+  FAILED
 }
 
 model ShiftComment {

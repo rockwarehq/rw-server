@@ -543,6 +543,7 @@ export const SYSTEM_ENTITY_REGISTRY: readonly SystemEntitySpec[] = [
     fields: [
       { name: "id", type: "TEXT", sortOrder: 0 },
       { name: "shiftName", type: "TEXT", required: true, sortOrder: 10 },
+      { name: "isScheduled", type: "BOOLEAN", sortOrder: 15 },
       { name: "businessDate", type: "DATE", sortOrder: 20 },
       { name: "startTime", type: "TIMESTAMP", sortOrder: 30 },
       { name: "endTime", type: "TIMESTAMP", sortOrder: 40 },

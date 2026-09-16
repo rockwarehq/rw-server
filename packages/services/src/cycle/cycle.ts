@@ -493,7 +493,7 @@ async function completeImmediate(
         ORDER BY "end" DESC LIMIT 1
       ),
       new_cycle AS (
-        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", quantity, "quantityUnit", "standardCycle", "standardQuantity", "siteId", "stationId", "jobVersionId", "sourceEventId", "modeId", "workcenterId", "jobId", "shiftInstanceId", "businessDate", attrs, "createdAt", "updatedAt")
+        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", quantity, "quantityUnit", "standardCycle", "standardQuantity", "siteId", "stationId", "jobVersionId", "sourceEventId", "modeId", "workcenterId", "jobId", "shiftInstanceId", "businessDate", "isScheduled", attrs, "createdAt", "updatedAt")
         VALUES (
           gen_random_uuid(),
           COALESCE((SELECT "end" FROM prev), ${timestamp}),
@@ -512,6 +512,7 @@ async function completeImmediate(
           ${dims.jobId}::uuid,
           ${dims.shiftInstanceId}::uuid,
           ${toDateString(dims.businessDate) ?? null}::date,
+          ${dims.isScheduled},
           '{}',
           NOW(),
           NOW()
@@ -582,6 +583,7 @@ async function completeImmediate(
         workcenterId: dims.workcenterId,
         shiftInstanceId: dims.shiftInstanceId,
         businessDate: dims.businessDate,
+        isScheduled: dims.isScheduled,
       },
       openRow,
     });
@@ -687,6 +689,7 @@ async function completeOpenClose(
               workcenterId: closeDims.workcenterId,
               shiftInstanceId: closeDims.shiftInstanceId,
               businessDate: closeDims.businessDate,
+              isScheduled: closeDims.isScheduled,
             },
           });
         }
@@ -743,6 +746,7 @@ async function completeOpenClose(
           workcenterId: dims.workcenterId,
           shiftInstanceId: dims.shiftInstanceId,
           businessDate: dims.businessDate,
+          isScheduled: dims.isScheduled,
         },
         openRow: openEntry
           ? {
@@ -841,7 +845,7 @@ async function completeImmediateReplay(
         ORDER BY "end" DESC LIMIT 1
       ),
       new_cycle AS (
-        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", quantity, "quantityUnit", "standardCycle", "standardQuantity", "siteId", "stationId", "jobVersionId", "sourceEventId", "modeId", "workcenterId", "jobId", "shiftInstanceId", "businessDate", attrs, "createdAt", "updatedAt")
+        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", quantity, "quantityUnit", "standardCycle", "standardQuantity", "siteId", "stationId", "jobVersionId", "sourceEventId", "modeId", "workcenterId", "jobId", "shiftInstanceId", "businessDate", "isScheduled", attrs, "createdAt", "updatedAt")
         VALUES (
           gen_random_uuid(),
           COALESCE((SELECT "end" FROM prev), ${timestamp}),
@@ -860,6 +864,7 @@ async function completeImmediateReplay(
           ${dims.jobId}::uuid,
           ${dims.shiftInstanceId}::uuid,
           ${toDateString(dims.businessDate) ?? null}::date,
+          ${dims.isScheduled},
           '{}',
           NOW(),
           NOW()
@@ -962,6 +967,7 @@ async function completeOpenCloseReplay(
               workcenterId: closeDims.workcenterId,
               shiftInstanceId: closeDims.shiftInstanceId,
               businessDate: closeDims.businessDate,
+              isScheduled: closeDims.isScheduled,
             },
           });
         }

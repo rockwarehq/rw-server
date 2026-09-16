@@ -1,5 +1,9 @@
 import prisma from "@rw/db";
-import { reconcileShiftInstances } from "@rw/services/facility/shift/materialize";
+import {
+  findInUseShiftInstanceIds,
+  publishShiftInstanceEvents,
+  reconcileShiftInstances,
+} from "@rw/services/facility/shift/materialize";
 
 export interface CreateShiftAssignmentInput {
   patternId: string;
@@ -55,22 +59,22 @@ const assignmentInclude = {
 export async function create(input: CreateShiftAssignmentInput) {
   const { patternId, siteId, workCenterId, rotationStartDate, rotationEndDate, rotationStartDefinitionId } = input;
 
-  // Validate pattern exists
   const pattern = await prisma.shiftPattern.findUnique({
     where: { id: patternId },
-    include: { assignment: { select: { id: true } } },
+    include: { assignment: { select: { id: true, rotationEndDate: true } } },
   });
 
   if (!pattern) {
     return { error: "Shift pattern not found", code: "SHIFT_PATTERN_NOT_FOUND" };
   }
+  if (pattern.deletedAt) {
+    return { error: "This schedule was deleted", code: "SHIFT_PATTERN_DELETED" };
+  }
 
-  // Pattern must not already be assigned (1:1 relationship)
-  if (pattern.assignment) {
-    return {
-      error: "This pattern is already assigned. Clone it to create a new assignment.",
-      code: "PATTERN_ALREADY_ASSIGNED",
-    };
+  // One assignment per pattern: a live one blocks, an ended one is re-published in place.
+  const ended = !!pattern.assignment?.rotationEndDate && pattern.assignment.rotationEndDate <= new Date();
+  if (pattern.assignment && !ended) {
+    return { error: "This schedule is already published", code: "PATTERN_ALREADY_ASSIGNED" };
   }
 
   // Validate site exists
@@ -123,17 +127,16 @@ export async function create(input: CreateShiftAssignmentInput) {
     }
   }
 
-  const assignment = await prisma.shiftAssignment.create({
-    data: {
-      patternId,
-      siteId,
-      workCenterId: workCenterId ?? null,
-      rotationStartDate,
-      rotationEndDate: rotationEndDate ?? null,
-      rotationStartDefinitionId: rotationStartDefinitionId ?? null,
-    },
-    include: assignmentInclude,
-  });
+  const data = {
+    siteId,
+    workCenterId: workCenterId ?? null,
+    rotationStartDate,
+    rotationEndDate: rotationEndDate ?? null,
+    rotationStartDefinitionId: rotationStartDefinitionId ?? null,
+  };
+  const assignment = pattern.assignment
+    ? await prisma.shiftAssignment.update({ where: { id: pattern.assignment.id }, data, include: assignmentInclude })
+    : await prisma.shiftAssignment.create({ data: { patternId, ...data }, include: assignmentInclude });
 
   // Reconcile: end-date overlapping old assignments, clean up their
   // unused future ShiftInstances, and materialize the new assignment's shifts.
@@ -247,19 +250,31 @@ export async function update(id: string, input: UpdateShiftAssignmentInput) {
 }
 
 /**
- * Delete shift assignment (cascades instances)
+ * Unpublish: end the assignment now. Shifts that have not started are removed;
+ * the running shift and everything stamped stay (deleting the row would cascade
+ * to every instance and null the stamp on every fact).
  */
-export async function remove(id: string) {
-  const assignment = await prisma.shiftAssignment.findUnique({
-    where: { id },
-    select: { id: true },
-  });
-
+export async function unpublish(id: string) {
+  const assignment = await prisma.shiftAssignment.findUnique({ where: { id }, select: { rotationEndDate: true } });
   if (!assignment) {
     return { error: "Shift assignment not found", code: "SHIFT_ASSIGNMENT_NOT_FOUND" };
   }
 
-  await prisma.shiftAssignment.delete({ where: { id } });
+  const now = new Date();
+  if (assignment.rotationEndDate && assignment.rotationEndDate <= now) return { success: true };
+
+  await prisma.shiftAssignment.update({ where: { id }, data: { rotationEndDate: now } });
+
+  const notStarted = await prisma.shiftInstance.findMany({
+    where: { assignmentId: id, startTime: { gte: now } },
+    include: { site: { select: { workspaceId: true } } },
+  });
+  const inUse = await findInUseShiftInstanceIds(notStarted.map((i) => i.id));
+  const toDelete = notStarted.filter((i) => !inUse.has(i.id));
+  if (toDelete.length > 0) {
+    await prisma.shiftInstance.deleteMany({ where: { id: { in: toDelete.map((i) => i.id) } } });
+    publishShiftInstanceEvents("deleted", toDelete);
+  }
 
   return { success: true };
 }

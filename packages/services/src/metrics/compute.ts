@@ -202,6 +202,16 @@ export async function computeBucketFromEvents(
   return deriveBucketKPIs(durations, counts, jobFilter);
 }
 
+/** The station HOUR bucket's stamp; a bucket that does not exist yet counts as scheduled. */
+async function isScheduledBucket(stationId: string, bucketStart: Date): Promise<boolean> {
+  const [row] = await prisma.$queryRaw<Array<{ isScheduled: boolean }>>`
+    SELECT "isScheduled" FROM "MetricBucket"
+    WHERE "entityType" = 'STATION'::"BucketEntityType" AND "entityId" = ${stationId}::uuid
+      AND granularity = 'HOUR'::"BucketGranularity" AND "startTime" = ${bucketStart}
+    LIMIT 1`;
+  return row?.isScheduled ?? true;
+}
+
 /** The state-log half of a bucket: what cycle completions never write. */
 export interface BucketDurations {
   durationTally: DurationTally;
@@ -236,6 +246,7 @@ export async function computeBucketDurations(
   const jobClip = jobFilter ? resolveJobClip(jobFilter, bucketStartMs, bucketEndMs, now) : null;
   if (jobFilter && !jobClip) return null;
 
+  const effectiveDuration = jobClip ? jobClip.durationSeconds : bucketDurationSeconds;
   const durationTally = await queryAndTallyStateLogs(
     stationId,
     bucketStart,
@@ -245,7 +256,7 @@ export async function computeBucketDurations(
     now,
     jobClip,
   );
-  return { durationTally, effectiveDuration: jobClip ? jobClip.durationSeconds : bucketDurationSeconds };
+  return { durationTally, effectiveDuration };
 }
 
 /**
@@ -690,6 +701,17 @@ async function queryAndTallyStateLogs(
   now: number,
   jobClip: JobClipWindow | null,
 ): Promise<DurationTally> {
+  // Unscheduled time (a gap, a holiday, a switched-off shift) never counts
+  // against KPIs (ADR-0015): everything elapsed so far is exempt time, so
+  // planned production and expected cycles are zero while counts still accrue.
+  if (!(await isScheduledBucket(stationId, bucketStart))) {
+    // Whole seconds, like the tally below: every KPI column is an integer, and
+    // an in-progress unscheduled window measured to now is otherwise fractional.
+    const elapsed = Math.round(
+      jobClip ? jobClip.elapsedDurationSeconds : Math.max(0, (Math.min(bucketEndMs, now) - bucketStartMs) / 1000),
+    );
+    return { runSeconds: 0, downSeconds: elapsed, plannedDownSeconds: elapsed, unplannedDownSeconds: 0 };
+  }
   const stateLogs = await prisma.$queryRaw<
     Array<{
       startTime: Date;

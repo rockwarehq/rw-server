@@ -256,7 +256,9 @@ export async function listAmendments(filter: { siteId: string; stationId?: strin
       job: { select: { currentVersion: { select: { name: true } } } },
     },
   });
-  const ids = (k: "actorEmployeeId" | "actorUserId") => [...new Set(rows.map((r) => r[k]).filter((x): x is string => !!x))];
+  const ids = (k: "actorEmployeeId" | "actorUserId") => [
+    ...new Set(rows.map((r) => r[k]).filter((x): x is string => !!x)),
+  ];
   const [employees, users] = await Promise.all([
     prisma.employee.findMany({
       where: { id: { in: ids("actorEmployeeId") } },

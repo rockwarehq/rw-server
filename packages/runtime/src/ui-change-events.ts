@@ -8,15 +8,20 @@ import { sanitizeSubjectToken } from "./domain-events.js";
 export const UI_CHANGE_SUBJECT_PREFIX = "ui.changes";
 export const UI_CHANGE_SUBJECT_FILTER = `${UI_CHANGE_SUBJECT_PREFIX}.*`;
 
-export type UiChangeKind = "job-history.rebuilt" | "downtime.recalculated" | "scrap.recorded";
-const KINDS: readonly string[] = ["job-history.rebuilt", "downtime.recalculated", "scrap.recorded"];
+export type UiChangeKind = "job-history.rebuilt" | "shift-history.rebuilt" | "downtime.recalculated" | "scrap.recorded";
+const KINDS: readonly string[] = [
+  "job-history.rebuilt",
+  "shift-history.rebuilt",
+  "downtime.recalculated",
+  "scrap.recorded",
+];
 
 export interface UiChangeEvent {
   id: string;
   kind: UiChangeKind;
   siteId: string;
   stationId?: string;
-  /** job-history.rebuilt: which amendment, and how its metric rebuild ended. */
+  /** job-history.rebuilt / shift-history.rebuilt: which amendment, and how its metric rebuild ended. */
   amendmentId?: string;
   status?: "APPLIED" | "FAILED";
   emittedAt: string;

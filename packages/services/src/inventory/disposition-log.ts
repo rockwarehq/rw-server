@@ -354,16 +354,19 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
   const workcenterId = input.workcenterId ?? station.workcenterId ?? null;
   let shiftId: string | null = shiftInstanceId ?? null;
   let businessDate: Date | null = null;
+  let isScheduled = true;
   if (shiftId) {
     const instance = await prisma.shiftInstance.findUnique({
       where: { id: shiftId },
-      select: { businessDate: true },
+      select: { businessDate: true, isScheduled: true },
     });
     businessDate = instance?.businessDate ?? null;
+    isScheduled = instance?.isScheduled ?? true;
   } else {
     const stamp = await resolveShiftStamp(siteId, workcenterId, new Date());
     shiftId = stamp.shiftInstanceId;
     businessDate = stamp.businessDate;
+    isScheduled = stamp.isScheduled;
   }
 
   // Stable ids paired with the version snapshots: derive from the versions
@@ -400,6 +403,7 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
         cycleId: cycleId ?? null,
         shiftInstanceId: shiftId,
         businessDate,
+        isScheduled,
         jobId: stampJobId,
         productId: productVersion.productId,
         toolId: stampToolId,
@@ -423,8 +427,8 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
   updateDispositionBadItems(stationId, siteId, log.createdAt, quantity ?? 1)
     .then(() => publishUiChange({ kind: "scrap.recorded", siteId, stationId }))
     .catch((err) => {
-    console.error(`[disposition-log] Failed to update badItems metrics for station ${stationId}:`, err);
-  });
+      console.error(`[disposition-log] Failed to update badItems metrics for station ${stationId}:`, err);
+    });
 
   publishStockEvent(siteId, station.site.workspaceId, productVersion.productId);
 
@@ -619,8 +623,8 @@ export async function update(
     updateDispositionBadItems(current.stationId, current.siteId, log.createdAt, quantityDelta)
       .then(() => publishUiChange({ kind: "scrap.recorded", siteId: current.siteId, stationId: current.stationId }))
       .catch((err) => {
-      console.error(`[disposition-log] Failed to update badItems metrics for station ${current.stationId}:`, err);
-    });
+        console.error(`[disposition-log] Failed to update badItems metrics for station ${current.stationId}:`, err);
+      });
     publishStockEvent(current.siteId, current.site.workspaceId, current.productVersion.productId);
   }
 
@@ -658,8 +662,8 @@ export async function remove(id: string) {
   updateDispositionBadItems(log.stationId, log.siteId, log.createdAt, -Number(log.quantity))
     .then(() => publishUiChange({ kind: "scrap.recorded", siteId: log.siteId, stationId: log.stationId }))
     .catch((err) => {
-    console.error(`[disposition-log] Failed to update badItems metrics for station ${log.stationId}:`, err);
-  });
+      console.error(`[disposition-log] Failed to update badItems metrics for station ${log.stationId}:`, err);
+    });
 
   publishStockEvent(log.siteId, log.site.workspaceId, log.productVersion.productId);
 

@@ -20,6 +20,8 @@ model Workcenter {
   stations            Station[]
   shiftAssignment     ShiftAssignment[]
   shiftInstances      ShiftInstance[]
+  shiftOverrides      ShiftOverride[]
+  shiftAmendments     ShiftAmendment[]
   statusReasons       StatusReason[]
   displays            Display[]
   itemDispositionLogs ItemDispositionLog[]
@@ -163,6 +165,9 @@ model StationStateLog {
   /// Shift the period started in.
   shiftInstanceId String?        @db.Uuid
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled Boolean @default(true)
 
   /// Business date of that shift.
   businessDate DateTime? @db.Date
@@ -320,6 +325,9 @@ model StationJobLog {
   /// Shift the assignment started in.
   shiftInstanceId String?        @db.Uuid
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled Boolean @default(true)
 
   /// Business date of that shift.
   businessDate DateTime? @db.Date

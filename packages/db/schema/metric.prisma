@@ -68,6 +68,9 @@ model MetricBucket {
   /// Null for DAY granularity, clock-aligned hours (no shift), and MINUTE.
   /// No FK constraint — purely informational.
   shiftInstanceId String? @db.Uuid
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled Boolean @default(true)
 
   /// Business date this bucket belongs to. Derived from ShiftInstance.businessDate
   /// when a shift schedule exists, or from the local calendar date (using
@@ -172,6 +175,9 @@ model MetricBucketLog {
   durationSeconds Int
 
   shiftInstanceId String? @db.Uuid
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled Boolean @default(true)
 
   businessDate  DateTime? @db.Date
   businessShift String?

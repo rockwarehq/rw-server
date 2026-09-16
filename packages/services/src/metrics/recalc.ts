@@ -329,7 +329,7 @@ async function recomputeJobBucketsForRange(
         INSERT INTO "MetricBucket" (
           id, "siteId", "entityType", "entityId", "entityName", path,
           granularity, "granularityName", "startTime", "durationSeconds",
-          "shiftInstanceId", "businessDate", "businessShift",
+          "shiftInstanceId", "businessDate", "businessShift", "isScheduled",
           "currentJobId", "currentJobName",
           ${Prisma.join(kpiInsertCols)},
           "createdAt", "updatedAt"
@@ -337,6 +337,7 @@ async function recomputeJobBucketsForRange(
           gen_random_uuid(), ${siteId}, 'JOB'::"BucketEntityType", ${compositeId}, ${jobName}, ${jobPath},
           'HOUR'::"BucketGranularity", 'Hour', ${bucket.startTime}, ${bucket.durationSeconds},
           ${shiftInstanceId}, ${businessDate}, ${businessShift},
+          COALESCE((SELECT si2."isScheduled" FROM "ShiftInstance" si2 WHERE si2.id = ${shiftInstanceId}::uuid), true),
           ${jobCurrentJobId}, ${jobCurrentJobName},
           ${Prisma.join(kpiInsertVals)},
           NOW(), NOW()

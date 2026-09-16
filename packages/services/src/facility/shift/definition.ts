@@ -1,4 +1,5 @@
 import prisma from "@rw/db";
+import { rematerializePattern } from "@rw/services/facility/shift/materialize";
 
 export interface CreateShiftDefinitionInput {
   patternId: string;
@@ -8,6 +9,7 @@ export interface CreateShiftDefinitionInput {
   startTime: string;
   durationHrs: number;
   shiftName: string;
+  isScheduled?: boolean;
 }
 
 export interface UpdateShiftDefinitionInput {
@@ -17,6 +19,7 @@ export interface UpdateShiftDefinitionInput {
   startTime?: string;
   durationHrs?: number;
   shiftName?: string;
+  isScheduled?: boolean;
 }
 
 export interface ListShiftDefinitionsFilter {
@@ -28,23 +31,11 @@ export interface ListShiftDefinitionsFilter {
  * Create a new shift definition within a pattern
  */
 export async function create(input: CreateShiftDefinitionInput) {
-  const { patternId, dayOfRotation, sortOrder, startDayOffset, startTime, durationHrs, shiftName } = input;
+  const { patternId, dayOfRotation, sortOrder, startDayOffset, startTime, durationHrs, shiftName, isScheduled } = input;
 
-  // Validate pattern exists and is not assigned
-  const pattern = await prisma.shiftPattern.findUnique({
-    where: { id: patternId },
-    include: { assignment: { select: { id: true } } },
-  });
-
+  const pattern = await prisma.shiftPattern.findUnique({ where: { id: patternId }, select: { id: true } });
   if (!pattern) {
     return { error: "Shift pattern not found", code: "SHIFT_PATTERN_NOT_FOUND" };
-  }
-
-  if (pattern.assignment) {
-    return {
-      error: "Cannot add definitions to an assigned pattern. Clone it first.",
-      code: "PATTERN_ASSIGNED",
-    };
   }
 
   // Check unique constraint [patternId, dayOfRotation, sortOrder]
@@ -69,8 +60,10 @@ export async function create(input: CreateShiftDefinitionInput) {
       startTime,
       durationHrs,
       shiftName,
+      isScheduled: isScheduled ?? true,
     },
   });
+  await rematerializePattern(patternId);
 
   return { data: definition };
 }
@@ -114,26 +107,12 @@ export async function getById(id: string) {
  * Update shift definition
  */
 export async function update(id: string, input: UpdateShiftDefinitionInput) {
-  const { dayOfRotation, sortOrder, startDayOffset, startTime, durationHrs, shiftName } = input;
+  const { dayOfRotation, sortOrder, startDayOffset, startTime, durationHrs, shiftName, isScheduled } = input;
 
-  const current = await prisma.shiftDefinition.findUnique({
-    where: { id },
-    include: {
-      pattern: {
-        include: { assignment: { select: { id: true } } },
-      },
-    },
-  });
+  const current = await prisma.shiftDefinition.findUnique({ where: { id } });
 
   if (!current) {
     return { error: "Shift definition not found", code: "SHIFT_DEFINITION_NOT_FOUND" };
-  }
-
-  if (current.pattern.assignment) {
-    return {
-      error: "Cannot edit definitions of an assigned pattern. Clone it first.",
-      code: "PATTERN_ASSIGNED",
-    };
   }
 
   // Check unique constraint if dayOfRotation or sortOrder are changing
@@ -167,11 +146,13 @@ export async function update(id: string, input: UpdateShiftDefinitionInput) {
   if (startTime !== undefined) updateData.startTime = startTime;
   if (durationHrs !== undefined) updateData.durationHrs = durationHrs;
   if (shiftName !== undefined) updateData.shiftName = shiftName;
+  if (isScheduled !== undefined) updateData.isScheduled = isScheduled;
 
   const definition = await prisma.shiftDefinition.update({
     where: { id },
     data: updateData,
   });
+  await rematerializePattern(current.patternId);
 
   return { data: definition };
 }
@@ -182,25 +163,22 @@ export async function update(id: string, input: UpdateShiftDefinitionInput) {
 export async function remove(id: string) {
   const definition = await prisma.shiftDefinition.findUnique({
     where: { id },
-    include: {
-      pattern: {
-        include: { assignment: { select: { id: true } } },
-      },
-    },
+    include: { pattern: { select: { assignment: { select: { rotationStartDefinitionId: true } } } } },
   });
 
   if (!definition) {
     return { error: "Shift definition not found", code: "SHIFT_DEFINITION_NOT_FOUND" };
   }
 
-  if (definition.pattern.assignment) {
+  if (definition.pattern.assignment?.rotationStartDefinitionId === id) {
     return {
-      error: "Cannot delete definitions from an assigned pattern. Clone it first.",
-      code: "PATTERN_ASSIGNED",
+      error: "This shift anchors the published rotation. Unpublish or change the anchor first.",
+      code: "DEFINITION_IS_ROTATION_ANCHOR",
     };
   }
 
   await prisma.shiftDefinition.delete({ where: { id } });
+  await rematerializePattern(definition.patternId);
 
   return { success: true };
 }

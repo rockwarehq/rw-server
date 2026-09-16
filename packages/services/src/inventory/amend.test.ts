@@ -88,7 +88,15 @@ describe.skipIf(!process.env.DATABASE_URL)("reassignItems ledger adjustment", ()
     j2 = await makeJob("J2", 3);
     stationId = (await prisma.station.create({ data: { siteId, name: "Press", currentJobId: j1.id } })).id;
 
-    const dims = { siteId, stationId, workcenterId: null, jobId: j1.id, shiftInstanceId: shiftId, businessDate: start };
+    const dims = {
+      siteId,
+      stationId,
+      workcenterId: null,
+      jobId: j1.id,
+      shiftInstanceId: shiftId,
+      businessDate: start,
+      isScheduled: true,
+    };
     await prisma.$transaction(async (tx) => {
       const cycle = await tx.cycle.create({
         data: {

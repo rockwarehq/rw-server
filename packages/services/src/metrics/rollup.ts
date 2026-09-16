@@ -971,6 +971,11 @@ async function upsertBucket(input: UpsertInput) {
       SET
         "entityName" = ${entityName},
         "path" = ${path},
+        "durationSeconds" = ${input.durationSeconds}::int,
+        "isScheduled" = COALESCE(
+          (SELECT si2."isScheduled" FROM "ShiftInstance" si2 WHERE si2.id = ${shiftInstanceId}::uuid),
+          true
+        ),
         "shiftInstanceId" = ${shiftInstanceId}::uuid,
         "businessDate" = ${businessDate}::date,
         "businessShift" = ${businessShift},
@@ -1007,7 +1012,7 @@ async function upsertBucket(input: UpsertInput) {
     INSERT INTO "MetricBucket" (
       "id", "siteId", "entityType", "entityId", "entityName", "path",
       "granularity", "granularityName", "startTime", "durationSeconds",
-      "shiftInstanceId", "businessDate", "businessShift",
+      "shiftInstanceId", "businessDate", "businessShift", "isScheduled",
       "currentJobId", "currentJobName",
       "totalCycles", "badCycles", "totalItems", "badItems",
       "expectedCycles", "expectedItems",
@@ -1030,6 +1035,7 @@ async function upsertBucket(input: UpsertInput) {
       ${shiftInstanceId}::uuid,
       ${businessDate}::date,
       ${businessShift},
+      COALESCE((SELECT si2."isScheduled" FROM "ShiftInstance" si2 WHERE si2.id = ${shiftInstanceId}::uuid), true),
       ${currentJobId}::uuid,
       ${currentJobName},
       ${kpiData.totalCycles ?? 0}::int,
@@ -1054,6 +1060,10 @@ async function upsertBucket(input: UpsertInput) {
     DO UPDATE SET
       "entityName" = EXCLUDED."entityName",
       "path" = EXCLUDED."path",
+      -- The window follows the caller: a shift that was amended (or a bucket
+      -- restored from the archive at its old length) must take the new one.
+      "durationSeconds" = EXCLUDED."durationSeconds",
+      "isScheduled" = EXCLUDED."isScheduled",
       "shiftInstanceId" = EXCLUDED."shiftInstanceId",
       "businessDate" = EXCLUDED."businessDate",
       "businessShift" = EXCLUDED."businessShift",
