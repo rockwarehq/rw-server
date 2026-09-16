@@ -320,11 +320,11 @@ model ShiftAmendment {
   previousScheduled Boolean
   previousName      String
 
-  /// Same shape as ShiftOverride: replacement window, or cancelled + label.
-  startTime DateTime? @db.Timestamptz(3)
-  endTime   DateTime? @db.Timestamptz(3)
-  cancelled Boolean   @default(false)
-  label     String?
+  /// Same shape as ShiftOverride: replacement window and/or the three-way scheduled flag + label.
+  startTime   DateTime? @db.Timestamptz(3)
+  endTime     DateTime? @db.Timestamptz(3)
+  isScheduled Boolean?
+  label       String?
 
   /// Union of the old and new windows: what was re-stamped and what the rebuild recomputes.
   windowStart DateTime @db.Timestamptz(3)

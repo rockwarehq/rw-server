@@ -430,3 +430,65 @@ describe("DST edge cases", () => {
     expect(utc(fall, "Night")).toBe("10-24T21:00→10-25T00:30"); // 02:30 CEST, first occurrence
   });
 });
+
+describe("scheduled flag", () => {
+  const weekend: AssignmentWithPattern = {
+    ...assignment,
+    pattern: {
+      ...assignment.pattern,
+      shifts: [
+        ...assignment.pattern.shifts,
+        // Saturday kept on the rotation but not worked by default
+        {
+          id: "d6s1",
+          dayOfRotation: 6,
+          sortOrder: 1,
+          startDayOffset: 0,
+          startTime: "06:00",
+          durationHrs: 8,
+          shiftName: "Shift 1",
+          isScheduled: false,
+        },
+      ],
+    },
+  };
+
+  it("an unscheduled definition yields an unscheduled row that keeps its name", () => {
+    const sat = buildInstanceRows(weekend, day("2026-09-19").getTime(), 0).filter((r) => r.definitionId);
+    expect(sat.map(brief)).toEqual(["Shift 1|2026-09-19|09-19T06:00→09-19T14:00|N"]);
+  });
+
+  it("an override with isScheduled=true switches it on for that date only", () => {
+    const rows = buildInstanceRows(weekend, day("2026-09-19").getTime(), 7, [], "UTC", [
+      {
+        businessDate: day("2026-09-19"),
+        shiftName: "Shift 1",
+        startTime: null,
+        endTime: null,
+        isScheduled: true,
+        label: null,
+      },
+    ]);
+    const sats = rows.filter((r) => r.definitionId === "d6s1");
+    expect(sats.map(brief)).toEqual([
+      "Shift 1|2026-09-19|09-19T06:00→09-19T14:00|S",
+      "Shift 1|2026-09-26|09-26T06:00→09-26T14:00|N",
+    ]);
+  });
+
+  it("an override may retime and unschedule at once", () => {
+    const rows = buildInstanceRows(assignment, day("2026-09-14").getTime(), 0, [], "UTC", [
+      {
+        businessDate: day("2026-09-14"),
+        shiftName: "Shift 2",
+        startTime: new Date("2026-09-14T15:00:00Z"),
+        endTime: new Date("2026-09-14T19:00:00Z"),
+        isScheduled: false,
+        label: "Down",
+      },
+    ]);
+    expect(rows.filter((r) => r.definitionId === "d1s2").map(brief)).toEqual([
+      "Down|2026-09-14|09-14T15:00→09-14T19:00|N",
+    ]);
+  });
+});

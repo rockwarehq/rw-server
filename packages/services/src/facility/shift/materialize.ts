@@ -332,7 +332,14 @@ export async function loadOverrides(
     workCenterId: scope.workCenterId,
     businessDate: { gte: new Date(fromMs - MS_PER_DAY), lte: new Date(toMs) },
   };
-  const select = { businessDate: true, shiftName: true, startTime: true, endTime: true, isScheduled: true, label: true };
+  const select = {
+    businessDate: true,
+    shiftName: true,
+    startTime: true,
+    endTime: true,
+    isScheduled: true,
+    label: true,
+  };
   const [overrides, amendments] = await Promise.all([
     prisma.shiftOverride.findMany({ where, select }),
     prisma.shiftAmendment.findMany({ where, select, orderBy: { createdAt: "asc" } }),

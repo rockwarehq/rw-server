@@ -41,7 +41,8 @@ export interface AmendShiftInput {
   shiftName: string;
   startTime?: Date | null;
   endTime?: Date | null;
-  cancelled?: boolean;
+  /** null = as defined; false = not worked (named by `label`); true = worked. */
+  isScheduled?: boolean | null;
   label?: string | null;
   actorUserId?: string | null;
 }
@@ -58,7 +59,7 @@ export async function amendShift(input: AmendShiftInput): Promise<Result<ShiftAm
     shiftName,
     startTime: input.startTime ?? null,
     endTime: input.endTime ?? null,
-    cancelled: input.cancelled ?? false,
+    isScheduled: input.isScheduled ?? null,
     label: input.label ?? null,
   };
   const invalid = validateRule(rule);
@@ -152,7 +153,7 @@ export async function amendShift(input: AmendShiftInput): Promise<Result<ShiftAm
           previousName: current.shiftName,
           startTime: rule.startTime,
           endTime: rule.endTime,
-          cancelled: rule.cancelled,
+          isScheduled: rule.isScheduled,
           label: rule.label,
           windowStart: window.start,
           windowEnd: window.end,
@@ -198,9 +199,10 @@ export async function undoShiftAmendment(id: string, actorUserId?: string | null
     workCenterId: a.workCenterId,
     businessDate: a.businessDate,
     shiftName: a.shiftName,
-    ...(a.previousScheduled
-      ? { startTime: a.previousStartTime, endTime: a.previousEndTime }
-      : { cancelled: true, label: a.previousName }),
+    startTime: a.previousStartTime,
+    endTime: a.previousEndTime,
+    isScheduled: a.previousScheduled,
+    label: a.previousScheduled ? null : a.previousName,
     actorUserId,
   });
 }

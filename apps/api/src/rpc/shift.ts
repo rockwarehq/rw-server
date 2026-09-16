@@ -389,7 +389,7 @@ const amendmentCreateInputSchema = z.object({
   shiftName: z.string().min(1),
   startTime: z.coerce.date().nullable().optional(),
   endTime: z.coerce.date().nullable().optional(),
-  cancelled: z.boolean().optional(),
+  isScheduled: z.boolean().nullable().optional(),
   label: z.string().min(1).nullable().optional(),
 });
 

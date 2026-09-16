@@ -59,14 +59,22 @@ buckets asynchronously" half for jobs.
    are null, and downtime inside it is exempt. Day, workcenter and site rollups exclude
    that time from their denominators as a result.
 
+2b. **A definition can be kept on the rotation but not worked by default.**
+   `ShiftDefinition.isScheduled = false` (a weekend shift) still materializes rows — with
+   the definition's own name and window, `isScheduled = false` — so the calendar shows the
+   shift that *would* run, its time is unscheduled for KPIs (item 2), and working it on one
+   date is a single override or amendment with `isScheduled = true`; nothing has to be
+   typed in.
+
 3. **The pattern stays frozen; deviations live beside it.** Two records, chosen by whether
    the shift has started, never by whether its rows exist:
    - **`ShiftOverride`** — a plan for a shift that has not started. Keyed by scope, business
      date and shift name (so it survives pattern edits); `shiftName = null` means every
-     shift that date; a shift-specific override beats a whole-day one. It either cancels
-     the shift (the window is kept, `isScheduled = false`, named by the override label,
-     e.g. "Holiday"), replaces its window, or — when it names a shift the pattern lacks
-     that day — adds a scheduled shift with no definition. The row builder applies
+     shift that date; a shift-specific override beats a whole-day one. It carries a
+     replacement window and/or a three-way `isScheduled`: null leaves the definition's
+     flag alone, false switches the shift off (the window is kept, `isScheduled = false`,
+     named by the override label, e.g. "Holiday"), true switches it on. When it names a
+     shift the pattern lacks that day it adds a scheduled shift with no definition. The row builder applies
      overrides when it materializes, and a write re-runs the builder from the day before
      the date, deleting and regenerating unused rows. Rows in the seven-day window are
      regenerated freely: a shift that has not started has nothing stamped on it. An
