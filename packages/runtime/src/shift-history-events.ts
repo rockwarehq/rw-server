@@ -1,7 +1,7 @@
 // Shift amendment event contract — a correction to a shift that already ran
-// (ADR-0015). `amended` is published after the instance rows and stamps are
-// rewritten and drives the metric rebuild; `rebuilt` is published when that
-// rebuild ends. Mirrors job-history-events; dependency-free by design.
+// (ADR-0015). Published after the instance rows and stamps are rewritten, to
+// drive the metric rebuild. How that rebuild ended reaches the UI through
+// ui.changes, not this stream. Mirrors job-history-events; dependency-free.
 
 import { sanitizeSubjectToken } from "./domain-events.js";
 
@@ -9,7 +9,7 @@ export const SHIFT_HISTORY_EVENT_STREAM = "RW_SHIFT_HISTORY_EVENTS";
 export const SHIFT_HISTORY_EVENT_SUBJECT_PREFIX = "shift-history";
 export const SHIFT_HISTORY_EVENT_SUBJECT_FILTER = `${SHIFT_HISTORY_EVENT_SUBJECT_PREFIX}.>`;
 
-export type ShiftHistoryEventAction = "amended" | "rebuilt";
+export type ShiftHistoryEventAction = "amended";
 
 export interface ShiftHistoryEvent {
   id: string; // event id — published as msgID for JetStream dedup
@@ -24,8 +24,6 @@ export interface ShiftHistoryEvent {
   /** Union of the old and new windows. */
   windowStart: string;
   windowEnd: string;
-  /** rebuilt only. */
-  status?: "APPLIED" | "FAILED";
   emittedAt: string;
 }
 
@@ -45,7 +43,7 @@ export function parseShiftHistoryEvent(value: unknown): ShiftHistoryEvent | null
   const e = value as Partial<ShiftHistoryEvent>;
   const ok =
     typeof e.id === "string" &&
-    (e.action === "amended" || e.action === "rebuilt") &&
+    e.action === "amended" &&
     typeof e.workspaceId === "string" &&
     typeof e.siteId === "string" &&
     (e.workCenterId === null || typeof e.workCenterId === "string") &&
