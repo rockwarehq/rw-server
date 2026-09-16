@@ -8,16 +8,16 @@ import {
   type AssignmentWithPattern,
   assignmentsCovering,
   buildInstanceRows,
-  floorToDay,
   hasOverlappingRows,
-  isGapRow,
   loadOverrides,
   MS_PER_DAY,
   type OverrideRule,
   rebuildShiftInstances,
   ruleKey,
+  type ShiftScope,
+  toRule,
 } from "@rw/services/facility/shift/materialize";
-import { getSiteTimezone } from "../../metrics/bucket.js";
+import { getLocalCalendarDate, getSiteTimezone } from "../../metrics/bucket.js";
 
 export interface CreateShiftOverrideInput {
   siteId: string;
@@ -26,16 +26,16 @@ export interface CreateShiftOverrideInput {
   shiftName?: string | null;
   startTime?: Date | null;
   endTime?: Date | null;
-  /** null = as defined; false = not worked (named by `label`); true = worked. */
+  /** null = as defined; false = not worked (name kept); true = worked. */
   isScheduled?: boolean | null;
-  label?: string | null;
+  note?: string | null;
 }
 
 export interface UpdateShiftOverrideInput {
   startTime?: Date | null;
   endTime?: Date | null;
   isScheduled?: boolean | null;
-  label?: string | null;
+  note?: string | null;
 }
 
 export interface ListShiftOverridesFilter {
@@ -58,15 +58,8 @@ export async function create(input: CreateShiftOverrideInput): Promise<OverrideR
     if (wc.siteId !== input.siteId) return { error: "Workcenter must belong to the same site", code: "SITE_MISMATCH" };
   }
 
-  const rule: OverrideRule = {
-    businessDate: floorToDay(input.businessDate),
-    shiftName: input.shiftName ?? null,
-    startTime: input.startTime ?? null,
-    endTime: input.endTime ?? null,
-    isScheduled: input.isScheduled ?? null,
-    label: input.label ?? null,
-  };
-  const invalid = validateRule(rule);
+  const rule = toRule(input);
+  const invalid = validateRule(rule) ?? (await pastDateError(input.siteId, rule.businessDate));
   if (invalid) return invalid;
 
   const duplicate = await prisma.shiftOverride.findFirst({
@@ -76,7 +69,7 @@ export async function create(input: CreateShiftOverrideInput): Promise<OverrideR
   if (duplicate) return { error: "An override already exists for this date and shift", code: "SHIFT_OVERRIDE_EXISTS" };
 
   const assignments = await assignmentsCovering(input.siteId, workCenterId, rule.businessDate);
-  const overlap = await overlapError({ siteId: input.siteId, workCenterId }, rule, assignments);
+  const overlap = await findOverlap({ siteId: input.siteId, workCenterId }, rule, assignments);
   if (overlap) return overlap;
 
   const override = await prisma.shiftOverride.create({ data: { siteId: input.siteId, workCenterId, ...rule } });
@@ -94,13 +87,13 @@ export async function update(id: string, input: UpdateShiftOverrideInput): Promi
     startTime: input.startTime !== undefined ? input.startTime : current.startTime,
     endTime: input.endTime !== undefined ? input.endTime : current.endTime,
     isScheduled: input.isScheduled !== undefined ? input.isScheduled : current.isScheduled,
-    label: input.label !== undefined ? input.label : current.label,
+    note: input.note !== undefined ? input.note : current.note,
   };
-  const invalid = validateRule(rule);
+  const invalid = validateRule(rule) ?? (await pastDateError(current.siteId, rule.businessDate));
   if (invalid) return invalid;
 
   const assignments = await assignmentsCovering(current.siteId, current.workCenterId, rule.businessDate);
-  const overlap = await overlapError(current, rule, assignments);
+  const overlap = await findOverlap(current, rule, assignments);
   if (overlap) return overlap;
 
   const override = await prisma.shiftOverride.update({ where: { id }, data: rule });
@@ -148,16 +141,24 @@ export function validateRule(rule: OverrideRule) {
   return null;
 }
 
+/** Overrides plan days that have not run; a day that has is corrected with an amendment. */
+async function pastDateError(siteId: string, businessDate: Date) {
+  const today = getLocalCalendarDate(new Date(), await getSiteTimezone(siteId));
+  if (businessDate < today) {
+    return { error: "That date has already run; correct it with an amendment", code: "SHIFT_OVERRIDE_PAST" };
+  }
+  return null;
+}
+
 /**
  * Dry-run the row builder with `rule` replacing any same-key override and
  * report an error when the resulting windows overlap a neighbouring shift
  * (added shifts included; gap fillers are regenerated afterwards).
  */
-export async function overlapError(
-  scope: { siteId: string; workCenterId: string | null },
-  rule: OverrideRule,
-  assignments: AssignmentWithPattern[],
-) {
+/** One message for both paths: an override plans the window, an amendment corrects it. */
+export const OVERLAP_ERROR = { error: "That window overlaps another shift", code: "SHIFT_OVERRIDE_OVERLAPS" };
+
+export async function findOverlap(scope: ShiftScope, rule: OverrideRule, assignments: AssignmentWithPattern[]) {
   if (!rule.startTime) return null;
   const fromMs = rule.businessDate.getTime() - 2 * MS_PER_DAY;
   const others = (await loadOverrides(scope, fromMs, fromMs + 6 * MS_PER_DAY)).filter(
@@ -166,19 +167,20 @@ export async function overlapError(
   const timezone = await getSiteTimezone(scope.siteId);
   for (const assignment of assignments) {
     const rows = buildInstanceRows(assignment, fromMs, 5, [], timezone, [...others, rule]);
-    if (hasOverlappingRows(rows.filter((r) => !isGapRow(r)))) {
-      return { error: "Override window overlaps another shift", code: "SHIFT_OVERRIDE_OVERLAPS" };
-    }
+    if (hasOverlappingRows(rows)) return OVERLAP_ERROR;
   }
   return null;
 }
 
-/** Rebuild the scope's rows from the day before (its gap rows end where this date's shifts start). */
+/**
+ * Rebuild the scope's rows from the day before (its gap rows end where this
+ * date's shifts start), never reaching behind now: a row that has ended is history.
+ */
 async function rebuildFrom(assignments: AssignmentWithPattern[], businessDate: Date) {
   if (assignments.length === 0) return;
   await rebuildShiftInstances(
     assignments.map((a) => a.id),
     assignments,
-    new Date(businessDate.getTime() - MS_PER_DAY),
+    new Date(Math.max(businessDate.getTime() - MS_PER_DAY, Date.now())),
   );
 }

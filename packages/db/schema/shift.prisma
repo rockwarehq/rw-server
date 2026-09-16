@@ -5,11 +5,9 @@
 /// Workflow:
 ///   1. Create a ShiftPattern with its ShiftDefinitions.
 ///   2. Assign it to a Site (and optionally a Workcenter) via ShiftAssignment.
-///      Once assigned, the pattern is effectively frozen — do not edit.
-///   3. To make changes, clone the pattern, modify the clone, and assign it.
-///      The clone's `clonedFromId` tracks lineage.
-///   4. Each assignment always points to a frozen pattern, so historical
-///      data stays consistent.
+///   3. A published pattern can still be edited: the edit rebuilds the days
+///      that have not run and leaves the rows that have (ADR-0015). Cloning it
+///      instead keeps the old schedule readable, tracked by `clonedFromId`.
 model ShiftPattern {
   id String @id @default(uuid()) @db.Uuid
 
@@ -49,7 +47,11 @@ model ShiftPattern {
   site   Site   @relation(fields: [siteId], references: [id], onDelete: Restrict)
 
   shifts     ShiftDefinition[]
-  assignment ShiftAssignment? // 1:1 — immutable once assigned
+  assignment ShiftAssignment? // 1:1 — a pattern is published at most once
+
+  /// Set instead of deleting once the pattern has been published: its
+  /// assignment and past instances are history other tables are stamped on.
+  deletedAt DateTime? @db.Timestamptz(3)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -167,10 +169,10 @@ model ShiftAssignment {
 /// Materialized shift window — a concrete, pre-computed row representing
 /// one shift at a specific point in time for a specific entity.
 ///
-/// Created just-in-time at each shift boundary by the BullMQ shift
-/// boundary job (same job that creates MetricBuckets). Stores absolute
-/// UTC timestamps and the pre-computed business date, so runtime queries
-/// are simple indexed lookups with no rotation math.
+/// Written ahead by the 60-second materialize tick (a week of lookahead) and
+/// corrected in place by overrides and amendments. Stores absolute UTC
+/// timestamps and the pre-computed business date, so runtime queries are
+/// simple indexed lookups with no rotation math.
 ///
 /// Scope:
 ///   workCenterId = null → site-level instance (default for all workcenters)
@@ -214,7 +216,7 @@ model ShiftInstance {
   workCenter   Workcenter? @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
 
   /// Human-readable shift name copied from the definition (e.g., "Shift 1"),
-  /// "Not Scheduled" for gap fillers, or the override label for a cancelled shift.
+  /// "Off Hours" for gap fillers; a switched-off shift keeps its own name.
   shiftName String
 
   /// False for gap fillers and cancelled shifts: the window exists so facts
@@ -260,7 +262,7 @@ model ShiftInstance {
 ///
 ///   shiftName = null   → every shift on that date
 ///   isScheduled        → null = as the definition says; false = not worked, the
-///                        window is kept as an unscheduled row named `label`;
+///                        window is kept as an unscheduled row (name unchanged);
 ///                        true = worked (switches an unscheduled definition on)
 ///   startTime/endTime  → replacement window (both or neither)
 model ShiftOverride {
@@ -280,8 +282,8 @@ model ShiftOverride {
   endTime   DateTime? @db.Timestamptz(3)
 
   isScheduled Boolean?
-  /// Display name for an unscheduled shift (e.g. "Holiday"). Defaults to "Not Scheduled".
-  label       String?
+  /// Free text for the calendar (e.g. "Holiday", "Down for maintenance").
+  note        String?
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -314,17 +316,19 @@ model ShiftAmendment {
   /// Pattern shift name, or the name of an added shift.
   shiftName    String
 
-  /// The window and state the shift had before this amendment.
-  previousStartTime DateTime @db.Timestamptz(3)
-  previousEndTime   DateTime @db.Timestamptz(3)
-  previousScheduled Boolean
-  previousName      String
+  /// The window and state the shift had before this amendment. Null when the
+  /// amendment added a shift to a day that had already run: there was no shift
+  /// to describe, and undoing it removes the row rather than restoring one.
+  previousStartTime DateTime? @db.Timestamptz(3)
+  previousEndTime   DateTime? @db.Timestamptz(3)
+  previousScheduled Boolean?
+  previousName      String?
 
-  /// Same shape as ShiftOverride: replacement window and/or the three-way scheduled flag + label.
+  /// Same shape as ShiftOverride: replacement window and/or the three-way scheduled flag + note.
   startTime   DateTime? @db.Timestamptz(3)
   endTime     DateTime? @db.Timestamptz(3)
   isScheduled Boolean?
-  label       String?
+  note        String?
 
   /// Union of the old and new windows: what was re-stamped and what the rebuild recomputes.
   windowStart DateTime @db.Timestamptz(3)

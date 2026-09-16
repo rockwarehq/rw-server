@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
-import prisma from "@rw/db";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
@@ -31,7 +30,7 @@ const currentInputSchema = z.object({
 });
 
 export const current = userOrDisplayRequired.input(currentInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "schedule:read", scope: siteScope(input.siteId) }));
 
   const result = await shift.current.getCurrentShift(input.siteId, input.workCenterId);
   return unwrap(result);
@@ -139,12 +138,19 @@ const assignmentListInputSchema = z.object({
 // ============================================================================
 
 export const patternCreate = authRequired.input(patternCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: siteScope(input.siteId) }));
 
   const result = await shift.pattern.create(input);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
+
+/** A calendar year and a bit: the month view never asks for more. */
+const MAX_PREVIEW_DAYS = 400;
+const MS_PER_DAY = 86_400_000;
+
+/** Site scope for the policy call each handler makes inline. */
+const siteScope = (siteId: string) => ({ kind: "site", siteId }) as const;
 
 export const patternList = authRequired.input(patternListInputSchema).handler(async ({ input, context }) => {
   const scope = grant(await authorizeList(context.iam, { permission: "schedule:read", requestedSiteId: input.siteId }));
@@ -243,7 +249,7 @@ export const definitionDelete = authRequired.input(idInputSchema).handler(async 
 // ============================================================================
 
 export const assignmentCreate = authRequired.input(assignmentCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: siteScope(input.siteId) }));
 
   const result = await shift.assignment.create(input);
   if (result.error !== undefined) throwServiceError(result, ASSIGNMENT_CREATE_OVERRIDES);
@@ -290,19 +296,19 @@ export const assignmentPreview = authRequired
     );
     const from = new Date(`${input.from}T00:00:00Z`);
     const to = new Date(`${input.to}T00:00:00Z`);
-    if (to < from || to.getTime() - from.getTime() > 400 * 86_400_000) {
-      throw new ORPCError("BAD_REQUEST", { message: "Preview range must be 0-400 days" });
+    if (to < from || to.getTime() - from.getTime() > MAX_PREVIEW_DAYS * MS_PER_DAY) {
+      throw new ORPCError("BAD_REQUEST", { message: `Preview range must be 0-${MAX_PREVIEW_DAYS} days` });
     }
     const { today, rows } = await shift.previewShiftInstances(input.id, from, to);
     return { today, rows: rows.map(({ assignmentId: _a, siteId: _s, ...row }) => row) };
   });
 
-export const assignmentDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+export const assignmentUnpublish = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   grant(
     await authorize(context.iam, { permission: "schedule:admin", scope: { kind: "shiftAssignment", id: input.id } }),
   );
 
-  const result = await shift.assignment.remove(input.id);
+  const result = await shift.assignment.unpublish(input.id);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
@@ -321,7 +327,7 @@ const overrideCreateInputSchema = z.object({
   startTime: z.coerce.date().nullable().optional(),
   endTime: z.coerce.date().nullable().optional(),
   isScheduled: z.boolean().nullable().optional(),
-  label: z.string().min(1).nullable().optional(),
+  note: z.string().min(1).nullable().optional(),
 });
 
 const overrideUpdateInputSchema = z.object({
@@ -329,7 +335,7 @@ const overrideUpdateInputSchema = z.object({
   startTime: z.coerce.date().nullable().optional(),
   endTime: z.coerce.date().nullable().optional(),
   isScheduled: z.boolean().nullable().optional(),
-  label: z.string().min(1).nullable().optional(),
+  note: z.string().min(1).nullable().optional(),
 });
 
 const overrideListInputSchema = z.object({
@@ -339,40 +345,38 @@ const overrideListInputSchema = z.object({
   to: businessDateSchema.optional(),
 });
 
-/** Overrides are authorized through their site. */
-async function authorizedOverride(
-  iam: Parameters<typeof authorize>[0],
-  id: string,
-  permission: "schedule:read" | "schedule:write",
-) {
-  const override = unwrap(await shift.override.getById(id), { notFoundMessage: "Shift override not found" });
-  grant(await authorize(iam, { permission, scope: { kind: "site", siteId: override.siteId } }));
-  return override;
+/** An override is authorized through its site, so the row is read first. */
+async function loadOverride(id: string) {
+  return unwrap(await shift.override.getById(id), { notFoundMessage: "Shift override not found" });
 }
 
 export const overrideCreate = authRequired.input(overrideCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: siteScope(input.siteId) }));
 
   return unwrap(await shift.override.create(input));
 });
 
 export const overrideList = authRequired.input(overrideListInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "schedule:read", scope: siteScope(input.siteId) }));
   return shift.override.list(input);
 });
 
 export const overrideGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  return authorizedOverride(context.iam, input.id, "schedule:read");
+  const override = await loadOverride(input.id);
+  grant(await authorize(context.iam, { permission: "schedule:read", scope: siteScope(override.siteId) }));
+  return override;
 });
 
 export const overrideUpdate = authRequired.input(overrideUpdateInputSchema).handler(async ({ input, context }) => {
-  await authorizedOverride(context.iam, input.id, "schedule:write");
+  const override = await loadOverride(input.id);
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: siteScope(override.siteId) }));
   const { id, ...updateData } = input;
   return unwrap(await shift.override.update(id, updateData));
 });
 
 export const overrideDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  await authorizedOverride(context.iam, input.id, "schedule:write");
+  const override = await loadOverride(input.id);
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: siteScope(override.siteId) }));
   const result = await shift.override.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
@@ -382,39 +386,33 @@ export const overrideDelete = authRequired.input(idInputSchema).handler(async ({
 // ShiftAmendment Procedures — corrections to shifts that already started
 // ============================================================================
 
-const amendmentCreateInputSchema = z.object({
-  siteId: z.uuid(),
-  workCenterId: z.uuid().nullable().optional(),
-  businessDate: businessDateSchema,
-  shiftName: z.string().min(1),
-  startTime: z.coerce.date().nullable().optional(),
-  endTime: z.coerce.date().nullable().optional(),
-  isScheduled: z.boolean().nullable().optional(),
-  label: z.string().min(1).nullable().optional(),
-});
+// An amendment is an override of a day that has run: same shape, and the shift
+// it corrects must be named.
+const amendmentCreateInputSchema = overrideCreateInputSchema.extend({ shiftName: z.string().min(1) });
 
-async function authorizedAmendment(iam: Parameters<typeof authorize>[0], id: string) {
-  const amendment = await prisma.shiftAmendment.findUnique({ where: { id }, select: { siteId: true } });
-  if (!amendment) throw new ORPCError("NOT_FOUND", { message: "Shift amendment not found" });
-  grant(await authorize(iam, { permission: "schedule:write", scope: { kind: "site", siteId: amendment.siteId } }));
+/** An amendment is authorized through its site, so the row is read first. */
+async function loadAmendment(id: string) {
+  return unwrap(await shift.amend.getById(id), { notFoundMessage: "Shift amendment not found" });
 }
 
 export const amendmentCreate = authRequired.input(amendmentCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: siteScope(input.siteId) }));
   return unwrap(await shift.amend.amendShift({ ...input, actorUserId: context.iam.id }));
 });
 
 export const amendmentList = authRequired.input(overrideListInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "schedule:read", scope: siteScope(input.siteId) }));
   return shift.amend.listShiftAmendments(input);
 });
 
 export const amendmentUndo = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  await authorizedAmendment(context.iam, input.id);
+  const amendment = await loadAmendment(input.id);
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: siteScope(amendment.siteId) }));
   return unwrap(await shift.amend.undoShiftAmendment(input.id, context.iam.id));
 });
 
 export const amendmentRetry = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  await authorizedAmendment(context.iam, input.id);
+  const amendment = await loadAmendment(input.id);
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: siteScope(amendment.siteId) }));
   return unwrap(await shift.amend.retryShiftAmendment(input.id));
 });

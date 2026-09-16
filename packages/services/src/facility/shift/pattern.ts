@@ -1,4 +1,6 @@
 import prisma from "@rw/db";
+import { rematerializePattern } from "@rw/services/facility/shift/materialize";
+import { unpublish } from "./assignment.js";
 
 export interface CreateShiftPatternInput {
   name: string;
@@ -48,6 +50,13 @@ const patternInclude = {
   _count: { select: { shifts: true } },
 };
 
+/** Published = has an assignment that has not ended (server clock). */
+const withPublished = <T extends { assignment: { rotationEndDate: Date | null } | null }>(pattern: T) => ({
+  ...pattern,
+  isPublished:
+    !!pattern.assignment && (!pattern.assignment.rotationEndDate || pattern.assignment.rotationEndDate > new Date()),
+});
+
 /**
  * Create a new shift pattern
  */
@@ -74,7 +83,7 @@ export async function create(input: CreateShiftPatternInput) {
     include: patternInclude,
   });
 
-  return { data: pattern };
+  return { data: withPublished(pattern) };
 }
 
 /**
@@ -83,7 +92,7 @@ export async function create(input: CreateShiftPatternInput) {
 export async function list(filter: ListShiftPatternsFilter = {}) {
   const { siteId, name, limit = 50, offset = 0 } = filter;
 
-  const where: Record<string, unknown> = {};
+  const where: Record<string, unknown> = { deletedAt: null };
 
   if (siteId) {
     where.siteId = siteId;
@@ -105,7 +114,7 @@ export async function list(filter: ListShiftPatternsFilter = {}) {
   ]);
 
   return {
-    data: patterns,
+    data: patterns.map(withPublished),
     total,
     limit: Number(limit),
     offset: Number(offset),
@@ -125,7 +134,7 @@ export async function getById(id: string) {
     return null;
   }
 
-  return { data: pattern };
+  return { data: withPublished(pattern) };
 }
 
 /**
@@ -134,21 +143,10 @@ export async function getById(id: string) {
 export async function update(id: string, input: UpdateShiftPatternInput) {
   const { name, totalDaysInRotation, startOnDayOfWeek, useEndDateForBusinessDate } = input;
 
-  const current = await prisma.shiftPattern.findUnique({
-    where: { id },
-    include: { assignment: { select: { id: true } } },
-  });
+  const current = await prisma.shiftPattern.findUnique({ where: { id }, select: { id: true } });
 
   if (!current) {
     return { error: "Shift pattern not found", code: "SHIFT_PATTERN_NOT_FOUND" };
-  }
-
-  // Prevent editing assigned patterns
-  if (current.assignment) {
-    return {
-      error: "Cannot edit an assigned shift pattern. Clone it first, then edit the clone.",
-      code: "PATTERN_ASSIGNED",
-    };
   }
 
   const updateData: Record<string, unknown> = {};
@@ -162,8 +160,13 @@ export async function update(id: string, input: UpdateShiftPatternInput) {
     data: updateData,
     include: patternInclude,
   });
+  // Only a change that moves a boundary is worth rebuilding the week for; a
+  // rename does not.
+  const movesShifts =
+    totalDaysInRotation !== undefined || useEndDateForBusinessDate !== undefined || startOnDayOfWeek !== undefined;
+  if (movesShifts) await rematerializePattern(id);
 
-  return { data: pattern };
+  return { data: withPublished(pattern) };
 }
 
 /**
@@ -179,14 +182,15 @@ export async function remove(id: string) {
     return { error: "Shift pattern not found", code: "SHIFT_PATTERN_NOT_FOUND" };
   }
 
+  // A published pattern's assignment anchors the instances history is stamped
+  // on, so it is ended now and hidden; only a never-published one is removed.
   if (pattern.assignment) {
-    return {
-      error: "Cannot delete an assigned shift pattern. Remove the assignment first.",
-      code: "PATTERN_ASSIGNED",
-    };
+    const ended = await unpublish(pattern.assignment.id);
+    if ("error" in ended) return ended;
+    await prisma.shiftPattern.update({ where: { id }, data: { deletedAt: new Date() } });
+  } else {
+    await prisma.shiftPattern.delete({ where: { id } });
   }
-
-  await prisma.shiftPattern.delete({ where: { id } });
 
   return { success: true };
 }
@@ -242,5 +246,5 @@ export async function duplicate(id: string, newName?: string) {
   });
 
   // biome-ignore lint/style/noNonNullAssertion: pattern is the result of findUnique on a row just created in the same transaction
-  return { data: pattern! };
+  return { data: withPublished(pattern!) };
 }

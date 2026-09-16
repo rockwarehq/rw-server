@@ -45,7 +45,7 @@ import {
   buildInstanceRows,
   hasOverlappingRows,
   type InstanceRow,
-  NOT_SCHEDULED_NAME,
+  OFF_HOURS_NAME,
 } from "./materialize.js";
 
 const day = (s: string) => new Date(`${s}T00:00:00Z`);
@@ -104,9 +104,9 @@ describe("fillNotScheduledGaps", () => {
     const rows = buildInstanceRows(assignment, day("2026-09-14").getTime(), 0);
     expect(rows.map(brief)).toEqual([
       "Shift 1|2026-09-14|09-14T06:00→09-14T12:00|S",
-      "Not Scheduled|2026-09-14|09-14T12:00→09-14T14:00|N",
+      "Off Hours|2026-09-14|09-14T12:00→09-14T14:00|N",
       "Shift 2|2026-09-14|09-14T14:00→09-14T20:00|S",
-      "Not Scheduled|2026-09-14|09-14T20:00→09-14T22:00|N",
+      "Off Hours|2026-09-14|09-14T20:00→09-14T22:00|N",
       "Shift 3|2026-09-14|09-14T22:00→09-15T04:00|S",
     ]);
   });
@@ -121,9 +121,9 @@ describe("fillNotScheduledGaps", () => {
         r.startTime < new Date("2026-09-21T06:00:00Z"),
     );
     expect(gaps.map(brief)).toEqual([
-      "Not Scheduled|2026-09-18|09-19T04:00→09-19T06:00|N",
-      "Not Scheduled|2026-09-19|09-19T06:00→09-20T06:00|N",
-      "Not Scheduled|2026-09-20|09-20T06:00→09-21T06:00|N",
+      "Off Hours|2026-09-18|09-19T04:00→09-19T06:00|N",
+      "Off Hours|2026-09-19|09-19T06:00→09-20T06:00|N",
+      "Off Hours|2026-09-20|09-20T06:00→09-21T06:00|N",
     ]);
     expect(rows.at(-1)?.shiftName).toBe("Shift 3"); // trailing gap not emitted
     expect(hasOverlappingRows(rows)).toBe(false);
@@ -148,9 +148,9 @@ describe("fillNotScheduledGaps", () => {
     const rows = buildInstanceRows(assignment, day("2026-09-14").getTime(), 0, [kept]);
     expect(rows.map(brief)).toEqual([
       "Shift 1|2026-09-14|09-14T06:00→09-14T12:00|S",
-      "Not Scheduled|2026-09-14|09-14T12:00→09-14T14:30|N",
+      "Off Hours|2026-09-14|09-14T12:00→09-14T14:30|N",
       "Shift 2|2026-09-14|09-14T14:30→09-14T20:00|S",
-      "Not Scheduled|2026-09-14|09-14T20:00→09-14T22:00|N",
+      "Off Hours|2026-09-14|09-14T20:00→09-14T22:00|N",
       "Shift 3|2026-09-14|09-14T22:00→09-15T04:00|S",
     ]);
     expect(rows[2]).toBe(kept);
@@ -158,8 +158,44 @@ describe("fillNotScheduledGaps", () => {
   });
 });
 
+describe("buildInstanceRows rotation end", () => {
+  it("is an instant: shifts starting at or after it are not built", () => {
+    const ended = { ...assignment, rotationEndDate: new Date("2026-09-15T12:00:00Z") };
+    const rows = buildInstanceRows(ended, day("2026-09-14").getTime(), 3, [], "UTC", []).filter((r) => r.isScheduled);
+    expect(rows.map((r) => `${r.businessDate.toISOString().slice(0, 10)} ${r.shiftName}`)).toEqual([
+      "2026-09-14 Shift 1",
+      "2026-09-14 Shift 2",
+      "2026-09-14 Shift 3",
+      "2026-09-15 Shift 1",
+    ]);
+  });
+});
+
+describe("buildInstanceRows preserved rows", () => {
+  it("keeps existing rows before a moved-forward rotation start and fills gaps around them", () => {
+    // Rows the tick wrote under the old rotation (Sun 09-13); the rotation now starts Mon 09-14.
+    const old = buildInstanceRows(
+      { ...assignment, rotationStartDate: day("2026-09-13") },
+      day("2026-09-13").getTime(),
+      1,
+    ).filter((r) => r.isScheduled && r.businessDate.getTime() === day("2026-09-13").getTime());
+    expect(old).toHaveLength(3);
+    const rows = buildInstanceRows(assignment, day("2026-09-13").getTime(), 2, old);
+    const on13 = rows.filter((r) => r.businessDate.getTime() === day("2026-09-13").getTime());
+    expect(on13.map(brief)).toEqual([
+      "Shift 1|2026-09-13|09-13T06:00→09-13T12:00|S",
+      `${OFF_HOURS_NAME}|2026-09-13|09-13T12:00→09-13T14:00|N`,
+      "Shift 2|2026-09-13|09-13T14:00→09-13T20:00|S",
+      `${OFF_HOURS_NAME}|2026-09-13|09-13T20:00→09-13T22:00|N`,
+      "Shift 3|2026-09-13|09-13T22:00→09-14T04:00|S",
+      `${OFF_HOURS_NAME}|2026-09-13|09-14T04:00→09-14T06:00|N`,
+    ]);
+    expect(hasOverlappingRows(rows.filter((r) => !r.isScheduled || r.definitionId))).toBe(false);
+  });
+});
+
 describe("buildInstanceRows overrides", () => {
-  it("cancelled shift keeps its window, unscheduled, named by the label", () => {
+  it("switched-off shift keeps its window and name, unscheduled", () => {
     const rows = buildInstanceRows(assignment, day("2026-09-14").getTime(), 0, [], "UTC", [
       {
         businessDate: day("2026-09-14"),
@@ -167,14 +203,14 @@ describe("buildInstanceRows overrides", () => {
         startTime: null,
         endTime: null,
         isScheduled: false,
-        label: "Holiday",
+        note: "Holiday",
       },
     ]);
     expect(rows.map(brief)).toEqual([
       "Shift 1|2026-09-14|09-14T06:00→09-14T12:00|S",
-      "Not Scheduled|2026-09-14|09-14T12:00→09-14T14:00|N",
-      "Holiday|2026-09-14|09-14T14:00→09-14T20:00|N",
-      "Not Scheduled|2026-09-14|09-14T20:00→09-14T22:00|N",
+      "Off Hours|2026-09-14|09-14T12:00→09-14T14:00|N",
+      "Shift 2|2026-09-14|09-14T14:00→09-14T20:00|N",
+      "Off Hours|2026-09-14|09-14T20:00→09-14T22:00|N",
       "Shift 3|2026-09-14|09-14T22:00→09-15T04:00|S",
     ]);
     expect(rows[2].definitionId).toBe("d1s2");
@@ -188,7 +224,7 @@ describe("buildInstanceRows overrides", () => {
         startTime: null,
         endTime: null,
         isScheduled: false,
-        label: null,
+        note: null,
       },
       {
         businessDate: day("2026-09-14"),
@@ -196,12 +232,12 @@ describe("buildInstanceRows overrides", () => {
         startTime: new Date("2026-09-14T21:00:00Z"),
         endTime: new Date("2026-09-15T03:00:00Z"),
         isScheduled: null,
-        label: null,
+        note: null,
       },
     ]);
     expect(rows.filter((r) => r.definitionId).map(brief)).toEqual([
-      `${NOT_SCHEDULED_NAME}|2026-09-14|09-14T06:00→09-14T12:00|N`,
-      `${NOT_SCHEDULED_NAME}|2026-09-14|09-14T14:00→09-14T20:00|N`,
+      "Shift 1|2026-09-14|09-14T06:00→09-14T12:00|N",
+      "Shift 2|2026-09-14|09-14T14:00→09-14T20:00|N",
       "Shift 3|2026-09-14|09-14T21:00→09-15T03:00|S",
     ]);
   });
@@ -214,12 +250,12 @@ describe("buildInstanceRows overrides", () => {
         startTime: new Date("2026-09-14T07:00:00Z"),
         endTime: new Date("2026-09-14T13:00:00Z"),
         isScheduled: null,
-        label: null,
+        note: null,
       },
     ]);
     expect(rows.slice(0, 2).map(brief)).toEqual([
       "Shift 1|2026-09-14|09-14T07:00→09-14T13:00|S",
-      "Not Scheduled|2026-09-14|09-14T13:00→09-14T14:00|N",
+      "Off Hours|2026-09-14|09-14T13:00→09-14T14:00|N",
     ]);
   });
 
@@ -231,13 +267,13 @@ describe("buildInstanceRows overrides", () => {
         startTime: null,
         endTime: null,
         isScheduled: false,
-        label: "Down",
+        note: "Down",
       },
     ]);
     const byDate = (d: string) =>
       rows.filter((r) => r.definitionId && iso(r.businessDate) === d).map((r) => r.shiftName);
     expect(byDate("2026-09-14")).toEqual(["Shift 1", "Shift 2", "Shift 3"]);
-    expect(byDate("2026-09-15")).toEqual(["Down", "Down", "Down"]);
+    expect(byDate("2026-09-15")).toEqual(["Shift 1", "Shift 2", "Shift 3"]);
   });
 });
 
@@ -250,7 +286,7 @@ describe("hasOverlappingRows", () => {
         startTime: new Date("2026-09-14T06:00:00Z"),
         endTime: new Date("2026-09-14T15:00:00Z"),
         isScheduled: null,
-        label: null,
+        note: null,
       },
     ]);
     expect(hasOverlappingRows(rows.filter((r) => r.definitionId))).toBe(true);
@@ -267,17 +303,17 @@ describe("added shifts", () => {
         startTime: new Date("2026-09-19T10:00:00Z"),
         endTime: new Date("2026-09-19T16:00:00Z"),
         isScheduled: null,
-        label: null,
+        note: null,
       },
     ]);
     const sat = rows.filter(
       (r) => r.startTime >= new Date("2026-09-19T04:00:00Z") && r.startTime < new Date("2026-09-20T06:00:00Z"),
     );
     expect(sat.map(brief)).toEqual([
-      "Not Scheduled|2026-09-18|09-19T04:00→09-19T06:00|N",
-      "Not Scheduled|2026-09-19|09-19T06:00→09-19T10:00|N",
+      "Off Hours|2026-09-18|09-19T04:00→09-19T06:00|N",
+      "Off Hours|2026-09-19|09-19T06:00→09-19T10:00|N",
       "Saturday OT|2026-09-19|09-19T10:00→09-19T16:00|S",
-      "Not Scheduled|2026-09-19|09-19T16:00→09-20T10:00|N",
+      "Off Hours|2026-09-19|09-19T16:00→09-20T10:00|N",
     ]);
     expect(sat[2].definitionId).toBeNull();
   });
@@ -290,7 +326,7 @@ describe("added shifts", () => {
         startTime: new Date("2026-09-14T07:00:00Z"),
         endTime: new Date("2026-09-14T13:00:00Z"),
         isScheduled: null,
-        label: null,
+        note: null,
       },
     ]);
     expect(rows.filter((r) => r.shiftName === "Shift 1")).toHaveLength(1);
@@ -466,7 +502,7 @@ describe("scheduled flag", () => {
         startTime: null,
         endTime: null,
         isScheduled: true,
-        label: null,
+        note: null,
       },
     ]);
     const sats = rows.filter((r) => r.definitionId === "d6s1");
@@ -484,11 +520,11 @@ describe("scheduled flag", () => {
         startTime: new Date("2026-09-14T15:00:00Z"),
         endTime: new Date("2026-09-14T19:00:00Z"),
         isScheduled: false,
-        label: "Down",
+        note: "Down",
       },
     ]);
     expect(rows.filter((r) => r.definitionId === "d1s2").map(brief)).toEqual([
-      "Down|2026-09-14|09-14T15:00→09-14T19:00|N",
+      "Shift 2|2026-09-14|09-14T15:00→09-14T19:00|N",
     ]);
   });
 });

@@ -28,7 +28,7 @@ buckets asynchronously" half for jobs.
 
 1. **Every instant inside the materialized window has an instance row.** After the
    scheduled rows for a day are built, the gaps between consecutive shifts become rows
-   named "Not Scheduled" with `isScheduled = false` and no `definitionId`. The gap after
+   named "Off Hours" with `isScheduled = false` and no `definitionId`. The gap after
    the last built shift is not written (its end is unknown) — it appears when the next
    shift enters the window. Period rows cut at gap boundaries like any other
    (ADR-0014), so a downtime running into unscheduled time becomes an unscheduled piece
@@ -59,6 +59,14 @@ buckets asynchronously" half for jobs.
    are null, and downtime inside it is exempt. Day, workcenter and site rollups exclude
    that time from their denominators as a result.
 
+   **The flag is stamped, not joined.** Every shift-stamped fact table and both bucket
+   tables carry `isScheduled`, written with the shift stamp exactly like `businessDate`
+   (the same star-stamp convention), backfilled from the instance rows, and re-stamped by
+   amendments in the same statement that moves `shiftInstanceId`. Bucket inserts read it
+   from the instance they are keyed to. The report catalog exposes it as a `scheduled`
+   dimension on every fact with a shift and hides unscheduled time by default; grouping
+   by it, or filtering it explicitly, shows what happened in it.
+
 2b. **A definition can be kept on the rotation but not worked by default.**
    `ShiftDefinition.isScheduled = false` (a weekend shift) still materializes rows — with
    the definition's own name and window, `isScheduled = false` — so the calendar shows the
@@ -73,7 +81,8 @@ buckets asynchronously" half for jobs.
      shift that date; a shift-specific override beats a whole-day one. It carries a
      replacement window and/or a three-way `isScheduled`: null leaves the definition's
      flag alone, false switches the shift off (the window is kept, `isScheduled = false`,
-     named by the override label, e.g. "Holiday"), true switches it on. When it names a
+     the row keeps its own name), true switches it on. A free-text `note` ("Holiday")
+     lives on the override for the calendar only; it is not a report dimension. When it names a
      shift the pattern lacks that day it adds a scheduled shift with no definition. The row builder applies
      overrides when it materializes, and a write re-runs the builder from the day before
      the date, deleting and regenerating unused rows. Rows in the seven-day window are
@@ -88,6 +97,19 @@ buckets asynchronously" half for jobs.
      preview and a later amendment of the same day all reproduce amended days.
    The calendar offers one action, "modify"; the service picks the record from
    `instance.startTime <= now`.
+   "Frozen" means the pattern is not the place to record a one-day deviation, not that
+   it cannot change. A published pattern's definitions may be edited, added or removed in
+   place (2026-09-16); the write rebuilds the assignment's rows from now with the same
+   routine a new assignment uses, so free future rows follow the new definition while the
+   running shift and anything stamped keep their own copies. Overrides key by shift name,
+   so renaming a definition does not carry its overrides along; the only guard left is
+   that the definition anchoring the rotation start cannot be deleted.
+   Unpublishing ends the assignment at that instant instead of deleting it: shifts that
+   have not started are removed, the running shift and every stamped row stay (a delete
+   would cascade to every instance and null the stamp on every fact). The builder treats
+   the rotation end as an instant, so nothing starting at or after it is materialized.
+   Publishing the same pattern again reuses the ended assignment row, so history keeps
+   one assignment id, and a pattern that has ever been published cannot be deleted.
 
 4. **Amendments update rows in place and diff, they do not hand-code cases.** The target
    rows for the day are computed with the same builder (pattern + overrides + the
@@ -112,7 +134,9 @@ buckets asynchronously" half for jobs.
    ensures them against the new boundaries, runs `recalcAll` per affected station,
    cascades, and marks the amendment `APPLIED` or `FAILED`; a retry re-publishes. Cycles
    completing meanwhile resolve their shift from the already-updated rows and land in
-   the right bucket once it exists. On `APPLIED` the worker publishes a second event,
+   the right bucket once it exists. The rebuild recomputes every hour of every row the
+   amendment changed (a shift bucket sums all of its hours, not only the moved ones) and
+   clears the process-level shift-window cache first. On `APPLIED` the worker publishes a second event,
    `shift-history.<site>.<scope>.rebuilt`, and a `ui.changes` ping so calendars, recaps
    and automations know the numbers are final.
 
@@ -137,7 +161,7 @@ buckets asynchronously" half for jobs.
 ## Consequences
 
 - Every fact from now on carries a shift stamp, so shift-grain reports are complete and
-  "Not Scheduled" / "Holiday" are visible groups rather than blanks.
+  "Off Hours" / "Holiday" are visible groups rather than blanks.
 - A workcenter schedule's gap rows shadow a site-level shift during the gap. Previously
   the site shift filled in; the workcenter's explicit "not scheduled" now wins.
 - Reports that group by shift name pick up cancelled and added shifts by name; an added
@@ -155,7 +179,22 @@ buckets asynchronously" half for jobs.
 - **Materialize a year of instances and let users edit rows directly** — cheap to store,
   but every pattern change would have to merge hand edits with regenerated rows, and
   the table would hold two sources of truth. Rejected in favour of a short rolling
-  window plus a calendar preview computed from pattern and overrides.
+  window plus a calendar preview computed from pattern and overrides. The preview
+  shows the assignment's existing `ShiftInstance` rows first (they are what facts
+  are stamped to) and lets the builder fill only what has no row yet, so moving a
+  rotation start or editing a pattern never rewrites the past on the calendar. Before
+  now, only table rows are shown: a past day nothing was written for is a gap, not
+  what the pattern would have made.
+- **Instances that have ended are history and are never deleted.** Deleting a
+  published pattern ends its assignment now (not-started rows removed) and sets
+  `ShiftPattern.deletedAt`; the assignment, definitions and past rows stay so every
+  stamp still resolves, and the calendar still lists the ended schedule. Publish and
+  override rebuilds never reach behind the current instant; a rebuild reserves every
+  row it keeps (history, in-use rows, and a superseded schedule's running shift, which
+  finishes before the new schedule's rows begin) and leaves an unchanged row's id
+  alone; the tick likewise reserves every existing row of the scope, so it only ever
+  fills time that has no row, and an override for a date that
+  has already run is refused (that is an amendment).
 - **No materialization; compute the shift on demand** — fourteen tables and the metric
   buckets key on the instance id. Rejected as a rewrite of the history layer.
 - **One record with a status for every change** — an override needs no rebuild, so its
@@ -174,4 +213,97 @@ Items 3 (`ShiftAmendment`), 4 and 6 on the stacked `feat/shift-amendments`: the 
 the `RW_SHIFT_HISTORY_EVENTS` stream with the rollups-worker rebuild, undo and retry. Two
 known gaps: (a) period pieces that were cut at a boundary that no longer exists stay two
 pieces with the same stamp (reports counting pieces are off by one there; a merge is
-deferred), and (b) item 2 — unscheduled time not counting against KPIs — is still open.
+deferred). Item 2 (stamps, KPI exemption, report default) is the stacked
+`feat/shift-scheduled-stamps`; the exemption lives in the one state-log tally every
+TypeScript duration path shares and in the two SQL derivations the live cascade uses
+(station hours and per-job hours), so JOB buckets are exempt too. In-place edits of
+published definitions and patterns (`rematerializePattern`), unpublish-as-end
+(`shiftAssignment.unpublish`, `isPublished` on patterns) are on the same branch.
+
+## The amendment reads rows, not the pattern
+
+An amendment corrects a day that has already run, and on such a day the rows are the
+truth: they carry the stamps, and the assignment that built them may already have been
+ended behind them. Publishing a schedule with a past start date does exactly that, since
+reconcile ends the previous assignment at the new start while the rows from that date up
+to now stay as history. So the amendment:
+
+- finds the shift in the scope (site plus workcenter, business date, name), not through
+  the assignments whose rotation covers the date;
+- builds its target from the scope's own rows over the day and its neighbours, with the
+  amendment applied to one of them and the Off Hours rows re-cut around the result;
+- locks, and records itself against, the row's own assignment.
+
+The pattern is not consulted at all. Two failures this removes: a shift that outlived its
+assignment could not be found (`SHIFT_NOT_FOUND`), and one still inside the two-day slack
+was found but rebuilt from a rotation that no longer produced it, so the diff was empty
+("Amendment changes nothing"). Reading the whole scope rather than one assignment also
+means a handover day, where two assignments own rows, gets one consistent set of Off
+Hours rows instead of one per assignment.
+
+Order inside the transaction matters: obsolete rows are removed *before* the updates,
+because a shift moving back over a gap takes the start time that gap row still holds and
+`(assignmentId, startTime)` is unique. That is safe because the re-stamp now covers every
+changed row's old and new position, so a fact on a removed row is re-resolved by time
+rather than left unstamped; only a reference the re-stamp cannot move (material shift
+usage) keeps an obsolete row alive.
+
+One more fix in the same path: the re-stamp built a single parameter list for every fact
+table, but the site-level tables never mention the station id array, and Postgres rejects
+a statement with a parameter it cannot type. Every site-scoped amendment failed with
+`42P18` until the parameters were numbered per statement.
+
+## Rollup buckets follow the corrected window
+
+Three problems sat between an amendment and the numbers it is supposed to fix.
+
+The upsert that writes a rollup bucket listed every column on insert but left
+`durationSeconds` and `isScheduled` out of its `ON CONFLICT DO UPDATE`, so a bucket
+that already existed kept the shift length it was born with. Only a bucket that had
+been deleted first came back with the corrected window. Both columns are updated now.
+
+That mattered because the rebuild does not start from an empty slate. It drops the
+scope's live buckets, then each station's rebuild restores archived buckets for the
+station, its workcenter *and* the site, at their archived length. The restore runs
+after the drop, so the old window came back and then survived the upsert. The drop now
+covers the site as well as the scope, and clears the archive table too, so an old shift
+(whose buckets have been archived) rebuilds like a recent one. Without the site in that
+list, a moved boundary also left the old site bucket beside the new one, counting the
+window twice.
+
+Last, unscheduled time measured to `now` returned fractional seconds, and every KPI
+column is an integer. Shortening or cancelling a shift that is still running creates an
+Off Hours window whose first hour is in progress, so the rebuild wrote something like
+708.595 into an int column and the whole amendment failed with a Postgres 22P02. The
+gap branch rounds like the tally beside it now.
+
+One race remains, unfixed and rare: the rollups worker holds shift windows in a
+30-second cache of its own, so a tick landing right after an amendment can write a
+bucket for a boundary that no longer exists. It cannot persist a wrong duration any
+more, and the next rebuild of that window clears it.
+
+## Adding a shift to a day that has run
+
+Production sometimes happens outside the schedule: a crew works into unscheduled
+time, or one long shift was really two. The amendment covers both, because the
+target it builds is the day's rows and nothing stops a row being added to that set.
+
+`amendShift` takes an add when no shift of that name exists on the date. It needs a
+start and an end, the time must already have passed (otherwise it is an override),
+and the window must be free — the overlap check refuses anything landing on a shift
+that is already there, so an add can only fill Off Hours. The row it writes has no
+definition, because the pattern never described it, and joins the schedule that owns
+the time it lands in. Everything after that is the path a retime already took: the
+diff creates the row, facts inside the window re-stamp onto it by time, periods are
+re-cut at its edges, and the rebuild gives it its own buckets.
+
+Splitting is two amendments: shorten the shift, then add the remainder under a new
+name. The first opens Off Hours, the second fills it exactly, and the day ends with
+no gap between the halves.
+
+The amendment record's four `previous` columns are null for an add, since there was
+no shift to describe. Undo reads that: null means take the row off again rather than
+restore a window. The removal is itself an amendment, recording the window it took
+away in `previous` and leaving the replacement empty, so undoing the removal adds the
+shift back with no extra code. Only an added shift can be removed; a shift the pattern
+defines is cancelled instead, which keeps its name and window on the day.
