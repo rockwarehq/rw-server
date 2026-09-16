@@ -84,6 +84,7 @@ const definitionCreateInputSchema = z.object({
   startTime: z.string().regex(/^\d{2}:\d{2}$/, "Must be HH:mm format"),
   durationHrs: z.number().positive(),
   shiftName: z.string().min(1),
+  isScheduled: z.boolean().optional(),
 });
 
 const definitionUpdateInputSchema = z.object({
@@ -97,6 +98,7 @@ const definitionUpdateInputSchema = z.object({
     .optional(),
   durationHrs: z.number().positive().optional(),
   shiftName: z.string().min(1).optional(),
+  isScheduled: z.boolean().optional(),
 });
 
 const definitionListInputSchema = z.object({
@@ -290,8 +292,8 @@ export const assignmentPreview = authRequired
     if (to < from || to.getTime() - from.getTime() > 400 * 86_400_000) {
       throw new ORPCError("BAD_REQUEST", { message: "Preview range must be 0-400 days" });
     }
-    const rows = await shift.previewShiftInstances(input.id, from, to);
-    return rows.map(({ assignmentId: _a, siteId: _s, ...row }) => row);
+    const { today, rows } = await shift.previewShiftInstances(input.id, from, to);
+    return { today, rows: rows.map(({ assignmentId: _a, siteId: _s, ...row }) => row) };
   });
 
 export const assignmentDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
@@ -317,7 +319,7 @@ const overrideCreateInputSchema = z.object({
   shiftName: z.string().min(1).nullable().optional(),
   startTime: z.coerce.date().nullable().optional(),
   endTime: z.coerce.date().nullable().optional(),
-  cancelled: z.boolean().optional(),
+  isScheduled: z.boolean().nullable().optional(),
   label: z.string().min(1).nullable().optional(),
 });
 
@@ -325,7 +327,7 @@ const overrideUpdateInputSchema = z.object({
   id: z.uuid(),
   startTime: z.coerce.date().nullable().optional(),
   endTime: z.coerce.date().nullable().optional(),
-  cancelled: z.boolean().optional(),
+  isScheduled: z.boolean().nullable().optional(),
   label: z.string().min(1).nullable().optional(),
 });
 

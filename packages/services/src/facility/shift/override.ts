@@ -25,14 +25,15 @@ export interface CreateShiftOverrideInput {
   shiftName?: string | null;
   startTime?: Date | null;
   endTime?: Date | null;
-  cancelled?: boolean;
+  /** null = as defined; false = not worked (named by `label`); true = worked. */
+  isScheduled?: boolean | null;
   label?: string | null;
 }
 
 export interface UpdateShiftOverrideInput {
   startTime?: Date | null;
   endTime?: Date | null;
-  cancelled?: boolean;
+  isScheduled?: boolean | null;
   label?: string | null;
 }
 
@@ -61,7 +62,7 @@ export async function create(input: CreateShiftOverrideInput): Promise<OverrideR
     shiftName: input.shiftName ?? null,
     startTime: input.startTime ?? null,
     endTime: input.endTime ?? null,
-    cancelled: input.cancelled ?? false,
+    isScheduled: input.isScheduled ?? null,
     label: input.label ?? null,
   };
   const invalid = validateRule(rule);
@@ -91,7 +92,7 @@ export async function update(id: string, input: UpdateShiftOverrideInput): Promi
     shiftName: current.shiftName,
     startTime: input.startTime !== undefined ? input.startTime : current.startTime,
     endTime: input.endTime !== undefined ? input.endTime : current.endTime,
-    cancelled: input.cancelled ?? current.cancelled,
+    isScheduled: input.isScheduled !== undefined ? input.isScheduled : current.isScheduled,
     label: input.label !== undefined ? input.label : current.label,
   };
   const invalid = validateRule(rule);
@@ -142,10 +143,7 @@ function validateRule(rule: OverrideRule) {
   if (hasStart && (rule.endTime as Date) <= (rule.startTime as Date)) {
     return { error: "endTime must be after startTime", code: "INVALID_OVERRIDE" };
   }
-  if (rule.cancelled && hasStart) {
-    return { error: "A cancelled shift cannot also be retimed", code: "INVALID_OVERRIDE" };
-  }
-  if (!rule.cancelled && !hasStart) return { error: "Override changes nothing", code: "INVALID_OVERRIDE" };
+  if (rule.isScheduled === null && !hasStart) return { error: "Override changes nothing", code: "INVALID_OVERRIDE" };
   return null;
 }
 

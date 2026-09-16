@@ -84,7 +84,8 @@ export interface OverrideRule {
   shiftName: string | null;
   startTime: Date | null;
   endTime: Date | null;
-  cancelled: boolean;
+  /** null = as defined; false = not worked (named by `label`); true = worked. */
+  isScheduled: boolean | null;
   label: string | null;
 }
 
@@ -110,6 +111,7 @@ export interface AssignmentWithPattern {
       startTime: string;
       durationHrs: number;
       shiftName: string;
+      isScheduled: boolean;
     }>;
   };
 }
@@ -324,7 +326,7 @@ export async function loadOverrides(
       workCenterId: scope.workCenterId,
       businessDate: { gte: new Date(fromMs - MS_PER_DAY), lte: new Date(toMs) },
     },
-    select: { businessDate: true, shiftName: true, startTime: true, endTime: true, cancelled: true, label: true },
+    select: { businessDate: true, shiftName: true, startTime: true, endTime: true, isScheduled: true, label: true },
   });
 }
 
@@ -401,17 +403,18 @@ export function buildInstanceRows(
 
       if (overlapsAny(utcStartMs, utcEndMs, preserved)) continue;
 
-      const cancelled = override?.cancelled ?? false;
       rows.push({
         assignmentId: assignment.id,
         definitionId: definition.id,
         siteId: assignment.siteId,
         workCenterId: assignment.workCenterId,
-        shiftName: cancelled ? (override?.label ?? NOT_SCHEDULED_NAME) : definition.shiftName,
+        // An unscheduled definition keeps its name (it is the shift that would run);
+        // a shift switched off for one date takes the override's label.
+        shiftName: override?.isScheduled === false ? (override.label ?? NOT_SCHEDULED_NAME) : definition.shiftName,
         businessDate,
         startTime: new Date(utcStartMs),
         endTime: new Date(utcEndMs),
-        isScheduled: !cancelled,
+        isScheduled: override?.isScheduled ?? definition.isScheduled,
       });
     }
   }
@@ -421,7 +424,7 @@ export function buildInstanceRows(
   const rangeStartMs = fromDayMs - MS_PER_DAY;
   const rangeEndMs = fromDayMs + (lookaheadDays + 1) * MS_PER_DAY;
   for (const o of overrides) {
-    if (applied.has(o) || !o.shiftName || !o.startTime || !o.endTime || o.cancelled) continue;
+    if (applied.has(o) || !o.shiftName || !o.startTime || !o.endTime || o.isScheduled === false) continue;
     const dateMs = o.businessDate.getTime();
     if (dateMs < rangeStartMs || dateMs > rangeEndMs || !inRotation(dateMs)) continue;
     if (overlapsAny(o.startTime.getTime(), o.endTime.getTime(), preserved)) continue;
@@ -447,18 +450,24 @@ export const isGapRow = (row: { definitionId: string | null; isScheduled: boolea
 
 /**
  * Virtual rows for a calendar: what the materializer would write for
- * [from, to] with today's overrides applied. Nothing is persisted.
+ * [from, to] with today's overrides applied. Nothing is persisted. `today`
+ * and `started` come from the server clock and the site timezone, so a
+ * client never decides from its own clock whether a shift has begun.
  */
 export async function previewShiftInstances(
   assignmentId: string,
   from: Date,
   to: Date,
-): Promise<Array<InstanceRow & { definitionName: string | null }>> {
+): Promise<{ today: string; rows: Array<InstanceRow & { definitionName: string | null; started: boolean }> }> {
   const assignment = await prisma.shiftAssignment.findUnique({
     where: { id: assignmentId },
     include: assignmentIncludeForMaterialize,
   });
-  if (!assignment) return [];
+  if (!assignment) return { today: new Date().toISOString().slice(0, 10), rows: [] };
+  const now = new Date();
+  const today = getLocalCalendarDate(now, await getSiteTimezone(assignment.siteId))
+    .toISOString()
+    .slice(0, 10);
   const fromMs = floorToDay(from).getTime();
   const days = Math.max(0, Math.round((floorToDay(to).getTime() - fromMs) / MS_PER_DAY));
   // A day of lead so the first date's gaps are anchored like the tick builds
@@ -466,9 +475,16 @@ export async function previewShiftInstances(
   const rows = await buildRowsForAssignment(assignment, fromMs - MS_PER_DAY, days + 3, []);
   const cutoffMs = fromMs + (days + 1) * MS_PER_DAY;
   const nameById = new Map(assignment.pattern.shifts.map((d) => [d.id, d.shiftName]));
-  return rows
-    .filter((r) => r.startTime.getTime() < cutoffMs)
-    .map((r) => ({ ...r, definitionName: r.definitionId ? (nameById.get(r.definitionId) ?? null) : null }));
+  return {
+    today,
+    rows: rows
+      .filter((r) => r.startTime.getTime() < cutoffMs)
+      .map((r) => ({
+        ...r,
+        definitionName: r.definitionId ? (nameById.get(r.definitionId) ?? null) : null,
+        started: r.startTime <= now,
+      })),
+  };
 }
 
 /** Shift-specific override wins over a whole-day one. */

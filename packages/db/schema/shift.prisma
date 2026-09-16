@@ -99,6 +99,11 @@ model ShiftDefinition {
   /// Human-readable name (e.g., "Shift 1", "Night Shift").
   shiftName String
 
+  /// False = defined but not worked by default (a weekend shift kept on the
+  /// rotation so it can be switched on for one date with its name and window
+  /// already right). Its instances are unscheduled time.
+  isScheduled Boolean @default(true)
+
   pattern   ShiftPattern @relation(fields: [patternId], references: [id], onDelete: Cascade)
   patternId String       @db.Uuid
 
@@ -252,9 +257,11 @@ model ShiftInstance {
 /// instances are materialized: cancel a shift (holiday, scheduled down) or
 /// replace its window. Keyed by shift name so it survives pattern changes.
 ///
-///   shiftName = null → every shift on that date
-///   cancelled        → the window is kept as an unscheduled row named `label`
-///   startTime/endTime → replacement window (both or neither)
+///   shiftName = null   → every shift on that date
+///   isScheduled        → null = as the definition says; false = not worked, the
+///                        window is kept as an unscheduled row named `label`;
+///                        true = worked (switches an unscheduled definition on)
+///   startTime/endTime  → replacement window (both or neither)
 model ShiftOverride {
   id String @id @default(uuid()) @db.Uuid
 
@@ -271,9 +278,9 @@ model ShiftOverride {
   startTime DateTime? @db.Timestamptz(3)
   endTime   DateTime? @db.Timestamptz(3)
 
-  cancelled Boolean @default(false)
-  /// Display name for a cancelled shift (e.g. "Holiday"). Defaults to "Not Scheduled".
-  label     String?
+  isScheduled Boolean?
+  /// Display name for an unscheduled shift (e.g. "Holiday"). Defaults to "Not Scheduled".
+  label       String?
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)

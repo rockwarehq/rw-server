@@ -8,6 +8,7 @@ export interface CreateShiftDefinitionInput {
   startTime: string;
   durationHrs: number;
   shiftName: string;
+  isScheduled?: boolean;
 }
 
 export interface UpdateShiftDefinitionInput {
@@ -17,6 +18,7 @@ export interface UpdateShiftDefinitionInput {
   startTime?: string;
   durationHrs?: number;
   shiftName?: string;
+  isScheduled?: boolean;
 }
 
 export interface ListShiftDefinitionsFilter {
@@ -28,7 +30,7 @@ export interface ListShiftDefinitionsFilter {
  * Create a new shift definition within a pattern
  */
 export async function create(input: CreateShiftDefinitionInput) {
-  const { patternId, dayOfRotation, sortOrder, startDayOffset, startTime, durationHrs, shiftName } = input;
+  const { patternId, dayOfRotation, sortOrder, startDayOffset, startTime, durationHrs, shiftName, isScheduled } = input;
 
   // Validate pattern exists and is not assigned
   const pattern = await prisma.shiftPattern.findUnique({
@@ -69,6 +71,7 @@ export async function create(input: CreateShiftDefinitionInput) {
       startTime,
       durationHrs,
       shiftName,
+      isScheduled: isScheduled ?? true,
     },
   });
 
@@ -114,7 +117,7 @@ export async function getById(id: string) {
  * Update shift definition
  */
 export async function update(id: string, input: UpdateShiftDefinitionInput) {
-  const { dayOfRotation, sortOrder, startDayOffset, startTime, durationHrs, shiftName } = input;
+  const { dayOfRotation, sortOrder, startDayOffset, startTime, durationHrs, shiftName, isScheduled } = input;
 
   const current = await prisma.shiftDefinition.findUnique({
     where: { id },
@@ -167,6 +170,7 @@ export async function update(id: string, input: UpdateShiftDefinitionInput) {
   if (startTime !== undefined) updateData.startTime = startTime;
   if (durationHrs !== undefined) updateData.durationHrs = durationHrs;
   if (shiftName !== undefined) updateData.shiftName = shiftName;
+  if (isScheduled !== undefined) updateData.isScheduled = isScheduled;
 
   const definition = await prisma.shiftDefinition.update({
     where: { id },

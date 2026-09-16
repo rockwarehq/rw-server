@@ -70,6 +70,7 @@ const assignment: AssignmentWithPattern = {
         startTime: "06:00",
         durationHrs: 6,
         shiftName: "Shift 1",
+        isScheduled: true,
       },
       {
         id: `d${d}s2`,
@@ -79,6 +80,7 @@ const assignment: AssignmentWithPattern = {
         startTime: "14:00",
         durationHrs: 6,
         shiftName: "Shift 2",
+        isScheduled: true,
       },
       {
         id: `d${d}s3`,
@@ -88,6 +90,7 @@ const assignment: AssignmentWithPattern = {
         startTime: "22:00",
         durationHrs: 6,
         shiftName: "Shift 3",
+        isScheduled: true,
       },
     ]),
   },
@@ -163,7 +166,7 @@ describe("buildInstanceRows overrides", () => {
         shiftName: "Shift 2",
         startTime: null,
         endTime: null,
-        cancelled: true,
+        isScheduled: false,
         label: "Holiday",
       },
     ]);
@@ -184,7 +187,7 @@ describe("buildInstanceRows overrides", () => {
         shiftName: null,
         startTime: null,
         endTime: null,
-        cancelled: true,
+        isScheduled: false,
         label: null,
       },
       {
@@ -192,7 +195,7 @@ describe("buildInstanceRows overrides", () => {
         shiftName: "Shift 3",
         startTime: new Date("2026-09-14T21:00:00Z"),
         endTime: new Date("2026-09-15T03:00:00Z"),
-        cancelled: false,
+        isScheduled: null,
         label: null,
       },
     ]);
@@ -210,7 +213,7 @@ describe("buildInstanceRows overrides", () => {
         shiftName: "Shift 1",
         startTime: new Date("2026-09-14T07:00:00Z"),
         endTime: new Date("2026-09-14T13:00:00Z"),
-        cancelled: false,
+        isScheduled: null,
         label: null,
       },
     ]);
@@ -227,7 +230,7 @@ describe("buildInstanceRows overrides", () => {
         shiftName: null,
         startTime: null,
         endTime: null,
-        cancelled: true,
+        isScheduled: false,
         label: "Down",
       },
     ]);
@@ -246,7 +249,7 @@ describe("hasOverlappingRows", () => {
         shiftName: "Shift 1",
         startTime: new Date("2026-09-14T06:00:00Z"),
         endTime: new Date("2026-09-14T15:00:00Z"),
-        cancelled: false,
+        isScheduled: null,
         label: null,
       },
     ]);
@@ -263,7 +266,7 @@ describe("added shifts", () => {
         shiftName: "Saturday OT",
         startTime: new Date("2026-09-19T10:00:00Z"),
         endTime: new Date("2026-09-19T16:00:00Z"),
-        cancelled: false,
+        isScheduled: null,
         label: null,
       },
     ]);
@@ -286,7 +289,7 @@ describe("added shifts", () => {
         shiftName: "Shift 1",
         startTime: new Date("2026-09-14T07:00:00Z"),
         endTime: new Date("2026-09-14T13:00:00Z"),
-        cancelled: false,
+        isScheduled: null,
         label: null,
       },
     ]);
@@ -310,6 +313,7 @@ describe("local wall-clock definitions", () => {
           startTime: "23:00",
           durationHrs: 8,
           shiftName: "Shift 1",
+          isScheduled: true,
         },
         {
           id: "s2",
@@ -319,6 +323,7 @@ describe("local wall-clock definitions", () => {
           startTime: "07:00",
           durationHrs: 8,
           shiftName: "Shift 2",
+          isScheduled: true,
         },
         {
           id: "s3",
@@ -328,6 +333,7 @@ describe("local wall-clock definitions", () => {
           startTime: "15:00",
           durationHrs: 8,
           shiftName: "Shift 3",
+          isScheduled: true,
         },
       ],
     },
@@ -373,6 +379,7 @@ describe("DST edge cases", () => {
           startTime: "23:00",
           durationHrs,
           shiftName: "Night",
+          isScheduled: true,
         },
         ...(second
           ? [
@@ -384,6 +391,7 @@ describe("DST edge cases", () => {
                 startTime: second.startTime,
                 durationHrs: second.durationHrs,
                 shiftName: "Early",
+                isScheduled: true,
               },
             ]
           : []),
