@@ -32,6 +32,7 @@ import {
 } from "@rw/services/queues/shift-change";
 import { startDirtyBucketConsumer, stopDirtyBucketConsumer } from "@rw/services/metrics/batcher";
 import { startJobHistoryRebuild, stopJobHistoryRebuild } from "./job-history-rebuild.js";
+import { startShiftHistoryRebuild, stopShiftHistoryRebuild } from "./shift-history-rebuild.js";
 
 let cleanupBridge: (() => Promise<void>) | null = null;
 let cleanupMetricsBridge: (() => Promise<void>) | null = null;
@@ -52,6 +53,7 @@ export async function startRollups(): Promise<void> {
   await startMetricBucketEnsure();
   startDirtyBucketConsumer();
   await startJobHistoryRebuild();
+  await startShiftHistoryRebuild();
 
   console.log("[rollups] all workers started");
 }
@@ -59,6 +61,7 @@ export async function startRollups(): Promise<void> {
 export async function stopRollups(): Promise<void> {
   await stopDirtyBucketConsumer();
   await stopJobHistoryRebuild();
+  await stopShiftHistoryRebuild();
   await Promise.all([stopMetricBucketEnsure(), stopMetricBucketQueues(), stopShiftChangeQueue()]);
   if (cleanupGraphBridge) await cleanupGraphBridge();
   if (cleanupBridge) await cleanupBridge();

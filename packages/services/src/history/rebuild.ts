@@ -1,10 +1,9 @@
 import prisma from "@rw/db";
 import { publishUiChange } from "../events/ui-changes.js";
-import { unarchiveAffectedBuckets } from "../cycle/replay.js";
 import { ensureBuckets } from "../metrics/bucket.js";
 import { jobEntityId } from "../metrics/cascade.js";
 import { MetricsContext } from "../metrics/context.js";
-import { recalcAll } from "../metrics/recalc.js";
+import { rebuildStationWindow } from "../metrics/rebuild-window.js";
 
 /**
  * Rebuild the metric buckets over one amendment's window (including zeroing
@@ -30,15 +29,8 @@ export async function rebuildForAmendment(amendmentId: string, displacedJobIds: 
   };
   const t0 = lapStart;
   try {
-    await unarchiveAffectedBuckets(
-      stationId,
-      siteId,
-      from,
-      to,
-      jobIds.map((id) => jobEntityId(stationId, id)),
-    );
-    lap("unarchive");
     const ctx = new MetricsContext();
+    // The job's own buckets must exist at the window edges before the shared rebuild recomputes them.
     if (amendment.jobId) {
       const entity = {
         siteId,
@@ -50,7 +42,7 @@ export async function rebuildForAmendment(amendmentId: string, displacedJobIds: 
       if (!amendment.toTime) await ensureBuckets({ ...entity, timestamp: to }, ctx);
     }
     lap("ensure");
-    await recalcAll(stationId, siteId, from, to, ctx, jobIds);
+    await rebuildStationWindow(stationId, siteId, { start: from, end: to }, { jobIds, ctx });
     lap("recalc");
     // Stock moved with the items inside the amendment transaction (see
     // reassignItems); re-deriving a product's total from all history here

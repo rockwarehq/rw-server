@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
+import prisma from "@rw/db";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
@@ -375,4 +376,45 @@ export const overrideDelete = authRequired.input(idInputSchema).handler(async ({
   const result = await shift.override.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
+});
+
+// ============================================================================
+// ShiftAmendment Procedures — corrections to shifts that already started
+// ============================================================================
+
+const amendmentCreateInputSchema = z.object({
+  siteId: z.uuid(),
+  workCenterId: z.uuid().nullable().optional(),
+  businessDate: businessDateSchema,
+  shiftName: z.string().min(1),
+  startTime: z.coerce.date().nullable().optional(),
+  endTime: z.coerce.date().nullable().optional(),
+  cancelled: z.boolean().optional(),
+  label: z.string().min(1).nullable().optional(),
+});
+
+async function authorizedAmendment(iam: Parameters<typeof authorize>[0], id: string) {
+  const amendment = await prisma.shiftAmendment.findUnique({ where: { id }, select: { siteId: true } });
+  if (!amendment) throw new ORPCError("NOT_FOUND", { message: "Shift amendment not found" });
+  grant(await authorize(iam, { permission: "schedule:write", scope: { kind: "site", siteId: amendment.siteId } }));
+}
+
+export const amendmentCreate = authRequired.input(amendmentCreateInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "site", siteId: input.siteId } }));
+  return unwrap(await shift.amend.amendShift({ ...input, actorUserId: context.iam.id }));
+});
+
+export const amendmentList = authRequired.input(overrideListInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "site", siteId: input.siteId } }));
+  return shift.amend.listShiftAmendments(input);
+});
+
+export const amendmentUndo = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await authorizedAmendment(context.iam, input.id);
+  return unwrap(await shift.amend.undoShiftAmendment(input.id, context.iam.id));
+});
+
+export const amendmentRetry = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await authorizedAmendment(context.iam, input.id);
+  return unwrap(await shift.amend.retryShiftAmendment(input.id));
 });

@@ -4,6 +4,8 @@ export * as definition from "./definition.js";
 export * as assignment from "./assignment.js";
 export * as current from "./current.js";
 export * as override from "./override.js";
+export * as amend from "./amend.js";
+export { setShiftHistoryEventSink, publishShiftHistoryEvent } from "./events.js";
 export {
   materializeShiftInstances,
   previewShiftInstances,

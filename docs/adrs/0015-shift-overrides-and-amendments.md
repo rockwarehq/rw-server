@@ -75,6 +75,9 @@ buckets asynchronously" half for jobs.
      the instance rows directly and records the old and new windows, the actor, and the
      rebuild status (`PENDING_REBUILD` / `APPLIED` / `FAILED`) exactly like
      `JobHistoryAmendment`. Undo is another amendment restoring the previous window.
+     An amendment has the same shape as an override and the builder treats it as one
+     more rule — the latest per date and shift wins — so the ensure tick, the calendar
+     preview and a later amendment of the same day all reproduce amended days.
    The calendar offers one action, "modify"; the service picks the record from
    `instance.startTime <= now`.
 
@@ -87,10 +90,11 @@ buckets asynchronously" half for jobs.
    union of the old and new windows are re-stamped by time; period rows there are merged
    back into their blocks and re-cut at the new boundaries with the shared cutter.
 
-5. **The ensure tick never fights an edit.** It only inserts, and it skips any generated
-   row that overlaps an existing row of the same schedule — not just rows with an
-   identical start — so an amended start time (a shift that began an hour early) is not
-   shadowed by the pattern's original row on the next tick.
+5. **The ensure tick never fights an edit.** Because amendments are builder rules, the
+   tick regenerates an amended shift with its amended times, which is the row already
+   there, and skips it as a duplicate. The same is true of the boundary jobs the tick
+   schedules: they are derived from the regenerated rows, so an amended end time moves
+   the next shift-change job on the following tick without any special hand-off.
 
 6. **Derived data rebuilds asynchronously; live recording is never blocked.** The
    amendment transaction only rewrites instance rows and stamps under the station
@@ -100,10 +104,7 @@ buckets asynchronously" half for jobs.
    ensures them against the new boundaries, runs `recalcAll` per affected station,
    cascades, and marks the amendment `APPLIED` or `FAILED`; a retry re-publishes. Cycles
    completing meanwhile resolve their shift from the already-updated rows and land in
-   the right bucket once it exists. The shift-change boundary job for the scope is
-   re-scheduled from the amended rows after commit, since the ensure tick derives
-   boundaries from the builder's output and would not see an amended end time. On
-   `APPLIED` the worker publishes a second event,
+   the right bucket once it exists. On `APPLIED` the worker publishes a second event,
    `shift-history.<site>.<scope>.rebuilt`, and a `ui.changes` ping so calendars, recaps
    and automations know the numbers are final.
 
@@ -159,6 +160,10 @@ buckets asynchronously" half for jobs.
 
 ## Implemented so far
 
-Items 1, 3 (overrides only), 5 (identical-start dedup only), 7 and 8, plus the calendar
-preview, on `feat/shift-gaps-overrides`. Items 2, 4, 6, the overlap-skip in 5 and
-`ShiftAmendment` are the stacked `feat/shift-amendments` branch.
+Items 1, 3 (overrides), 5, 7 and 8, plus the calendar preview, on `feat/shift-gaps-overrides`.
+Items 3 (`ShiftAmendment`), 4 and 6 on the stacked `feat/shift-amendments`: the diff planner
+(`planInstanceDiff`), re-stamp of every stamped fact table by its own instant, period re-cut,
+the `RW_SHIFT_HISTORY_EVENTS` stream with the rollups-worker rebuild, undo and retry. Two
+known gaps: (a) period pieces that were cut at a boundary that no longer exists stay two
+pieces with the same stamp (reports counting pieces are off by one there; a merge is
+deferred), and (b) item 2 — unscheduled time not counting against KPIs — is still open.

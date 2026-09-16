@@ -439,6 +439,12 @@ export const router = {
     update: shift.overrideUpdate,
     delete: shift.overrideDelete,
   },
+  shiftAmendment: {
+    create: shift.amendmentCreate,
+    list: shift.amendmentList,
+    undo: shift.amendmentUndo,
+    retry: shift.amendmentRetry,
+  },
   disposition: {
     create: disposition.dispositionCreate,
     list: disposition.dispositionList,

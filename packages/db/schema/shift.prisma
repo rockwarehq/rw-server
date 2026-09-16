@@ -153,7 +153,8 @@ model ShiftAssignment {
   workCenterId String?     @db.Uuid
   workCenter   Workcenter? @relation(fields: [workCenterId], references: [id])
 
-  instances ShiftInstance[]
+  instances  ShiftInstance[]
+  amendments ShiftAmendment[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -287,6 +288,67 @@ model ShiftOverride {
 
   @@index([siteId, businessDate])
   @@index([workCenterId, businessDate])
+}
+
+/// A correction to a shift that is running or has finished (ADR-0015). The
+/// instance rows are edited in place when it is created; the facts inside the
+/// changed window are re-stamped in the same transaction; the metric buckets
+/// are rebuilt asynchronously and `status` tracks that. Undo is another
+/// amendment restoring `previous*`.
+///
+/// The builder treats amendments like overrides (latest per date + shift
+/// wins), so the ensure tick and the calendar preview reproduce amended days.
+model ShiftAmendment {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  workCenterId String?     @db.Uuid
+  workCenter   Workcenter? @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
+
+  assignmentId String          @db.Uuid
+  assignment   ShiftAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  businessDate DateTime @db.Date
+  /// Pattern shift name, or the name of an added shift.
+  shiftName    String
+
+  /// The window and state the shift had before this amendment.
+  previousStartTime DateTime @db.Timestamptz(3)
+  previousEndTime   DateTime @db.Timestamptz(3)
+  previousScheduled Boolean
+  previousName      String
+
+  /// Same shape as ShiftOverride: replacement window, or cancelled + label.
+  startTime DateTime? @db.Timestamptz(3)
+  endTime   DateTime? @db.Timestamptz(3)
+  cancelled Boolean   @default(false)
+  label     String?
+
+  /// Union of the old and new windows: what was re-stamped and what the rebuild recomputes.
+  windowStart DateTime @db.Timestamptz(3)
+  windowEnd   DateTime @db.Timestamptz(3)
+
+  status       ShiftAmendmentStatus @default(PENDING_REBUILD)
+  rebuildError String?
+  rebuiltAt    DateTime?            @db.Timestamptz(3)
+
+  createdById String? @db.Uuid
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([siteId, businessDate])
+  @@index([workCenterId, businessDate])
+  @@index([siteId, status])
+}
+
+enum ShiftAmendmentStatus {
+  PENDING_REBUILD
+  APPLIED
+  FAILED
 }
 
 model ShiftComment {

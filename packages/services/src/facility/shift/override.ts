@@ -6,7 +6,7 @@ import prisma from "@rw/db";
 import type { ShiftOverride } from "@rw/db";
 import {
   type AssignmentWithPattern,
-  assignmentIncludeForMaterialize,
+  assignmentsCovering,
   buildInstanceRows,
   floorToDay,
   hasOverlappingRows,
@@ -15,6 +15,7 @@ import {
   MS_PER_DAY,
   type OverrideRule,
   rebuildShiftInstances,
+  ruleKey,
 } from "@rw/services/facility/shift/materialize";
 import { getSiteTimezone } from "../../metrics/bucket.js";
 
@@ -74,7 +75,7 @@ export async function create(input: CreateShiftOverrideInput): Promise<OverrideR
   });
   if (duplicate) return { error: "An override already exists for this date and shift", code: "SHIFT_OVERRIDE_EXISTS" };
 
-  const assignments = await activeAssignments(input.siteId, workCenterId, rule.businessDate);
+  const assignments = await assignmentsCovering(input.siteId, workCenterId, rule.businessDate);
   const overlap = await overlapError({ siteId: input.siteId, workCenterId }, rule, assignments);
   if (overlap) return overlap;
 
@@ -98,7 +99,7 @@ export async function update(id: string, input: UpdateShiftOverrideInput): Promi
   const invalid = validateRule(rule);
   if (invalid) return invalid;
 
-  const assignments = await activeAssignments(current.siteId, current.workCenterId, rule.businessDate);
+  const assignments = await assignmentsCovering(current.siteId, current.workCenterId, rule.businessDate);
   const overlap = await overlapError(current, rule, assignments);
   if (overlap) return overlap;
 
@@ -113,7 +114,7 @@ export async function remove(id: string) {
 
   await prisma.shiftOverride.delete({ where: { id } });
   await rebuildFrom(
-    await activeAssignments(current.siteId, current.workCenterId, current.businessDate),
+    await assignmentsCovering(current.siteId, current.workCenterId, current.businessDate),
     current.businessDate,
   );
   return { success: true };
@@ -136,7 +137,7 @@ export async function list(filter: ListShiftOverridesFilter) {
   });
 }
 
-function validateRule(rule: OverrideRule) {
+export function validateRule(rule: OverrideRule) {
   const hasStart = rule.startTime !== null;
   const hasEnd = rule.endTime !== null;
   if (hasStart !== hasEnd) return { error: "startTime and endTime must be set together", code: "INVALID_OVERRIDE" };
@@ -147,27 +148,12 @@ function validateRule(rule: OverrideRule) {
   return null;
 }
 
-/** Assignments whose rotation covers `businessDate` for the scope. */
-async function activeAssignments(siteId: string, workCenterId: string | null, businessDate: Date) {
-  return prisma.shiftAssignment.findMany({
-    where: {
-      siteId,
-      workCenterId,
-      // Two days of slack each side: a rotation day's rows can carry the next
-      // business date (overnight block, end-date rule) or start a day early.
-      rotationStartDate: { lte: new Date(businessDate.getTime() + 2 * MS_PER_DAY) },
-      OR: [{ rotationEndDate: null }, { rotationEndDate: { gte: new Date(businessDate.getTime() - 2 * MS_PER_DAY) } }],
-    },
-    include: assignmentIncludeForMaterialize,
-  });
-}
-
 /**
  * Dry-run the row builder with `rule` replacing any same-key override and
  * report an error when the resulting windows overlap a neighbouring shift
  * (added shifts included; gap fillers are regenerated afterwards).
  */
-async function overlapError(
+export async function overlapError(
   scope: { siteId: string; workCenterId: string | null },
   rule: OverrideRule,
   assignments: AssignmentWithPattern[],
@@ -175,7 +161,7 @@ async function overlapError(
   if (!rule.startTime) return null;
   const fromMs = rule.businessDate.getTime() - 2 * MS_PER_DAY;
   const others = (await loadOverrides(scope, fromMs, fromMs + 6 * MS_PER_DAY)).filter(
-    (o) => o.businessDate.getTime() !== rule.businessDate.getTime() || o.shiftName !== rule.shiftName,
+    (o) => ruleKey(o) !== ruleKey(rule),
   );
   const timezone = await getSiteTimezone(scope.siteId);
   for (const assignment of assignments) {

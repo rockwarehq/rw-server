@@ -26,6 +26,7 @@
 // it appears once the next shift enters the window.
 
 import prisma from "@rw/db";
+import type { Prisma } from "@rw/db";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { getSiteTimezone, getLocalCalendarDate } from "../../metrics/bucket.js";
@@ -315,18 +316,47 @@ async function buildRowsForAssignment(
   return buildInstanceRows(assignment, fromDayMs, lookaheadDays, preserved, timezone, overrides);
 }
 
+/**
+ * The rules the builder applies for a scope and date range: overrides, then
+ * amendments (ADR-0015). An amendment is the same shape as an override and
+ * the latest one per date + shift wins over any override for that shift, so
+ * the tick and the calendar reproduce amended days without special cases.
+ */
 export async function loadOverrides(
   scope: { siteId: string; workCenterId: string | null },
   fromMs: number,
   toMs: number,
 ): Promise<OverrideRule[]> {
-  return prisma.shiftOverride.findMany({
+  const where = {
+    siteId: scope.siteId,
+    workCenterId: scope.workCenterId,
+    businessDate: { gte: new Date(fromMs - MS_PER_DAY), lte: new Date(toMs) },
+  };
+  const select = { businessDate: true, shiftName: true, startTime: true, endTime: true, isScheduled: true, label: true };
+  const [overrides, amendments] = await Promise.all([
+    prisma.shiftOverride.findMany({ where, select }),
+    prisma.shiftAmendment.findMany({ where, select, orderBy: { createdAt: "asc" } }),
+  ]);
+  const byKey = new Map<string, OverrideRule>();
+  for (const rule of [...overrides, ...amendments]) byKey.set(ruleKey(rule), rule);
+  return [...byKey.values()];
+}
+
+export const ruleKey = (r: { businessDate: Date; shiftName: string | null }) =>
+  `${r.businessDate.getTime()}|${r.shiftName ?? ""}`;
+
+/** Assignments of the scope whose rotation can produce rows on `businessDate`. */
+export async function assignmentsCovering(siteId: string, workCenterId: string | null, businessDate: Date) {
+  return prisma.shiftAssignment.findMany({
     where: {
-      siteId: scope.siteId,
-      workCenterId: scope.workCenterId,
-      businessDate: { gte: new Date(fromMs - MS_PER_DAY), lte: new Date(toMs) },
+      siteId,
+      workCenterId,
+      // Two days of slack each side: a rotation day's rows can carry the next
+      // business date (overnight block, end-date rule) or start a day early.
+      rotationStartDate: { lte: new Date(businessDate.getTime() + 2 * MS_PER_DAY) },
+      OR: [{ rotationEndDate: null }, { rotationEndDate: { gte: new Date(businessDate.getTime() - 2 * MS_PER_DAY) } }],
     },
-    select: { businessDate: true, shiftName: true, startTime: true, endTime: true, isScheduled: true, label: true },
+    include: assignmentIncludeForMaterialize,
   });
 }
 
@@ -582,12 +612,24 @@ const SHIFT_REFERENCING_TABLES = [
  * Find which ShiftInstance IDs are "in use" — referenced by at least one row
  * in any shift-stamped table. One batched DISTINCT query per table.
  */
-async function findInUseShiftInstanceIds(instanceIds: string[]): Promise<Set<string>> {
+export async function findInUseShiftInstanceIds(
+  instanceIds: string[],
+  options: {
+    /** Amendments rebuild the buckets in their window, so bucket references alone do not keep a row. */
+    ignoreBuckets?: boolean;
+    /** Read through the caller's transaction so stamps it just rewrote are seen. */
+    client?: Prisma.TransactionClient | typeof prisma;
+  } = {},
+): Promise<Set<string>> {
   if (instanceIds.length === 0) return new Set();
 
   const inUse = new Set<string>();
-  for (const table of SHIFT_REFERENCING_TABLES) {
-    const refs = await prisma.$queryRawUnsafe<Array<{ shiftInstanceId: string }>>(
+  const client = options.client ?? prisma;
+  const tables = options.ignoreBuckets
+    ? SHIFT_REFERENCING_TABLES.filter((t) => !t.startsWith("MetricBucket"))
+    : SHIFT_REFERENCING_TABLES;
+  for (const table of tables) {
+    const refs = await client.$queryRawUnsafe<Array<{ shiftInstanceId: string }>>(
       `SELECT DISTINCT "shiftInstanceId" FROM "${table}"
        WHERE "shiftInstanceId" = ANY($1::uuid[])`,
       instanceIds,
@@ -640,7 +682,10 @@ async function publishCreatedShiftInstanceEvents(rows: readonly InstanceRow[], e
   );
 }
 
-function publishShiftInstanceEvents(action: "created" | "deleted", instances: readonly ShiftInstanceEventRow[]) {
+export function publishShiftInstanceEvents(
+  action: "created" | "updated" | "deleted",
+  instances: readonly ShiftInstanceEventRow[],
+) {
   for (const instance of instances) {
     publishEntityEvent({
       action,
