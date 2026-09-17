@@ -59,7 +59,7 @@ export async function create(input: CreateShiftOverrideInput): Promise<OverrideR
   }
 
   const rule = toRule(input);
-  const invalid = validateRule(rule) ?? (await pastDateError(input.siteId, rule.businessDate));
+  const invalid = validateRule(rule) ?? (await pastWindowError(input.siteId, rule));
   if (invalid) return invalid;
 
   const duplicate = await prisma.shiftOverride.findFirst({
@@ -89,7 +89,7 @@ export async function update(id: string, input: UpdateShiftOverrideInput): Promi
     isScheduled: input.isScheduled !== undefined ? input.isScheduled : current.isScheduled,
     note: input.note !== undefined ? input.note : current.note,
   };
-  const invalid = validateRule(rule) ?? (await pastDateError(current.siteId, rule.businessDate));
+  const invalid = validateRule(rule) ?? (await pastWindowError(current.siteId, rule));
   if (invalid) return invalid;
 
   const assignments = await assignmentsCovering(current.siteId, current.workCenterId, rule.businessDate);
@@ -141,10 +141,18 @@ export function validateRule(rule: OverrideRule) {
   return null;
 }
 
-/** Overrides plan days that have not run; a day that has is corrected with an amendment. */
-async function pastDateError(siteId: string, businessDate: Date) {
+/**
+ * Overrides plan time that has not run; time that has is corrected with an
+ * amendment. A window whose start has passed is refused outright: the rebuild
+ * never reaches behind now, so such an override would quietly do nothing (or
+ * drop the shift it retimed) instead of failing.
+ */
+async function pastWindowError(siteId: string, rule: OverrideRule) {
+  if (rule.startTime && rule.startTime <= new Date()) {
+    return { error: "That shift has already started; correct it with an amendment", code: "SHIFT_OVERRIDE_STARTED" };
+  }
   const today = getLocalCalendarDate(new Date(), await getSiteTimezone(siteId));
-  if (businessDate < today) {
+  if (rule.businessDate < today) {
     return { error: "That date has already run; correct it with an amendment", code: "SHIFT_OVERRIDE_PAST" };
   }
   return null;

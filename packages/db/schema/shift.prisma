@@ -334,6 +334,11 @@ model ShiftAmendment {
   windowStart DateTime @db.Timestamptz(3)
   windowEnd   DateTime @db.Timestamptz(3)
 
+  /// Set when this amendment reverses an earlier one: the id of the amendment
+  /// it undid. Neither an undo nor the amendment it undid is in force, so the
+  /// calendar shows the shift as planned again and neither can be undone twice.
+  undoOfId String? @db.Uuid
+
   status       ShiftAmendmentStatus @default(PENDING_REBUILD)
   rebuildError String?
   rebuiltAt    DateTime?            @db.Timestamptz(3)

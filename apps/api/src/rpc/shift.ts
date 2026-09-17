@@ -299,8 +299,10 @@ export const assignmentPreview = authRequired
     if (to < from || to.getTime() - from.getTime() > MAX_PREVIEW_DAYS * MS_PER_DAY) {
       throw new ORPCError("BAD_REQUEST", { message: `Preview range must be 0-${MAX_PREVIEW_DAYS} days` });
     }
-    const { today, rows } = await shift.previewShiftInstances(input.id, from, to);
-    return { today, rows: rows.map(({ assignmentId: _a, siteId: _s, ...row }) => row) };
+    const { today, now, rows } = await shift.previewShiftInstances(input.id, from, to);
+    // `now` too: a client adding a shift must know whether the window it names
+    // has already run (an amendment) or has not (an override).
+    return { today, now, rows: rows.map(({ assignmentId: _a, siteId: _s, ...row }) => row) };
   });
 
 export const assignmentUnpublish = authRequired.input(idInputSchema).handler(async ({ input, context }) => {

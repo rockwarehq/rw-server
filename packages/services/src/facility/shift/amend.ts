@@ -45,6 +45,8 @@ export interface AmendShiftInput extends CreateShiftOverrideInput {
    * Undo of an "added" amendment is the only caller.
    */
   remove?: boolean;
+  /** Set by undo: the amendment this one reverses. Both become history. */
+  undoOf?: string | null;
 }
 
 type AmendOutcome =
@@ -193,6 +195,7 @@ export async function amendShift(input: AmendShiftInput): Promise<Result<ShiftAm
           endTime: input.remove ? null : rule.endTime,
           isScheduled: input.remove ? null : rule.isScheduled,
           note: rule.note,
+          undoOfId: input.undoOf ?? null,
           windowStart: window.start,
           windowEnd: window.end,
           createdById: input.actorUserId ?? null,
@@ -230,33 +233,34 @@ export async function amendShift(input: AmendShiftInput): Promise<Result<ShiftAm
 }
 
 /**
- * Undo = a new amendment that restores the window the amended one replaced.
- * An amendment that added a shift has no previous window, so its undo takes the
- * shift off the day again — and undoing *that* adds it back, by the same rule.
+ * Undo = a new amendment that restores the window the amended one replaced,
+ * naming it in `undoOfId` so neither reads as in force afterwards. An amendment
+ * that added a shift has no previous window, so its undo takes the shift off
+ * the day again. Only a correction can be undone: to put an undone change back,
+ * make it again.
  */
 export async function undoShiftAmendment(id: string, actorUserId?: string | null): Promise<Result<ShiftAmendment>> {
   const a = await prisma.shiftAmendment.findUnique({ where: { id } });
   if (!a) return { error: "Shift amendment not found", code: "SHIFT_AMENDMENT_NOT_FOUND" };
-  if (a.previousStartTime === null) {
-    return amendShift({
-      siteId: a.siteId,
-      workCenterId: a.workCenterId,
-      businessDate: a.businessDate,
-      shiftName: a.shiftName,
-      remove: true,
-      actorUserId,
-    });
-  }
-  return amendShift({
+  if (a.undoOfId) return { error: "That change has already been undone", code: "SHIFT_AMENDMENT_UNDONE" };
+  const undone = await prisma.shiftAmendment.findFirst({ where: { undoOfId: id }, select: { id: true } });
+  if (undone) return { error: "That change has already been undone", code: "SHIFT_AMENDMENT_UNDONE" };
+
+  const common = {
     siteId: a.siteId,
     workCenterId: a.workCenterId,
     businessDate: a.businessDate,
     shiftName: a.shiftName,
+    undoOf: a.id,
+    actorUserId,
+  };
+  if (a.previousStartTime === null) return amendShift({ ...common, remove: true });
+  return amendShift({
+    ...common,
     startTime: a.previousStartTime,
     endTime: a.previousEndTime,
     isScheduled: a.previousScheduled,
     note: null,
-    actorUserId,
   });
 }
 
