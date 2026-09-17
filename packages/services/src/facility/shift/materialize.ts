@@ -585,13 +585,17 @@ export async function previewShiftInstances(
   assignmentId: string,
   from: Date,
   to: Date,
-): Promise<{ today: string; rows: Array<InstanceRow & { definitionName: string | null; started: boolean }> }> {
+): Promise<{
+  today: string;
+  now: Date;
+  rows: Array<InstanceRow & { definitionName: string | null; started: boolean }>;
+}> {
   const assignment = await prisma.shiftAssignment.findUnique({
     where: { id: assignmentId },
     include: assignmentIncludeForMaterialize,
   });
-  if (!assignment) return { today: new Date().toISOString().slice(0, 10), rows: [] };
   const now = new Date();
+  if (!assignment) return { today: now.toISOString().slice(0, 10), now, rows: [] };
   const today = getLocalCalendarDate(now, await getSiteTimezone(assignment.siteId))
     .toISOString()
     .slice(0, 10);
@@ -617,6 +621,7 @@ export async function previewShiftInstances(
   const nameById = new Map(assignment.pattern.shifts.map((d) => [d.id, d.shiftName]));
   return {
     today,
+    now,
     rows: rows
       .filter((r) => r.startTime.getTime() < cutoffMs)
       .map((r) => ({
