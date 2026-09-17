@@ -51,14 +51,25 @@ const timelineConfigSchema = z.object({
   labelIds: z.array(z.uuid()).nullable(),
 });
 
+// Station cycles page (scopeId = stationId): the viewer's implicit default —
+// a time range plus the quiet display mode that mutes good cycles so
+// exceptions pop. "day" (a fixed calendar date) is deliberately not a
+// saveable range: a default view must describe a rolling window, not a
+// moment.
+const stationCyclesConfigSchema = z.object({
+  range: z.enum(["5m", "1h", "today", "24h"]),
+  quietGoodCycles: z.boolean(),
+});
+
 // One member per page that supports saved views.
 const pageConfigSchema = z.discriminatedUnion("page", [
   z.object({ page: z.literal("shift-view"), config: shiftViewConfigSchema }),
   z.object({ page: z.literal("stations-directory"), config: stationsDirectoryConfigSchema }),
   z.object({ page: z.literal("timeline"), config: timelineConfigSchema }),
+  z.object({ page: z.literal("station-cycles"), config: stationCyclesConfigSchema }),
 ]);
 
-const pageSchema = z.enum(["shift-view", "stations-directory", "timeline"]);
+const pageSchema = z.enum(["shift-view", "stations-directory", "timeline", "station-cycles"]);
 const visibilitySchema = z.enum(["PRIVATE", "WORKSPACE"]);
 
 const createInputSchema = z
@@ -80,6 +91,7 @@ const updateConfigSchema = z.discriminatedUnion("page", [
     config: stationsDirectoryConfigSchema.optional(),
   }),
   z.object({ page: z.literal("timeline"), config: timelineConfigSchema.optional() }),
+  z.object({ page: z.literal("station-cycles"), config: stationCyclesConfigSchema.optional() }),
 ]);
 
 const updateInputSchema = z
