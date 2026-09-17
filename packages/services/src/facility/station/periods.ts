@@ -7,6 +7,15 @@ import { acquireStationLock, findOpenStateEntry, splitStateEntryAt } from "./sta
 // Period rows (StationStateLog, StationJobLog) belong to exactly one shift:
 // a row that reaches a shift boundary is cut there and continued with the
 // boundary's stamp under the same blockId (ADR-0014).
+//
+// TODO (revisit before PR): StationModeLog has the same period shape and is
+// NOT cut here (ADR-0014, last consequence). So `modePeriods` in the report
+// catalog still attributes a mode stretch wholly to the shift it started in,
+// and unlike the other two tables that is not just a legacy gap — the writer
+// keeps producing spanning rows, so backfilling mode rows alone would regrow.
+// Fix is this same path (add the open mode row to
+// splitOpenPeriodsAtShiftBoundaries and give it a cutModeLog), then include
+// StationModeLog in the period backfill.
 
 type Tx = Prisma.TransactionClient;
 
