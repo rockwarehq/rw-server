@@ -479,6 +479,9 @@ export const router = {
     commentCreate: shiftRecap.commentCreate,
     commentUpdate: shiftRecap.commentUpdate,
     commentDelete: shiftRecap.commentDelete,
+    signoffGet: shiftRecap.signoffGet,
+    signoffCreate: shiftRecap.signoffCreate,
+    signoffDelete: shiftRecap.signoffDelete,
   },
   logs: {
     metricBucketSearch: logs.metricBucketLogSearch,

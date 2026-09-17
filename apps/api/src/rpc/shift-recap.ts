@@ -4,6 +4,7 @@ import { authorize } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
 import prisma from "@rw/db";
 import * as shiftCommentService from "@rw/services/facility/shift/shift-comment";
+import * as shiftSignoffService from "@rw/services/facility/shift/shift-signoff";
 import { throwServiceError } from "./errors.js";
 
 // ============================================================================
@@ -514,6 +515,52 @@ export const commentDelete = authRequired.input(commentDeleteInputSchema).handle
   grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "shiftComment", id: input.id } }));
 
   const result = await shiftCommentService.remove(input.id, { actorId: context.iam.id });
+  if (result.error !== undefined) throwServiceError(result);
+  return { success: true };
+});
+
+// ============================================================================
+// Shift Recap Sign-off (supervisor "post" per shift instance + workcenter)
+// ============================================================================
+
+const signoffInputSchema = z.object({
+  siteId: z.uuid(),
+  shiftInstanceId: z.uuid(),
+  workCenterId: z.uuid(),
+});
+
+export const signoffGet = userOrDisplayRequired.input(signoffInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "site", siteId: input.siteId } }));
+
+  const result = await shiftSignoffService.get({
+    shiftInstanceId: input.shiftInstanceId,
+    workcenterId: input.workCenterId,
+  });
+  return result.data;
+});
+
+export const signoffCreate = authRequired.input(signoffInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "site", siteId: input.siteId } }));
+
+  const result = await shiftSignoffService.create({
+    siteId: input.siteId,
+    shiftInstanceId: input.shiftInstanceId,
+    workcenterId: input.workCenterId,
+    postedById: context.iam.id,
+  });
+  if (result.error !== undefined) throwServiceError(result, { ALREADY_SIGNED_OFF: "CONFLICT" });
+  return result.data;
+});
+
+export const signoffDelete = authRequired.input(signoffInputSchema).handler(async ({ input, context }) => {
+  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "site", siteId: input.siteId } }));
+
+  const result = await shiftSignoffService.remove({
+    siteId: input.siteId,
+    shiftInstanceId: input.shiftInstanceId,
+    workcenterId: input.workCenterId,
+    actorId: context.iam.id,
+  });
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
