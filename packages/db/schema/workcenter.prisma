@@ -26,6 +26,7 @@ model Workcenter {
   displays            Display[]
   itemDispositionLogs ItemDispositionLog[]
   shiftComments       ShiftComment[]
+  signoffs       ShiftSignoff[]
   calls               Call[]
   modeLogs            StationModeLog[]
   grants              WorkcenterGrant[]
@@ -167,7 +168,7 @@ model StationStateLog {
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
   /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
   /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
-  isScheduled Boolean @default(true)
+  isScheduled     Boolean        @default(true)
 
   /// Business date of that shift.
   businessDate DateTime? @db.Date
@@ -327,7 +328,7 @@ model StationJobLog {
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
   /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
   /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
-  isScheduled Boolean @default(true)
+  isScheduled     Boolean        @default(true)
 
   /// Business date of that shift.
   businessDate DateTime? @db.Date

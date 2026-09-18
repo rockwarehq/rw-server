@@ -44,14 +44,16 @@ model User {
   updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
 
   // Relations
-  memberships             WorkspaceMembership[]
-  refreshTokens           RefreshToken[]
-  shiftComments           ShiftComment[]
-  shiftAmendments         ShiftAmendment[]
-  materialLedgerEntries   MaterialLedgerEntry[]
-  productStockAdjustments ProductStockAdjustment[]
-  apiTokensCreated        ApiToken[]
-  savedViewsCreated       SavedView[]
+  memberships                WorkspaceMembership[]
+  refreshTokens              RefreshToken[]
+  shiftComments              ShiftComment[]
+  shiftSignoffsPosted   ShiftSignoff[]      @relation("ShiftSignoffPostedBy")
+  shiftSignoffsReopened ShiftSignoff[]      @relation("ShiftSignoffReopenedBy")
+  shiftAmendments            ShiftAmendment[]
+  materialLedgerEntries      MaterialLedgerEntry[]
+  productStockAdjustments    ProductStockAdjustment[]
+  apiTokensCreated           ApiToken[]
+  savedViewsCreated          SavedView[]
 
   // SMS consent decisions this user recorded
   smsConsentEvents SmsConsentEvent[]

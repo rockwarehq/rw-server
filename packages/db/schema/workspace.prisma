@@ -111,6 +111,7 @@ model Site {
   orderConsumptions       OrderConsumption[]
   productStockAdjustments ProductStockAdjustment[]
   shiftComments           ShiftComment[]
+  shiftSignoffs      ShiftSignoff[]
   roleAssignments         RoleAssignment[]
   materialLedgerEntries   MaterialLedgerEntry[]
   materialShiftUsage      MaterialShiftUsage[]
