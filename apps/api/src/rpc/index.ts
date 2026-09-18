@@ -497,6 +497,7 @@ export const router = {
   report: {
     schema: report.schema,
     query: report.query,
+    rows: report.rows,
   },
   historian: {
     query: historian.query,

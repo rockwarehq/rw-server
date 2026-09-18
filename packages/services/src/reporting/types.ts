@@ -10,16 +10,34 @@
 //   2. All SQL fragments (exprs, joins, filters) are catalog-authored
 //      constants, never user input. User-supplied values only ever bind as
 //      query parameters in the compiler.
+//
+// The rollup guarantee covers AGGREGATE queries (ReportQuery) only. Detail
+// queries (ReportRowsQuery) return the rows themselves, which no
+// pre-aggregation table can serve, so they always read the base table. That
+// exemption is deliberate: do not "fix" it by summarising detail output, and
+// do not assume a future rollup can serve every query in this module.
+//
+// Detail mode gets its projections almost free from rule 1: an additive
+// measure's expr is row-local by construction, so dropping the aggregate
+// wrapper yields that row's own value.
+
+/**
+ * How a number should be read, so clients render it without hardcoding a list.
+ * Not derivable from `kind`: avgCycleSeconds is a ratio measured in seconds
+ * while OEE is a ratio measured in percent.
+ */
+export type ValueFormat = "seconds" | "percent" | "quantity" | "count" | "text";
 
 /** Additive measure, or a read-time ratio of two additive measures. */
 export type MeasureDef =
-  | { kind: "count"; label: string; description?: string }
+  | { kind: "count"; label: string; description?: string; format?: ValueFormat }
   | {
       kind: "sum" | "min" | "max" | "avg";
       label: string;
       /** Row-local SQL expression; reference fact columns as `f."col"`. */
       expr: string;
       description?: string;
+      format?: ValueFormat;
     }
   | {
       kind: "ratio";
@@ -32,6 +50,7 @@ export type MeasureDef =
       numerator: string | string[];
       denominator: string | string[];
       description?: string;
+      format?: ValueFormat;
     };
 
 export interface DimensionLookup {
@@ -44,10 +63,40 @@ export interface DimensionLookup {
   name: string;
 }
 
+/**
+ * A row-local column, projected only by detail queries (`report.rows`).
+ *
+ * Fields are the columns that are neither a grouping key nor a measure — event
+ * timestamps, the row's own id — so they never widen the grouping vocabulary.
+ * `type` decides how the value reaches the wire, since every ReportRow value is
+ * string | number | null:
+ *   timestamp → UTC ISO string (client converts to the site zone)
+ *   decimal   → exact numeric string, lossless (parse at the chart boundary)
+ *   number    → float8
+ *   boolean   → 'true' | 'false'
+ */
+export interface FieldDef {
+  label: string;
+  /** Column on the fact table/source (compiler quotes it). */
+  column: string;
+  type: "timestamp" | "decimal" | "number" | "string" | "id" | "boolean";
+  description?: string;
+  format?: ValueFormat;
+}
+
 export interface DimensionDef {
   label: string;
-  /** Column on the fact table (compiler quotes it). */
+  /**
+   * Column on the fact table (compiler quotes it). Also the filter target and
+   * the GROUP BY key, unless `expr` overrides it.
+   */
   column: string;
+  /**
+   * SQL expression to use instead of the plain column — for a value the fact
+   * carries but not as its own column, e.g. the workcenter inside a metric
+   * bucket's `path`. Referenced as `f."col"` otherwise.
+   */
+  expr?: string;
   type: "id" | "date" | "enum" | "string";
   /** Joined only when the dimension is selected or name output is needed. */
   lookup?: DimensionLookup;
@@ -64,6 +113,14 @@ export interface DimensionDef {
    * shift that opens the business day sorts first regardless of name.
    */
   sortExpr?: string;
+  /**
+   * The implicit m2m table joining this entity to Label, enabling hasLabel
+   * filters. Prisma names those tables by ordering the two sides
+   * alphabetically, so which column holds the label flips per entity
+   * (_JobToLabel has it in B, _LabelToStation in A) — state it rather than
+   * derive it. The entity id is in the other column.
+   */
+  labelJoin?: { table: string; labelColumn: "A" | "B" };
 }
 
 export interface FactDef {
@@ -85,6 +142,20 @@ export interface FactDef {
   source?: string;
   /** Row predicate applied to every query (soft deletes etc.); references `f`. */
   baseFilter?: string;
+  /**
+   * Extra predicate applied to AGGREGATE queries only. For grain rules that are
+   * true of a total but wrong for a list: cycles count when they END, so an
+   * open cycle has no date to bucket into — yet a cycle log must still show the
+   * one that is running. References `f`.
+   */
+  aggregateFilter?: string;
+  /**
+   * Row identity, used as the detail ORDER BY tie-break so OFFSET paging can't
+   * skip or repeat rows across pages. Detail queries are refused without it.
+   */
+  rowKey?: string;
+  /** Row-local columns available to detail queries only. */
+  fields?: Record<string, FieldDef>;
   /** businessDate stamp column — target of the date-range filter. */
   dateColumn: string;
   /**
@@ -115,10 +186,49 @@ export interface FactDef {
   dimensions: Record<string, DimensionDef>;
 }
 
+/**
+ * Comparison operators. Each target type declares which of these it accepts
+ * (see filters.ts) — ordering a uuid or substring-matching a date is refused
+ * rather than silently coerced.
+ */
+export type FilterOp =
+  | "eq"
+  | "neq"
+  | "in"
+  | "notIn"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "between"
+  | "notBetween"
+  | "contains"
+  | "beginsWith"
+  | "isNull"
+  | "notNull"
+  // Carries at least one of the given labels — available on dimensions whose
+  // entity is labelable. Value is a list of label ids.
+  | "hasLabel"
+  | "notHasLabel";
+
 export interface ReportFilter {
+  /**
+   * The key to filter on: a dimension, a dimension's `<key>Name` display value,
+   * a field, or a measure — resolved in that order. A measure filter becomes
+   * HAVING in aggregate mode and a row predicate in detail mode. (Named
+   * `dimension` for wire compatibility.)
+   *
+   * Filtering `<key>Name` is how you match on a name rather than a uuid:
+   * "reason contains mold". The compiler joins the dimension's lookup for the
+   * filter whether or not the column is selected.
+   */
   dimension: string;
-  op: "eq" | "neq" | "in";
-  value: string | string[];
+  op: FilterOp;
+  /**
+   * One value, or two for between/notBetween, or many for in/notIn. Omitted
+   * for isNull/notNull.
+   */
+  value?: string | string[];
 }
 
 export interface ReportQuery {
@@ -148,6 +258,49 @@ export interface ReportQuery {
   orderBy?: { field: string; dir: "asc" | "desc" };
   limit?: number;
   offset?: number;
+  /**
+   * Total number of GROUPS matching the query, for page counts. Costs a second
+   * pass over the same aggregate, so leave it off for charts and exports.
+   */
+  includeTotal?: boolean;
+}
+
+/**
+ * A detail query: the rows themselves, no grouping and no aggregation.
+ *
+ * Deliberately outside the rollup invariant stated at the top of this file — a
+ * pre-aggregation table can never serve a detail query, so these always read
+ * the base table. Aggregate queries keep the guarantee; this one opts out.
+ */
+export interface ReportRowsQuery {
+  fact: string;
+  /**
+   * Output columns, in the order the caller wants them: dimension keys (an id
+   * dimension also yields `<key>Name`), field keys, or measure keys — a measure
+   * projects its row-local expression unaggregated. At least one.
+   */
+  columns: string[];
+  filters?: ReportFilter[];
+  /** Inclusive YYYY-MM-DD bounds on the fact's businessDate stamp. */
+  dateFrom?: string;
+  dateTo?: string;
+  /** A selected column key; defaults to the fact's event timestamp, newest first. */
+  orderBy?: { field: string; dir: "asc" | "desc" };
+  limit?: number;
+  offset?: number;
+  /**
+   * Total matching rows, for page counts. Costs a second COUNT over the same
+   * predicate, so exports taking every row should turn it off. Default true.
+   */
+  includeTotal?: boolean;
+}
+
+export interface ReportRowsResult {
+  rows: ReportRow[];
+  /** True when the row count hit the query limit. */
+  truncated: boolean;
+  /** Present when includeTotal was not disabled. */
+  total?: number;
 }
 
 /** Authz scope — injected by the rpc layer, never from the client. */
@@ -164,4 +317,6 @@ export interface ReportResult {
   rows: ReportRow[];
   /** True when the row count hit the query limit. */
   truncated: boolean;
+  /** Present when includeTotal was requested: how many groups matched. */
+  total?: number;
 }
