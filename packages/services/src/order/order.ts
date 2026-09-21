@@ -27,6 +27,8 @@ export interface CreateOrderInput {
   siteId: string;
   orderNumber: string;
   status?: "DRAFT" | "OPEN";
+  /** Who raised it; null for non-interactive creators. */
+  createdByUserId?: string | null;
   customerId?: string;
   poNumber?: string;
   startDate?: Date;
@@ -46,7 +48,7 @@ export interface UpdateOrderInput {
   notes?: string | null;
 }
 
-export type OrderSortKey = "orderNumber" | "customer" | "status" | "dueDate" | "createdAt";
+export type OrderSortKey = "orderNumber" | "customer" | "status" | "dueDate" | "createdAt" | "completedAt";
 
 export interface ListOrdersFilter {
   siteId?: string;
@@ -243,7 +245,7 @@ export async function getNextOrderNumber(siteId: string) {
 // ============================================================================
 
 export async function create(input: CreateOrderInput) {
-  const { siteId, orderNumber, status = "DRAFT", customerId, lineItems, ...rest } = input;
+  const { siteId, orderNumber, status = "DRAFT", createdByUserId, customerId, lineItems, ...rest } = input;
 
   const site = await prisma.site.findUnique({
     where: { id: siteId },
@@ -303,6 +305,10 @@ export async function create(input: CreateOrderInput) {
       orderNumber,
       status,
       sequence,
+      // Created straight to OPEN: this IS the moment it opened. A draft gets
+      // its openedAt when someone actually opens it.
+      openedAt: status === "OPEN" ? new Date() : null,
+      createdByUserId: createdByUserId ?? null,
       customerId: customerId ?? null,
       ...rest,
       lineItems:
@@ -386,6 +392,10 @@ export async function list(filter: ListOrdersFilter = {}) {
         return [{ dueDate: { sort: sortDir, nulls: "last" } }, { orderNumber: "asc" }];
       case "createdAt":
         return [{ createdAt: sortDir }];
+      // A closed list ordered by when things closed. Nulls last so an
+      // unclosed order never leads a "most recently completed" page.
+      case "completedAt":
+        return [{ completedAt: { sort: sortDir, nulls: "last" } }, { orderNumber: "asc" }];
       default:
         return [{ sequence: { sort: "asc", nulls: "last" } }, { createdAt: "desc" }];
     }
@@ -515,6 +525,7 @@ export async function transitionStatus(id: string, targetStatus: OrderStatus, op
       previousStatus: true,
       deletedAt: true,
       sequence: true,
+      openedAt: true,
       site: { select: { workspaceId: true } },
     },
   });
@@ -549,6 +560,16 @@ export async function transitionStatus(id: string, targetStatus: OrderStatus, op
   // Restore previous status when leaving ON_HOLD
   if (currentStatus === "ON_HOLD" && (targetStatus === "OPEN" || targetStatus === "IN_PROGRESS")) {
     updateData.previousStatus = null;
+  }
+
+  // The first time an order becomes real work, and only the first time —
+  // resuming from ON_HOLD must not reset when it opened.
+  if ((targetStatus === "OPEN" || targetStatus === "IN_PROGRESS") && order.openedAt == null) {
+    updateData.openedAt = new Date();
+  }
+
+  if (targetStatus === "CANCELLED") {
+    updateData.cancelledAt = new Date();
   }
 
   // Assign sequence when transitioning to OPEN (if not already set)
@@ -666,7 +687,9 @@ async function completeOrder(orderId: string, siteId: string, workspaceId: strin
 
     const updated = await tx.order.update({
       where: { id: orderId },
-      data: { status: "COMPLETED" },
+      // Stamped in the same transaction as the consumption rows, so the two
+      // can never disagree about when the order closed.
+      data: { status: "COMPLETED", completedAt: new Date() },
       include: orderDetailInclude,
     });
     return { data: updated, consumedProducts: consuming.map((t) => t.productId) };
@@ -680,7 +703,7 @@ async function completeOrder(orderId: string, siteId: string, workspaceId: strin
     entityId: orderId,
     siteId,
     workspaceId,
-    changedFields: ["status"],
+    changedFields: ["status", "completedAt"],
   });
   for (const productId of new Set(result.consumedProducts)) {
     publishEntityEvent({

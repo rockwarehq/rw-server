@@ -127,6 +127,13 @@ describe.skipIf(!process.env.DATABASE_URL)("inventory-first orders", () => {
     expect(Number(consumptions[0].quantity)).toBe(4);
     expect(consumptions[0].source).toBe("MANUAL");
 
+    // completedAt is stamped in the same transaction as the ledger, so the
+    // two can never disagree about when the order closed.
+    const closed = await prisma.order.findUniqueOrThrow({ where: { id: target.id } });
+    expect(closed.completedAt).not.toBeNull();
+    expect(closed.cancelledAt).toBeNull();
+    expect(Math.abs(closed.completedAt!.getTime() - consumptions[0].createdAt.getTime())).toBeLessThan(5000);
+
     // COMPLETED is terminal — a second complete is rejected.
     const again = await orders.transitionStatus(target.id, "COMPLETED", {});
     expect("code" in again && again.code).toBe("INVALID_TRANSITION");
@@ -160,6 +167,32 @@ describe.skipIf(!process.env.DATABASE_URL)("inventory-first orders", () => {
     expect(await prisma.orderConsumption.count({ where: { orderId: order.id } })).toBe(0);
     const stock = await getStock(prisma, siteId, [productB]);
     expect(stock.get(productB)?.consumed ?? 0).toBe(0);
+
+    // Cancelled is closed too, and the two terminal stamps stay exclusive.
+    const cancelled = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+    expect(cancelled.cancelledAt).not.toBeNull();
+    expect(cancelled.completedAt).toBeNull();
+  });
+
+  test("openedAt is stamped once and survives a hold", async () => {
+    // Created as a DRAFT: nothing has opened yet.
+    const draft = await orders.create({ siteId, orderNumber: nextOrderNumber(), status: "DRAFT" });
+    if ("error" in draft) throw new Error(`fixture order create failed: ${draft.error}`);
+    expect(draft.data.openedAt).toBeNull();
+
+    await orders.transitionStatus(draft.data.id, "OPEN", {});
+    const opened = await prisma.order.findUniqueOrThrow({ where: { id: draft.data.id } });
+    expect(opened.openedAt).not.toBeNull();
+
+    // A hold and a resume are not a new opening.
+    await orders.transitionStatus(draft.data.id, "ON_HOLD", {});
+    await orders.transitionStatus(draft.data.id, "OPEN", {});
+    const resumed = await prisma.order.findUniqueOrThrow({ where: { id: draft.data.id } });
+    expect(resumed.openedAt?.getTime()).toBe(opened.openedAt?.getTime());
+
+    // Created straight to OPEN: that IS the moment it opened.
+    const born = await createOpenOrder([]);
+    expect(born.openedAt).not.toBeNull();
   });
 
   test("auto-complete completes fully covered orders in queue order, FIFO-strict", async () => {

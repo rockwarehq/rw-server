@@ -50,6 +50,22 @@ model Order {
   startDate             DateTime?    @db.Timestamptz(3)
   dueDate               DateTime?    @db.Timestamptz(3)
 
+  /// When the order first became OPEN — set once, on the DRAFT -> OPEN move
+  /// or at creation when it is created open. Resuming from ON_HOLD does not
+  /// reset it, so it always answers "since when has this been real work?".
+  openedAt    DateTime? @db.Timestamptz(3)
+  /// When the order was completed. This is the fact `updatedAt` was standing
+  /// in for; unlike `updatedAt` it cannot drift if anything else touches the
+  /// row.
+  completedAt DateTime? @db.Timestamptz(3)
+  /// When the order was cancelled. COMPLETED and CANCELLED are terminal and
+  /// mutually exclusive, so at most one of these two is ever set.
+  cancelledAt DateTime? @db.Timestamptz(3)
+
+  /// Who raised the order. Null for rows created before this column and for
+  /// any non-interactive creator.
+  createdByUserId String? @db.Uuid
+
   siteId String @db.Uuid
   site   Site   @relation("SiteFulfillmentOrders", fields: [siteId], references: [id])
 
@@ -66,6 +82,7 @@ model Order {
   @@unique([siteId, orderNumber])
   @@index([siteId, status])
   @@index([siteId, sequence])
+  @@index([siteId, completedAt])
   @@index([customerId])
 }
 

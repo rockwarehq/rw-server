@@ -52,7 +52,7 @@ const listInputSchema = z.object({
   customerId: z.uuid().optional(),
   productId: z.uuid().optional(),
   search: z.string().optional(),
-  sortBy: z.enum(["orderNumber", "customer", "status", "dueDate", "createdAt"]).optional(),
+  sortBy: z.enum(["orderNumber", "customer", "status", "dueDate", "createdAt", "completedAt"]).optional(),
   sortDir: z.enum(["asc", "desc"]).default("asc"),
   limit: z.number().min(0).default(200),
   offset: z.number().min(0).default(0),
@@ -97,10 +97,13 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
   grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "site", siteId: input.siteId } }));
 
   const { priority: _priority, ...createData } = input;
+  // Who raised it, the same identity transitionStatus already records.
   // DUPLICATE_PRODUCT here means duplicate products within the create payload
   // and historically fell through to BAD_REQUEST (unlike addLineItem, where the
   // same code is a CONFLICT with existing state).
-  return unwrap(await orderService.create(createData), { overrides: { DUPLICATE_PRODUCT: "BAD_REQUEST" } });
+  return unwrap(await orderService.create({ ...createData, createdByUserId: context.iam.id ?? null }), {
+    overrides: { DUPLICATE_PRODUCT: "BAD_REQUEST" },
+  });
 });
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
