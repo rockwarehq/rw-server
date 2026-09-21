@@ -2,19 +2,15 @@
 // Order Fulfillment
 // ---------------------------------------------------------------------------
 
+/// An order is raised OPEN, then either COMPLETED — consuming covered stock and
+/// writing the OrderConsumption ledger — or CANCELLED, closing without
+/// consuming. Both are terminal. DRAFT, IN_PROGRESS and ON_HOLD were the
+/// vocabulary of the retired automatic allocation engine and were removed in
+/// the order-lifecycle simplification.
 enum OrderStatus {
-  DRAFT
   OPEN
-  IN_PROGRESS
-  ON_HOLD
   COMPLETED
   CANCELLED
-}
-
-enum LineItemStatus {
-  PENDING
-  IN_PROGRESS
-  COMPLETED
 }
 
 model Customer {
@@ -37,22 +33,18 @@ model Customer {
 model Order {
   id                    String       @id @default(uuid()) @db.Uuid
   orderNumber           String
-  status                OrderStatus  @default(DRAFT)
-  previousStatus        OrderStatus?
+  status                OrderStatus  @default(OPEN)
+  /// Manual fill-queue position: the FIFO key coverage walks. Assigned at
+  /// creation, rewritten wholesale by `reorder`.
   sequence              Int?
-  /// DEPRECATED — never read by server logic; queue `sequence` is the only
-  /// ordering truth. Accepted-and-ignored by the API; dropped in a future
-  /// cleanup migration.
-  priority              Int          @default(0)
   notes                 String?
   poNumber              String?
   defaultTargetQuantity Decimal      @default(1) @db.Decimal(18, 4)
   startDate             DateTime?    @db.Timestamptz(3)
   dueDate               DateTime?    @db.Timestamptz(3)
 
-  /// When the order first became OPEN — set once, on the DRAFT -> OPEN move
-  /// or at creation when it is created open. Resuming from ON_HOLD does not
-  /// reset it, so it always answers "since when has this been real work?".
+  /// When the order was raised. Every order is created OPEN, so this is
+  /// stamped once at creation and never moves.
   openedAt    DateTime? @db.Timestamptz(3)
   /// When the order was completed. This is the fact `updatedAt` was standing
   /// in for; unlike `updatedAt` it cannot drift if anything else touches the
@@ -90,22 +82,12 @@ model OrderLineItem {
   id             String  @id @default(uuid()) @db.Uuid
   targetQuantity Decimal @db.Decimal(18, 4)
 
-  /// DEPRECATED — frozen legacy allocation counter (total produced incl. scrap).
-  /// No longer written; fulfillment is computed coverage + OrderConsumption.
-  /// Dropped in a future cleanup migration.
-  completedQuantity Decimal        @default(0) @db.Decimal(18, 4)
-  /// DEPRECATED — frozen legacy allocation counter. See completedQuantity.
-  scrapQuantity     Decimal        @default(0) @db.Decimal(18, 4)
-  /// DEPRECATED — frozen denormalized view of the legacy counters.
-  status            LineItemStatus @default(PENDING)
-
   orderId String @db.Uuid
   order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   productId String  @db.Uuid
   product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
 
-  allocations  OrderInventoryAllocation[]
   consumptions OrderConsumption[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
@@ -113,26 +95,6 @@ model OrderLineItem {
 
   @@unique([orderId, productId])
   @@index([productId])
-}
-
-/// DEPRECATED — frozen ledger of the retired automatic allocation engine.
-/// No writes since the inventory-first cutover; kept for history and dropped
-/// in a future cleanup migration. Fulfillment is now computed coverage
-/// (ProductStock vs open-order demand) + OrderConsumption at completion.
-model OrderInventoryAllocation {
-  id       String  @id @default(uuid()) @db.Uuid
-  quantity Decimal @default(1) @db.Decimal(18, 4)
-
-  inventoryItemId String?        @db.Uuid
-  inventoryItem   InventoryItem? @relation(fields: [inventoryItemId], references: [id])
-
-  orderLineItemId String        @db.Uuid
-  orderLineItem   OrderLineItem @relation(fields: [orderLineItemId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-
-  @@index([orderLineItemId])
-  @@index([inventoryItemId])
 }
 
 /// Per-(site, product) on-hand aggregate. A derived cache of facts:
@@ -523,7 +485,6 @@ model InventoryItem {
   toolCavityVersion   ToolCavityVersion? @relation(fields: [toolCavityVersionId], references: [id])
 
   productMaterialVersions ProductMaterialVersion[]
-  orderAllocations        OrderInventoryAllocation[]
 
   /// Production mode the station was in when the item was created.
   modeId String?         @db.Uuid

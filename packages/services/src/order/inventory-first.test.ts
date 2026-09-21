@@ -22,7 +22,6 @@ describe.skipIf(!process.env.DATABASE_URL)("inventory-first orders", () => {
     const result = await orders.create({
       siteId,
       orderNumber: nextOrderNumber(),
-      status: "OPEN",
       lineItems,
     });
     if ("error" in result) throw new Error(`fixture order create failed: ${result.error}`);
@@ -92,7 +91,7 @@ describe.skipIf(!process.env.DATABASE_URL)("inventory-first orders", () => {
     expect(coverage.coveredDemand.get(productA)).toBe(5);
 
     // list/get attach the same numbers
-    const listed = await orders.list({ siteId, status: ["OPEN", "IN_PROGRESS"] });
+    const listed = await orders.list({ siteId, status: ["OPEN"] });
     const listedFirst = listed.data.find((o) => o.id === first.id);
     const listedSecond = listed.data.find((o) => o.id === second.id);
     expect(listedFirst?.isFullyCovered).toBe(true);
@@ -174,25 +173,51 @@ describe.skipIf(!process.env.DATABASE_URL)("inventory-first orders", () => {
     expect(cancelled.completedAt).toBeNull();
   });
 
-  test("openedAt is stamped once and survives a hold", async () => {
-    // Created as a DRAFT: nothing has opened yet.
-    const draft = await orders.create({ siteId, orderNumber: nextOrderNumber(), status: "DRAFT" });
-    if ("error" in draft) throw new Error(`fixture order create failed: ${draft.error}`);
-    expect(draft.data.openedAt).toBeNull();
-
-    await orders.transitionStatus(draft.data.id, "OPEN", {});
-    const opened = await prisma.order.findUniqueOrThrow({ where: { id: draft.data.id } });
-    expect(opened.openedAt).not.toBeNull();
-
-    // A hold and a resume are not a new opening.
-    await orders.transitionStatus(draft.data.id, "ON_HOLD", {});
-    await orders.transitionStatus(draft.data.id, "OPEN", {});
-    const resumed = await prisma.order.findUniqueOrThrow({ where: { id: draft.data.id } });
-    expect(resumed.openedAt?.getTime()).toBe(opened.openedAt?.getTime());
-
-    // Created straight to OPEN: that IS the moment it opened.
+  test("an order is born OPEN, stamped and sequenced", async () => {
     const born = await createOpenOrder([]);
+    expect(born.status).toBe("OPEN");
     expect(born.openedAt).not.toBeNull();
+    // It is in the fill queue from the moment it exists.
+    expect(born.sequence).not.toBeNull();
+
+    // The next one lands behind it.
+    const next = await createOpenOrder([]);
+    expect(next.sequence).toBeGreaterThan(born.sequence ?? 0);
+  });
+
+  test("the lifecycle has exactly two exits, both terminal", async () => {
+    const order = await createOpenOrder([]);
+    // OPEN is the only live status; there is nowhere sideways to go.
+    for (const target of ["OPEN", "IN_PROGRESS", "ON_HOLD", "DRAFT"] as const) {
+      const refused = await orders.transitionStatus(order.id, target as never, {});
+      expect("code" in refused && refused.code).toBe("INVALID_TRANSITION");
+    }
+
+    const cancelled = await orders.transitionStatus(order.id, "CANCELLED", {});
+    expect("error" in cancelled && cancelled.error).toBeFalsy();
+    // And terminal means terminal — no reopening, no completing after the fact.
+    for (const target of ["OPEN", "COMPLETED"] as const) {
+      const after = await orders.transitionStatus(order.id, target as never, {});
+      expect("code" in after && after.code).toBe("INVALID_TRANSITION");
+    }
+  });
+
+  test("only a cancelled order can be deleted", async () => {
+    const open = await createOpenOrder([]);
+    const refusedOpen = await orders.remove(open.id);
+    expect("code" in refusedOpen && refusedOpen.code).toBe("NOT_DELETABLE");
+
+    await orders.transitionStatus(open.id, "CANCELLED", {});
+    const removed = await orders.remove(open.id);
+    expect("success" in removed && removed.success).toBe(true);
+    const gone = await prisma.order.findUniqueOrThrow({ where: { id: open.id } });
+    expect(gone.deletedAt).not.toBeNull();
+
+    // A completed order consumed stock; it is never deletable.
+    const completed = await createOpenOrder([]);
+    await orders.transitionStatus(completed.id, "COMPLETED", {});
+    const refusedDone = await orders.remove(completed.id);
+    expect("code" in refusedDone && refusedDone.code).toBe("NOT_DELETABLE");
   });
 
   test("auto-complete completes fully covered orders in queue order, FIFO-strict", async () => {
@@ -218,7 +243,7 @@ describe.skipIf(!process.env.DATABASE_URL)("inventory-first orders", () => {
   });
 
   test("reorder rejects ids outside the authorized site", async () => {
-    const foreign = await orders.create({ siteId: otherSiteId, orderNumber: "FOREIGN-001", status: "OPEN" });
+    const foreign = await orders.create({ siteId: otherSiteId, orderNumber: "FOREIGN-001" });
     if ("error" in foreign) throw new Error(foreign.error);
     const local = await createOpenOrder([{ productId: productB, targetQuantity: 1 }]);
 

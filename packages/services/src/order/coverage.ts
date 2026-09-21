@@ -1,4 +1,5 @@
 import prisma from "@rw/db";
+import type { OrderStatus } from "@rw/db";
 import { getStock } from "../inventory/stock.js";
 
 // ============================================================================
@@ -9,6 +10,13 @@ import { getStock } from "../inventory/stock.js";
 // open-order queue ordered by sequence). Consumption happens only at order
 // completion. A future scheduling module overrides this default by partitioning
 // `available` before the walk — the API shape stays unchanged.
+
+/**
+ * The one definition of "in the fill queue". The SQL walk below, the
+ * isQueueStatus predicate and auto-complete's candidate filter all read it, so
+ * the three cannot drift apart.
+ */
+export const QUEUE_STATUSES = ["OPEN"] as const satisfies readonly OrderStatus[];
 
 export interface LineItemCoverage {
   coveredQuantity: number;
@@ -48,7 +56,7 @@ export async function computeCoverage(siteId: string, productIds: string[]): Pro
     FROM "OrderLineItem" oli
     JOIN "Order" o ON o.id = oli."orderId"
     WHERE o."siteId" = ${siteId}::uuid
-      AND o.status IN ('OPEN', 'IN_PROGRESS')
+      AND o.status = ANY(${QUEUE_STATUSES}::"OrderStatus"[])
       AND o."deletedAt" IS NULL
       AND oli."productId" = ANY(${productIds}::uuid[])
     ORDER BY o.sequence ASC NULLS LAST, o."createdAt" ASC, oli."createdAt" ASC
@@ -80,7 +88,7 @@ export async function computeCoverage(siteId: string, productIds: string[]): Pro
 
 /** Statuses whose orders sit in the coverage queue. */
 export function isQueueStatus(status: string): boolean {
-  return status === "OPEN" || status === "IN_PROGRESS";
+  return (QUEUE_STATUSES as readonly string[]).includes(status);
 }
 
 /**
