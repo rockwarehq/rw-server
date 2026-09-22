@@ -41,9 +41,7 @@ const measureFormat = (measure: MeasureDef): ValueFormat =>
 function isRowLocal(fact: FactDef, measure: MeasureDef): boolean {
   if (measure.kind === "count") return false;
   if (measure.kind !== "ratio") return true;
-  const components = [measure.numerator, measure.denominator].flatMap((side) =>
-    Array.isArray(side) ? side : [side],
-  );
+  const components = [measure.numerator, measure.denominator].flatMap((side) => (Array.isArray(side) ? side : [side]));
   return components.every((key) => {
     const component = fact.measures[key];
     return component !== undefined && component.kind !== "count" && component.kind !== "ratio";
