@@ -611,9 +611,10 @@ async function completeOrder(orderId: string, siteId: string, workspaceId: strin
     const txRaw = tx as unknown as { $queryRaw: typeof prisma.$queryRaw };
     const stockRows =
       productIds.length > 0
-        ? await txRaw.$queryRaw<Array<{ productId: string; available: number }>>`
+        ? await txRaw.$queryRaw<Array<{ productId: string; available: number; raw: number }>>`
             SELECT "productId",
-                   GREATEST(produced - scrapped - consumed + adjustment, 0)::float8 AS available
+                   GREATEST(produced - scrapped - consumed + adjustment, 0)::float8 AS available,
+                   (produced - scrapped - consumed + adjustment)::float8 AS raw
             FROM "ProductStock"
             WHERE "siteId" = ${siteId}::uuid AND "productId" = ANY(${productIds}::uuid[])
             ORDER BY "productId"
@@ -630,10 +631,38 @@ async function completeOrder(orderId: string, siteId: string, workspaceId: strin
       return { lineItemId: li.id, productId: li.productId, target, take };
     });
 
+    // A clamped-negative availability means the stock cache says less than
+    // nothing is on hand. Every take against it is 0, so the order would
+    // complete with an empty ledger and no explanation. Say so once, loudly,
+    // rather than letting it fail silently forever.
+    for (const row of stockRows) {
+      if (row.raw < 0) {
+        console.error(
+          `[order] ProductStock for site ${siteId} product ${row.productId} is negative (${row.raw}); ` +
+            `availability clamps to 0, so completing order ${orderId} will consume nothing for it.`,
+        );
+      }
+    }
+
     const shortCount = takes.filter((t) => t.take < t.target).length;
-    if (shortCount > 0 && !allowPartial) {
+
+    // Take is derived from raw on-hand, but the fill queue shows FIFO
+    // coverage — so an order can take stock the queue attributed to an
+    // earlier one. That is allowed (nothing is reserved; first to complete
+    // wins) but it must never happen silently: it needs the same explicit
+    // confirmation completing short does. Walked against `tx`, under the
+    // locks held above, so the answer cannot drift before the consume.
+    const coverage = productIds.length > 0 ? await computeCoverage(siteId, productIds, tx) : null;
+    const jumpingQueue = takes.some(
+      (t) => t.take > (coverage?.byLineItem.get(t.lineItemId)?.coveredQuantity ?? t.take),
+    );
+
+    if ((shortCount > 0 || jumpingQueue) && !allowPartial) {
       return {
-        error: `Order is not fully covered by stock (${shortCount} line${shortCount === 1 ? "" : "s"} short)`,
+        error:
+          shortCount > 0
+            ? `Order is not fully covered by stock (${shortCount} line${shortCount === 1 ? "" : "s"} short)`
+            : "Completing this order would take stock the fill queue has ahead of it",
         code: "PARTIAL_COVERAGE",
       } as const;
     }

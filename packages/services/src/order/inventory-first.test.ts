@@ -202,6 +202,36 @@ describe.skipIf(!process.env.DATABASE_URL)("inventory-first orders", () => {
     }
   });
 
+  test("completing out of queue order needs the same confirmation as completing short", async () => {
+    // Fresh product so the queue is exactly these two orders.
+    const productC = (await prisma.product.create({ data: { siteId } })).id;
+    await produce(productC, 5);
+
+    const first = await createOpenOrder([{ productId: productC, targetQuantity: 5 }]);
+    const second = await createOpenOrder([{ productId: productC, targetQuantity: 4 }]);
+
+    // FIFO gives everything to the first: the second shows as uncovered.
+    const coverage = await computeCoverage(siteId, [productC]);
+    expect(coverage.byLineItem.get(first.lineItems[0].id)).toMatchObject({ coveredQuantity: 5 });
+    expect(coverage.byLineItem.get(second.lineItems[0].id)).toMatchObject({ coveredQuantity: 0 });
+
+    // Raw stock would let the second take 4, which is the first's. Refused
+    // without an explicit allowPartial even though nothing is "short".
+    const refused = await orders.transitionStatus(second.id, "COMPLETED", {});
+    expect("code" in refused && refused.code).toBe("PARTIAL_COVERAGE");
+    expect((await orders.get(second.id)).data?.status).toBe("OPEN");
+
+    // Confirmed, it still wins — nothing is reserved, first to commit takes it.
+    const confirmed = await orders.transitionStatus(second.id, "COMPLETED", { allowPartial: true });
+    expect("error" in confirmed && confirmed.error).toBeFalsy();
+    const stock = await getStock(prisma, siteId, [productC]);
+    expect(stock.get(productC)).toMatchObject({ consumed: 4, available: 1 });
+
+    // And the first order's coverage collapses, as it must.
+    const after = await computeCoverage(siteId, [productC]);
+    expect(after.byLineItem.get(first.lineItems[0].id)).toMatchObject({ coveredQuantity: 1 });
+  });
+
   test("only a cancelled order can be deleted", async () => {
     const open = await createOpenOrder([]);
     const refusedOpen = await orders.remove(open.id);

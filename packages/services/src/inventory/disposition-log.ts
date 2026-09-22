@@ -495,7 +495,13 @@ export async function autoScrapCycleItems(
     perProduct.set(item.productId, (perProduct.get(item.productId) ?? 0) + item.quantity);
   }
   let total = 0;
-  for (const [productId, qty] of perProduct) {
+  // Sorted by productId: applyProduction and completeOrder both take their
+  // ProductStock row locks in that order, and a Map iterates in insertion
+  // order. Scrapping two products in the opposite order to a concurrent
+  // cycle or completion is an ABBA deadlock — and the cycle path runs this
+  // and applyProduction in the same transaction.
+  for (const productId of [...perProduct.keys()].sort()) {
+    const qty = perProduct.get(productId) ?? 0;
     if (qty === 0) continue;
     await applyScrapDelta(tx, input.siteId, productId, qty);
     total += qty;

@@ -1,5 +1,5 @@
 import prisma from "@rw/db";
-import type { OrderStatus } from "@rw/db";
+import type { OrderStatus, Prisma } from "@rw/db";
 import { getStock } from "../inventory/stock.js";
 
 // ============================================================================
@@ -35,12 +35,20 @@ export interface CoverageResult {
 }
 
 /**
- * Compute FIFO coverage for all OPEN/IN_PROGRESS orders in the site that carry
- * any of the given products. The whole queue is walked (not just one page of
- * orders) because a row's coverage depends on the orders ahead of it.
- * Two queries total, independent of caller page size.
+ * Compute FIFO coverage for every queued order in the site that carries any of
+ * the given products. The whole queue is walked (not just one page of orders)
+ * because a row's coverage depends on the orders ahead of it. Two queries
+ * total, independent of caller page size.
+ *
+ * `client` lets the completion transaction run this walk against its own tx,
+ * under the ProductStock locks it already holds, so the answer cannot drift
+ * between the check and the consume.
  */
-export async function computeCoverage(siteId: string, productIds: string[]): Promise<CoverageResult> {
+export async function computeCoverage(
+  siteId: string,
+  productIds: string[],
+  client: Prisma.TransactionClient | typeof prisma = prisma,
+): Promise<CoverageResult> {
   const result: CoverageResult = {
     byLineItem: new Map(),
     openDemand: new Map(),
@@ -49,9 +57,11 @@ export async function computeCoverage(siteId: string, productIds: string[]): Pro
   };
   if (productIds.length === 0) return result;
 
-  const stock = await getStock(prisma, siteId, productIds);
+  const stock = await getStock(client, siteId, productIds);
 
-  const queue = await prisma.$queryRaw<Array<{ lineItemId: string; productId: string; target: number }>>`
+  const queue = await (client as typeof prisma).$queryRaw<
+    Array<{ lineItemId: string; productId: string; target: number }>
+  >`
     SELECT oli.id AS "lineItemId", oli."productId", oli."targetQuantity"::float8 AS target
     FROM "OrderLineItem" oli
     JOIN "Order" o ON o.id = oli."orderId"
