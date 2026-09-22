@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import prisma from "@rw/db";
 import { stationStateSeries } from "./station-state.js";
 import { isHistorianError, type ResolvedRange } from "./types.js";
@@ -22,12 +22,14 @@ describe.skipIf(!process.env.DATABASE_URL)("historian stationState series", () =
   let otherSiteId: string;
   let workcenterId: string;
   let stationId: string;
+  let workspaceId: string;
 
   beforeAll(async () => {
     const suffix = randomUUID();
     const workspace = await prisma.workspace.create({
       data: { name: `Historian Test ${suffix}`, slug: `historian-test-${suffix}` },
     });
+    workspaceId = workspace.id;
     const site = await prisma.site.create({
       data: { name: `Historian Site ${suffix}`, workspaceId: workspace.id },
     });
@@ -95,6 +97,75 @@ describe.skipIf(!process.env.DATABASE_URL)("historian stationState series", () =
         },
       ],
     });
+  });
+
+  afterAll(async () => {
+    if (!workspaceId) return;
+    const sites = { workspaceId };
+    await prisma.stationStateLog.deleteMany({ where: { station: { site: sites } } });
+    await prisma.shiftInstance.deleteMany({ where: { site: sites } });
+    await prisma.shiftAssignment.deleteMany({ where: { site: sites } });
+    await prisma.shiftPattern.deleteMany({ where: { site: sites } });
+    await prisma.station.deleteMany({ where: { site: sites } });
+    await prisma.workcenter.deleteMany({ where: { site: sites } });
+    await prisma.site.deleteMany({ where: sites });
+    await prisma.workspace.delete({ where: { id: workspaceId } });
+  });
+
+  test("legacy null stamps fall back independently, while foreign historical stamps survive station moves", async () => {
+    const otherWorkcenter = await prisma.workcenter.create({ data: { siteId, name: `Other WC ${randomUUID()}` } });
+    const station = await prisma.station.create({ data: { siteId, workcenterId, name: `Legacy ${randomUUID()}` } });
+    const rows = [
+      { blockId: "legacy", siteId: null, workcenterId: null },
+      { blockId: "site-only", siteId, workcenterId: null },
+      { blockId: "wc-only", siteId: null, workcenterId },
+      { blockId: "owned", siteId, workcenterId },
+      { blockId: "foreign-wc", siteId, workcenterId: otherWorkcenter.id },
+      { blockId: "foreign-site", siteId: otherSiteId, workcenterId },
+      { blockId: "foreign-site-null-wc", siteId: otherSiteId, workcenterId: null },
+      { blockId: "null-site-foreign-wc", siteId: null, workcenterId: otherWorkcenter.id },
+    ];
+    await prisma.stationStateLog.createMany({
+      data: rows.map((row, index) => ({
+        ...row,
+        stationId: station.id,
+        state: "UP",
+        startTime: new Date(at(T0).getTime() + index * 1000),
+        endTime: new Date(at(T0).getTime() + (index + 1) * 1000),
+        ...(row.blockId === "site-only" ? { deletedAt: new Date() } : {}),
+      })),
+    });
+    const scope = { siteId, stationId: station.id, workcenterIds: [workcenterId] };
+    const first = await stationStateSeries.fetchRange(scope, RANGE, { limit: 2 });
+    if (isHistorianError(first)) throw new Error(first.error);
+    expect(first.nextPageToken).not.toBeNull();
+    const second = await stationStateSeries.fetchRange(scope, RANGE, { limit: 20, pageToken: first.nextPageToken });
+    if (isHistorianError(second)) throw new Error(second.error);
+    expect([...first.rows, ...second.rows].map((row) => row.blockId)).toEqual([
+      "legacy",
+      "site-only",
+      "wc-only",
+      "owned",
+    ]);
+    const changes = await stationStateSeries.fetchChanges(scope, RANGE, 0, 100);
+    if (isHistorianError(changes)) throw new Error(changes.error);
+    expect(changes.deltas.map((delta) => delta.row.blockId).sort()).toEqual([
+      "legacy",
+      "owned",
+      "site-only",
+      "wc-only",
+    ]);
+    expect(changes.deltas.find((delta) => delta.row.blockId === "site-only")?.op).toBe("delete");
+
+    await prisma.station.update({ where: { id: station.id }, data: { workcenterId: otherWorkcenter.id } });
+    const moved = await stationStateSeries.fetchRange({ ...scope, workcenterIds: [otherWorkcenter.id] }, RANGE, {
+      limit: 100,
+    });
+    if (isHistorianError(moved)) throw new Error(moved.error);
+    expect(moved.rows.map((row) => row.blockId)).toEqual(["legacy", "site-only", "foreign-wc", "null-site-foreign-wc"]);
+    const oldScope = await stationStateSeries.fetchRange(scope, RANGE, { limit: 100 });
+    if (isHistorianError(oldScope)) throw new Error(oldScope.error);
+    expect(oldScope.rows.map((row) => row.blockId)).toEqual(["wc-only", "owned"]);
   });
 
   test("assertScope rejects a station under a different site", async () => {

@@ -6,6 +6,7 @@ import {
   type ValidatePointSiteAccessResult,
 } from "../services/point-value.js";
 import { authorizeList } from "@rw/auth/iam/policy";
+import { canReadPoint } from "@rw/services/entity/access-scope";
 import { grant } from "./authz.js";
 import { subscribeStreamEvents, type PointValueEvent, type StreamEvent } from "@rw/runtime/events-bus";
 import { throwServiceError, type CodeOverrides } from "./errors.js";
@@ -89,7 +90,10 @@ export const getSnapshots = userOrDisplayRequired
     // Displays are pinned to their own site by the policy; site-scoped users
     // must have every point inside an accessible site; all-sites users keep
     // the existence/workspace validation.
-    const scope = grant(await authorizeList(context.iam, { permission: "facility:read" }));
+    const scope = grant(await authorizeList(context.iam, { permission: "production:read" }));
+    for (const pointId of pointIds) {
+      if (!(await canReadPoint(scope, pointId))) throw new ORPCError("FORBIDDEN");
+    }
     const accessValidationResult: ValidatePointSiteAccessResult = await validatePointSiteAccess(pointIds, scope.siteId);
 
     if (!accessValidationResult.success) {
@@ -109,7 +113,10 @@ export const stream = userOrDisplayRequired
     // Displays are pinned to their own site by the policy; site-scoped users
     // must have every point inside an accessible site; all-sites users keep
     // the existence/workspace validation.
-    const scope = grant(await authorizeList(context.iam, { permission: "facility:read" }));
+    const scope = grant(await authorizeList(context.iam, { permission: "production:read" }));
+    for (const pointId of pointIds) {
+      if (!(await canReadPoint(scope, pointId))) throw new ORPCError("FORBIDDEN");
+    }
     const accessValidationResult: ValidatePointSiteAccessResult = await validatePointSiteAccess(pointIds, scope.siteId);
 
     if (!accessValidationResult.success) {

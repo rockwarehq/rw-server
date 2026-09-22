@@ -403,6 +403,7 @@ export type AdminSetPasswordError =
   | "USER_NOT_FOUND"
   | "SELF_RESET"
   | "SYSTEM_USER"
+  | "FORBIDDEN"
   | "OWNER_PERMISSION_REQUIRED"
   | "WEAK_PASSWORD"
   | "PERMANENT_REQUIRES_PASSWORD";
@@ -436,11 +437,23 @@ export async function adminSetPassword(
     return { success: false, error: "SYSTEM_USER" };
   }
 
+  const memberships = await prisma.workspaceMembership.findMany({
+    where: { userId: input.targetUserId },
+    select: { workspaceId: true },
+  });
+  if (!memberships.some((m) => m.workspaceId === input.workspaceId)) {
+    return { success: false, error: "USER_NOT_FOUND" };
+  }
+  for (const membership of memberships) {
+    if (!(await hasPermission(input.actorId, "plant:admin", { workspaceId: membership.workspaceId }))) {
+      return { success: false, error: "FORBIDDEN" };
+    }
+  }
+
   // Resetting an owner's password is a takeover vector, so it needs the
   // owner permission — same rule as changing an owner's role.
-  const targetIsOwner = await prisma.workspaceMembership.findFirst({
+  const ownerMemberships = await prisma.workspaceMembership.findMany({
     where: {
-      workspaceId: input.workspaceId,
       userId: input.targetUserId,
       roleAssignments: {
         some: {
@@ -453,12 +466,12 @@ export async function adminSetPassword(
         },
       },
     },
-    select: { id: true },
+    select: { id: true, workspaceId: true },
   });
 
-  if (targetIsOwner) {
+  for (const targetIsOwner of ownerMemberships) {
     const actorIsOwner = await hasPermission(input.actorId, OWNER_PERMISSION, {
-      workspaceId: input.workspaceId,
+      workspaceId: targetIsOwner.workspaceId,
     });
     if (!actorIsOwner) {
       return { success: false, error: "OWNER_PERMISSION_REQUIRED" };

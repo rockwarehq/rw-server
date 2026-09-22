@@ -7,7 +7,9 @@ import * as query from "../services/metrics.js";
 import { getShiftForEntity } from "@rw/services/metrics/shift";
 import { rowToSnapshot } from "@rw/services/metrics/sync";
 import { userOrDisplayRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
+import { authorizeList } from "@rw/auth/iam/policy";
+import type { IAMContext } from "@rw/auth/context";
+import { canReadMetricEntity, metricPathInScope, metricReadWhere } from "@rw/services/entity/access-scope";
 import { grant } from "./authz.js";
 import {
   subscribeMetricChanges,
@@ -16,6 +18,20 @@ import {
 } from "@rw/services/rpc/metrics-bus";
 
 const entityTypeSchema = z.enum(["STATION", "WORKCENTER", "SITE", "JOB"]);
+
+async function authorizeEntities(
+  iam: IAMContext,
+  siteId: string,
+  entities: { entityType: string; entityId: string }[],
+) {
+  const scope = grant(await authorizeList(iam, { permission: "production:read", requestedSiteId: siteId }));
+  for (const entity of entities) {
+    if (!(await canReadMetricEntity(scope, entity))) {
+      throw new ORPCError("FORBIDDEN", { message: "Metric entity is outside the production read scope" });
+    }
+  }
+  return scope;
+}
 const granularitySchema = z.enum(["MINUTE", "HOUR", "SHIFT", "DAY"]);
 
 const entitySubscriptionSchema = z.object({
@@ -445,7 +461,7 @@ export const stream = userOrDisplayRequired
   .input(streamInputSchema)
   .output(eventIterator(metricChangeSchema))
   .handler(async function* ({ context, input, signal }) {
-    grant(await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.siteId } }));
+    const scope = await authorizeEntities(context.iam, input.siteId, input.entities);
 
     const subscriptions = new Map<string, Set<string>>();
     for (const entity of input.entities) {
@@ -458,7 +474,7 @@ export const stream = userOrDisplayRequired
     }
 
     for await (const change of subscribeMetricChanges({ signal })) {
-      if (change.siteId !== input.siteId) {
+      if (change.siteId !== input.siteId || !metricPathInScope(scope, change.path)) {
         continue;
       }
 
@@ -479,7 +495,7 @@ export const streamValues = userOrDisplayRequired
   .input(streamValuesInputSchema)
   .output(eventIterator(streamValueEventSchema))
   .handler(async function* ({ context, input, signal }) {
-    grant(await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.siteId } }));
+    const scope = await authorizeEntities(context.iam, input.siteId, input.requests);
 
     const requestByKey = new Map<string, NormalizedMetricValueRequest>();
     for (const request of input.requests) {
@@ -503,6 +519,7 @@ export const streamValues = userOrDisplayRequired
           if (!request) {
             continue;
           }
+          if (!metricPathInScope(scope, event.path)) continue;
 
           const record = metricValueEventToRecord(event, request);
           if (buffering) {
@@ -533,6 +550,7 @@ export const streamValues = userOrDisplayRequired
     );
 
     for (const value of currentValues) {
+      if (!metricPathInScope(scope, value.path)) continue;
       yield serializeStreamValueRecord(value, true);
     }
 
@@ -561,7 +579,7 @@ export const getBuckets = userOrDisplayRequired
   .input(getBucketsInputSchema)
   .output(z.array(bucketSchema))
   .handler(async ({ context, input }) => {
-    grant(await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.siteId } }));
+    const scope = await authorizeEntities(context.iam, input.siteId, input.entities);
 
     const buckets = await query.getBuckets({
       siteId: input.siteId,
@@ -573,11 +591,13 @@ export const getBuckets = userOrDisplayRequired
       offset: input.offset,
     });
 
-    return buckets.map((bucket) => ({
-      ...bucket,
-      startTime: bucket.startTime.toISOString(),
-      businessDate: bucket.businessDate?.toISOString() ?? null,
-    }));
+    return buckets
+      .filter((bucket) => metricPathInScope(scope, bucket.path))
+      .map((bucket) => ({
+        ...bucket,
+        startTime: bucket.startTime.toISOString(),
+        businessDate: bucket.businessDate?.toISOString() ?? null,
+      }));
   });
 
 const SHIFT_METRIC_CATALOG_MAP = new Map(
@@ -593,7 +613,7 @@ export const getShiftValues = userOrDisplayRequired
   .input(getShiftValuesInputSchema)
   .output(getShiftValuesOutputSchema)
   .handler(async ({ context, input }) => {
-    grant(await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.siteId } }));
+    const scope = await authorizeEntities(context.iam, input.siteId, input.entities);
 
     const uniqueMetricKeys = [...new Set(input.metricKeys)] as ShiftMetricKey[];
 
@@ -644,6 +664,7 @@ export const getShiftValues = userOrDisplayRequired
               siteId: input.siteId,
               granularity: "SHIFT",
               OR: shiftQueries,
+              AND: [await metricReadWhere(scope)],
             },
           })
         : [];

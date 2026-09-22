@@ -24,7 +24,7 @@ model Display {
   workcenter   Workcenter? @relation(fields: [workcenterId], references: [id], onDelete: SetNull)
 
   stationId String?  @db.Uuid
-  station   Station? @relation(fields: [stationId], references: [id], onDelete: SetNull)
+  station   Station? @relation(fields: [stationId], references: [id], onDelete: Restrict)
 
   claimedAt  DateTime? @db.Timestamptz(3)
   lastSeenAt DateTime? @db.Timestamptz(3)
@@ -33,6 +33,8 @@ model Display {
 
   logonSessions StationLogonSession[]
   refreshTokens DisplayRefreshToken[]
+  authoredShiftComments ShiftComment[] @relation("ShiftCommentAuthorDisplay")
+  sourcedShiftComments ShiftComment[] @relation("ShiftCommentSourceDisplay")
 
   @@index([siteId])
   @@index([claimCode])

@@ -4,6 +4,7 @@ import { SystemUserAssignmentError } from "./assignments.js";
 
 // GitHub-collaborator-style workcenter grants: a membership holds READ or
 // WRITE at one workcenter (one row per pair — upsert to change the level).
+// These grant only scoped production:read / production:write, never Engineer.
 // Evaluation happens in permissions.ts; this module is CRUD + invariants,
 // mirroring assignments.ts.
 
@@ -32,6 +33,7 @@ const grantInclude = {
  *    permissions come from code, not the database.
  */
 export async function upsertGrant(input: UpsertWorkcenterGrantInput) {
+  if (input.access !== "READ" && input.access !== "WRITE") throw new Error("Invalid workcenter access");
   const user = await prisma.user.findUnique({
     where: { id: input.userId },
     select: { id: true, systemRole: true },

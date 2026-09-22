@@ -1,17 +1,20 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
+import prisma from "@rw/db";
+import type { IAMContext } from "@rw/auth/context";
 import { authRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
+import { authorizePhysicalTarget, authorizePhysicalList } from "../api/authz.js";
 import { grant } from "./authz.js";
 import { savedView } from "@rw/services/saved-view/index";
-import { throwServiceError } from "./errors.js";
+import { throwServiceError, unwrap } from "./errors.js";
 
 // Saved page views (Linear-style): generic verbs over one table, with a
 // typed per-page config union (the historian selector-union pattern, ADR
 // 0008 §1) — adding views to another page later is one union member, no new
 // endpoints. Visibility: "PRIVATE" (creator only) or "WORKSPACE" (all
-// workspace members). Publishing config to a WORKSPACE view is open to any
-// member; rename/reshare/delete are creator-only (enforced in the service).
+// members with access to the view's context). Personal preferences need that
+// same read access; shared publishing needs site configuration authority.
+// Rename/reshare/delete remain creator-only (enforced in the service).
 
 // ============================================================================
 // Input Schemas
@@ -125,9 +128,91 @@ function requireUserContext(iam: { id?: string; workspaceId?: string }) {
   return { userId: iam.id, workspaceId: iam.workspaceId };
 }
 
+interface ViewContext {
+  siteId: string;
+  page: string;
+  scopeId?: string | null;
+}
+
+/** Authorize the actual page context, not the saved-view row's site alone. */
+async function authorize(
+  iam: IAMContext,
+  view: ViewContext,
+  options: { sharedWrite?: boolean; config?: Record<string, unknown> } = {},
+) {
+  if (!pageSchema.safeParse(view.page).success) {
+    throw new ORPCError("BAD_REQUEST", { message: "Unsupported saved-view page" });
+  }
+  // Known physical anchors only. stations-directory has no defined scopeId
+  // namespace; keep its optional opaque namespace rather than inventing a FK.
+  // Null anchors remain site-context defaults, with the same narrowed read
+  // access as the underlying production list.
+  const kind =
+    view.page === "station-cycles"
+      ? "station"
+      : view.page === "shift-view" || view.page === "timeline"
+        ? "workcenter"
+        : undefined;
+  let workcenterIds: string[] | undefined;
+  if (kind && view.scopeId) {
+    const scope = grant(
+      await authorizePhysicalTarget(iam, {
+        permission: "production:read",
+        scope: { kind, id: view.scopeId },
+      }),
+    );
+    if (scope.siteId !== view.siteId) {
+      throw new ORPCError("FORBIDDEN", { message: "View scope does not belong to this site" });
+    }
+    if (kind === "workcenter") workcenterIds = [view.scopeId];
+  } else {
+    const scope = grant(
+      await authorizePhysicalList(iam, {
+        permission: "production:read",
+        requestedSiteId: view.siteId,
+      }),
+    );
+    workcenterIds = scope.workcenterIds;
+  }
+  if (options.sharedWrite) {
+    grant(
+      await authorizePhysicalTarget(iam, {
+        permission: "configuration:write",
+        scope: { kind: "site", siteId: view.siteId },
+      }),
+    );
+  }
+
+  // Filter selections are references, not authority. Validate the submitted
+  // configuration against the proven site/workcenter set before persisting it.
+  const stationIds = options.config?.stationIds;
+  if (Array.isArray(stationIds) && stationIds.length) {
+    const ids = [...new Set(stationIds as string[])];
+    const count = await prisma.station.count({
+      where: {
+        id: { in: ids },
+        siteId: view.siteId,
+        deletedAt: null,
+        ...(workcenterIds ? { workcenterId: { in: workcenterIds } } : {}),
+      },
+    });
+    if (count !== ids.length) {
+      throw new ORPCError("FORBIDDEN", { message: "Station filters must belong to the accessible view context" });
+    }
+  }
+  const labelIds = options.config?.labelIds;
+  if (Array.isArray(labelIds) && labelIds.length) {
+    const ids = [...new Set(labelIds as string[])];
+    const count = await prisma.label.count({ where: { id: { in: ids }, siteId: view.siteId } });
+    if (count !== ids.length) {
+      throw new ORPCError("FORBIDDEN", { message: "Label filters must belong to the view's site" });
+    }
+  }
+}
+
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
   const { userId, workspaceId } = requireUserContext(context.iam);
-  grant(await authorize(context.iam, { permission: "dashboard:write", scope: { kind: "site", siteId: input.siteId } }));
+  await authorize(context.iam, input, { sharedWrite: input.visibility === "WORKSPACE", config: input.config });
 
   const result = await savedView.create(
     {
@@ -148,7 +233,7 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
   const { userId, workspaceId } = requireUserContext(context.iam);
-  grant(await authorize(context.iam, { permission: "dashboard:read", scope: { kind: "site", siteId: input.siteId } }));
+  await authorize(context.iam, input);
 
   const result = await savedView.list(
     { siteId: input.siteId, page: input.page, scopeId: input.scopeId ?? null, userId },
@@ -160,7 +245,14 @@ export const list = authRequired.input(listInputSchema).handler(async ({ input, 
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { userId, workspaceId } = requireUserContext(context.iam);
-  grant(await authorize(context.iam, { permission: "dashboard:write", scope: { kind: "savedView", id: input.id } }));
+  const current = unwrap(await savedView.getContext(input.id, workspaceId));
+  if (input.page !== current.page) {
+    throw new ORPCError("BAD_REQUEST", { message: "Page does not match the saved view" });
+  }
+  await authorize(context.iam, current, {
+    sharedWrite: current.visibility === "WORKSPACE" || input.visibility === "WORKSPACE",
+    config: input.config,
+  });
 
   const result = await savedView.update(
     input.id,
@@ -181,7 +273,8 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const { userId, workspaceId } = requireUserContext(context.iam);
-  grant(await authorize(context.iam, { permission: "dashboard:write", scope: { kind: "savedView", id: input.id } }));
+  const current = unwrap(await savedView.getContext(input.id, workspaceId));
+  await authorize(context.iam, current, { sharedWrite: current.visibility === "WORKSPACE" });
 
   const result = await savedView.remove(input.id, { actorId: userId }, workspaceId);
   if (result.error !== undefined) {

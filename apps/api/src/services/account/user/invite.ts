@@ -1,6 +1,7 @@
 import prisma from "@rw/db";
+import type { RoleScope } from "@rw/db";
 import { securityConfig } from "../../../config.js";
-import { hasOwnerPermission, hasPermission, OWNER_PERMISSION } from "@rw/auth/iam/index";
+import { hasOwnerPermission, hasPermission, OWNER_PERMISSION, validateCustomRolePermissions } from "@rw/auth/iam/index";
 import { hashPassword } from "@rw/auth/password";
 import { sendInviteEmail } from "@rw/services/email/index";
 import { logEvent } from "@rw/services/audit/index";
@@ -20,6 +21,7 @@ export interface CreateInviteInput {
    */
   roleId?: string;
   siteId?: string;
+  workcenterId?: string;
   fallbackSiteId?: string;
   /** Workcenter grants to create for the invitee (GitHub-collaborator style). */
   workcenterGrants?: Array<{ workcenterId: string; access: "READ" | "WRITE" }>;
@@ -53,7 +55,8 @@ export interface InviteContext {
 interface InviteAssignment {
   roleId: string;
   siteId: string | null;
-  scope: "WORKSPACE" | "SITE";
+  workcenterId?: string | null;
+  scope: RoleScope;
   isOwner: boolean;
 }
 
@@ -73,6 +76,7 @@ async function resolveInviteAccess(input: {
   workspaceId: string;
   roleId?: string;
   siteId?: string;
+  workcenterId?: string;
   fallbackSiteId?: string;
   workcenterGrants?: Array<{ workcenterId: string; access: "READ" | "WRITE" }>;
 }): Promise<{ ok: true; access: InviteAccess } | { ok: false; error: string }> {
@@ -108,6 +112,7 @@ async function resolveInviteAssignment(input: {
   workspaceId: string;
   roleId?: string;
   siteId?: string;
+  workcenterId?: string;
   fallbackSiteId?: string;
 }): Promise<{ ok: true; assignment: InviteAssignment } | { ok: false; error: string }> {
   if (!input.roleId) {
@@ -129,13 +134,33 @@ async function resolveInviteAssignment(input: {
   }
 
   if (role.scope === "WORKSPACE") {
-    if (input.siteId) {
+    if (input.siteId || input.workcenterId) {
       return { ok: false, error: "siteId cannot be used with a workspace-scoped role" };
     }
     return { ok: true, assignment: { roleId: role.id, siteId: null, scope: "WORKSPACE", isOwner } };
   }
 
-  const siteId = input.siteId ?? input.fallbackSiteId;
+  let siteId = input.siteId ?? input.fallbackSiteId;
+  if (role.scope === "WORKCENTER") {
+    if (!input.workcenterId) return { ok: false, error: "workcenterId is required for workcenter roles" };
+    try {
+      validateCustomRolePermissions(role.permissions, "WORKCENTER");
+    } catch {
+      return { ok: false, error: "Invalid workcenter role permissions" };
+    }
+    const workcenter = await prisma.workcenter.findUnique({
+      where: { id: input.workcenterId },
+      select: { siteId: true, site: { select: { workspaceId: true } } },
+    });
+    if (
+      !workcenter ||
+      workcenter.site.workspaceId !== input.workspaceId ||
+      (input.siteId && workcenter.siteId !== input.siteId)
+    ) {
+      return { ok: false, error: "Workcenter does not belong to the requested site/workspace" };
+    }
+    siteId = workcenter.siteId;
+  }
   if (!siteId) {
     return { ok: false, error: "siteId is required for site-scoped invite roles" };
   }
@@ -149,6 +174,14 @@ async function resolveInviteAssignment(input: {
     return { ok: false, error: "Site does not belong to this workspace" };
   }
 
+  if (role.scope === "WORKCENTER") {
+    return {
+      ok: true,
+      assignment: { roleId: role.id, siteId, workcenterId: input.workcenterId, scope: "WORKCENTER", isOwner: false },
+    };
+  }
+  if (input.workcenterId) return { ok: false, error: "Only workcenter roles accept workcenterId" };
+
   return { ok: true, assignment: { roleId: role.id, siteId, scope: "SITE", isOwner: false } };
 }
 
@@ -157,7 +190,7 @@ async function canInviteAssignment(inviterId: string, workspaceId: string, assig
     return hasPermission(inviterId, OWNER_PERMISSION, { workspaceId });
   }
 
-  return hasPermission(inviterId, "user:write", {
+  return hasPermission(inviterId, "plant:admin", {
     workspaceId,
     ...(assignment.siteId ? { siteId: assignment.siteId } : {}),
   });
@@ -167,9 +200,9 @@ async function canInviteAccess(inviterId: string, workspaceId: string, access: I
   if (access.assignment && !(await canInviteAssignment(inviterId, workspaceId, access.assignment))) {
     return false;
   }
-  // Every granted workcenter's site needs the inviter to hold user:write.
+  // Every granted workcenter's site needs the inviter to hold plant:admin.
   for (const grantRow of access.grants) {
-    const ok = await hasPermission(inviterId, "user:write", { workspaceId, siteId: grantRow.siteId });
+    const ok = await hasPermission(inviterId, "plant:admin", { workspaceId, siteId: grantRow.siteId });
     if (!ok) return false;
   }
   return true;
@@ -185,7 +218,7 @@ async function canManagePendingInvite(
 ): Promise<boolean> {
   if (assignments.length === 0 && grantSiteIds.length === 0) {
     // Orphaned invite with no role context - require workspace-level rights
-    return hasPermission(actorId, "user:write", { workspaceId });
+    return hasPermission(actorId, "plant:admin", { workspaceId });
   }
 
   if (assignments.some((assignment) => hasOwnerPermission(assignment.role.permissions))) {
@@ -193,18 +226,18 @@ async function canManagePendingInvite(
   }
 
   for (const assignment of assignments) {
-    const ok = await hasPermission(actorId, "user:write", {
+    const ok = await hasPermission(actorId, "plant:admin", {
       workspaceId,
       ...(assignment.siteId ? { siteId: assignment.siteId } : {}),
     });
-    if (ok) return true;
+    if (!ok) return false;
   }
   for (const siteId of grantSiteIds) {
-    const ok = await hasPermission(actorId, "user:write", { workspaceId, siteId });
-    if (ok) return true;
+    const ok = await hasPermission(actorId, "plant:admin", { workspaceId, siteId });
+    if (!ok) return false;
   }
 
-  return false;
+  return true;
 }
 
 async function inviteEmailContext(inviterId: string, workspaceId: string) {
@@ -273,6 +306,11 @@ export async function createInvite(
   });
 
   if (existingUser) {
+    const foreignMembership = await prisma.workspaceMembership.findFirst({
+      where: { userId: existingUser.id, workspaceId: { not: workspaceId } },
+      select: { id: true },
+    });
+    if (foreignMembership) return { success: false, error: "Forbidden" };
     // PENDING user - either a straight resend or adoption of an orphan
     // (missing membership, or zero role assignments AND zero workcenter
     // grants - the states the old flow left permanently uninvitable).
@@ -347,6 +385,7 @@ export async function createInvite(
                 membershipId: adoptedMembership.id,
                 roleId: access.assignment.roleId,
                 siteId: access.assignment.siteId,
+                workcenterId: access.assignment.workcenterId,
               },
             });
           }
@@ -405,7 +444,12 @@ export async function createInvite(
 
         if (access.assignment) {
           await tx.roleAssignment.create({
-            data: { membershipId: membership.id, roleId: access.assignment.roleId, siteId: access.assignment.siteId },
+            data: {
+              membershipId: membership.id,
+              roleId: access.assignment.roleId,
+              siteId: access.assignment.siteId,
+              workcenterId: access.assignment.workcenterId,
+            },
           });
         }
         if (access.grants.length) {
@@ -521,6 +565,14 @@ export async function revokeInvite(input: {
   if (!canRevoke) {
     return { success: false, error: "FORBIDDEN" };
   }
+
+  if (
+    await prisma.workspaceMembership.findFirst({
+      where: { userId: targetUserId, workspaceId: { not: workspaceId } },
+      select: { id: true },
+    })
+  )
+    return { success: false, error: "FORBIDDEN" };
 
   // Memberships, role assignments, and refresh tokens all cascade
   await prisma.user.delete({ where: { id: target.id } });

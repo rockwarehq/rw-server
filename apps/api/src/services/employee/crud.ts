@@ -41,6 +41,11 @@ export interface ListEmployeesFilter {
   offset?: number;
 }
 
+export interface EmployeeScope {
+  workspaceId: string;
+  siteId: string;
+}
+
 const versionSelectPublic = {
   id: true,
   version: true,
@@ -258,7 +263,7 @@ export async function list(filter: ListEmployeesFilter) {
   const [data, total] = await Promise.all([
     prisma.employee.findMany({
       where,
-      include: employeeInclude,
+      include: employeeIncludeForSite(siteId),
       orderBy: { createdAt: "desc" },
       take: limit || undefined,
       skip: offset,
@@ -269,10 +274,10 @@ export async function list(filter: ListEmployeesFilter) {
   return { data: await withSmsConsent(data), total };
 }
 
-export async function getById(id: string) {
+export async function getById(id: string, scope: EmployeeScope) {
   const employee = await prisma.employee.findUnique({
-    where: { id },
-    include: employeeInclude,
+    where: { id, workspaceId: scope.workspaceId, siteAccess: { some: { siteId: scope.siteId } } },
+    include: employeeIncludeForSite(scope.siteId),
   });
 
   if (!employee) return null;
@@ -308,9 +313,9 @@ export async function getByBadgeNumber(siteId: string, badgeNumber: string) {
   return { data: employee };
 }
 
-export async function update(id: string, input: UpdateEmployeeInput) {
+export async function update(id: string, input: UpdateEmployeeInput, scope: EmployeeScope) {
   const employee = await prisma.employee.findUnique({
-    where: { id },
+    where: { id, workspaceId: scope.workspaceId, siteAccess: { some: { siteId: scope.siteId } } },
     include: { version: true },
   });
 
@@ -343,7 +348,7 @@ export async function update(id: string, input: UpdateEmployeeInput) {
         error: "Employee role not found",
         code: "ROLE_NOT_FOUND" as const,
       };
-    if (role.site.workspaceId !== employee.workspaceId) {
+    if (role.site.workspaceId !== employee.workspaceId || role.siteId !== scope.siteId) {
       return {
         error: "Employee role does not belong to this workspace",
         code: "WORKSPACE_MISMATCH" as const,
@@ -408,16 +413,16 @@ export async function update(id: string, input: UpdateEmployeeInput) {
       });
     }
 
-    return tx.employee.findUnique({ where: { id }, include: employeeInclude });
+    return tx.employee.findUnique({ where: { id }, include: employeeIncludeForSite(scope.siteId) });
   });
 
   if (!result) throw new Error("Employee was not found after update");
   return { data: result };
 }
 
-export async function remove(id: string) {
+export async function remove(id: string, scope: EmployeeScope) {
   const employee = await prisma.employee.findUnique({
-    where: { id },
+    where: { id, workspaceId: scope.workspaceId, siteAccess: { some: { siteId: scope.siteId } } },
     select: { id: true },
   });
 

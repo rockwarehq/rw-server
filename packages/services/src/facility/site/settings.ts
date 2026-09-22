@@ -1,4 +1,6 @@
 import prisma from "@rw/db";
+import type { Permission } from "@rw/auth/iam/permissions";
+import type { UpdateSiteInput } from "./crud.js";
 import { BASE_WORKCENTER_ACCESS_KEY, type BaseWorkcenterAccess } from "@rw/auth/iam/permissions";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
@@ -18,19 +20,29 @@ export interface SiteSettings {
    * (same code path as a manual completion).
    */
   orderAutoComplete: boolean;
-  /**
-   * Base workcenter access for read-tier site roles (GitHub's org "base
-   * permissions" at plant scope): ALL (default) = members see live floor
-   * data site-wide; GRANTS_REQUIRED = floor reads (status/calls/modes)
-   * come only from explicit workcenter grants. The permission evaluator
-   * (@rw/auth iam/permissions.ts) reads the raw attrs key directly.
-   */
+  /** @deprecated Wire compatibility only. This value never grants production access. */
   baseWorkcenterAccess: BaseWorkcenterAccess;
 }
 
 const SETTINGS_KEYS = ["orderAutoComplete", "baseWorkcenterAccess"] as const satisfies ReadonlyArray<
   keyof SiteSettings
 >;
+
+/** Generic attrs are technical configuration, never a shortcut around the typed administration API. */
+export function siteUpdatePermissions(input: UpdateSiteInput): Permission[] {
+  const permissions = new Set<Permission>();
+  if (input.name !== undefined || input.description !== undefined || input.timezone !== undefined) {
+    permissions.add("plant:admin");
+  }
+  if (input.attrs !== undefined) {
+    permissions.add("configuration:write");
+    if (Object.hasOwn(input.attrs, "baseWorkcenterAccess") || Object.hasOwn(input.attrs, "logo")) {
+      permissions.add("plant:admin");
+    }
+  }
+  if (!permissions.size) permissions.add("plant:admin");
+  return [...permissions];
+}
 
 export function parseSiteSettings(attrs: unknown): SiteSettings {
   const record = (attrs ?? {}) as Record<string, unknown>;

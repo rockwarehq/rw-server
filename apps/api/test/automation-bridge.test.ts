@@ -2,10 +2,17 @@ import prisma from "@rw/db";
 import type { JobEvent } from "@rw/runtime/job-events";
 import { call, productionMode, station } from "@rw/services/facility/index";
 import * as notification from "@rw/services/notification/index";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createAppAutomationFramework } from "../src/automations/index.js";
 import { fromCallEvent } from "../src/automations/events/call-changed.js";
 import { fromModeEvent } from "../src/automations/events/mode-changed.js";
+
+// This suite exercises immediate DB-backed actions and their event/audit chain.
+// Delayed delivery is covered by scheduler tests; its transport need not dial NATS here.
+vi.mock("../src/nats/automation-schedule-store.js", async () => {
+  const { createMemoryScheduleStore } = await import("@rw/automations");
+  return { createNatsScheduleStore: async () => createMemoryScheduleStore() };
+});
 
 // Tier 2: real DB framework. A mode event opens a call through an automation; the resulting call
 // event notifies a group through another; the chain and the dedupe key survive a redelivery.
@@ -59,14 +66,18 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("automation bridge", () => {
   afterAll(async () => {
     await prisma.automationRun.deleteMany({ where: { matches: { some: { automationId: { in: automationIds } } } } });
     await prisma.automation.deleteMany({ where: { id: { in: automationIds } } });
-    await prisma.notification.deleteMany({ where: { groupId } });
-    await prisma.notificationGroup.deleteMany({ where: { id: groupId } });
-    await prisma.employee.deleteMany({ where: { id: employeeId } });
-    await prisma.call.deleteMany({ where: { stationId } });
-    await prisma.stationModeLog.deleteMany({ where: { stationId } });
-    await prisma.callDefinition.deleteMany({ where: { id: definitionId } });
-    await prisma.productionMode.deleteMany({ where: { id: modeId } });
-    await prisma.station.deleteMany({ where: { id: stationId } });
+    if (groupId) {
+      await prisma.notification.deleteMany({ where: { groupId } });
+      await prisma.notificationGroup.deleteMany({ where: { id: groupId } });
+    }
+    if (employeeId) await prisma.employee.deleteMany({ where: { id: employeeId } });
+    if (stationId) {
+      await prisma.call.deleteMany({ where: { stationId } });
+      await prisma.stationModeLog.deleteMany({ where: { stationId } });
+    }
+    if (definitionId) await prisma.callDefinition.deleteMany({ where: { id: definitionId } });
+    if (modeId) await prisma.productionMode.deleteMany({ where: { id: modeId } });
+    if (stationId) await prisma.station.deleteMany({ where: { id: stationId } });
   });
 
   const modeEvent = (action: "forced" | "cleared", id: string) =>

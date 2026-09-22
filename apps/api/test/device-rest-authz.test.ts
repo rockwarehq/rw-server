@@ -6,6 +6,7 @@ import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js
 const FA_EMAIL = "dev-authz-fa@test.local";
 const READER_EMAIL = "dev-authz-reader@test.local";
 const PASSWORD = "dev-authz-password-1";
+const READER_ROLE = "DevAuthZ Configuration Reader";
 
 // Tier 2: device REST surface (gateways/datasources/points/groups/drivers).
 describe.skipIf(!process.env.TEST_DATABASE_URL)("device REST authorization (Tier 2)", () => {
@@ -50,8 +51,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("device REST authorization (Tier
       where: { workspaceId_name_scope: { workspaceId, name: "Plant Admin", scope: "SITE" } },
       select: { id: true },
     });
-    const readerRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Plant Member", scope: "SITE" } },
+    // Technical read-only access is an explicit bundle, not Plant Member's planning access.
+    const readerRole = await prisma.role.upsert({
+      where: { workspaceId_name_scope: { workspaceId, name: READER_ROLE, scope: "SITE" } },
+      update: { permissions: ["configuration:read"] },
+      create: { workspaceId, name: READER_ROLE, scope: "SITE", permissions: ["configuration:read"] },
       select: { id: true },
     });
     const passwordHash = await hashPassword(PASSWORD);
@@ -83,6 +87,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("device REST authorization (Tier
 
   afterAll(async () => {
     await prisma.user.deleteMany({ where: { email: { in: [FA_EMAIL, READER_EMAIL] } } });
+    await prisma.role.deleteMany({ where: { name: READER_ROLE, isSystem: false } });
     await prisma.gateway.deleteMany({ where: { name: { in: ["dev-authz-gw-a", "dev-authz-gw-b"] } } });
     await prisma.site.deleteMany({ where: { name: "DevAuthZ Site B" } });
     await server.close();
@@ -102,14 +107,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("device REST authorization (Tier
     expect(spec.statusCode).toBe(403);
   });
 
-  it("gateway credential minting requires facility:admin at the gateway's site", async () => {
+  it("gateway credential minting requires configuration:write at the gateway's site", async () => {
     const denied = await call("POST", `/gateways/${gatewayB.id}/tokens`, faToken, { name: "x" });
     expect(denied.statusCode).toBe(403);
     const reader = await call("POST", `/gateways/${gatewayA.id}/tokens`, readerToken, { name: "x" });
     expect(reader.statusCode).toBe(403);
   });
 
-  it("moving a gateway requires facility:write at the target site (two-sided)", async () => {
+  it("moving a gateway requires configuration:write at the target site (two-sided)", async () => {
     const res = await call("PUT", `/gateways/${gatewayA.id}`, faToken, { siteId: siteB.id });
     expect(res.statusCode).toBe(403);
   });
@@ -131,7 +136,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("device REST authorization (Tier
       const siteList = await call("GET", `/gateways/?siteId=${siteA.id}`, faToken);
       expect(siteList.statusCode).toBe(200);
       expect((siteList.json() as Array<{ id: string }>).map((g) => g.id)).not.toContain(pool.id);
-      // …visible via the explicit pool view for facility:write holders…
+      // …visible via the explicit pool view for configuration:write holders…
       const poolList = await call("GET", "/gateways/?unassigned=true", faToken);
       expect(poolList.statusCode).toBe(200);
       expect((poolList.json() as Array<{ id: string }>).map((g) => g.id)).toContain(pool.id);
@@ -143,10 +148,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("device REST authorization (Tier
     }
   });
 
-  it("datasource listing is scope-filtered and drivers require facility:read", async () => {
+  it("datasource listing is scope-filtered and drivers require configuration:read", async () => {
     const list = await call("GET", `/datasources/?siteId=${siteB.id}`, faToken);
     expect(list.statusCode).toBe(403);
-    // The driver catalog is global vendor metadata: any facility:read grant
+    // The driver catalog is global vendor metadata: any configuration:read grant
     // (at any site) suffices.
     const drivers = await call("GET", "/drivers/", faToken);
     expect(drivers.statusCode).toBe(200);

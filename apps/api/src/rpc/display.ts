@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { publicProcedure, authRequired } from "./middleware.js";
-import { authorize, authorizeList } from "@rw/auth/iam/policy";
+import { authorizePhysicalTarget as authorize, authorizePhysicalList as authorizeList } from "../api/authz.js";
 import { grant } from "./authz.js";
 import { display } from "@rw/services/display/index";
 import { throwServiceError, unwrap } from "./errors.js";
@@ -86,7 +86,7 @@ export const heartbeat = publicProcedure.input(idInputSchema).handler(async ({ i
  */
 export const claim = authRequired.input(claimInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
   );
 
   const result = await display.claim(workspaceId, input.claimCode, {
@@ -104,7 +104,9 @@ export const claim = authRequired.input(claimInputSchema).handler(async ({ input
  * List displays for a site
  */
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "facility:read", requestedSiteId: input.siteId }));
+  const scope = grant(
+    await authorizeList(context.iam, { permission: "configuration:read", requestedSiteId: input.siteId }),
+  );
 
   return display.listForWorkspace(scope.workspaceId, { ...input, siteId: scope.siteId });
 });
@@ -114,7 +116,7 @@ export const list = authRequired.input(listInputSchema).handler(async ({ input, 
  */
 export const assignDashboard = authRequired.input(assignDashboardInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "display", id: input.id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "display", id: input.id } }),
   );
 
   const result = await display.assignDashboard(workspaceId, input.id, input.dashboardId);
@@ -129,7 +131,7 @@ export const assignDashboard = authRequired.input(assignDashboardInputSchema).ha
  */
 export const unassignDashboard = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "display", id: input.id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "display", id: input.id } }),
   );
 
   const result = await display.unassignDashboard(workspaceId, input.id);
@@ -142,7 +144,7 @@ export const unassignDashboard = authRequired.input(idInputSchema).handler(async
  */
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "display", id: input.id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "display", id: input.id } }),
   );
 
   const { id, ...updateData } = input;
@@ -160,7 +162,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
  */
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:admin", scope: { kind: "display", id: input.id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "display", id: input.id } }),
   );
 
   const result = await display.remove(workspaceId, input.id);

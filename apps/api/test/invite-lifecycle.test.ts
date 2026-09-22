@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { validatePasswordStrength } from "../src/services/validation.js";
 import { TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD } from "./global-setup.js";
 import { buildServer, type TestServer } from "./helpers/build-server.js";
+import { removeMember } from "../src/services/account/workspace/members.js";
 
 const INVITER_EMAIL = "inviter@test.local";
 const INVITER_PASSWORD = "InviterPass123!";
@@ -64,7 +65,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
         workspaceId,
         name: ROLE_NAME,
         scope: "WORKSPACE",
-        permissions: ["user:read", "user:write"],
+        permissions: ["plant:admin"],
         isSystem: false,
       },
     });
@@ -195,7 +196,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
     });
     expect(inviteCompleted).toBeTruthy();
 
-    // Same token, previously blocked route now passes (invitee has user:read)
+    // Same token, previously blocked route now passes (invitee has plant:admin)
     const unblocked = await server.inject({
       method: "GET",
       url: "/users",
@@ -312,13 +313,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
     expect((res.json() as { error: string }).error).toBe("User is disabled");
   });
 
-  it("permission matrix: no user:write means no invite/revoke; owner invites need owner:all", async () => {
+  it("permission matrix: no plant:admin means no invite/revoke; owner invites need owner:all", async () => {
     expect((await invite(nopermToken, { email: "nope@test.local", roleId })).statusCode).toBe(403);
 
     const pending = await prisma.user.findUniqueOrThrow({ where: { email: INVITEE_EMAILS[1] } });
     expect((await revoke(nopermToken, pending.id)).statusCode).toBe(403);
 
-    // user:write is not enough to hand out the owner role
+    // plant:admin is not enough to hand out the owner role
     const ownerByInviter = await invite(inviterToken, { email: INVITEE_EMAILS[8], roleId: ownerRoleId });
     expect(ownerByInviter.statusCode).toBe(403);
 
@@ -408,58 +409,77 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
     expect(await prisma.user.findUnique({ where: { id: active.id } })).not.toBeNull();
   });
 
-  it("the last workspace owner cannot be removed", async () => {
-    // Isolated workspace so shared-DB owner counts can't skew the result
-    const ws3 = await prisma.workspace.create({ data: { name: "Invite Test WS3", slug: "invite-test-ws3" } });
-    const ws3OwnerRole = await prisma.role.create({
-      data: {
-        workspaceId: ws3.id,
-        name: "Company Administrator",
-        scope: "WORKSPACE",
-        permissions: ["owner:all", "user:admin", "user:write", "user:read"],
-        isSystem: true,
-      },
-    });
-    const ws3AdminRole = await prisma.role.create({
-      data: {
-        workspaceId: ws3.id,
-        name: "WS3 User Admin",
-        scope: "WORKSPACE",
-        permissions: ["user:read", "user:admin"],
-        isSystem: false,
-      },
+  describe("owner removal protections", () => {
+    let owner: { id: string };
+    let ownerWorkspaceId: string;
+    let ws3AdminToken: string;
+
+    beforeAll(async () => {
+      // Isolated workspace so shared-DB owner counts can't skew the result.
+      const ws3 = await prisma.workspace.create({ data: { name: "Invite Test WS3", slug: "invite-test-ws3" } });
+      ownerWorkspaceId = ws3.id;
+      const ws3OwnerRole = await prisma.role.create({
+        data: {
+          workspaceId: ws3.id,
+          name: "Company Administrator",
+          scope: "WORKSPACE",
+          permissions: ["owner:all", "plant:admin"],
+          isSystem: true,
+        },
+      });
+      const ws3AdminRole = await prisma.role.create({
+        data: {
+          workspaceId: ws3.id,
+          name: "WS3 User Admin",
+          scope: "WORKSPACE",
+          permissions: ["plant:admin"],
+          isSystem: false,
+        },
+      });
+
+      owner = await prisma.user.create({
+        data: { email: INVITEE_EMAILS[10], status: "ACTIVE", passwordHash: await hashPassword("Ws3Owner123!") },
+      });
+      const ownerMembership = await prisma.workspaceMembership.create({
+        data: { userId: owner.id, workspaceId: ws3.id },
+      });
+      await prisma.roleAssignment.create({
+        data: { membershipId: ownerMembership.id, roleId: ws3OwnerRole.id, siteId: null },
+      });
+
+      const wsAdmin = await prisma.user.create({
+        data: { email: INVITEE_EMAILS[11], status: "ACTIVE", passwordHash: await hashPassword("Ws3Admin123!") },
+      });
+      const adminMembership = await prisma.workspaceMembership.create({
+        data: { userId: wsAdmin.id, workspaceId: ws3.id },
+      });
+      await prisma.roleAssignment.create({
+        data: { membershipId: adminMembership.id, roleId: ws3AdminRole.id, siteId: null },
+      });
+
+      const ws3AdminLogin = await login(server, INVITEE_EMAILS[11], "Ws3Admin123!");
+      expect(ws3AdminLogin.statusCode).toBe(200);
+      ws3AdminToken = (ws3AdminLogin.json() as { accessToken: string }).accessToken;
     });
 
-    const owner = await prisma.user.create({
-      data: { email: INVITEE_EMAILS[10], status: "ACTIVE", passwordHash: await hashPassword("Ws3Owner123!") },
-    });
-    const ownerMembership = await prisma.workspaceMembership.create({
-      data: { userId: owner.id, workspaceId: ws3.id },
-    });
-    await prisma.roleAssignment.create({
-      data: { membershipId: ownerMembership.id, roleId: ws3OwnerRole.id, siteId: null },
-    });
-
-    const wsAdmin = await prisma.user.create({
-      data: { email: INVITEE_EMAILS[11], status: "ACTIVE", passwordHash: await hashPassword("Ws3Admin123!") },
-    });
-    const adminMembership = await prisma.workspaceMembership.create({
-      data: { userId: wsAdmin.id, workspaceId: ws3.id },
-    });
-    await prisma.roleAssignment.create({
-      data: { membershipId: adminMembership.id, roleId: ws3AdminRole.id, siteId: null },
+    it("a non-owner administrator cannot remove an owner", async () => {
+      const res = await server.inject({
+        method: "DELETE",
+        url: `/workspaces/${ownerWorkspaceId}/members/${owner.id}`,
+        headers: { authorization: `Bearer ${ws3AdminToken}` },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toEqual({ error: "Owner permission required" });
     });
 
-    const ws3AdminLogin = await login(server, INVITEE_EMAILS[11], "Ws3Admin123!");
-    expect(ws3AdminLogin.statusCode).toBe(200);
-    const ws3AdminToken = (ws3AdminLogin.json() as { accessToken: string }).accessToken;
-
-    const res = await server.inject({
-      method: "DELETE",
-      url: `/workspaces/${ws3.id}/members/${owner.id}`,
-      headers: { authorization: `Bearer ${ws3AdminToken}` },
+    it("an authorized owner cannot remove the last owner membership", async () => {
+      // HTTP independently forbids self-removal. Exercise the service's last-owner
+      // invariant with an owner actor so it cannot short-circuit at authorization.
+      const result = await removeMember(ownerWorkspaceId, owner.id, { actorId: owner.id });
+      expect(result).toEqual({ success: false, error: "LAST_OWNER" });
+      expect(await prisma.workspaceMembership.findUnique({
+        where: { userId_workspaceId: { userId: owner.id, workspaceId: ownerWorkspaceId } },
+      })).not.toBeNull();
     });
-    expect(res.statusCode).toBe(400);
-    expect((res.json() as { error: string }).error).toBe("Cannot remove the last workspace owner");
   });
 });

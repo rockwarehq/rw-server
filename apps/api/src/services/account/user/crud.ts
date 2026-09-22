@@ -1,14 +1,18 @@
 import prisma from "@rw/db";
 import type { UserStatus } from "@rw/db";
+import type { IAMContext } from "@rw/auth/context";
+import { authorize, type PolicyResult } from "@rw/auth/iam/policy";
 import {
   getEffectivePermissions,
   listAccessibleSites,
   loadPermissionSnapshot,
   snapshotEffectivePermissions,
+  hasPermission,
+  hasOwnerPermission,
   type Permission,
 } from "@rw/auth/iam/index";
 import { logEvent } from "@rw/services/audit/index";
-import { getWorkspaceAccessSummaries } from "../workspace/members.js";
+import { getWorkspaceAccessSummaries, memberPopulationWhere } from "../workspace/members.js";
 import { resolveAvatarUrl } from "./avatar.js";
 
 export interface CreateUserInput {
@@ -33,6 +37,8 @@ export interface UserAdminContext {
 }
 
 export interface ListUsersFilter {
+  workspaceId: string;
+  siteId?: string;
   status?: UserStatus;
   search?: string;
   limit?: number;
@@ -57,13 +63,16 @@ export async function create(input: CreateUserInput) {
   });
 }
 
-export async function list(filter: ListUsersFilter = {}) {
-  const { status, search, limit = 50, offset = 0 } = filter;
+export async function list(filter: ListUsersFilter) {
+  const { workspaceId, siteId, status, search, limit = 50, offset = 0 } = filter;
 
   // Customer-facing listings never include internal Rockware staff. The
   // RBAC invariant keeps them out of WorkspaceMembership rows;
   // this filter is defense in depth against bypass paths.
-  const where: Record<string, unknown> = { systemRole: null };
+  const where: Record<string, unknown> = {
+    systemRole: null,
+    memberships: { some: memberPopulationWhere(workspaceId, siteId) },
+  };
 
   if (status) {
     where.status = status;
@@ -201,13 +210,25 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
   // grant's own `permissions` below.
   const snapshot = await loadPermissionSnapshot(userId, membership.workspaceId);
   const permissions = snapshot ? snapshotEffectivePermissions(snapshot, site?.id) : new Set<Permission>();
+  const workcenterScopes = new Map<string, { workcenterId: string; siteId: string }>();
+  for (const assignment of snapshot?.assignments ?? []) {
+    if (assignment.workcenterId && assignment.siteId) {
+      workcenterScopes.set(assignment.workcenterId, {
+        workcenterId: assignment.workcenterId,
+        siteId: assignment.siteId,
+      });
+    }
+  }
+  for (const grant of snapshot?.workcenterGrants ?? []) workcenterScopes.set(grant.workcenterId, grant);
   const workcenterGrants = snapshot
-    ? (snapshot.workcenterGrants ?? []).map((grant) => ({
-        workcenterId: grant.workcenterId,
-        siteId: grant.siteId,
-        access: grant.access,
-        permissions: sortPermissions(snapshotEffectivePermissions(snapshot, grant.siteId, grant.workcenterId)),
-      }))
+    ? [...workcenterScopes.values()].map((scope) => {
+        const effective = snapshotEffectivePermissions(snapshot, scope.siteId, scope.workcenterId);
+        return {
+          ...scope,
+          access: effective.has("production:write") ? "WRITE" : "READ",
+          permissions: sortPermissions(effective),
+        };
+      })
     : [];
 
   const roles = membership.roleAssignments
@@ -216,6 +237,8 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
       id: assignment.role.id,
       name: assignment.role.name,
       scope: assignment.role.scope,
+      siteId: assignment.siteId,
+      workcenterId: assignment.workcenterId,
     }));
 
   return {
@@ -241,7 +264,46 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
   };
 }
 
-export async function getById(id: string) {
+/** Workspace administrators see their company; plant administrators see the active plant's population. */
+export async function authorizePopulation(iam: IAMContext | undefined): Promise<PolicyResult> {
+  const workspace = await authorize(iam, { permission: "plant:admin", scope: { kind: "workspace" } });
+  if (workspace.ok || !iam?.siteId) return workspace;
+  return authorize(iam, { permission: "plant:admin", scope: { kind: "site", siteId: iam.siteId } });
+}
+
+export async function authorizeTarget(iam: IAMContext | undefined, id: string, global = false): Promise<PolicyResult> {
+  const scope = global
+    ? await authorize(iam, { permission: "plant:admin", scope: { kind: "workspace" } })
+    : await authorizePopulation(iam);
+  if (!scope.ok) return scope;
+  const membership = await prisma.workspaceMembership.findFirst({
+    where: { ...memberPopulationWhere(scope.workspaceId, scope.siteId), userId: id },
+    select: { id: true },
+  });
+  if (!membership) return { ok: false, code: "NOT_FOUND", message: "User not found" };
+  if (global) {
+    const actor = iam as IAMContext & { id: string };
+    // Global credentials/profile/status affect every membership, not just the active company.
+    const memberships = await prisma.workspaceMembership.findMany({
+      where: { userId: id },
+      select: { workspaceId: true, roleAssignments: { select: { role: { select: { permissions: true } } } } },
+    });
+    for (const target of memberships) {
+      if (!(await hasPermission(actor.id, "plant:admin", { workspaceId: target.workspaceId }))) {
+        return { ok: false, code: "FORBIDDEN", message: "Cannot change a user outside your workspace authority" };
+      }
+      if (
+        target.roleAssignments.some((a) => hasOwnerPermission(a.role.permissions)) &&
+        !(await hasPermission(actor.id, "owner:all", { workspaceId: target.workspaceId }))
+      ) {
+        return { ok: false, code: "FORBIDDEN", message: "Owner permission required" };
+      }
+    }
+  }
+  return scope;
+}
+
+export async function getById(id: string, workspaceId?: string) {
   const record = await prisma.user.findUnique({
     where: { id },
     select: {
@@ -254,6 +316,7 @@ export async function getById(id: string) {
       createdAt: true,
       updatedAt: true,
       memberships: {
+        ...(workspaceId ? { where: { workspaceId } } : {}),
         include: {
           workspace: {
             select: { id: true, name: true, slug: true },

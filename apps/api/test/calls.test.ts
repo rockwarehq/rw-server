@@ -77,20 +77,21 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
       where: { workspaceId_name_scope: { workspaceId, name: "Plant Admin", scope: "SITE" } },
       select: { id: true },
     });
-    const readerRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Plant Member", scope: "SITE" } },
+    const readerRole = await prisma.role.upsert({
+      where: { workspaceId_name_scope: { workspaceId, name: "calls-test-reader", scope: "SITE" } },
+      update: { permissions: ["production:read"] },
+      create: { workspaceId, name: "calls-test-reader", scope: "SITE", permissions: ["production:read"] },
       select: { id: true },
     });
-    // Custom role: calls:write without calls:admin, so definition role gates
-    // apply (Plant Admin holds calls:admin and would bypass answer gates).
+    // Production write without production admin: definition answer gates apply.
     const officeRole = await prisma.role.upsert({
       where: { workspaceId_name_scope: { workspaceId, name: "calls-test-caller", scope: "SITE" } },
-      update: { permissions: ["facility:read", "calls:read", "calls:write"] },
+      update: { permissions: ["production:read", "production:write"] },
       create: {
         workspaceId,
         name: "calls-test-caller",
         scope: "SITE",
-        permissions: ["facility:read", "calls:read", "calls:write"],
+        permissions: ["production:read", "production:write"],
       },
       select: { id: true },
     });
@@ -156,7 +157,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
     });
 
     // The caller user gets its own employee (one membership per employee),
-    // also in the ops role — calls:write without calls:admin, so no bypass.
+    // also in the ops role — production write without administration, so no bypass.
     const officeEmployee = await prisma.employee.create({ data: { workspaceId }, select: { id: true } });
     officeEmployeeId = officeEmployee.id;
     await prisma.employeeSiteAccess.create({
@@ -508,7 +509,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
     const def = await createDefinition({ name: "calls-test-open-gate", openRoleIds: [roleMaintId] });
 
     // Both test employees hold the ops role, so manual opens are denied —
-    // calls:admin does NOT bypass the open gate.
+    // Production administration does NOT bypass the open gate.
     const denied = await rpcCall(server, "call/open", { stationId: stationA.id, definitionId: def.id }, officeToken);
     expect(denied.statusCode).toBe(403);
     const deniedFa = await rpcCall(server, "call/open", { stationId: stationA.id, definitionId: def.id }, faToken);
@@ -527,7 +528,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
     expect(allowed.statusCode).toBe(200);
   });
 
-  it("answerRoles gates closing; calls:admin bypasses; unattributed actors are denied", async () => {
+  it("answerRoles gates closing; production admin bypasses; unattributed actors are denied", async () => {
     const def = await createDefinition({ name: "calls-test-answer-gate", answerRoleIds: [roleMaintId] });
 
     const open = await rpcCall(server, "call/open", { stationId: stationA.id, definitionId: def.id }, officeToken);
@@ -542,7 +543,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
     const unattributed = await callService.close({ id: callId });
     expect("error" in unattributed && unattributed.code).toBe("ANSWER_ROLE_RESTRICTED");
 
-    // FA also holds only the ops role, but calls:admin bypasses the gate.
+    // FA also holds only the ops role, but scoped production administration bypasses the gate.
     const bypass = await rpcCall(server, "call/close", { id: callId }, faToken);
     expect(bypass.statusCode).toBe(200);
   });

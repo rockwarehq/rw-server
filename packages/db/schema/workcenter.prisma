@@ -30,6 +30,7 @@ model Workcenter {
   calls               Call[]
   modeLogs            StationModeLog[]
   grants              WorkcenterGrant[]
+  roleAssignments     RoleAssignment[]
   cycles              Cycle[]
   inventoryItems      InventoryItem[]
   stateLogs           StationStateLog[]

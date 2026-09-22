@@ -3,14 +3,13 @@ import { z } from "zod";
 import { countActiveApiTokens, createApiToken, listApiTokens, revokeApiToken } from "@rw/auth/api-tokens";
 import { logEvent } from "@rw/services/audit/index";
 
-import { permissionRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
+import { authRequired } from "./middleware.js";
+import prisma from "@rw/db";
+import { user } from "../services/account/index.js";
+import { authorizePhysicalTarget as authorize } from "../api/authz.js";
 import { grant } from "./authz.js";
 
-// Workspace integration credentials are settings-level configuration, so token
-// management rides the existing settings:admin permission rather than a new
-// resource (revisit if tokens grow scopes beyond graph:read).
-const apiTokenAdminRequired = permissionRequired("settings:admin");
+// Customer token management is plant administration; APP scopes remain graph:read.
 
 // Flooding guard: per-procedure rate limits don't apply inside the single oRPC
 // route, so cap standing inventory instead.
@@ -30,11 +29,9 @@ function requireWorkspaceId(iam: { workspaceId?: string }): string {
   return workspaceId;
 }
 
-export const create = apiTokenAdminRequired.input(createInputSchema).handler(async ({ input, context }) => {
+export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
   const workspaceId = requireWorkspaceId(context.iam);
-  // The middleware checks settings:admin at the caller's own site; the token
-  // grants access to input.siteId, so require settings:admin THERE as well.
-  grant(await authorize(context.iam, { permission: "settings:admin", scope: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "plant:admin", scope: { kind: "site", siteId: input.siteId } }));
 
   const activeCount = await countActiveApiTokens(workspaceId);
   if (activeCount >= MAX_ACTIVE_TOKENS_PER_WORKSPACE) {
@@ -66,17 +63,22 @@ export const create = apiTokenAdminRequired.input(createInputSchema).handler(asy
   return result;
 });
 
-export const list = apiTokenAdminRequired.handler(async ({ context }) => {
-  grant(await authorize(context.iam, { permission: "settings:admin", scope: { kind: "workspace" } }));
-
-  const workspaceId = requireWorkspaceId(context.iam);
-  return listApiTokens(workspaceId);
+export const list = authRequired.handler(async ({ context }) => {
+  const scope = grant(await user.authorizePopulation(context.iam));
+  const tokens = await listApiTokens(scope.workspaceId);
+  return tokens.filter((token) => !scope.siteId || token.siteId === scope.siteId);
 });
 
-export const revoke = apiTokenAdminRequired.input(revokeInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "settings:admin", scope: { kind: "workspace" } }));
-
+export const revoke = authRequired.input(revokeInputSchema).handler(async ({ input, context }) => {
   const workspaceId = requireWorkspaceId(context.iam);
+  const token = await prisma.apiToken.findFirst({ where: { id: input.id, workspaceId }, select: { siteId: true } });
+  if (!token) throw new ORPCError("NOT_FOUND", { message: "API token not found" });
+  grant(
+    await authorize(context.iam, {
+      permission: "plant:admin",
+      scope: token.siteId ? { kind: "site", siteId: token.siteId } : { kind: "workspace" },
+    }),
+  );
 
   const result = await revokeApiToken(input.id, workspaceId);
   if (!result) throw new ORPCError("NOT_FOUND", { message: "API token not found" });

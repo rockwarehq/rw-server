@@ -9,8 +9,15 @@ const mocks = vi.hoisted(() => ({
   metricBucketLog: { findMany: vi.fn() },
 }));
 vi.mock("@rw/db", () => ({ default: mocks }));
-vi.mock("@rw/auth/iam/policy", () => ({ authorize: mocks.authorize }));
-vi.mock("@rw/services/facility/shift/shift-comment", () => ({}));
+vi.mock("../src/rpc/terminal-authz.js", async () => {
+  const { ORPCError } = await import("@orpc/server");
+  return { authorizeTerminalAction: async (...args: unknown[]) => {
+    const result = await mocks.authorize(...args);
+    if (!result.ok) throw new ORPCError("FORBIDDEN");
+    return result;
+  } };
+});
+vi.mock("@rw/services/facility/shift/shift-comment", () => ({ validateLocation: async () => null }));
 vi.mock("../src/rpc/middleware.js", async () => {
   const { os } = await import("@orpc/server");
   return { authRequired: os, userOrDisplayRequired: os };
@@ -34,7 +41,7 @@ const archived = {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  mocks.authorize.mockResolvedValue({ ok: true });
+  mocks.authorize.mockResolvedValue({ ok: true, siteId: input.siteId, workcenterId: input.workCenterId });
   mocks.station.findMany.mockResolvedValue([station]);
   mocks.metricBucket.findMany.mockResolvedValue([]);
   mocks.metricBucketLog.findMany.mockResolvedValue([]);
@@ -59,8 +66,8 @@ describe("shift recap metric buckets", () => {
       mocks.metricBucketLog.findMany.mock.invocationCallOrder[0],
     );
     expect(mocks.authorize).toHaveBeenCalledWith(context.iam, {
-      permission: "job:read",
-      scope: { kind: "site", siteId: input.siteId },
+      action: "production.read",
+      scope: { kind: "workcenter", id: input.workCenterId },
     });
     expect(mocks.station.findMany).toHaveBeenCalledWith({
       where: { siteId: input.siteId, workcenterId: input.workCenterId },

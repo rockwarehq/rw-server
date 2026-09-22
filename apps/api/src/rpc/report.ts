@@ -9,7 +9,7 @@
  * shop-floor screens. A wall board can have the totals, not the list.
  */
 
-import { authorizeList, type Permission } from "@rw/auth/iam/policy";
+import { authorizeList } from "@rw/auth/iam/policy";
 import { FACTS, reportSchema, runReportQuery, runReportRows } from "@rw/services/reporting/index";
 import { z } from "zod";
 import { grant } from "./authz.js";
@@ -85,34 +85,26 @@ const rowsSchema = z.object({
 export const schema = userOrDisplayRequired
   .input(z.object({ siteId: z.uuid() }))
   .handler(async ({ input, context }) => {
-    // Each fact is gated by the permission its sibling routers use for the
-    // same tables; the schema lists only facts the caller can actually query.
-    const permissions = [...new Set(Object.values(FACTS).map((fact) => fact.permission))];
-    const granted = new Set<string>();
-    for (const permission of permissions) {
-      const result = await authorizeList(context.iam, {
-        permission: permission as Permission,
-        requestedSiteId: input.siteId,
-      });
-      if (result.ok) granted.add(permission);
-    }
-    if (granted.size === 0) {
-      // No catalog access at all — surface the denial instead of an empty list.
-      grant(await authorizeList(context.iam, { permission: "job:read", requestedSiteId: input.siteId }));
-    }
-    return { facts: reportSchema(granted) };
+    const scope = grant(
+      await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+    );
+    return {
+      facts: reportSchema(new Set(["production:read"])).filter(
+        (fact) => !scope.workcenterIds || FACTS[fact.key].workcenterColumn || FACTS[fact.key].workcenterPredicate,
+      ),
+    };
   });
 
 export const query = userOrDisplayRequired.input(querySchema).handler(async ({ input, context }) => {
   const fact = FACTS[input.fact];
   if (!fact) throwServiceError({ error: `Unknown fact: ${input.fact}`, code: "UNKNOWN_FACT" });
   const scope = grant(
-    await authorizeList(context.iam, { permission: fact.permission as Permission, requestedSiteId: input.siteId }),
+    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
   );
 
   const { siteId, ...reportQuery } = input;
   const result = await runReportQuery(reportQuery, { siteId, workcenterIds: scope.workcenterIds });
-  if ("error" in result) throwServiceError(result);
+  if ("error" in result) throwServiceError(result, { WORKCENTER_RESTRICTED: "FORBIDDEN" });
   return result;
 });
 
@@ -120,11 +112,11 @@ export const rows = authRequired.input(rowsSchema).handler(async ({ input, conte
   const fact = FACTS[input.fact];
   if (!fact) throwServiceError({ error: `Unknown fact: ${input.fact}`, code: "UNKNOWN_FACT" });
   const scope = grant(
-    await authorizeList(context.iam, { permission: fact.permission as Permission, requestedSiteId: input.siteId }),
+    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
   );
 
   const { siteId, ...rowsQuery } = input;
   const result = await runReportRows(rowsQuery, { siteId, workcenterIds: scope.workcenterIds });
-  if ("error" in result) throwServiceError(result);
+  if ("error" in result) throwServiceError(result, { WORKCENTER_RESTRICTED: "FORBIDDEN" });
   return result;
 });

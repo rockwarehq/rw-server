@@ -20,6 +20,8 @@ export {
   emailExists,
   unlockAccount,
   getLockStatus,
+  authorizePopulation,
+  authorizeTarget,
   type CreateUserInput,
   type UpdateUserInput,
   type ListUsersFilter,

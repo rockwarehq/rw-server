@@ -14,6 +14,9 @@ const APP_TOKEN = `${API_TOKEN_PREFIX}${"a".repeat(64)}`;
 function makeDbStub() {
   const state = {
     findUniqueCalls: 0,
+    userStatus: "ACTIVE",
+    member: true,
+    workcenterIds: ["wc-1"],
     row: {
       id: "tok-1",
       name: "t",
@@ -26,6 +29,21 @@ function makeDbStub() {
     } as Record<string, unknown> | null,
   };
   const db = {
+    user: {
+      findUnique: async () => ({
+        status: state.userStatus,
+        lockedUntil: null,
+        mustChangePassword: false,
+        systemRole: null,
+      }),
+    },
+    site: { findFirst: async () => ({ id: "site-1" }) },
+    workspaceMembership: { findUnique: async () => (state.member ? { id: "m1" } : null) },
+    roleAssignment: { findMany: async () => [] },
+    workcenterGrant: {
+      findMany: async () =>
+        state.workcenterIds.map((id) => ({ workcenterId: id, access: "READ", workcenter: { siteId: "site-1" } })),
+    },
     apiToken: {
       findUnique: async () => {
         state.findUniqueCalls += 1;
@@ -50,6 +68,32 @@ describe("LivestoreAuthenticator JWTs", () => {
     const principal = await auth.authenticate(token);
     expect(principal).toMatchObject({ kind: "user", userId: "u1", workspaceId: "ws-1", siteId: "site-1" });
     expect(principal?.expMs).toBeGreaterThan(Date.now());
+    expect(principal).toMatchObject({ readScope: { workcenterIds: ["wc-1"] } });
+  });
+
+  it("bounds disabled-user, membership-revocation and grant-change latency", async () => {
+    vi.useFakeTimers();
+    const { db, state } = makeDbStub();
+    const auth = new LivestoreAuthenticator(db, logger);
+    const token = createAccessToken({ id: "u1", email: "a@b.c", workspaceId: "ws-1", siteId: "site-1" });
+    expect(await auth.authenticate(token)).toMatchObject({ readScope: { workcenterIds: ["wc-1"] } });
+    state.workcenterIds = ["wc-2"];
+    vi.advanceTimersByTime(31_000);
+    expect(await auth.authenticate(token)).toMatchObject({ readScope: { workcenterIds: ["wc-2"] } });
+    state.member = false;
+    vi.advanceTimersByTime(31_000);
+    expect(await auth.authenticate(token)).toBeNull();
+    state.member = true;
+    state.userStatus = "DISABLED";
+    vi.advanceTimersByTime(11_000);
+    expect(await auth.authenticate(token)).toBeNull();
+  });
+
+  it("denies a token-site claim without any current read grant", async () => {
+    const { db, state } = makeDbStub();
+    state.workcenterIds = [];
+    const token = createAccessToken({ id: "u1", email: "a@b.c", workspaceId: "ws-1", siteId: "site-1" });
+    expect(await new LivestoreAuthenticator(db, logger).authenticate(token)).toBeNull();
   });
 
   it("rejects a user token without a siteId", async () => {
@@ -74,6 +118,11 @@ describe("LivestoreAuthenticator JWTs", () => {
 });
 
 describe("LivestoreAuthenticator api-token cache", () => {
+  it("requires the explicit app graph:read scope", async () => {
+    const { db, state } = makeDbStub();
+    state.row = { ...state.row, scopes: ["production:read"] };
+    expect(await new LivestoreAuthenticator(db, logger).authenticate(APP_TOKEN)).toBeNull();
+  });
   it("serves repeat validations from cache within the positive TTL", async () => {
     vi.useFakeTimers();
     const { db, state } = makeDbStub();

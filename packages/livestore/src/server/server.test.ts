@@ -1,6 +1,6 @@
 import type { AddressInfo } from "node:net";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
 import type { GraphRuntime } from "../engine/runtime.js";
@@ -16,6 +16,33 @@ const ENVELOPE = { value: 1, quality: "good", timestamp: 1 };
 
 const SITE_A = "site-a";
 const SITE_B = "site-b";
+
+// Transport tests use a proven scope; ownership/dependency proofs are exercised
+// separately in graph/read-scope.test.ts with mocked Prisma records.
+vi.mock("../graph/read-scope.js", () => ({
+  PublishedGraphAccess: class {
+    constructor(readonly scope: { workcenterIds?: string[] }) {}
+    invalidate() {}
+    async property(id: string) {
+      return !this.scope.workcenterIds || id === "allowed";
+    }
+    async node(node: unknown) {
+      return node;
+    }
+  },
+}));
+vi.mock("@rw/services/entity/access-scope", () => ({
+  canReadMetricEntity: async (_scope: unknown, entity: { entityId: string }) => entity.entityId === "own-station",
+}));
+
+const readScope = (siteId: string) => ({
+  siteId,
+  workspaceId: "ws1",
+  planningRead: true,
+  configurationRead: true,
+  plantAdmin: false,
+  referenceRead: true,
+});
 
 // Bearer values recognized by the authenticator stub.
 const USER_TOKEN_A = "user-token-site-a";
@@ -44,10 +71,24 @@ function makeRuntimeStub(): GraphRuntime {
 
 function principalFor(bearer: string): LivestorePrincipal | null {
   if (bearer === USER_TOKEN_A) {
-    return { kind: "user", userId: "u1", workspaceId: "ws1", siteId: SITE_A, expMs: Date.now() + 15 * 60_000 };
+    return {
+      kind: "user",
+      userId: "u1",
+      workspaceId: "ws1",
+      siteId: SITE_A,
+      expMs: Date.now() + 15 * 60_000,
+      readScope: readScope(SITE_A),
+    };
   }
   if (bearer === USER_TOKEN_B) {
-    return { kind: "user", userId: "u2", workspaceId: "ws1", siteId: SITE_B, expMs: Date.now() + 15 * 60_000 };
+    return {
+      kind: "user",
+      userId: "u2",
+      workspaceId: "ws1",
+      siteId: SITE_B,
+      expMs: Date.now() + 15 * 60_000,
+      readScope: readScope(SITE_B),
+    };
   }
   if (bearer === APP_TOKEN_A) {
     return { kind: "app", apiTokenId: "tok1", workspaceId: "ws1", siteId: SITE_A, expMs: null };
@@ -369,6 +410,78 @@ function makeInstrumentedRuntime(overrides?: { getCvgValue?: () => Promise<unkno
 }
 
 describe("/graph/live fan-out lifecycle", () => {
+  it("exposes the session grant, filters subscriptions, and closes after grant revocation", async () => {
+    let revoked = false;
+    const user: LivestorePrincipal = {
+      kind: "user",
+      userId: "u1",
+      siteId: SITE_A,
+      workspaceId: "ws1",
+      expMs: Date.now() + 60_000,
+      readScope: { ...readScope(SITE_A), workcenterIds: ["wc-a"] },
+    };
+    const auth: GraphAuthenticator = {
+      authenticate: async () => (revoked ? null : user),
+      revalidateApiToken: async () => true,
+    };
+    const { runtime, listenerCount } = makeInstrumentedRuntime();
+    const { wsUrl } = await startServer({ appRevalidateIntervalMs: 50 }, auth, runtime);
+    const { ws, messages } = await openAuthedSocket(wsUrl);
+    expect(messages.find((m) => m.op === "ready")?.scope).toEqual({
+      siteId: SITE_A,
+      workspaceId: "ws1",
+      workcenterIds: ["wc-a"],
+    });
+    ws.send(JSON.stringify({ op: "subscribe", propertyIds: ["allowed", "foreign"] }));
+    await waitFor(() => messages.some((m) => m.op === "value"));
+    expect(listenerCount("allowed")).toBe(1);
+    expect(listenerCount("foreign")).toBe(0);
+    expect(messages.some((m) => m.op === "error" && m.code === "FORBIDDEN")).toBe(true);
+    const close = waitForClose(ws);
+    revoked = true;
+    expect(await close).toBe(4401);
+    await waitFor(() => listenerCount("allowed") === 0);
+  });
+
+  it("relays UI changes only for a proven in-scope station", async () => {
+    const user: LivestorePrincipal = {
+      kind: "user",
+      userId: "u1",
+      siteId: SITE_A,
+      workspaceId: "ws1",
+      expMs: Date.now() + 60_000,
+      readScope: { ...readScope(SITE_A), workcenterIds: ["wc-a"] },
+    };
+    const auth: GraphAuthenticator = { authenticate: async () => user, revalidateApiToken: async () => true };
+    let listener: ((data: Uint8Array) => void) | undefined;
+    const runtime = Object.assign(makeRuntimeStub(), {
+      subscribeSubject: (_subject: string, callback: (data: Uint8Array) => void) => {
+        listener = callback;
+        return () => {};
+      },
+    });
+    const { wsUrl } = await startServer(undefined, auth, runtime);
+    const { ws, messages } = await openAuthedSocket(wsUrl);
+    ws.send(JSON.stringify({ op: "subscribe-changes" }));
+    await waitFor(() => !!listener);
+    for (const stationId of [undefined, "foreign-station", "own-station"]) {
+      listener!(
+        new TextEncoder().encode(
+          JSON.stringify({
+            id: stationId ?? "unowned",
+            siteId: SITE_A,
+            kind: "scrap.recorded",
+            stationId,
+            emittedAt: new Date().toISOString(),
+          }),
+        ),
+      );
+    }
+    await waitFor(() => messages.some((m) => m.op === "change"));
+    expect(messages.filter((m) => m.op === "change")).toHaveLength(1);
+    expect(messages.find((m) => m.op === "change")?.event).toMatchObject({ stationId: "own-station" });
+  });
+
   it("concurrent subscribes for the same property register exactly one listener", async () => {
     // Hold the first subscribe open across its initial read so a second
     // subscribe message arrives while it is still in flight.

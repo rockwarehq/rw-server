@@ -15,6 +15,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
   let siteA: { id: string };
   let siteB: { id: string };
   let stationB: { id: string };
+  let memberWorkcenter: { id: string };
   let commentB: { id: string };
   let faToken: string;
   let readerToken: string;
@@ -29,6 +30,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
     });
     siteA = { id: rockware.id };
     const workspaceId = rockware.workspaceId;
+    memberWorkcenter = await prisma.workcenter.create({
+      data: { name: `rep-authz-member-${Date.now()}`, siteId: siteA.id }, select: { id: true },
+    });
     siteB = await prisma.site.upsert({
       where: { workspaceId_name: { workspaceId, name: "RepAuthZ Site B" } },
       update: {},
@@ -48,14 +52,23 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
       });
       return existing ?? prisma.workcenter.create({ data: { name: "rep-authz-wc-b", siteId: siteB.id }, select: { id: true } });
     })();
-    // ShiftInstance needs a pattern/definition/assignment chain; borrow any
-    // existing instance for the FK — the policy resolver reads the COMMENT's
-    // siteId, which is what the cross-site test exercises.
-    const anyShift = await prisma.shiftInstance.findFirstOrThrow({ select: { id: true } });
+    const pattern = await prisma.shiftPattern.create({ data: { siteId: siteB.id, name: "RepAuthZ Pattern" } });
+    const definition = await prisma.shiftDefinition.create({ data: {
+      patternId: pattern.id, dayOfRotation: 1, sortOrder: 1, startTime: "06:00", durationHrs: 8, shiftName: "RepAuthZ Shift",
+    } });
+    const assignment = await prisma.shiftAssignment.create({ data: {
+      patternId: pattern.id, siteId: siteB.id, workCenterId: wcB.id, rotationStartDate: new Date("2026-01-01T00:00:00Z"),
+      rotationStartDefinitionId: definition.id,
+    } });
+    const shift = await prisma.shiftInstance.create({ data: {
+      assignmentId: assignment.id, definitionId: definition.id, siteId: siteB.id, workCenterId: wcB.id,
+      shiftName: "RepAuthZ Shift", businessDate: new Date("2026-01-01"),
+      startTime: new Date("2026-01-01T06:00:00Z"), endTime: new Date("2026-01-01T14:00:00Z"),
+    } });
     commentB = await prisma.shiftComment.create({
       data: {
         siteId: siteB.id,
-        shiftInstanceId: anyShift.id,
+        shiftInstanceId: shift.id,
         workcenterId: wcB.id,
         text: "rep-authz-comment",
       },
@@ -91,6 +104,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
       if (!existing) {
         await prisma.roleAssignment.create({ data: { membershipId: membership.id, roleId, siteId: siteA.id } });
       }
+      if (email === READER_EMAIL) await prisma.workcenterGrant.upsert({
+        where: { membershipId_workcenterId: { membershipId: membership.id, workcenterId: memberWorkcenter.id } },
+        update: { access: "READ" },
+        create: { membershipId: membership.id, workcenterId: memberWorkcenter.id, access: "READ" },
+      });
     }
 
     faToken = (await loginAs(server, FA_EMAIL, PASSWORD)).accessToken;
@@ -99,8 +117,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
 
   afterAll(async () => {
     await prisma.user.deleteMany({ where: { email: { in: [FA_EMAIL, READER_EMAIL] } } });
+    await prisma.workcenter.delete({ where: { id: memberWorkcenter.id } });
     await prisma.shiftComment.deleteMany({ where: { siteId: siteB.id } });
     await prisma.shiftInstance.deleteMany({ where: { siteId: siteB.id } });
+    await prisma.shiftAssignment.deleteMany({ where: { siteId: siteB.id } });
+    await prisma.shiftPattern.deleteMany({ where: { siteId: siteB.id } });
     await prisma.station.deleteMany({ where: { siteId: siteB.id } });
     await prisma.workcenter.deleteMany({ where: { siteId: siteB.id } });
     await prisma.site.deleteMany({ where: { name: "RepAuthZ Site B" } });
@@ -117,7 +138,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
   it("log searches allow the granted site and honor permission mapping", async () => {
     const cycles = await rpcCall(server, "logs/cycleSearch", { siteId: siteA.id }, faToken);
     expect(cycles.statusCode).toBe(200);
-    // Plant Member carries employee:read, so logon search is permitted
+    // A member's explicit WC READ grant permits only that WC's production logons.
     const logon = await rpcCall(server, "logs/logonSearch", { siteId: siteA.id }, readerToken);
     expect(logon.statusCode).toBe(200);
   });

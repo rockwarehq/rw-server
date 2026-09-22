@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { authRequired } from "./middleware.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { scopeFilter } from "@rw/auth/iam/policy";
+import { authorizePhysicalTarget as authorize, authorizePhysicalList as authorizeList } from "../api/authz.js";
 import { grant } from "./authz.js";
 import * as customerService from "@rw/services/order/customer";
 import { throwServiceError, unwrap } from "./errors.js";
@@ -33,31 +34,31 @@ const idInputSchema = z.object({ id: z.uuid() });
 // ============================================================================
 
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "planning:write", scope: { kind: "site", siteId: input.siteId } }));
 
   return unwrap(await customerService.create(input));
 });
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "job:read", requestedSiteId: input.siteId }));
+  const scope = grant(await authorizeList(context.iam, { permission: "planning:read", requestedSiteId: input.siteId }));
   return customerService.list({ ...input, ...scopeFilter(scope) });
 });
 
 export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "customer", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "planning:read", scope: { kind: "customer", id: input.id } }));
 
   return unwrap(await customerService.getById(input.id));
 });
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "customer", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "planning:write", scope: { kind: "customer", id: input.id } }));
 
   const { id, ...updateData } = input;
   return unwrap(await customerService.update(id, updateData));
 });
 
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:admin", scope: { kind: "customer", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "planning:write", scope: { kind: "customer", id: input.id } }));
 
   const result = await customerService.remove(input.id);
   if (result.error) throwServiceError(result);

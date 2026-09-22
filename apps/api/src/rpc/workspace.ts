@@ -1,14 +1,13 @@
 import { z } from "zod";
 import { roles } from "@rw/auth/iam/index";
-import { workspace as workspaceService } from "../services/account/index.js";
+import { workspace as workspaceService, user } from "../services/account/index.js";
 import { authRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
 
 const emptyInputSchema = z.object({});
 
 export const listUserRoles = authRequired.input(emptyInputSchema).handler(async ({ context }) => {
-  const { workspaceId } = grant(await authorize(context.iam, { permission: "user:read", scope: { kind: "anySite" } }));
+  const { workspaceId } = grant(await user.authorizePopulation(context.iam));
 
   const roleList = await roles.list(workspaceId);
 
@@ -27,7 +26,7 @@ export const listUserRoles = authRequired.input(emptyInputSchema).handler(async 
 });
 
 export const listMembers = authRequired.input(emptyInputSchema).handler(async ({ context }) => {
-  const { workspaceId } = grant(await authorize(context.iam, { permission: "user:read", scope: { kind: "anySite" } }));
+  const { workspaceId, siteId } = grant(await user.authorizePopulation(context.iam));
 
-  return { data: await workspaceService.listMembers(workspaceId) };
+  return { data: await workspaceService.listMembers(workspaceId, siteId) };
 });

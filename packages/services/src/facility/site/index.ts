@@ -30,6 +30,7 @@ export {
   getSiteSettings,
   updateSiteSettings,
   parseSiteSettings,
+  siteUpdatePermissions,
   type SiteSettings,
 } from "./settings.js";
 

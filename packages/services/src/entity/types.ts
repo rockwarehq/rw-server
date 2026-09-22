@@ -10,6 +10,7 @@ export interface ListResult<T> {
 export interface EntityScope {
   workspaceId: string;
   siteId: string;
+  workcenterIds?: readonly string[];
 }
 
 export function errorResult(code: string, error: string): { error: string; code: string } {

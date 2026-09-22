@@ -2,8 +2,13 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { workcenter } from "@rw/services/facility/index";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
-import { replyPolicyDenial } from "./authz.js";
+import { scopeFilter } from "@rw/auth/iam/policy";
+import {
+  authorizePhysicalTarget as authorize,
+  authorizePhysicalList as authorizeList,
+  authorizePhysicalReference as authorizeReferenceRead,
+  replyPolicyDenial,
+} from "./authz.js";
 
 // ============================================================================
 // Schemas
@@ -185,7 +190,7 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:write",
+        permission: "configuration:write",
         scope: { kind: "site", siteId: request.body.siteId },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -216,7 +221,7 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const scope = await authorizeList(request.iam, {
-        permission: "facility:read",
+        permission: "production:read",
         requestedSiteId: request.query.siteId,
       });
       if (!scope.ok) return replyPolicyDenial(reply, scope);
@@ -242,8 +247,7 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        permission: "facility:read",
+      const auth = await authorizeReferenceRead(request.iam, {
         scope: { kind: "workcenter", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -277,7 +281,7 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:write",
+        permission: "configuration:write",
         scope: { kind: "workcenter", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -312,7 +316,7 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:write",
+        permission: "configuration:write",
         scope: { kind: "workcenter", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -346,7 +350,7 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:admin",
+        permission: "configuration:write",
         scope: { kind: "workcenter", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);

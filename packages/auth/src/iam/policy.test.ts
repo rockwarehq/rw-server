@@ -1,544 +1,279 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import type { AppIAMContext, DisplayIAMContext, IAMContext, UserIAMContext } from "../context.js";
+vi.mock("@rw/db", () => ({ default: {} }));
+import type { IAMContext } from "../context.js";
+import { ALL_PERMISSIONS, type AccessibleSites, type PermissionSnapshot } from "./permissions.js";
 import {
   createPolicy,
-  type PolicyDenial,
   type PolicyDeps,
+  type PolicyDenial,
+  type SiteGrant,
   scopeFilter,
   scopeWhere,
-  type SiteGrant,
-  type WorkspaceGrant,
+  scopeWorkcenterWhere,
 } from "./policy.js";
 
-const WORKSPACE = "11111111-1111-1111-1111-111111111111";
-const SITE_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-const SITE_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-const STATION = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
-
-const user = (overrides: Partial<UserIAMContext> = {}): UserIAMContext => ({
+const A = "site-a";
+const B = "site-b";
+const W1 = "workcenter-1";
+const W2 = "workcenter-2";
+const workspaceId = "workspace";
+const user = (assignments: PermissionSnapshot["assignments"] = []): IAMContext => ({
   principal: "USER",
   validToken: true,
-  id: "user-1",
-  email: "u@test.local",
-  workspaceId: WORKSPACE,
-  ...overrides,
+  id: "user",
+  workspaceId,
+  siteId: A,
+  permissionSnapshot: { systemRole: null, assignments },
 });
-
-const display = (overrides: Partial<DisplayIAMContext> = {}): DisplayIAMContext => ({
-  principal: "DISPLAY",
-  validToken: true,
-  displayId: "display-1",
-  siteId: SITE_A,
-  workspaceId: WORKSPACE,
-  ...overrides,
+const operator = (): IAMContext => ({
+  ...user(),
+  permissionSnapshot: {
+    systemRole: null,
+    assignments: [],
+    workcenterGrants: [{ siteId: A, workcenterId: W1, access: "WRITE" }],
+  },
 });
-
-const app = (overrides: Partial<AppIAMContext> = {}): AppIAMContext => ({
-  principal: "APP",
-  validToken: true,
-  apiTokenId: "token-1",
-  siteId: SITE_A,
-  workspaceId: WORKSPACE,
-  scopes: ["graph:read"],
-  ...overrides,
-});
+const device = (principal: "DISPLAY" | "APP"): IAMContext => ({ principal, validToken: true, workspaceId, siteId: A });
+const siteGrant = (siteId = A) => ({ ok: true, workspaceId, siteId });
+const forbidden = { ok: false, code: "FORBIDDEN" };
 
 function buildPolicy(overrides: Partial<PolicyDeps> = {}) {
   const deps: PolicyDeps = {
-    hasPermission: vi.fn(async () => true),
-    getAccessibleSites: vi.fn(async () => ({ all: true }) as const),
-    resolveSiteRef: vi.fn(async () => ({ siteId: SITE_A })),
+    hasPermission: vi.fn(async () => false),
+    getAccessibleSites: vi.fn(async () => ({ all: false, siteIds: [] }) as AccessibleSites),
+    getVisibleSites: vi.fn(async () => ({ all: false, siteIds: [A] }) as AccessibleSites),
+    loadPermissionSnapshot: vi.fn(async () => null),
+    resolveSiteRef: vi.fn(async () => ({ siteId: A, workcenterId: W1, stationId: "station-1" })),
     ...overrides,
   };
   return { policy: createPolicy(deps), deps };
 }
 
-describe("authorize", () => {
-  it("denies UNAUTHENTICATED when iam is missing", async () => {
-    const { policy } = buildPolicy();
-    const result = await policy.authorize(undefined, {
-      permission: "facility:read",
-      scope: { kind: "site", siteId: SITE_A },
-    });
-    expect(result).toMatchObject({ ok: false, code: "UNAUTHENTICATED" });
-  });
-
-  it("denies UNAUTHENTICATED for an invalid token", async () => {
-    const { policy } = buildPolicy();
-    const iam: IAMContext = { principal: "UNKNOWN", validToken: false };
-    const result = await policy.authorize(iam, {
-      permission: "facility:read",
-      scope: { kind: "site", siteId: SITE_A },
-    });
-    expect(result).toMatchObject({ ok: false, code: "UNAUTHENTICATED" });
-  });
-
-  it("denies NO_WORKSPACE for a user token without workspace context", async () => {
-    const { policy, deps } = buildPolicy();
-    const result = await policy.authorize(user({ workspaceId: undefined }), {
-      permission: "facility:read",
-      scope: { kind: "site", siteId: SITE_A },
-    });
-    expect(result).toMatchObject({ ok: false, code: "NO_WORKSPACE" });
-    expect(deps.hasPermission).not.toHaveBeenCalled();
-  });
-
-  it("grants workspace-kind checks for users with the permission", async () => {
-    const { policy, deps } = buildPolicy();
-    const result = await policy.authorize(user(), {
-      permission: "facility:write",
-      scope: { kind: "workspace" },
-    });
-    expect(result).toEqual({ ok: true, workspaceId: WORKSPACE });
-    expect(deps.hasPermission).toHaveBeenCalledWith("user-1", "facility:write", { workspaceId: WORKSPACE });
-  });
-
-  it("denies workspace-kind checks for users lacking the permission, echoing it", async () => {
-    const { policy } = buildPolicy({ hasPermission: vi.fn(async () => false) });
-    const result = await policy.authorize(user(), {
-      permission: "facility:write",
-      scope: { kind: "workspace" },
-    });
-    expect(result).toMatchObject({ ok: false, code: "FORBIDDEN", permission: "facility:write" });
-  });
-
-  it("denies workspace-kind checks for device principals", async () => {
-    const { policy, deps } = buildPolicy();
-    for (const iam of [display(), app()]) {
-      const result = await policy.authorize(iam, {
-        permission: "facility:write",
-        scope: { kind: "workspace" },
-      });
-      expect(result).toMatchObject({ ok: false, code: "FORBIDDEN" });
-    }
-    expect(deps.hasPermission).not.toHaveBeenCalled();
-  });
-
-  it("grants site-kind checks without resolving", async () => {
-    const { policy, deps } = buildPolicy();
-    const result = await policy.authorize(user(), {
-      permission: "facility:read",
-      scope: { kind: "site", siteId: SITE_B },
-    });
-    expect(result).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_B });
-    expect(deps.resolveSiteRef).not.toHaveBeenCalled();
-    expect(deps.hasPermission).toHaveBeenCalledWith("user-1", "facility:read", {
-      workspaceId: WORKSPACE,
-      siteId: SITE_B,
-    });
-  });
-
-  it("resolves resource refs and grants when the user holds the permission at that site", async () => {
-    const { policy, deps } = buildPolicy();
-    const result = await policy.authorize(user(), {
-      permission: "facility:write",
-      scope: { kind: "station", id: STATION },
-    });
-    expect(result).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
-    expect(deps.resolveSiteRef).toHaveBeenCalledWith({ kind: "station", id: STATION });
-  });
-
-  it("denies FORBIDDEN when the user lacks the permission at the resolved site", async () => {
-    const { policy } = buildPolicy({ hasPermission: vi.fn(async () => false) });
-    const result = await policy.authorize(user(), {
-      permission: "facility:admin",
-      scope: { kind: "workcenter", id: STATION },
-    });
-    expect(result).toMatchObject({ ok: false, code: "FORBIDDEN", permission: "facility:admin" });
-  });
-
-  it("returns NOT_FOUND for unresolvable refs without calling hasPermission", async () => {
+describe("authorization guards and scope isolation", () => {
+  it("keeps authentication, workspace, worker and missing-resource denials explicit", async () => {
     const { policy, deps } = buildPolicy({ resolveSiteRef: vi.fn(async () => null) });
-    const result = await policy.authorize(user(), {
-      permission: "facility:read",
-      scope: { kind: "station", id: STATION },
-    });
-    expect(result).toMatchObject({ ok: false, code: "NOT_FOUND" });
-    expect(deps.hasPermission).not.toHaveBeenCalled();
-  });
-
-  it("grants device principals on their own site without permission queries", async () => {
-    const { policy, deps } = buildPolicy();
-    for (const iam of [display(), app()]) {
-      const result = await policy.authorize(iam, {
-        permission: "facility:read",
-        scope: { kind: "site", siteId: SITE_A },
-      });
-      expect(result).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
+    const check = { permission: "production:read", scope: { kind: "station", id: "missing" } } as const;
+    for (const iam of [
+      undefined,
+      { ...user(), validToken: false },
+      { ...user(), id: undefined },
+      { ...user(), principal: "WORKER" } as IAMContext,
+    ]) {
+      expect(await policy.authorize(iam, check)).toMatchObject({ ok: false, code: "UNAUTHENTICATED" });
     }
+    expect(await policy.authorize({ ...user(), workspaceId: undefined }, check)).toMatchObject({
+      ok: false,
+      code: "NO_WORKSPACE",
+    });
+    expect(await policy.authorize(user(), check)).toMatchObject({ ok: false, code: "NOT_FOUND" });
     expect(deps.hasPermission).not.toHaveBeenCalled();
   });
 
-  it("denies device principals outside their own site", async () => {
+  it("authorizes a resolved assigned station but not a sibling WC, another site or a null-WC station", async () => {
+    const resolveSiteRef = vi.fn<PolicyDeps["resolveSiteRef"]>().mockResolvedValue({ siteId: A, workcenterId: W1 });
+    const { policy } = buildPolicy({ resolveSiteRef });
+    const check = { permission: "production:write", scope: { kind: "station", id: "station" } } as const;
+    expect(await policy.authorize(operator(), check)).toEqual(siteGrant());
+    for (const row of [
+      { siteId: A, workcenterId: W2 },
+      { siteId: B, workcenterId: W1 },
+      { siteId: A, workcenterId: null },
+    ]) {
+      resolveSiteRef.mockResolvedValue(row);
+      expect(await policy.authorize(operator(), check)).toMatchObject(forbidden);
+    }
+  });
+
+  it("WC custom admin implies write at that WC, not at the site", async () => {
     const { policy } = buildPolicy();
-    for (const iam of [display(), app()]) {
-      const result = await policy.authorize(iam, {
-        permission: "facility:read",
-        scope: { kind: "site", siteId: SITE_B },
-      });
-      expect(result).toMatchObject({ ok: false, code: "FORBIDDEN" });
+    const iam = user([{ siteId: A, workcenterId: W1, permissions: ["production:admin"] }]);
+    expect(
+      await policy.authorize(iam, { permission: "production:write", scope: { kind: "station", id: "s" } }),
+    ).toEqual(siteGrant());
+    expect(
+      await policy.authorize(iam, { permission: "production:admin", scope: { kind: "site", siteId: A } }),
+    ).toMatchObject(forbidden);
+    expect(
+      await policy.authorize(iam, { permission: "plant:admin", scope: { kind: "station", id: "s" } }),
+    ).toMatchObject(forbidden);
+  });
+
+  it("Plant Admin is site-bounded while Company Administrator owns the workspace", async () => {
+    const { policy } = buildPolicy();
+    const plant = user([
+      { siteId: A, permissions: ["production:admin", "planning:write", "configuration:write", "plant:admin"] },
+    ]);
+    const company = user([{ siteId: null, permissions: ALL_PERMISSIONS }]);
+    expect(await policy.authorize(plant, { permission: "plant:admin", scope: { kind: "site", siteId: A } })).toEqual(
+      siteGrant(),
+    );
+    expect(
+      await policy.authorize(plant, { permission: "production:read", scope: { kind: "site", siteId: B } }),
+    ).toMatchObject(forbidden);
+    for (const permission of ["plant:admin", "owner:all"] as const) {
+      for (const scope of [{ kind: "workspace" }, { kind: "anySite" }] as const) {
+        expect(await policy.authorize(plant, { permission, scope })).toMatchObject(forbidden);
+        expect(await policy.authorize(company, { permission, scope })).toEqual({ ok: true, workspaceId });
+      }
     }
   });
 
-  it("checks device site binding against the resolved site for resource refs", async () => {
-    const { policy } = buildPolicy({ resolveSiteRef: vi.fn(async () => ({ siteId: SITE_B })) });
-    const result = await policy.authorize(display(), {
-      permission: "facility:read",
-      scope: { kind: "station", id: STATION },
-    });
-    expect(result).toMatchObject({ ok: false, code: "FORBIDDEN" });
-  });
-});
-
-describe("anySite refs", () => {
-  it("grants users holding the permission workspace-wide", async () => {
-    const { policy, deps } = buildPolicy();
-    const result = await policy.authorize(user(), {
-      permission: "employee:write",
-      scope: { kind: "anySite" },
-    });
-    expect(result).toEqual({ ok: true, workspaceId: WORKSPACE });
-    expect(deps.getAccessibleSites).toHaveBeenCalledWith("user-1", "employee:write", WORKSPACE);
-  });
-
-  it("grants users holding the permission at one or more sites", async () => {
-    const { policy } = buildPolicy({
-      getAccessibleSites: vi.fn(async () => ({ all: false as const, siteIds: [SITE_A] })),
-    });
-    const result = await policy.authorize(user(), {
-      permission: "employee:write",
-      scope: { kind: "anySite" },
-    });
-    expect(result).toEqual({ ok: true, workspaceId: WORKSPACE });
-  });
-
-  it("denies users holding the permission at zero sites, echoing it", async () => {
-    const { policy } = buildPolicy({
-      getAccessibleSites: vi.fn(async () => ({ all: false as const, siteIds: [] as string[] })),
-    });
-    const result = await policy.authorize(user(), {
-      permission: "employee:write",
-      scope: { kind: "anySite" },
-    });
-    expect(result).toMatchObject({ ok: false, code: "FORBIDDEN", permission: "employee:write" });
-  });
-
-  it("denies device principals outright", async () => {
-    const { policy, deps } = buildPolicy();
-    for (const iam of [display(), app()]) {
-      const result = await policy.authorize(iam, {
-        permission: "facility:read",
-        scope: { kind: "anySite" },
-      });
-      expect(result).toMatchObject({ ok: false, code: "FORBIDDEN" });
-    }
-    expect(deps.getAccessibleSites).not.toHaveBeenCalled();
-  });
-});
-
-describe("null-site resources", () => {
-  it("applies the anySite rule when a resolver returns a row without a site", async () => {
-    const { policy, deps } = buildPolicy({
-      resolveSiteRef: vi.fn(async () => ({ siteId: null })),
-      getAccessibleSites: vi.fn(async () => ({ all: false as const, siteIds: [SITE_A] })),
-    });
-    const result = await policy.authorize(user(), {
-      permission: "facility:write",
-      scope: { kind: "gateway", id: STATION },
-    });
-    expect(result).toEqual({ ok: true, workspaceId: WORKSPACE });
-    expect(deps.hasPermission).not.toHaveBeenCalled();
-  });
-
-  it("denies users with zero accessible sites on null-site resources", async () => {
-    const { policy } = buildPolicy({
-      resolveSiteRef: vi.fn(async () => ({ siteId: null })),
-      getAccessibleSites: vi.fn(async () => ({ all: false as const, siteIds: [] as string[] })),
-    });
-    const result = await policy.authorize(user(), {
-      permission: "facility:write",
-      scope: { kind: "gateway", id: STATION },
-    });
-    expect(result).toMatchObject({ ok: false, code: "FORBIDDEN", permission: "facility:write" });
-  });
-
-  it("denies device principals on null-site resources", async () => {
+  it("null-site administration cannot inherit a single site's grant", async () => {
     const { policy } = buildPolicy({ resolveSiteRef: vi.fn(async () => ({ siteId: null })) });
-    const result = await policy.authorize(display(), {
-      permission: "facility:read",
-      scope: { kind: "document", id: STATION },
+    const plant = user([{ siteId: A, permissions: ["configuration:write", "plant:admin"] }]);
+    const check = { permission: "configuration:write", scope: { kind: "gateway", id: "unassigned" } } as const;
+    expect(await policy.authorize(plant, check)).toMatchObject(forbidden);
+    expect(await policy.authorize(user([{ siteId: null, permissions: ["configuration:write"] }]), check)).toEqual({
+      ok: true,
+      workspaceId,
     });
-    expect(result).toMatchObject({ ok: false, code: "FORBIDDEN" });
-  });
-
-  it("still distinguishes a missing row (NOT_FOUND)", async () => {
-    const { policy } = buildPolicy({ resolveSiteRef: vi.fn(async () => null) });
-    const result = await policy.authorize(user(), {
-      permission: "facility:read",
-      scope: { kind: "gateway", id: STATION },
-    });
-    expect(result).toMatchObject({ ok: false, code: "NOT_FOUND" });
   });
 });
 
-describe("authorizeList (single-site)", () => {
-  it("defaults to the token's active site", async () => {
-    const { policy, deps } = buildPolicy();
-    const result = await policy.authorizeList(user({ siteId: SITE_A }), { permission: "facility:read" });
-    expect(result).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
-    expect(deps.hasPermission).toHaveBeenCalledWith("user-1", "facility:read", {
-      workspaceId: WORKSPACE,
-      siteId: SITE_A,
-    });
-  });
-
-  it("authorizes an explicitly requested site over the token site", async () => {
+describe("list and membership scopes", () => {
+  it("preserves WC restrictions through every list-filter adapter and excludes null-WC rows", async () => {
     const { policy } = buildPolicy();
-    const result = await policy.authorizeList(user({ siteId: SITE_A }), {
-      permission: "facility:read",
-      requestedSiteId: SITE_B,
+    const result = await policy.authorizeList(operator(), { permission: "production:read" });
+    expect(result).toEqual({ ...siteGrant(), workcenterIds: [W1] });
+    if (!result.ok) throw new Error("Expected list scope");
+    expect(scopeFilter(result)).toEqual({ workspaceId, siteId: A, workcenterIds: [W1] });
+    expect(scopeWhere(result)).toEqual({ siteId: A });
+    expect(scopeWorkcenterWhere(result)).toEqual({ workcenterId: { in: [W1] } });
+    expect(scopeWorkcenterWhere({ ...result, workcenterIds: [] })).toEqual({ workcenterId: { in: [] } });
+    expect(await policy.authorizeList(operator(), { permission: "production:read", requestedSiteId: B })).toMatchObject(
+      forbidden,
+    );
+  });
+
+  it("site-wide production grants cover all WCs, while Planner has no live production list", async () => {
+    const { policy } = buildPolicy();
+    expect(
+      await policy.authorizeList(user([{ siteId: A, permissions: ["production:admin"] }]), {
+        permission: "production:read",
+      }),
+    ).toEqual(siteGrant());
+    expect(
+      await policy.authorizeList(user([{ siteId: A, permissions: ["planning:write"] }]), {
+        permission: "production:read",
+      }),
+    ).toMatchObject(forbidden);
+  });
+
+  it("supports non-snapshot callers without losing their WC scope", async () => {
+    const snapshot = operator().permissionSnapshot!;
+    const { policy, deps } = buildPolicy({ loadPermissionSnapshot: vi.fn(async () => snapshot) });
+    expect(
+      await policy.authorizeList({ ...operator(), permissionSnapshot: undefined }, { permission: "production:read" }),
+    ).toEqual({ ...siteGrant(), workcenterIds: [W1] });
+    expect(deps.loadPermissionSnapshot).toHaveBeenCalledWith("user", workspaceId);
+  });
+
+  it("site entry does not depend on operational permissions", async () => {
+    const { policy } = buildPolicy();
+    const iam = user([{ siteId: A, permissions: [] }]);
+    expect(await policy.authorizeAccessibleSites(iam)).toEqual({ ok: true, workspaceId, siteIds: [A] });
+    expect(await policy.authorizeAccessibleSites(iam, { permission: "production:read" })).toEqual({
+      ok: true,
+      workspaceId,
+      siteIds: [],
     });
-    expect(result).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_B });
+    expect(await policy.authorizeAccessibleSites(device("DISPLAY"))).toEqual({ ok: true, workspaceId, siteIds: [A] });
+  });
+});
+
+describe("explicit shared-reference reads", () => {
+  it("a scoped operator can read site references but gains no general site-wide production access", async () => {
+    const { policy } = buildPolicy();
+    expect(await policy.authorizeReferenceRead(operator(), { scope: { kind: "site", siteId: A } })).toEqual(
+      siteGrant(),
+    );
+    expect(
+      await policy.authorize(operator(), { permission: "production:read", scope: { kind: "site", siteId: A } }),
+    ).toMatchObject(forbidden);
+    expect(await policy.authorizeReferenceRead(operator(), { scope: { kind: "site", siteId: B } })).toMatchObject(
+      forbidden,
+    );
   });
 
-  it("denies a requested site the user lacks the permission at, echoing it", async () => {
-    const { policy } = buildPolicy({ hasPermission: vi.fn(async () => false) });
-    const result = await policy.authorizeList(user({ siteId: SITE_A }), {
-      permission: "facility:read",
-      requestedSiteId: SITE_B,
+  it("proves the resolved target site, not the active site or another granted site", async () => {
+    const { policy } = buildPolicy({ resolveSiteRef: vi.fn(async () => ({ siteId: B })) });
+    const scope = { kind: "product", id: "product-at-b" } as const;
+    expect(await policy.authorizeReferenceRead(operator(), { scope })).toMatchObject(forbidden);
+    const result = await policy.authorizeReferenceRead(user([{ siteId: B, permissions: ["planning:write"] }]), {
+      scope,
     });
-    expect(result).toMatchObject({ ok: false, code: "FORBIDDEN", permission: "facility:read" });
+    expect(result).toEqual(siteGrant(B));
+    expectTypeOf(result).toEqualTypeOf<SiteGrant | PolicyDenial>();
   });
 
-  it("denies when neither a requested site nor a token site exists", async () => {
-    const { policy, deps } = buildPolicy();
-    const result = await policy.authorizeList(user(), { permission: "facility:read" });
-    expect(result).toMatchObject({ ok: false, code: "NO_WORKSPACE", message: "Site context required" });
-    expect(deps.hasPermission).not.toHaveBeenCalled();
+  it("rejects workspace/anySite/null-site and absent targets, even for company owners", async () => {
+    const { policy } = buildPolicy({ resolveSiteRef: vi.fn(async () => ({ siteId: null })) });
+    const company = user([{ siteId: null, permissions: ALL_PERMISSIONS }]);
+    for (const scope of [{ kind: "workspace" }, { kind: "anySite" }, { kind: "document", id: "global" }] as const) {
+      expect(await policy.authorizeReferenceRead(company, { scope })).toMatchObject(forbidden);
+    }
+    const missing = buildPolicy({ resolveSiteRef: vi.fn(async () => null) }).policy;
+    expect(await missing.authorizeReferenceRead(company, { scope: { kind: "product", id: "missing" } })).toMatchObject({
+      ok: false,
+      code: "NOT_FOUND",
+    });
   });
 
-  it("scopes device principals to their own site", async () => {
+  it("supports DB-backed permission fallback and only same-site DISPLAY reference reads", async () => {
+    const { policy } = buildPolicy({
+      getAccessibleSites: vi.fn(async () => ({ all: false, siteIds: [B] }) as AccessibleSites),
+    });
+    const iam = { ...user(), permissionSnapshot: undefined };
+    expect(await policy.authorizeReferenceRead(iam, { scope: { kind: "site", siteId: B } })).toEqual(siteGrant(B));
+    expect(await policy.authorizeReferenceRead(iam, { scope: { kind: "site", siteId: A } })).toMatchObject(forbidden);
+    expect(await policy.authorizeReferenceRead(device("DISPLAY"), { scope: { kind: "site", siteId: A } })).toEqual(
+      siteGrant(),
+    );
+    expect(
+      await policy.authorizeReferenceRead(device("DISPLAY"), { scope: { kind: "site", siteId: B } }),
+    ).toMatchObject(forbidden);
+    expect(await policy.authorizeReferenceRead(device("APP"), { scope: { kind: "site", siteId: A } })).toMatchObject(
+      forbidden,
+    );
+  });
+});
+
+describe("device separation", () => {
+  it.each([
+    "DISPLAY",
+    "APP",
+  ] as const)("%s cannot acquire mutation/admin capability through any generic entry point", async (principal) => {
     const { policy, deps } = buildPolicy();
-    for (const iam of [display(), app()]) {
-      const result = await policy.authorizeList(iam, { permission: "facility:read" });
-      expect(result).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
+    const iam = { ...device(principal), permissionSnapshot: { systemRole: "ENGINEER", assignments: [] } };
+    for (const permission of ALL_PERMISSIONS.filter((p) => !p.endsWith(":read"))) {
+      for (const scope of [
+        { kind: "site", siteId: A },
+        { kind: "station", id: "s" },
+        { kind: "workspace" },
+        { kind: "anySite" },
+      ] as const) {
+        expect(await policy.authorize(iam, { permission, scope })).toMatchObject(forbidden);
+      }
+      expect(await policy.authorizeList(iam, { permission })).toMatchObject(forbidden);
+      expect(await policy.authorizeAccessibleSites(iam, { permission })).toMatchObject(forbidden);
     }
     expect(deps.hasPermission).not.toHaveBeenCalled();
   });
 
-  it("denies device principals requesting a foreign site", async () => {
+  it("DISPLAY retains same-site reads; APP user-permission reads remain denied", async () => {
     const { policy } = buildPolicy();
-    const result = await policy.authorizeList(display(), {
-      permission: "facility:read",
-      requestedSiteId: SITE_B,
-    });
-    expect(result).toMatchObject({ ok: false, code: "FORBIDDEN" });
-  });
-});
-
-describe("authorizeAccessibleSites (site directory)", () => {
-  it("returns all sites (undefined) for unrestricted users", async () => {
-    const { policy } = buildPolicy();
-    const result = await policy.authorizeAccessibleSites(user(), { permission: "facility:read" });
-    expect(result).toEqual({ ok: true, workspaceId: WORKSPACE });
-  });
-
-  it("returns the accessible subset for site-restricted users", async () => {
-    const { policy } = buildPolicy({
-      getAccessibleSites: vi.fn(async () => ({ all: false as const, siteIds: [SITE_A] })),
-    });
-    const result = await policy.authorizeAccessibleSites(user(), { permission: "facility:read" });
-    expect(result).toEqual({ ok: true, workspaceId: WORKSPACE, siteIds: [SITE_A] });
-  });
-
-  it("pins device principals to their own site", async () => {
-    const { policy } = buildPolicy();
-    const result = await policy.authorizeAccessibleSites(display(), { permission: "facility:read" });
-    expect(result).toEqual({ ok: true, workspaceId: WORKSPACE, siteIds: [SITE_A] });
-  });
-});
-
-describe("with a per-request permission snapshot", () => {
-  const snapshotUser = (
-    assignments: Array<{ siteId: string | null; permissions: string[] }>,
-    overrides: Partial<UserIAMContext> = {},
-  ) => user({ permissionSnapshot: { systemRole: null, assignments }, ...overrides });
-
-  it("authorize evaluates the snapshot without calling deps.hasPermission", async () => {
-    const { policy, deps } = buildPolicy();
-    const iam = snapshotUser([{ siteId: SITE_A, permissions: ["facility:write"] }]);
-
-    const allowed = await policy.authorize(iam, {
-      permission: "facility:write",
-      scope: { kind: "site", siteId: SITE_A },
-    });
-    expect(allowed).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
-
-    const denied = await policy.authorize(iam, {
-      permission: "facility:write",
-      scope: { kind: "site", siteId: SITE_B },
-    });
-    expect(denied).toMatchObject({ ok: false, code: "FORBIDDEN", permission: "facility:write" });
-
-    expect(deps.hasPermission).not.toHaveBeenCalled();
-  });
-
-  it("authorize still resolves resource refs before evaluating the snapshot", async () => {
-    const { policy, deps } = buildPolicy({ resolveSiteRef: vi.fn(async () => null) });
-    const result = await policy.authorize(snapshotUser([{ siteId: null, permissions: ["facility:read"] }]), {
-      permission: "facility:read",
-      scope: { kind: "station", id: STATION },
-    });
-    expect(result).toMatchObject({ ok: false, code: "NOT_FOUND" });
-    expect(deps.hasPermission).not.toHaveBeenCalled();
-  });
-
-  it("authorizeList evaluates the snapshot at the active site", async () => {
-    const { policy, deps } = buildPolicy();
-    const iam = snapshotUser([{ siteId: SITE_A, permissions: ["facility:read"] }], { siteId: SITE_A });
-
-    const scope = await policy.authorizeList(iam, { permission: "facility:read" });
-    expect(scope).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
-
-    const denied = await policy.authorizeList(iam, { permission: "facility:read", requestedSiteId: SITE_B });
-    expect(denied).toMatchObject({ ok: false, code: "FORBIDDEN" });
-
-    expect(deps.hasPermission).not.toHaveBeenCalled();
-  });
-
-  it("workspace-level snapshot assignments grant any requested site", async () => {
-    const { policy, deps } = buildPolicy();
-    const iam = snapshotUser([{ siteId: null, permissions: ["facility:read"] }], { siteId: SITE_A });
-    const scope = await policy.authorizeList(iam, { permission: "facility:read", requestedSiteId: SITE_B });
-    expect(scope).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_B });
-    expect(deps.hasPermission).not.toHaveBeenCalled();
-  });
-});
-
-describe("workcenter grants through the policy", () => {
-  const WC_1 = "11111111-1111-4111-8111-111111111111";
-  const WC_2 = "22222222-2222-4222-8222-222222222222";
-
-  const wcUser = (access: "READ" | "WRITE", overrides: Partial<UserIAMContext> = {}) =>
-    user({
-      permissionSnapshot: {
-        systemRole: null,
-        assignments: [],
-        workcenterGrants: [{ workcenterId: WC_1, siteId: SITE_A, access }],
-      },
-      ...overrides,
-    });
-
-  it("resolver workcenterId gates workcenter-scoped writes per workcenter", async () => {
-    const inGrantWc = buildPolicy({ resolveSiteRef: vi.fn(async () => ({ siteId: SITE_A, workcenterId: WC_1 })) });
-    const allowed = await inGrantWc.policy.authorize(wcUser("WRITE"), {
-      permission: "status:write",
-      scope: { kind: "station", id: STATION },
-    });
-    expect(allowed).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
-
-    const otherWc = buildPolicy({ resolveSiteRef: vi.fn(async () => ({ siteId: SITE_A, workcenterId: WC_2 })) });
-    const denied = await otherWc.policy.authorize(wcUser("WRITE"), {
-      permission: "status:write",
-      scope: { kind: "station", id: STATION },
-    });
-    expect(denied).toMatchObject({ ok: false, code: "FORBIDDEN", permission: "status:write" });
-  });
-
-  it("a workcenter-null resource evaluates site-level only: grant denied, site role allowed", async () => {
-    const { policy } = buildPolicy({ resolveSiteRef: vi.fn(async () => ({ siteId: SITE_A, workcenterId: null })) });
-    const denied = await policy.authorize(wcUser("WRITE"), {
-      permission: "status:write",
-      scope: { kind: "station", id: STATION },
-    });
-    expect(denied).toMatchObject({ ok: false, code: "FORBIDDEN" });
-
-    const siteRole = user({
-      permissionSnapshot: { systemRole: null, assignments: [{ siteId: SITE_A, permissions: ["status:write"] }] },
-    });
-    const allowed = await policy.authorize(siteRole, {
-      permission: "status:write",
-      scope: { kind: "station", id: STATION },
-    });
-    expect(allowed).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
-  });
-
-  it("global resources authorize site-wide from a grant (resolver returns no workcenterId)", async () => {
-    const { policy } = buildPolicy({ resolveSiteRef: vi.fn(async () => ({ siteId: SITE_A })) });
-    const allowed = await policy.authorize(wcUser("WRITE"), {
-      permission: "job:write",
-      scope: { kind: "job", id: STATION },
-    });
-    expect(allowed).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
-  });
-
-  it("a literal site ref accepts a target workcenterId (create flows)", async () => {
-    const { policy } = buildPolicy();
-    const allowed = await policy.authorize(wcUser("WRITE"), {
-      permission: "facility:write",
-      scope: { kind: "site", siteId: SITE_A, workcenterId: WC_1 },
-    });
-    expect(allowed).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
-
-    const wrongWc = await policy.authorize(wcUser("WRITE"), {
-      permission: "facility:write",
-      scope: { kind: "site", siteId: SITE_A, workcenterId: WC_2 },
-    });
-    expect(wrongWc).toMatchObject({ ok: false, code: "FORBIDDEN" });
-
-    const noWc = await policy.authorize(wcUser("WRITE"), {
-      permission: "facility:write",
-      scope: { kind: "site", siteId: SITE_A },
-    });
-    expect(noWc).toMatchObject({ ok: false, code: "FORBIDDEN" });
-  });
-
-  it("authorizeList narrows to granted workcenters when no site-wide hold exists", async () => {
-    const { policy } = buildPolicy();
-    const narrowed = await policy.authorizeList(wcUser("WRITE", { siteId: SITE_A }), { permission: "calls:read" });
-    expect(narrowed).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A, workcenterIds: [WC_1] });
-
-    // Site roles list without narrowing.
-    const siteRole = user({
-      permissionSnapshot: { systemRole: null, assignments: [{ siteId: SITE_A, permissions: ["calls:read"] }] },
-      siteId: SITE_A,
-    });
-    const wide = await policy.authorizeList(siteRole, { permission: "calls:read" });
-    expect(wide).toEqual({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A });
-
-    // No grant at the requested site: plain FORBIDDEN.
-    const denied = await policy.authorizeList(wcUser("WRITE"), { permission: "calls:read", requestedSiteId: SITE_B });
-    expect(denied).toMatchObject({ ok: false, code: "FORBIDDEN" });
-  });
-});
-
-describe("scopeFilter / scopeWhere", () => {
-  it("produce single-site fragments", () => {
-    expect(scopeFilter({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A })).toEqual({
-      workspaceId: WORKSPACE,
-      siteId: SITE_A,
-    });
-    expect(scopeWhere({ ok: true, workspaceId: WORKSPACE, siteId: SITE_A })).toEqual({ siteId: SITE_A });
-  });
-});
-
-describe("authorize overload return types", () => {
-  it("narrows grant shapes by ref kind", () => {
-    const { policy } = buildPolicy();
-    expectTypeOf(
-      policy.authorize(user(), { permission: "user:read", scope: { kind: "workspace" } }),
-    ).resolves.toEqualTypeOf<WorkspaceGrant | PolicyDenial>();
-    expectTypeOf(
-      policy.authorize(user(), { permission: "user:read", scope: { kind: "anySite" } }),
-    ).resolves.toEqualTypeOf<WorkspaceGrant | PolicyDenial>();
-    expectTypeOf(
-      policy.authorize(user(), { permission: "user:read", scope: { kind: "site", siteId: SITE_A } }),
-    ).resolves.toEqualTypeOf<SiteGrant | PolicyDenial>();
-    expectTypeOf(
-      policy.authorize(user(), { permission: "user:read", scope: { kind: "station", id: STATION } }),
-    ).resolves.toEqualTypeOf<SiteGrant | PolicyDenial>();
-    expectTypeOf(
-      policy.authorize(user(), { permission: "user:read", scope: { kind: "gateway", id: STATION } }),
-    ).resolves.toEqualTypeOf<SiteGrant | WorkspaceGrant | PolicyDenial>();
+    for (const permission of ["production:read", "planning:read", "configuration:read"] as const) {
+      expect(await policy.authorize(device("DISPLAY"), { permission, scope: { kind: "site", siteId: A } })).toEqual(
+        siteGrant(),
+      );
+      expect(
+        await policy.authorize(device("DISPLAY"), { permission, scope: { kind: "site", siteId: B } }),
+      ).toMatchObject(forbidden);
+      expect(await policy.authorize(device("APP"), { permission, scope: { kind: "site", siteId: A } })).toMatchObject(
+        forbidden,
+      );
+      expect(await policy.authorizeList(device("APP"), { permission })).toMatchObject(forbidden);
+    }
+    expect(await policy.authorizeAccessibleSites(device("APP"))).toMatchObject(forbidden);
   });
 });

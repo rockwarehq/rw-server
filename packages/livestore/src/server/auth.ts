@@ -5,11 +5,13 @@ import type { PrismaClient } from "@rw/db";
 import { isExpiredTokenError, verifyAccessToken } from "@rw/auth/verify";
 import { API_TOKEN_PREFIX, touchApiToken, validateApiToken } from "@rw/auth/api-tokens";
 import { hashToken } from "@rw/auth/secrets";
+import type { IAMContext } from "@rw/auth/context";
+import { publishedReadScope, type PublishedReadScope } from "../graph/read-scope.js";
 
 import type { LivestoreLogger } from "../types/index.js";
 
 export type LivestorePrincipal =
-  | { kind: "user"; userId: string; workspaceId: string; siteId: string; expMs: number }
+  | { kind: "user"; userId: string; workspaceId: string; siteId: string; expMs: number; readScope: PublishedReadScope }
   | { kind: "display"; displayId: string; workspaceId: string; siteId: string; expMs: number }
   | { kind: "app"; apiTokenId: string; workspaceId: string; siteId: string; expMs: null };
 
@@ -43,7 +45,7 @@ export class LivestoreAuthenticator {
     return this.authenticateJwt(bearer);
   }
 
-  private authenticateJwt(token: string): LivestorePrincipal | null {
+  private async authenticateJwt(token: string): Promise<LivestorePrincipal | null> {
     let decoded: ReturnType<typeof verifyAccessToken>;
     try {
       decoded = verifyAccessToken(token);
@@ -68,23 +70,89 @@ export class LivestoreAuthenticator {
       };
     }
 
-    // User tokens must carry a siteId: session issuance validates it against
-    // the user's accessible sites at mint time, so trusting the claim gives
-    // per-site scoping with zero DB reads here. A user without a site context
-    // has no live-data scope. (Accepted tradeoff: no user-status recheck, so a
-    // disabled user retains read access for at most the 15-min token life.)
     if (!decoded.workspaceId || !decoded.siteId) {
       this.logger.info({}, "livestore auth: user token without workspace/site context");
       return null;
     }
 
+    const key = hashToken(token);
+    const cached = this.cache.get(key);
+    if (cached && cached.expiresAtMs > Date.now()) return cached.principal;
+    const principal = await this.resolveUser(decoded.id, decoded.workspaceId, decoded.siteId, expMs);
+    this.remember(key, principal);
+    return principal;
+  }
+
+  private async resolveUser(
+    userId: string,
+    workspaceId: string,
+    siteId: string,
+    expMs: number,
+  ): Promise<LivestorePrincipal | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { status: true, lockedUntil: true, mustChangePassword: true, systemRole: true },
+    });
+    if (
+      !user ||
+      user.status !== "ACTIVE" ||
+      user.mustChangePassword ||
+      (user.lockedUntil && user.lockedUntil > new Date())
+    )
+      return null;
+    const site = await this.prisma.site.findFirst({ where: { id: siteId, workspaceId }, select: { id: true } });
+    if (!site) return null;
+    const iam: IAMContext = { principal: "USER", validToken: true, id: userId, workspaceId, siteId };
+    if (user.systemRole) {
+      iam.permissionSnapshot = { systemRole: user.systemRole, assignments: [] };
+    } else {
+      const membership = await this.prisma.workspaceMembership.findUnique({
+        where: { userId_workspaceId: { userId, workspaceId } },
+        select: { id: true },
+      });
+      if (!membership) return null;
+      const [assignments, grants] = await Promise.all([
+        this.prisma.roleAssignment.findMany({
+          where: { membership: { userId, workspaceId } },
+          select: { siteId: true, workcenterId: true, role: { select: { permissions: true } } },
+        }),
+        this.prisma.workcenterGrant.findMany({
+          where: { membership: { userId, workspaceId } },
+          select: { workcenterId: true, access: true, workcenter: { select: { siteId: true } } },
+        }),
+      ]);
+      iam.permissionSnapshot = {
+        systemRole: null,
+        assignments: assignments.map((a) => ({
+          siteId: a.siteId,
+          workcenterId: a.workcenterId,
+          permissions: a.role.permissions,
+        })),
+        workcenterGrants: grants.map((g) => ({
+          workcenterId: g.workcenterId,
+          siteId: g.workcenter.siteId,
+          access: g.access,
+        })),
+      };
+    }
+    const readScope = await publishedReadScope(iam, siteId);
+    if (!readScope) return null;
     return {
       kind: "user",
-      userId: decoded.id,
-      workspaceId: decoded.workspaceId,
-      siteId: decoded.siteId,
+      userId,
+      workspaceId,
+      siteId,
+      readScope,
       expMs,
     };
+  }
+
+  private remember(key: string, principal: LivestorePrincipal | null) {
+    if (this.cache.size >= CACHE_MAX_ENTRIES) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest !== undefined) this.cache.delete(oldest);
+    }
+    this.cache.set(key, { principal, expiresAtMs: Date.now() + (principal ? POSITIVE_TTL_MS : NEGATIVE_TTL_MS) });
   }
 
   private async authenticateApiToken(token: string): Promise<LivestorePrincipal | null> {
@@ -97,7 +165,7 @@ export class LivestoreAuthenticator {
     }
 
     const validated = await validateApiToken(token, this.prisma);
-    const principal: LivestorePrincipal | null = validated
+    const principal: LivestorePrincipal | null = validated?.scopes.includes("graph:read")
       ? {
           kind: "app",
           apiTokenId: validated.id,

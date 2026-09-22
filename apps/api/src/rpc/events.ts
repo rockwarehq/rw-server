@@ -2,9 +2,10 @@ import { ORPCError, eventIterator } from "@orpc/server";
 import * as z from "zod";
 import prisma from "@rw/db";
 import { authRequired, processorRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
+import { authorizeList } from "@rw/auth/iam/policy";
+import { canReadMetricEntity, canReadPoint, type ProductionReadScope } from "@rw/services/entity/access-scope";
 import { grant } from "./authz.js";
-import { publishStreamEvent, subscribeStreamEvents } from "@rw/runtime/events-bus";
+import { publishStreamEvent, subscribeStreamEvents, type StreamEvent } from "@rw/runtime/events-bus";
 
 const pointValueQualitySchema = z.enum(["GOOD", "BAD", "UNKNOWN"]);
 
@@ -188,10 +189,7 @@ export const stream = authRequired
   .input(streamInputSchema)
   .output(eventIterator(streamEventSchema))
   .handler(async function* ({ context, input, signal }) {
-    // The event envelope carries no siteId, so the stream is gated on
-    // holding facility:read somewhere; authorization happens at subscribe
-    // time only (no mid-stream re-check — known limitation).
-    const scope = grant(await authorize(context.iam, { permission: "facility:read", scope: { kind: "anySite" } }));
+    const scope = grant(await authorizeList(context.iam, { permission: "production:read" }));
     const workspaceId = scope.workspaceId;
 
     const requestedTypes = new Set(input.types ?? STREAM_EVENT_TYPES);
@@ -215,6 +213,15 @@ export const stream = authRequired
         }
       }
 
-      yield event;
+      if (await canReadStreamEvent(event, scope)) yield event;
     }
   });
+
+export async function canReadStreamEvent(event: StreamEvent, scope: ProductionReadScope): Promise<boolean> {
+  if (event.workspaceId !== scope.workspaceId) return false;
+  if (event.type === "PointValue") return canReadPoint(scope, event.payload.pointId);
+  if (event.type === "StationEventTriggered" || event.type === "StationEventExecution") {
+    return canReadMetricEntity(scope, { entityType: "STATION", entityId: event.payload.stationId });
+  }
+  return false;
+}

@@ -1,6 +1,6 @@
 {
   "name": "@rockwarehq/rpc-client",
-  "version": "0.36.0",
+  "version": "0.37.0-permissions.0",
   "description": "oRPC client for Rockware API",
   "type": "module",
   "main": "dist/index.js",
@@ -34,6 +34,7 @@
     "directory": "packages/rpc-client"
   },
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "registry": "https://npm.pkg.github.com",
+    "tag": "permissions"
   }
 }

@@ -1,13 +1,17 @@
 import { z } from "zod";
 import { authRequired } from "./middleware.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import {
+  authorizePhysicalTarget as authorize,
+  authorizePhysicalReference as authorizeReferenceRead,
+} from "../api/authz.js";
+import { ORPCError } from "@orpc/server";
 import { grant } from "./authz.js";
 import * as label from "@rw/services/label/index";
 import { throwServiceError, unwrap } from "./errors.js";
 
 // The site's shared list of labels. Only admins manage the list itself:
-// create/update/delete need settings:write. Putting an existing label ON a
-// record only needs permission to edit that record (job:write etc.), so
+// create/update/delete need configuration:write. Putting an existing label ON a
+// record only needs permission to edit that record (production:write etc.), so
 // office users can tag things but can't invent or rename labels.
 
 const createInputSchema = z.object({
@@ -40,32 +44,36 @@ const listInputSchema = z.object({
 });
 
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "settings:write", scope: { kind: "site", siteId: input.siteId } }));
+  grant(
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
+  );
 
   return unwrap(await label.create(input));
 });
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "facility:read", requestedSiteId: input.siteId }));
+  const siteId = input.siteId ?? context.iam.siteId;
+  if (!siteId) throw new ORPCError("BAD_REQUEST", { message: "Site context required" });
+  const scope = grant(await authorizeReferenceRead(context.iam, { scope: { kind: "site", siteId } }));
 
-  return label.list({ ...input, ...scopeFilter(scope) });
+  return label.list({ ...input, siteId: scope.siteId });
 });
 
 export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "facility:read", scope: { kind: "label", id: input.id } }));
+  grant(await authorizeReferenceRead(context.iam, { scope: { kind: "label", id: input.id } }));
 
   return unwrap(await label.getById(input.id), { notFoundMessage: "Label not found" });
 });
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "settings:write", scope: { kind: "label", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "configuration:write", scope: { kind: "label", id: input.id } }));
 
   const { id, ...updateData } = input;
   return unwrap(await label.update(id, updateData));
 });
 
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "settings:write", scope: { kind: "label", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "configuration:write", scope: { kind: "label", id: input.id } }));
 
   const result = await label.remove(input.id);
   if (result.error) throwServiceError(result);

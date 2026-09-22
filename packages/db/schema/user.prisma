@@ -46,7 +46,8 @@ model User {
   // Relations
   memberships                WorkspaceMembership[]
   refreshTokens              RefreshToken[]
-  shiftComments              ShiftComment[]
+  shiftComments              ShiftComment[] @relation("ShiftCommentCreatedBy")
+  deletedShiftComments       ShiftComment[] @relation("ShiftCommentDeletedBy")
   shiftSignoffsPosted   ShiftSignoff[]      @relation("ShiftSignoffPostedBy")
   shiftSignoffsReopened ShiftSignoff[]      @relation("ShiftSignoffReopenedBy")
   shiftAmendments            ShiftAmendment[]

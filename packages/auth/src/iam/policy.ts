@@ -2,10 +2,14 @@ import { type IAMContext, Principal } from "../context.js";
 import {
   type AccessibleSites,
   getAccessibleSites as defaultGetAccessibleSites,
+  getVisibleSites as defaultGetVisibleSites,
   hasPermission as defaultHasPermission,
+  isPermission,
+  loadPermissionSnapshot as defaultLoadPermissionSnapshot,
   type Permission,
   snapshotAccessibleSites,
   snapshotHasPermission,
+  snapshotVisibleSites,
   snapshotWorkcentersWithPermission,
 } from "./permissions.js";
 import {
@@ -76,11 +80,9 @@ export interface ListScope {
   workspaceId: string;
   siteId: string;
   /**
-   * Set when access comes only from workcenter grants: rows must belong to
-   * these workcenters — or carry no workcenter at all, which stays readable
-   * (site-level rows like the status taxonomy). Handlers for workcenter-
-   * bound resources merge {@link scopeWorkcenterWhere}; handlers for global
-   * resources ignore it.
+   * When present, rows MUST belong to these workcenters. Null-workcenter
+   * rows are not live-production access. Catalog/stock/directory handlers
+   * instead opt in to authorizeReferenceRead explicitly.
    */
   workcenterIds?: string[];
 }
@@ -100,8 +102,12 @@ export interface SiteDirectoryScope {
 }
 
 /** The list-filter fragment without the `ok` discriminant. */
-export function scopeFilter(scope: ListScope): { workspaceId: string; siteId: string } {
-  return { workspaceId: scope.workspaceId, siteId: scope.siteId };
+export function scopeFilter(scope: ListScope): Omit<ListScope, "ok"> {
+  return {
+    workspaceId: scope.workspaceId,
+    siteId: scope.siteId,
+    ...(scope.workcenterIds !== undefined ? { workcenterIds: scope.workcenterIds } : {}),
+  };
 }
 
 /**
@@ -115,20 +121,19 @@ export function scopeWhere(scope: ListScope): { siteId: string } {
 
 /**
  * Prisma fragment narrowing a workcenter-bound list to the scope's granted
- * workcenters. Site-level rows (workcenterId null) stay readable; writing
- * them still denies through single-record authorize — asymmetric on purpose.
+ * workcenters. Null-workcenter rows require a site-level production grant.
  * Merge into `AND` next to {@link scopeWhere}.
  */
-export function scopeWorkcenterWhere(
-  scope: ListScope,
-): { OR: Array<{ workcenterId: { in: string[] } } | { workcenterId: null }> } | Record<string, never> {
-  return scope.workcenterIds ? { OR: [{ workcenterId: { in: scope.workcenterIds } }, { workcenterId: null }] } : {};
+export function scopeWorkcenterWhere(scope: ListScope): { workcenterId: { in: string[] } } | Record<string, never> {
+  return scope.workcenterIds !== undefined ? { workcenterId: { in: scope.workcenterIds } } : {};
 }
 
 export interface PolicyDeps {
   hasPermission: typeof defaultHasPermission;
   getAccessibleSites: typeof defaultGetAccessibleSites;
   resolveSiteRef: typeof defaultResolveSiteRef;
+  getVisibleSites?: typeof defaultGetVisibleSites;
+  loadPermissionSnapshot?: typeof defaultLoadPermissionSnapshot;
 }
 
 /**
@@ -190,7 +195,7 @@ function requireAuthenticated(iam: IAMContext | undefined): AuthenticatedContext
   return { ok: true, workspaceId, iam };
 }
 
-/** Device principals (DISPLAY/APP) are authorized by their site binding. */
+/** Displays have site-bound reads. APP graph access is owned by graph middleware. */
 function deviceSiteGrant(iam: IAMContext, workspaceId: string, siteId: string): SiteGrant | PolicyDenial {
   if (iam.siteId !== siteId) {
     const message =
@@ -233,6 +238,14 @@ export function createPolicy(deps: PolicyDeps) {
     return deps.getAccessibleSites(iam.id as string, permission, workspaceId);
   }
 
+  function devicePermissionDenied(iam: IAMContext, permission: Permission): PolicyDenial | undefined {
+    if (!isPermission(permission)) return deny("FORBIDDEN", "Unknown permission");
+    if (iam.principal === Principal.APP) return deny("FORBIDDEN", "App tokens require graph-read middleware");
+    if (iam.principal === Principal.DISPLAY && !permission.endsWith(":read")) {
+      return deny("FORBIDDEN", "This action requires a user account", permission);
+    }
+  }
+
   /** Permission held workspace-wide or at >=1 site (query-free w/ snapshot). */
   async function userHasAnySitePermission(iam: IAMContext, permission: Permission, workspaceId: string) {
     const access = await userAccessibleSites(iam, permission, workspaceId);
@@ -249,7 +262,11 @@ export function createPolicy(deps: PolicyDeps) {
     if (iam.principal !== Principal.USER) {
       return deny("FORBIDDEN", "This action requires a user account");
     }
-    if (!(await userHasAnySitePermission(iam, permission, workspaceId))) {
+    // Unbounded mutation/admin checks must never inherit one site's authority.
+    const allowed = permission.endsWith(":read")
+      ? await userHasAnySitePermission(iam, permission, workspaceId)
+      : await userHasPermission(iam, permission, workspaceId);
+    if (!allowed) {
       return deny("FORBIDDEN", `Missing permission: ${permission}`, permission);
     }
     return { ok: true, workspaceId };
@@ -263,6 +280,8 @@ export function createPolicy(deps: PolicyDeps) {
     if (!auth.ok) return auth;
     const { workspaceId } = auth;
     const principal = auth.iam.principal;
+    const deviceDenial = devicePermissionDenied(auth.iam, check.permission);
+    if (deviceDenial) return deviceDenial;
 
     if (check.scope.kind === "workspace") {
       if (principal !== Principal.USER) {
@@ -294,8 +313,7 @@ export function createPolicy(deps: PolicyDeps) {
         return deny("NOT_FOUND", NOT_FOUND_MESSAGES[check.scope.kind]);
       }
       if (resolved.siteId === null) {
-        // Row exists but is not attached to a site (unassigned device,
-        // workspace-level document, global schema): anySite rule.
+        // Reads may use anySite; mutations/admin require a workspace grant.
         return anySiteGrant(auth.iam, check.permission, workspaceId);
       }
       siteId = resolved.siteId;
@@ -321,6 +339,9 @@ export function createPolicy(deps: PolicyDeps) {
     if (!auth.ok) return auth;
     const { workspaceId } = auth;
 
+    const deviceDenial = devicePermissionDenied(auth.iam, check.permission);
+    if (deviceDenial) return deviceDenial;
+
     if (auth.iam.principal !== Principal.USER) {
       // Device principals always list within their own site.
       const ownSiteId = auth.iam.siteId;
@@ -345,10 +366,11 @@ export function createPolicy(deps: PolicyDeps) {
     }
     const ok = await userHasPermission(auth.iam, check.permission, workspaceId, siteId);
     if (!ok) {
-      // No site-wide hold — workcenter grants may still narrow the list to
-      // the granted workcenters (snapshot-only; without one, deny as before).
-      if (auth.iam.permissionSnapshot) {
-        const workcenterIds = snapshotWorkcentersWithPermission(auth.iam.permissionSnapshot, check.permission, siteId);
+      const snapshot =
+        auth.iam.permissionSnapshot ??
+        (await (deps.loadPermissionSnapshot ?? defaultLoadPermissionSnapshot)(auth.iam.id as string, workspaceId));
+      if (snapshot) {
+        const workcenterIds = snapshotWorkcentersWithPermission(snapshot, check.permission, siteId);
         if (workcenterIds.length > 0) {
           return { ok: true, workspaceId, siteId, workcenterIds };
         }
@@ -364,11 +386,17 @@ export function createPolicy(deps: PolicyDeps) {
    */
   async function authorizeAccessibleSites(
     iam: IAMContext | undefined,
-    check: { permission: Permission },
+    check: { permission?: Permission } = {},
   ): Promise<SiteDirectoryScope | PolicyDenial> {
     const auth = requireAuthenticated(iam);
     if (!auth.ok) return auth;
     const { workspaceId } = auth;
+
+    if (auth.iam.principal === Principal.APP) return deny("FORBIDDEN", "App tokens require graph-read middleware");
+    if (check.permission) {
+      const deviceDenial = devicePermissionDenied(auth.iam, check.permission);
+      if (deviceDenial) return deviceDenial;
+    }
 
     if (auth.iam.principal !== Principal.USER) {
       const ownSiteId = auth.iam.siteId;
@@ -378,14 +406,52 @@ export function createPolicy(deps: PolicyDeps) {
       return { ok: true, workspaceId, siteIds: [ownSiteId] };
     }
 
-    const access = await userAccessibleSites(auth.iam, check.permission, workspaceId);
+    const access = check.permission
+      ? await userAccessibleSites(auth.iam, check.permission, workspaceId)
+      : auth.iam.permissionSnapshot
+        ? snapshotVisibleSites(auth.iam.permissionSnapshot)
+        : await (deps.getVisibleSites ?? defaultGetVisibleSites)(auth.iam.id as string, workspaceId);
     if (access.all) {
       return { ok: true, workspaceId };
     }
     return { ok: true, workspaceId, siteIds: access.siteIds };
   }
 
-  return { authorize: authorize as AuthorizeFn, authorizeList, authorizeAccessibleSites };
+  /**
+   * Explicit opt-in for shared catalog, stock and directory reads only.
+   * Always proves the requested/resolved site, never the user's active site.
+   * A production grant anywhere in that site or planning:read there suffices.
+   * Do not apply to general live data, station history or mutations.
+   */
+  async function authorizeReferenceRead(
+    iam: IAMContext | undefined,
+    check: { scope: ScopeRef },
+  ): Promise<SiteGrant | PolicyDenial> {
+    const auth = requireAuthenticated(iam);
+    if (!auth.ok) return auth;
+    if (auth.iam.principal === Principal.APP) return deny("FORBIDDEN", "App tokens require graph-read middleware");
+    if (check.scope.kind === "workspace" || check.scope.kind === "anySite") {
+      return deny("FORBIDDEN", "Reference reads require a concrete target site");
+    }
+    let siteId: string;
+    if (check.scope.kind === "site") {
+      siteId = check.scope.siteId;
+    } else {
+      const resolved = await deps.resolveSiteRef(check.scope);
+      if (!resolved) return deny("NOT_FOUND", NOT_FOUND_MESSAGES[check.scope.kind]);
+      if (resolved.siteId === null) return deny("FORBIDDEN", "Reference reads require a concrete target site");
+      siteId = resolved.siteId;
+    }
+    if (auth.iam.principal === Principal.DISPLAY) return deviceSiteGrant(auth.iam, auth.workspaceId, siteId);
+    if (await userHasPermission(auth.iam, "planning:read", auth.workspaceId, siteId)) {
+      return { ok: true, workspaceId: auth.workspaceId, siteId };
+    }
+    const access = await userAccessibleSites(auth.iam, "production:read", auth.workspaceId);
+    if (access.all || access.siteIds.includes(siteId)) return { ok: true, workspaceId: auth.workspaceId, siteId };
+    return deny("FORBIDDEN", "Reference reads require production:read or planning:read in the target site");
+  }
+
+  return { authorize: authorize as AuthorizeFn, authorizeList, authorizeAccessibleSites, authorizeReferenceRead };
 }
 
 const NOT_FOUND_MESSAGES: Record<ResolvableSiteRef["kind"], string> = {
@@ -393,6 +459,10 @@ const NOT_FOUND_MESSAGES: Record<ResolvableSiteRef["kind"], string> = {
   workcenter: "Workcenter not found",
   label: "Label not found",
   stationStateLog: "State log entry not found",
+  stationJobLog: "Job log entry not found",
+  stationModeLog: "Mode log entry not found",
+  stationLogonSession: "Logon session not found",
+  stationEvent: "Station event not found",
   order: "Order not found",
   orderLineItem: "Order line item not found",
   customer: "Customer not found",
@@ -421,6 +491,7 @@ const NOT_FOUND_MESSAGES: Record<ResolvableSiteRef["kind"], string> = {
   shiftPattern: "Shift pattern not found",
   shiftDefinition: "Shift definition not found",
   shiftAssignment: "Shift assignment not found",
+  shiftInstance: "Shift instance not found",
   shiftComment: "Shift comment not found",
   employeeRole: "Employee role not found",
   cycle: "Cycle not found",
@@ -454,4 +525,5 @@ const defaultPolicy = createPolicy({
 export const authorize = defaultPolicy.authorize;
 export const authorizeList = defaultPolicy.authorizeList;
 export const authorizeAccessibleSites = defaultPolicy.authorizeAccessibleSites;
+export const authorizeReferenceRead = defaultPolicy.authorizeReferenceRead;
 export type { Permission, ResolvableSiteRef };

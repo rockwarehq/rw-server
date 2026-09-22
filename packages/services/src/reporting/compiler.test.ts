@@ -11,6 +11,23 @@ const STATION = "33333333-3333-4333-8333-333333333333";
 const scope: ReportScope = { siteId: SITE };
 const restricted: ReportScope = { siteId: SITE, workcenterIds: [WORKCENTER] };
 
+describe("production grant regression", () => {
+  it("uses production read for every fact, including material, status and operator facts", () => {
+    expect(new Set(Object.values(FACTS).map((fact) => fact.permission))).toEqual(new Set(["production:read"]));
+  });
+  it("ANDs the grant with caller-supplied foreign workcenter filters for rows and totals", () => {
+    const foreign = "44444444-4444-4444-8444-444444444444";
+    const result = rows(
+      { fact: "cycles", columns: ["station"], filters: [{ dimension: "workcenter", op: "eq", value: foreign }] },
+      restricted,
+    );
+    expect(result.text).toContain('f."workcenterId" = ANY(');
+    expect(result.count).toContain('f."workcenterId" = ANY(');
+    expect(result.values).toContainEqual([WORKCENTER]);
+    expect(result.values).toContain(foreign);
+  });
+});
+
 /** Compiled text with `?` placeholders and whitespace collapsed. */
 const flat = (sql: { sql: string }) => sql.sql.replace(/\s+/g, " ").trim();
 

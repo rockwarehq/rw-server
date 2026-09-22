@@ -1,10 +1,12 @@
 import prisma from "@rw/db";
 import type { RoleAssignment } from "@rw/db";
+import { validateCustomRolePermissions } from "./permissions.js";
 
 export interface CreateAssignmentInput {
   userId: string;
   roleId: string;
   siteId?: string | null;
+  workcenterId?: string | null;
 }
 
 export class ScopeMismatchError extends Error {
@@ -26,7 +28,8 @@ export class SystemUserAssignmentError extends Error {
  *
  * Enforces:
  *  - scope invariant: WORKSPACE roles must have siteId === null;
- *    SITE roles must have siteId !== null.
+ *    SITE roles must have siteId !== null and no workcenter;
+ *    WORKCENTER roles require a workcenter (site derived and checked).
  *  - membership invariant: the user must be a member of the role's workspace.
  *  - site ownership: the site (if provided) must belong to the role's workspace.
  *  - system-user invariant: internal staff (User.systemRole set) cannot hold
@@ -42,17 +45,37 @@ export async function assign(input: CreateAssignmentInput): Promise<RoleAssignme
 
   const role = await prisma.role.findUnique({
     where: { id: input.roleId },
-    select: { id: true, workspaceId: true, scope: true },
+    select: { id: true, workspaceId: true, scope: true, permissions: true },
   });
   if (!role) throw new Error("Role not found");
 
-  const siteId = input.siteId ?? null;
+  let siteId = input.siteId ?? null;
+  const workcenterId = input.workcenterId ?? null;
 
   if (role.scope === "WORKSPACE" && siteId !== null) {
     throw new ScopeMismatchError("Workspace-scoped role cannot be assigned with a siteId");
   }
   if (role.scope === "SITE" && siteId === null) {
     throw new ScopeMismatchError("Site-scoped role requires a siteId");
+  }
+  if (role.scope !== "WORKCENTER" && workcenterId !== null) {
+    throw new ScopeMismatchError("Only workcenter-scoped roles can be assigned with a workcenterId");
+  }
+  if (role.scope === "WORKCENTER") {
+    if (workcenterId === null) throw new ScopeMismatchError("Workcenter-scoped role requires a workcenterId");
+    validateCustomRolePermissions(role.permissions, "WORKCENTER");
+    const workcenter = await prisma.workcenter.findUnique({
+      where: { id: workcenterId },
+      select: { siteId: true, site: { select: { workspaceId: true } } },
+    });
+    if (!workcenter) throw new Error("Workcenter not found");
+    if (workcenter.site.workspaceId !== role.workspaceId) {
+      throw new ScopeMismatchError("Workcenter does not belong to the role's workspace");
+    }
+    if (siteId !== null && siteId !== workcenter.siteId) {
+      throw new ScopeMismatchError("Workcenter does not belong to the assigned site");
+    }
+    siteId = workcenter.siteId;
   }
 
   if (siteId !== null) {
@@ -77,6 +100,7 @@ export async function assign(input: CreateAssignmentInput): Promise<RoleAssignme
       membershipId: membership.id,
       roleId: input.roleId,
       siteId,
+      workcenterId,
     },
   });
 }

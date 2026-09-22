@@ -17,6 +17,7 @@
     "db:migrate": "pnpm --filter @rw/db prisma:migrate",
     "db:migrate:dev": "pnpm --filter @rw/db prisma:migrate:dev",
     "db:seed": "pnpm --filter @rw/api db:seed",
+    "permissions:preview": "tsx apps/api/scripts/preview-permission-migration.ts",
     "test:document": "pnpm --filter @rw/services test:document",
     "openapi:generate": "tsx apps/api/scripts/generate-openapi.ts",
     "openapi:client": "pnpm --filter @rockwarehq/api-client generate && pnpm --filter @rockwarehq/api-client build",

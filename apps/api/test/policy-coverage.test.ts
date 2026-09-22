@@ -15,7 +15,12 @@ import { buildServer, type TestServer } from "./helpers/build-server.js";
 
 // Bundlers/vitest rewrite imported calls as (0,__import__.authorize)(...),
 // so match the identifier rather than an exact call shape.
-const POLICY_CALL = /\bauthorize(List|AccessibleSites)?\b/;
+// Keep this finite: these are policy entry points and target-bound wrappers,
+// not arbitrary helpers whose names happen to begin with "authorize".
+const POLICY_CALL = /\bauthorize(List|AccessibleSites|ReferenceRead|ReferenceList|Population|Target|EmployeeTarget|PhysicalTarget|PhysicalList|PhysicalReference|GatewayAssignment|TerminalAction|ProductionList|SiteOperation|Series|Entities|EntityInstances|Document|DocumentTarget|DocumentTree|Create)?\b|\b(publishedAccess|publishedNodes|recapScope|hasProductionAdmin)\b/;
+// graph.ts: publishedNodes delegates to publishedAccess's publishedReadScope.
+// shift-recap.ts: recapScope proves the terminal location; comment deletion
+// explicitly gates on terminal-authz.ts's hasProductionAdmin result.
 
 interface Leaf {
   path: string;

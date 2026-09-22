@@ -1,6 +1,6 @@
 import prisma from "@rw/db";
 import type { Role, RoleScope } from "@rw/db";
-import { OWNER_PERMISSION, validatePermissions } from "./permissions.js";
+import { validateCustomRolePermissions } from "./permissions.js";
 
 export interface CreateRoleInput {
   workspaceId: string;
@@ -28,10 +28,7 @@ export async function getById(id: string): Promise<Role | null> {
 }
 
 export async function create(input: CreateRoleInput): Promise<Role> {
-  const permissions = validatePermissions(input.permissions);
-  if (permissions.includes(OWNER_PERMISSION)) {
-    throw new Error(`${OWNER_PERMISSION} is reserved for system roles`);
-  }
+  const permissions = validateCustomRolePermissions(input.permissions, input.scope);
   return prisma.role.create({
     data: {
       workspaceId: input.workspaceId,
@@ -49,10 +46,7 @@ export async function update(id: string, input: UpdateRoleInput): Promise<Role> 
   if (!existing) throw new Error("Role not found");
   if (existing.isSystem) throw new Error("System roles cannot be modified");
 
-  const permissions = input.permissions ? validatePermissions(input.permissions) : undefined;
-  if (permissions?.includes(OWNER_PERMISSION)) {
-    throw new Error(`${OWNER_PERMISSION} is reserved for system roles`);
-  }
+  const permissions = input.permissions ? validateCustomRolePermissions(input.permissions, existing.scope) : undefined;
 
   return prisma.role.update({
     where: { id },

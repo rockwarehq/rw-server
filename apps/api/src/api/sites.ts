@@ -2,8 +2,12 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { site } from "@rw/services/facility/index";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
-import { authorize, authorizeAccessibleSites } from "@rw/auth/iam/policy";
-import { replyPolicyDenial } from "./authz.js";
+import { authorizeAccessibleSites } from "@rw/auth/iam/policy";
+import {
+  authorizePhysicalTarget as authorize,
+  authorizePhysicalReference as authorizeReferenceRead,
+  replyPolicyDenial,
+} from "./authz.js";
 
 // ============================================================================
 // Schemas
@@ -204,7 +208,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { permission: "facility:write", scope: { kind: "workspace" } });
+      const auth = await authorize(request.iam, { permission: "configuration:write", scope: { kind: "workspace" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await site.create({ ...request.body, workspaceId: auth.workspaceId });
@@ -230,7 +234,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const scope = await authorizeAccessibleSites(request.iam, { permission: "facility:read" });
+      const scope = await authorizeAccessibleSites(request.iam);
       if (!scope.ok) return replyPolicyDenial(reply, scope);
 
       return site.list({ ...request.query, workspaceId: scope.workspaceId, siteIds: scope.siteIds });
@@ -251,7 +255,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const scope = await authorizeAccessibleSites(request.iam, { permission: "facility:read" });
+      const scope = await authorizeAccessibleSites(request.iam);
       if (!scope.ok) return replyPolicyDenial(reply, scope);
 
       return site.getTree(scope.workspaceId, scope.siteIds);
@@ -275,8 +279,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        permission: "facility:read",
+      const auth = await authorizeReferenceRead(request.iam, {
         scope: { kind: "site", siteId: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -309,13 +312,11 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        permission: "facility:write",
-        scope: { kind: "site", siteId: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
-
-      const result = await site.update(request.params.id, request.body, auth.workspaceId);
+      for (const permission of site.siteUpdatePermissions(request.body)) {
+        const auth = await authorize(request.iam, { permission, scope: { kind: "site", siteId: request.params.id } });
+        if (!auth.ok) return replyPolicyDenial(reply, auth);
+      }
+      const result = await site.update(request.params.id, request.body, request.iam?.workspaceId);
       if ("error" in result) {
         const status = getStatusForCode(result.code ?? "UNKNOWN");
         return reply.status(status).send({ error: result.error });
@@ -344,7 +345,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:admin",
+        permission: "configuration:write",
         scope: { kind: "site", siteId: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);

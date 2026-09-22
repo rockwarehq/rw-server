@@ -4,6 +4,7 @@ import { publishMetricValueChange } from "@rw/services/rpc/metrics-bus";
 import { logEvent } from "@rw/services/audit/index";
 import { resolveShiftStamp } from "@rw/services/facility/work-context";
 import { resolveEntityPath } from "@rw/services/metrics/hierarchy";
+import { actorSiteRoleId } from "@rw/services/employee/actor-role";
 
 // ============================================================================
 // Types
@@ -132,6 +133,37 @@ export async function logon(input: LogonInput) {
   });
 
   if (!station) return { error: "Station not found", code: "STATION_NOT_FOUND" };
+
+  const display = await prisma.display.findUnique({
+    where: { id: displayId },
+    select: { status: true, siteId: true, stationId: true },
+  });
+  if (
+    !display ||
+    display.status !== "CLAIMED" ||
+    display.siteId !== station.siteId ||
+    (display.stationId && display.stationId !== stationId)
+  ) {
+    return { error: "Display cannot log on at this station", code: "FORBIDDEN" };
+  }
+  if (employeeId) {
+    const employee = await prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: { versionId: true, status: true },
+    });
+    if (
+      !employee ||
+      employee.status !== "ACTIVE" ||
+      employee.versionId !== versionId ||
+      !(await actorSiteRoleId(employeeId, station.siteId))
+    ) {
+      return { error: "Employee identification or site access is no longer valid", code: "FORBIDDEN" };
+    }
+    if (!["EMPLOYEE_ID", "PIN", "BADGE"].includes(logonMethod))
+      return { error: "Invalid employee logon method", code: "FORBIDDEN" };
+  } else if (logonMethod !== "GENERIC" || versionId) {
+    return { error: "Employee identification is required for this logon method", code: "FORBIDDEN" };
+  }
 
   // Prevent duplicate logons for the same employee at this display
   if (employeeId) {

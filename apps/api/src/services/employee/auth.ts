@@ -3,6 +3,7 @@ import { securityConfig } from "../../config.js";
 import { comparePassword } from "@rw/auth/password";
 import { logEvent } from "@rw/services/audit/index";
 import { getByBadgeNumber, getByEmployeeNumber } from "./crud.js";
+import { actorSiteRoleId } from "@rw/services/employee/actor-role";
 
 // ============================================================================
 // Types
@@ -180,6 +181,10 @@ async function authenticatePin(
   const employee = await resolveEmployee(siteId, credentials);
   if (!employee) {
     return { success: false, error: "Employee not found" };
+  }
+
+  if (employee.status !== "ACTIVE" || !(await actorSiteRoleId(employee.id, siteId))) {
+    return { success: false, error: "Employee site access is inactive" };
   }
 
   const lockoutResult = checkLockout(employee);

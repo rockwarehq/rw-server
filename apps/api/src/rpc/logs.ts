@@ -4,7 +4,8 @@
 
 import { z } from "zod";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
+import { authorizeList } from "@rw/auth/iam/policy";
+import { metricReadWhere, stationReadWhere, productionFactWhere } from "@rw/services/entity/access-scope";
 import { grant } from "./authz.js";
 import prisma from "@rw/db";
 import { Prisma } from "@rw/db";
@@ -104,11 +105,14 @@ const metricBucketLogSearchInputSchema = z.object({
 export const metricBucketLogSearch = userOrDisplayRequired
   .input(metricBucketLogSearchInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
+    const scope = grant(
+      await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+    );
 
     const where: Record<string, unknown> = {
       siteId: input.siteId,
       granularity: "SHIFT",
+      AND: [await metricReadWhere(scope)],
     };
 
     if (input.entityType) {
@@ -271,11 +275,14 @@ const hourlyBucketSearchInputSchema = z.object({
 export const hourlyBucketSearch = userOrDisplayRequired
   .input(hourlyBucketSearchInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
+    const scope = grant(
+      await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+    );
 
     const where: Record<string, unknown> = {
       siteId: input.siteId,
       granularity: "HOUR",
+      AND: [await metricReadWhere(scope)],
     };
 
     if (input.shiftInstanceId) {
@@ -357,11 +364,14 @@ const stationShiftSummaryInputSchema = z.object({
 export const stationShiftSummary = authRequired
   .input(stationShiftSummaryInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
+    const scope = grant(
+      await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+    );
 
     const where = {
       siteId: input.siteId,
       granularity: "SHIFT" as const,
+      AND: [await metricReadWhere(scope)],
       entityType: "STATION" as const,
       entityId: input.stationId,
       shiftInstanceId: input.shiftInstanceId,
@@ -438,7 +448,9 @@ const downtimeLogSearchInputSchema = z.object({
 export const downtimeLogSearch = authRequired
   .input(downtimeLogSearchInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "status:read", scope: { kind: "site", siteId: input.siteId } }));
+    const scope = grant(
+      await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+    );
 
     // Resolve station IDs for the scope
     let stationIds: string[];
@@ -446,21 +458,21 @@ export const downtimeLogSearch = authRequired
 
     if (input.stationId) {
       const st = await prisma.station.findFirst({
-        where: { id: input.stationId, siteId: input.siteId },
+        where: { id: input.stationId, AND: [stationReadWhere(scope)] },
         select: { id: true, workcenterId: true },
       });
       stationIds = st ? [st.id] : [];
       stationWorkcenterMap = new Map(st ? [[st.id, st.workcenterId]] : []);
     } else if (input.workCenterId) {
       const stations = await prisma.station.findMany({
-        where: { siteId: input.siteId, workcenterId: input.workCenterId },
+        where: { siteId: input.siteId, workcenterId: input.workCenterId, AND: [stationReadWhere(scope)] },
         select: { id: true, workcenterId: true },
       });
       stationIds = stations.map((s) => s.id);
       stationWorkcenterMap = new Map(stations.map((s) => [s.id, s.workcenterId]));
     } else {
       const stations = await prisma.station.findMany({
-        where: { siteId: input.siteId },
+        where: stationReadWhere(scope),
         select: { id: true, workcenterId: true },
       });
       stationIds = stations.map((s) => s.id);
@@ -508,6 +520,7 @@ export const downtimeLogSearch = authRequired
 
     // Fetch overlapping DOWN entries (exclude open entries — they're still in progress)
     const downtimeWhere: Record<string, unknown> = {
+      ...productionFactWhere(scope),
       state: "DOWN",
       deletedAt: null,
       stationId: stationIds.length === 1 ? stationIds[0] : { in: stationIds },
@@ -707,11 +720,14 @@ const dispositionLogSearchInputSchema = z.object({
 export const dispositionLogSearch = authRequired
   .input(dispositionLogSearchInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
+    const scope = grant(
+      await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+    );
 
     const where: Prisma.ItemDispositionLogWhereInput = {
       siteId: input.siteId,
       deletedAt: null,
+      AND: [{ station: stationReadWhere(scope) }, productionFactWhere(scope)],
     };
 
     // Label filter: resolve labels to the codes that carry them.
@@ -870,7 +886,9 @@ const materialUsageSearchInputSchema = z.object({
 export const materialUsageSearch = authRequired
   .input(materialUsageSearchInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "product:read", scope: { kind: "site", siteId: input.siteId } }));
+    const scope = grant(
+      await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+    );
 
     // Resolve station scope — always build workcenter map for shift lookup
     let stationIds: string[] | undefined;
@@ -879,12 +897,12 @@ export const materialUsageSearch = authRequired
       ? { siteId: input.siteId, workcenterId: input.workCenterId }
       : { siteId: input.siteId };
     const allStations = await prisma.station.findMany({
-      where: stationQuery,
+      where: { AND: [stationQuery, stationReadWhere(scope)] },
       select: { id: true, workcenterId: true },
     });
     const stationWorkcenterMap = new Map(allStations.map((s) => [s.id, s.workcenterId]));
 
-    if (input.workCenterId) {
+    if (input.workCenterId || scope.workcenterIds) {
       stationIds = allStations.map((s) => s.id);
       if (stationIds.length === 0) return { data: [], total: 0 };
     }
@@ -901,6 +919,7 @@ export const materialUsageSearch = authRequired
 
     // Fetch InventoryItems with material versions, cycle/job, and product
     const cycleWhere: Record<string, unknown> = {
+      ...productionFactWhere(scope),
       siteId: input.siteId,
       deletedAt: null,
       end: { gte: rangeStart, lt: rangeEnd },
@@ -1123,25 +1142,27 @@ const CYCLE_FIELD_TO_SQL: Record<string, Prisma.Sql> = {
 };
 
 export const cycleSearch = authRequired.input(cycleSearchInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
+  const scope = grant(
+    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+  );
 
   // Resolve station scope to a uuid[] we can ANY() in SQL.
   let stationIds: string[];
   if (input.stationId) {
     const st = await prisma.station.findFirst({
-      where: { id: input.stationId, siteId: input.siteId },
+      where: { id: input.stationId, AND: [stationReadWhere(scope)] },
       select: { id: true },
     });
     stationIds = st ? [st.id] : [];
   } else if (input.workCenterId) {
     const stations = await prisma.station.findMany({
-      where: { siteId: input.siteId, workcenterId: input.workCenterId },
+      where: { siteId: input.siteId, workcenterId: input.workCenterId, AND: [stationReadWhere(scope)] },
       select: { id: true },
     });
     stationIds = stations.map((s) => s.id);
   } else {
     const stations = await prisma.station.findMany({
-      where: { siteId: input.siteId },
+      where: stationReadWhere(scope),
       select: { id: true },
     });
     stationIds = stations.map((s) => s.id);
@@ -1178,6 +1199,9 @@ export const cycleSearch = authRequired.input(cycleSearchInputSchema).handler(as
     : new Date();
 
   const filterFragment = buildCycleFilterSql(input.query);
+  const grantFragment = scope.workcenterIds
+    ? Prisma.sql`AND c."workcenterId" = ANY(${scope.workcenterIds}::uuid[])`
+    : Prisma.empty;
   const orderFragment = buildCycleOrderBySql(input.sortBy, input.sortDir);
 
   const limit = Number(input.limit);
@@ -1248,6 +1272,7 @@ export const cycleSearch = authRequired.input(cycleSearchInputSchema).handler(as
         AND c.start >= ${rangeStart}::timestamptz
         AND c.start <  ${rangeEnd}::timestamptz
         AND c."stationId" = ANY(${stationIds}::uuid[])
+        ${grantFragment}
         ${jobLabelFragment}
     )
     SELECT
@@ -1363,10 +1388,13 @@ const logonLogSearchInputSchema = z.object({
 });
 
 export const logonLogSearch = authRequired.input(logonLogSearchInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "employee:read", scope: { kind: "site", siteId: input.siteId } }));
+  const scope = grant(
+    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+  );
 
   const where: Prisma.StationLogonSessionWhereInput = {
-    station: { siteId: input.siteId },
+    ...productionFactWhere(scope),
+    station: stationReadWhere(scope),
   };
 
   if (input.stationId) {
@@ -1512,7 +1540,9 @@ const partLogSearchInputSchema = z.object({
 });
 
 export const partLogSearch = authRequired.input(partLogSearchInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
+  const scope = grant(
+    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+  );
 
   // Resolve station scope + workcenter map for shift lookup
   let stationIds: string[];
@@ -1521,7 +1551,7 @@ export const partLogSearch = authRequired.input(partLogSearchInputSchema).handle
 
   if (input.stationId) {
     const st = await prisma.station.findFirst({
-      where: { id: input.stationId, siteId: input.siteId },
+      where: { id: input.stationId, AND: [stationReadWhere(scope)] },
       select: { id: true, name: true, workcenterId: true },
     });
     stationIds = st ? [st.id] : [];
@@ -1529,7 +1559,7 @@ export const partLogSearch = authRequired.input(partLogSearchInputSchema).handle
     if (st) stationNameMap.set(st.id, st.name);
   } else if (input.workCenterId) {
     const stations = await prisma.station.findMany({
-      where: { siteId: input.siteId, workcenterId: input.workCenterId },
+      where: { siteId: input.siteId, workcenterId: input.workCenterId, AND: [stationReadWhere(scope)] },
       select: { id: true, name: true, workcenterId: true },
     });
     stationIds = stations.map((s) => s.id);
@@ -1537,7 +1567,7 @@ export const partLogSearch = authRequired.input(partLogSearchInputSchema).handle
     for (const s of stations) stationNameMap.set(s.id, s.name);
   } else {
     const stations = await prisma.station.findMany({
-      where: { siteId: input.siteId },
+      where: stationReadWhere(scope),
       select: { id: true, name: true, workcenterId: true },
     });
     stationIds = stations.map((s) => s.id);
@@ -1621,6 +1651,7 @@ export const partLogSearch = authRequired.input(partLogSearchInputSchema).handle
     where: {
       deletedAt: null,
       cycle: {
+        ...productionFactWhere(scope),
         siteId: input.siteId,
         deletedAt: null,
         end: { gte: rangeStart, lt: rangeEnd },
@@ -1671,6 +1702,7 @@ export const partLogSearch = authRequired.input(partLogSearchInputSchema).handle
   // joined, so we use it directly rather than re-attributing via findShift.
   const dispositions = await prisma.itemDispositionLog.findMany({
     where: {
+      ...productionFactWhere(scope),
       siteId: input.siteId,
       deletedAt: null,
       createdAt: { gte: rangeStart, lt: rangeEnd },

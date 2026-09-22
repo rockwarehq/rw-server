@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
-import { authorize, authorizeList } from "@rw/auth/iam/policy";
+import {
+  authorizePhysicalTarget as authorize,
+  authorizePhysicalReference as authorizeReferenceRead,
+} from "../api/authz.js";
 import { grant } from "./authz.js";
 import { dashboard } from "@rw/services/dashboard/index";
 import { throwServiceError } from "./errors.js";
@@ -48,7 +51,7 @@ const listInputSchema = z.object({
  */
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "dashboard:write", scope: { kind: "site", siteId: input.siteId } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
   );
 
   const result = await dashboard.create(input, workspaceId);
@@ -60,11 +63,11 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
  * List dashboards
  */
 export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorizeList(context.iam, { permission: "dashboard:read", requestedSiteId: input.siteId }),
-  );
+  const siteId = input.siteId ?? context.iam.siteId;
+  if (!siteId) throw new ORPCError("BAD_REQUEST", { message: "Site context required" });
+  const scope = grant(await authorizeReferenceRead(context.iam, { scope: { kind: "site", siteId } }));
 
-  return dashboard.list({ ...input, siteId: scope.siteId }, scope.workspaceId);
+  return dashboard.list({ ...input, siteId }, scope.workspaceId);
 });
 
 /**
@@ -72,7 +75,7 @@ export const list = userOrDisplayRequired.input(listInputSchema).handler(async (
  */
 export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "dashboard:read", scope: { kind: "dashboard", id: input.id } }),
+    await authorizeReferenceRead(context.iam, { scope: { kind: "dashboard", id: input.id } }),
   );
 
   const result = await dashboard.getById(input.id, workspaceId);
@@ -88,7 +91,7 @@ export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ i
  */
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "dashboard:write", scope: { kind: "dashboard", id: input.id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "dashboard", id: input.id } }),
   );
 
   const { id, ...updateData } = input;
@@ -102,7 +105,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
  */
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "dashboard:admin", scope: { kind: "dashboard", id: input.id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "dashboard", id: input.id } }),
   );
 
   const result = await dashboard.remove(input.id, workspaceId);

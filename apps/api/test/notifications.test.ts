@@ -46,16 +46,15 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("notifications", () => {
 
     const roleFor = (name: string) =>
       prisma.role.findUniqueOrThrow({ where: { workspaceId_name_scope: { workspaceId, name, scope: "SITE" } }, select: { id: true } });
-    // Custom role: notifications:write without notifications:admin — Plant
-    // Member has no writes; Plant Admin's admin would pass the group gates.
+    // Sending and group configuration are deliberate configuration writes.
     const senderRole = await prisma.role.upsert({
       where: { workspaceId_name_scope: { workspaceId, name: "notif-test-sender", scope: "SITE" } },
-      update: { permissions: ["facility:read", "notifications:read", "notifications:write"] },
+      update: { permissions: ["configuration:write"] },
       create: {
         workspaceId,
         name: "notif-test-sender",
         scope: "SITE",
-        permissions: ["facility:read", "notifications:read", "notifications:write"],
+        permissions: ["configuration:write"],
       },
       select: { id: true },
     });
@@ -146,8 +145,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("notifications", () => {
     expect((updated.json as GroupJson).members.map((m) => m.id)).toEqual([withEmailId]);
 
     const listed = await rpcCall(server, "notificationGroup/list", { siteId: siteA.id }, readerToken);
-    expect(listed.statusCode).toBe(200);
-    expect((listed.json as { data: GroupJson[] }).data.some((g) => g.id === group.id)).toBe(true);
+    expect(listed.statusCode).toBe(403);
+    const configured = await rpcCall(server, "notificationGroup/list", { siteId: siteA.id }, officeToken);
+    expect(configured.statusCode).toBe(200);
+    expect((configured.json as { data: GroupJson[] }).data.some((g) => g.id === group.id)).toBe(true);
   });
 
   it("send: delivers per member per channel, skips members without an address, logs and emits", async () => {

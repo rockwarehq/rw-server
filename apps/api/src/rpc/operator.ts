@@ -5,6 +5,7 @@ import { auth, logon, crud } from "../services/employee/index.js";
 import { throwServiceError } from "./errors.js";
 import prisma from "@rw/db";
 import type { AuthMethod, AuthCredentials } from "../services/employee/auth.js";
+import { authorizeTerminalAction } from "./terminal-authz.js";
 
 // ============================================================================
 // Input Schemas
@@ -141,6 +142,10 @@ export const config = displayRequired.input(displayIdSchema).handler(async ({ in
  */
 export const operatorLogon = displayRequired.input(logonInputSchema).handler(async ({ input, context }) => {
   assertDisplayIdentity(input.displayId, context.iam.displayId);
+  await authorizeTerminalAction(context.iam, {
+    action: "operator.logon",
+    scope: { kind: "station", id: input.stationId },
+  });
 
   const ctx = await resolveDisplayContext(input.displayId);
   if (!ctx) {

@@ -2,8 +2,7 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { datasource } from "../services/device/index.js";
 import { errorWithDetailsSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { replyPolicyDenial } from "./authz.js";
+import { authorizePhysicalTarget as authorize, replyPolicyDenial } from "./authz.js";
 
 const pointProperties = {
   id: { type: "string", format: "uuid" },
@@ -96,7 +95,7 @@ export default async function points(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { id } = request.params;
-      const auth = await authorize(request.iam, { permission: "facility:read", scope: { kind: "point", id } });
+      const auth = await authorize(request.iam, { permission: "configuration:read", scope: { kind: "point", id } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const point = await datasource.points.getById(id);
@@ -127,7 +126,7 @@ export default async function points(fastify: FastifyTypedInstance) {
       const { id } = request.params;
       const body = request.body;
 
-      const auth = await authorize(request.iam, { permission: "facility:write", scope: { kind: "point", id } });
+      const auth = await authorize(request.iam, { permission: "configuration:write", scope: { kind: "point", id } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await datasource.points.update(id, body);
@@ -154,7 +153,7 @@ export default async function points(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { id } = request.params;
-      const auth = await authorize(request.iam, { permission: "facility:write", scope: { kind: "point", id } });
+      const auth = await authorize(request.iam, { permission: "configuration:write", scope: { kind: "point", id } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await datasource.points.remove(id);

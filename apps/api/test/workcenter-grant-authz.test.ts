@@ -14,7 +14,7 @@ const PASSWORD = "wcgrant-password-1";
 const EMAILS = [WRITE_EMAIL, READ_EMAIL, PLANT_ADMIN_EMAIL, INVITEE_EMAIL];
 
 // Tier 2: workcenter grants end to end. A user with only a WorkcenterGrant
-// (zero RoleAssignments) can enter the plant, read global data site-wide,
+// (zero RoleAssignments) can enter the plant, read shared references site-wide,
 // write within their workcenter, and nothing more; plant admins manage
 // grants for their own plant only.
 describe.skipIf(!process.env.TEST_DATABASE_URL)("workcenter grant authorization (Tier 2)", () => {
@@ -142,18 +142,22 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("workcenter grant authorization 
   });
 
   describe("workcenter-only users (no role assignments)", () => {
-    it("login binds the grant's site and global reads work site-wide", async () => {
+    it("login binds the grant's site; references are shared but production lists are narrowed", async () => {
       const jobs = await rpcCall(server, "job/list", { siteId: siteA.id }, readToken);
       expect(jobs.statusCode).toBe(200);
       const stations = await rpcCall(server, "station/list", { siteId: siteA.id }, readToken);
       expect(stations.statusCode).toBe(200);
+      expect((stations.json as { data: Array<{ id: string }> }).data.map((s) => s.id)).toEqual([stationGranted.id]);
+      const workcenters = await rpcCall(server, "workcenter/list", { siteId: siteA.id }, readToken);
+      expect(workcenters.statusCode).toBe(200);
+      expect((workcenters.json as { data: Array<{ id: string }> }).data.map((w) => w.id)).toEqual([wcGranted.id]);
       const products = await rpcCall(server, "product/list", { siteId: siteA.id }, writeToken);
       expect(products.statusCode).toBe(200);
     });
 
-    it("WRITE grant writes global resources site-wide", async () => {
+    it("WRITE grant cannot write shared site-global resources", async () => {
       const created = await rpcCall(server, "job/create", { siteId: siteA.id, name: `${PREFIX}-job-1` }, writeToken);
-      expect(created.statusCode).toBe(200);
+      expect(created.statusCode).toBe(403);
     });
 
     it("READ grant cannot write anything", async () => {
@@ -163,14 +167,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("workcenter grant authorization 
       expect(station.statusCode).toBe(403);
     });
 
-    it("WRITE grant configures stations only inside its workcenter", async () => {
+    it("WRITE grant cannot configure stations, including its own workcenter", async () => {
       const own = await rpcCall(
         server,
         "station/update",
         { id: stationGranted.id, description: `${PREFIX} updated` },
         writeToken,
       );
-      expect(own.statusCode).toBe(200);
+      expect(own.statusCode).toBe(403);
 
       const other = await rpcCall(server, "station/update", { id: stationOther.id, description: "no" }, writeToken);
       expect(other.statusCode).toBe(403);
@@ -180,14 +184,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("workcenter grant authorization 
       expect(noWc.statusCode).toBe(403);
     });
 
-    it("WRITE grant updates its own workcenter config but not others", async () => {
+    it("WRITE grant cannot update workcenter configuration", async () => {
       const own = await rpcCall(
         server,
         "workcenter/update",
         { id: wcGranted.id, description: `${PREFIX} mine` },
         writeToken,
       );
-      expect(own.statusCode).toBe(200);
+      expect(own.statusCode).toBe(403);
       const other = await rpcCall(server, "workcenter/update", { id: wcOther.id, description: "no" }, writeToken);
       expect(other.statusCode).toBe(403);
       // Creating a NEW workcenter is a site-level facility write.
@@ -202,7 +206,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("workcenter grant authorization 
       expect(members.statusCode).toBe(403);
     });
 
-    it("status taxonomy lists resolve through workcenter narrowing", async () => {
+    it("status taxonomy lists are explicit shared reference reads", async () => {
       const reasons = await rpcCall(server, "statusReason/list", { siteId: siteA.id }, readToken);
       expect(reasons.statusCode).toBe(200);
     });
@@ -294,21 +298,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("workcenter grant authorization 
       const grant = access.workcenterGrants[0];
       expect(grant).toMatchObject({ workcenterId: wcGranted.id, siteId: siteA.id, access: "READ" });
       // Scoped perms live on the grant, never in the flat list.
-      expect(grant.permissions).toEqual(expect.arrayContaining(["status:read", "calls:read", "job:read"]));
-      expect(grant.permissions).not.toContain("status:write");
-      expect(access.permissions).toContain("job:read");
-      expect(access.permissions).not.toContain("status:read");
+      expect(grant.permissions).toEqual(["production:read"]);
+      expect(access.permissions).toEqual([]);
     });
 
     it("WRITE grants expose scoped writes per grant only", async () => {
       const access = await getMeAccess(writeToken);
       const grant = access.workcenterGrants[0];
       expect(grant.access).toBe("WRITE");
-      expect(grant.permissions).toEqual(expect.arrayContaining(["status:write", "calls:write", "facility:write"]));
-      expect(access.permissions).toContain("job:write");
-      for (const scoped of ["status:write", "calls:write", "facility:write"]) {
-        expect(access.permissions).not.toContain(scoped);
-      }
+      expect(grant.permissions).toEqual(["production:read", "production:write"]);
+      expect(access.permissions).toEqual([]);
     });
 
     it("plant admins report no grants and GET /workspaces carries grant rows", async () => {
@@ -327,7 +326,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("workcenter grant authorization 
     });
   });
 
-  describe("base workcenter access policy", () => {
+  describe("legacy base workcenter preference has no authority", () => {
     // Runs against the test-created Site B (never the shared Rockware seed
     // site) so flipping the policy cannot perturb other suites.
     const ROLE_ONLY_EMAIL = "wcgrant-policy-role@test.local";
@@ -397,15 +396,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("workcenter grant authorization 
       await prisma.user.deleteMany({ where: { email: { in: [ROLE_ONLY_EMAIL, ROLE_GRANT_EMAIL] } } });
     });
 
-    it("under ALL (default) floor reads are site-wide", async () => {
+    it("under ALL (default) Plant Members still have no floor reads", async () => {
       const access = await meAccess(roleOnlyToken);
-      expect(access.permissions).toContain("status:read");
-      expect(access.permissions).toContain("calls:read");
-      const calls = await rpcCall(server, "call/listActive", { siteId: siteB.id }, roleOnlyToken);
-      expect(calls.statusCode).toBe(200);
+      expect(access.permissions).toEqual(["planning:read"]);
+      const workcenters = await rpcCall(server, "workcenter/list", { siteId: siteB.id }, roleOnlyToken);
+      expect(workcenters.statusCode).toBe(403);
     });
 
-    it("flipping to GRANTS_REQUIRED takes effect on the next request", async () => {
+    it("flipping to GRANTS_REQUIRED does not change permission scopes", async () => {
       const flip = await rpcCall(
         server,
         "site/updateSettings",
@@ -414,24 +412,20 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("workcenter grant authorization 
       );
       expect(flip.statusCode).toBe(200);
 
-      // Same tokens, no re-login: floor reads gone from the flat list…
+      // Neither compatibility setting grants site production authority.
       const roleOnly = await meAccess(roleOnlyToken);
-      expect(roleOnly.permissions).not.toContain("status:read");
-      expect(roleOnly.permissions).not.toContain("calls:read");
-      expect(roleOnly.permissions).toContain("facility:read");
-      expect(roleOnly.permissions).toContain("job:read");
+      expect(roleOnly.permissions).toEqual(["planning:read"]);
 
       // …but a grant keeps them per workcenter.
       const withGrant = await meAccess(roleGrantToken);
-      expect(withGrant.permissions).not.toContain("status:read");
+      expect(withGrant.permissions).not.toContain("production:read");
       expect(withGrant.workcenterGrants).toHaveLength(1);
-      expect(withGrant.workcenterGrants[0]?.permissions).toContain("status:read");
-      expect(withGrant.workcenterGrants[0]?.permissions).toContain("calls:read");
+      expect(withGrant.workcenterGrants[0]?.permissions).toContain("production:read");
 
       // Floor list endpoints: FORBIDDEN without a grant, narrowed 200 with one.
-      const denied = await rpcCall(server, "call/listActive", { siteId: siteB.id }, roleOnlyToken);
+      const denied = await rpcCall(server, "workcenter/list", { siteId: siteB.id }, roleOnlyToken);
       expect(denied.statusCode).toBe(403);
-      const narrowed = await rpcCall(server, "call/listActive", { siteId: siteB.id }, roleGrantToken);
+      const narrowed = await rpcCall(server, "workcenter/list", { siteId: siteB.id }, roleGrantToken);
       expect(narrowed.statusCode).toBe(200);
     });
   });

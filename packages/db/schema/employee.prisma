@@ -47,6 +47,7 @@ model Employee {
 
   logonSessions StationLogonSession[]
   openedCalls   Call[]                @relation("CallOpenedBy")
+  authoredShiftComments ShiftComment[]
   closedCalls   Call[]                @relation("CallClosedBy")
 
   startedModeLogs StationModeLog[] @relation("ModeLogStartedBy")

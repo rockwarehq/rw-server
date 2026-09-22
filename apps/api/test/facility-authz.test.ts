@@ -222,9 +222,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
   });
 
   describe("permission tiers within the granted site", () => {
-    it("read-only user can read but not write stations", async () => {
+    it("Plant Members can read the structural directory but cannot configure stations", async () => {
       const read = await rpcCall(server, "station/get", { id: stationA.id }, readerToken);
-      expect(read.statusCode).toBe(200);
+      expect(read.statusCode).toBe(403);
+      const directory = await rpcCall(server, "site/tree", { siteId: siteA.id }, readerToken);
+      expect(directory.statusCode).toBe(200);
       const write = await rpcCall(server, "station/update", { id: stationA.id, description: "nope" }, readerToken);
       expect(write.statusCode).toBe(403);
       const remove = await rpcCall(server, "station/delete", { id: stationA.id }, readerToken);
@@ -294,12 +296,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
       expect(stateLogs.statusCode).toBe(403);
     });
 
-    it("changeJob requires job:write", async () => {
+    it("changeJob requires production:write", async () => {
       const res = await rpcCall(server, "station/changeJob", { stationId: stationA.id, jobId: null }, readerToken);
       expect(res.statusCode).toBe(403);
     });
 
-    it("assignDowntimeReason resolves the entry's site and enforces status:write scope", async () => {
+    it("assignDowntimeReason resolves the entry's site and enforces production:write scope", async () => {
       // Entry belongs to site B; the FA grant covers site A only.
       const outOfScope = await rpcCall(
         server,

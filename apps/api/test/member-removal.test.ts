@@ -145,8 +145,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
         workspaceId,
         name: CUSTOM_SITE_ADMIN_ROLE,
         scope: "SITE",
-        // facility:read is what makes a site "accessible" for switch-site
-        permissions: ["facility:read", "user:read", "user:admin"],
+        // Site entry follows membership, independently of production authority.
+        permissions: ["plant:admin"],
         isSystem: false,
       },
     });
@@ -155,7 +155,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
         workspaceId,
         name: HYBRID_WS_ROLE,
         scope: "WORKSPACE",
-        permissions: ["dashboard:read"],
+        permissions: ["planning:read"],
         isSystem: false,
       },
     });
@@ -204,11 +204,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
     await server.close();
   });
 
-  it("seeded Plant Admin holds site-scoped user:admin", async () => {
+  it("seeded Plant Admin holds site-scoped plant:admin", async () => {
     const role = await prisma.role.findFirstOrThrow({
       where: { workspaceId, name: "Plant Admin", scope: "SITE", isSystem: true },
     });
-    expect(role.permissions).toContain("user:admin");
+    expect(role.permissions).toContain("plant:admin");
   });
 
   it("factory admin removes a site-only member; membership cascades away", async () => {
@@ -266,7 +266,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
     expect(res.json()).toEqual({ error: "Cannot remove yourself" });
   });
 
-  it("tightened org route: site-scoped user:admin cannot delete workspace memberships", async () => {
+  it("site-scoped plant:admin cannot delete workspace memberships", async () => {
     const res = await removeMember(customAdminToken, otherSiteUserId);
     expect(res.statusCode).toBe(403);
 
@@ -279,7 +279,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
     await prisma.user.deleteMany({ where: { email: "scoped-target@test.local" } });
   });
 
-  it("workspace-scoped user:admin still removes members org-wide", async () => {
+  it("workspace-scoped plant:admin removes members org-wide", async () => {
     const res = await removeMember(adminToken, otherSiteUserId);
     expect(res.statusCode).toBe(200);
     const membership = await prisma.workspaceMembership.findUnique({

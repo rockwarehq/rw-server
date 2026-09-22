@@ -1,17 +1,18 @@
 import prisma from "@rw/db";
+import type { SavedView } from "@rw/db";
 
 // Saved page views (Linear-style, ADR 0003 error contract): a view's saved
 // definition is its shared default. Visibility "PRIVATE" = creator only;
-// "WORKSPACE" = readable by every workspace member. Publishing new config to
-// a WORKSPACE view ("Set default for everyone") is open to any workspace
-// member; identity changes (name/description/visibility) and delete are
-// creator-only (ShiftComment author-guard precedent).
+// "WORKSPACE" = shared within the authorized page context. The RPC checks
+// underlying read access and configuration authority for shared publishing;
+// this service enforces private ownership and creator-only identity/delete rules.
 
 // ============================================================================
 // Types
 // ============================================================================
 
 export type SavedViewVisibility = "PRIVATE" | "WORKSPACE";
+export type SavedViewContext = Pick<SavedView, "id" | "siteId" | "page" | "scopeId" | "visibility" | "createdById">;
 
 export interface CreateSavedViewInput {
   siteId: string;
@@ -76,6 +77,9 @@ async function loadForMutation(id: string, workspaceId: string) {
     where: { id },
     select: {
       id: true,
+      siteId: true,
+      page: true,
+      scopeId: true,
       deletedAt: true,
       visibility: true,
       createdById: true,
@@ -89,6 +93,17 @@ async function loadForMutation(id: string, workspaceId: string) {
     return { error: "Saved view does not belong to this workspace", code: "WORKSPACE_MISMATCH" };
   }
   return { current };
+}
+
+/** Resolve persisted authorization context before a mutation; page/site/scope are immutable. */
+export async function getContext(
+  id: string,
+  workspaceId: string,
+): Promise<{ data: SavedViewContext } | { error: string; code: string }> {
+  const loaded = await loadForMutation(id, workspaceId);
+  if (loaded.error !== undefined) return { error: loaded.error, code: loaded.code };
+  const { site, deletedAt, ...context } = loaded.current;
+  return { data: context };
 }
 
 // ============================================================================
@@ -148,9 +163,8 @@ export async function update(id: string, input: UpdateSavedViewInput, workspaceI
 
   const isOwner = current.createdById === input.actorId;
 
-  // PRIVATE views are entirely owner-only. On WORKSPACE views any member may
-  // publish config ("Set default for everyone"); identity changes stay with
-  // the creator.
+  // PRIVATE views are entirely owner-only. Authorized shared publishers may
+  // update config; identity changes stay with the creator.
   const changesIdentity = input.name !== undefined || input.description !== undefined || input.visibility !== undefined;
   if (current.visibility === "PRIVATE" && !isOwner) {
     return { error: "Only the creator can modify this view", code: "FORBIDDEN" };

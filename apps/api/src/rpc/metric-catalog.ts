@@ -8,7 +8,7 @@ import {
 } from "@rw/services/metric-catalog/index";
 import { throwServiceError } from "./errors.js";
 import { userOrDisplayRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
+import { authorizeList } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
 
 const metricCatalogItemSchema = z.object({
@@ -36,7 +36,7 @@ export const list = userOrDisplayRequired
   .output(listOutputSchema)
   .handler(async ({ context, input }) => {
     const { workspaceId } = grant(
-      await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.siteId } }),
+      await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
     );
 
     const result = await listMetrics({

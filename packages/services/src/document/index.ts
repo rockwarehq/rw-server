@@ -334,9 +334,10 @@ export async function completeUpload(documentId: string) {
   return { data: updated };
 }
 
-export async function list(input: ListDocumentsInput = {}) {
+export async function list(input: ListDocumentsInput = {}, access?: { siteId: string | null; documentIds: string[] }) {
   const { siteId, parentId = null, kind, includePending = false, q, limit = 50, offset = 0, linkedTo } = input;
   const where: Prisma.DocumentWhereInput = {
+    ...(access ? { AND: [{ siteId: access.siteId, id: { in: access.documentIds } }] } : {}),
     deletedAt: null,
     // Linked-document queries span the whole folder tree.
     ...(linkedTo ? {} : { parentId }),
@@ -512,7 +513,7 @@ export async function link(documentId: string, targetType: DocumentTargetType, t
   const target = await resolveTargetSite(targetType, targetId);
   if ("error" in target) return target;
 
-  if (document.siteId && document.siteId !== target.siteId) {
+  if (document.siteId !== null && document.siteId !== target.siteId) {
     return { error: "Document and target must belong to the same site", code: "SITE_MISMATCH" };
   }
 

@@ -361,6 +361,20 @@ enum ShiftAmendmentStatus {
   FAILED
 }
 
+enum ShiftCommentAuthorKind {
+  UNKNOWN
+  USER
+  EMPLOYEE
+  DISPLAY
+}
+
+enum OperatorAssurance {
+  TERMINAL
+  IDENTIFIED
+  VERIFIED
+  ACCOUNT
+}
+
 model ShiftComment {
   id String @id @default(uuid()) @db.Uuid
 
@@ -380,7 +394,25 @@ model ShiftComment {
   text String
 
   createdById String? @db.Uuid
-  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy   User?   @relation("ShiftCommentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  /// Immutable identity, retained even if a referenced person/device is removed.
+  authorKind ShiftCommentAuthorKind @default(UNKNOWN)
+  authorId   String? @db.Uuid
+  authorEmployeeId String? @db.Uuid
+  authorEmployee Employee? @relation(fields: [authorEmployeeId], references: [id], onDelete: SetNull)
+  authorDisplayId String? @db.Uuid
+  authorDisplay Display? @relation("ShiftCommentAuthorDisplay", fields: [authorDisplayId], references: [id], onDelete: SetNull)
+
+  /// Source is provenance, never ownership of a person-authored comment.
+  sourceDisplayId String? @db.Uuid
+  sourceDisplay Display? @relation("ShiftCommentSourceDisplay", fields: [sourceDisplayId], references: [id], onDelete: SetNull)
+  operatorSessionId String? @db.Uuid
+  authorEmployeeVersionId String? @db.Uuid
+  authorAssurance OperatorAssurance?
+
+  deletedById String? @db.Uuid
+  deletedBy User? @relation("ShiftCommentDeletedBy", fields: [deletedById], references: [id], onDelete: Restrict)
 
   createdAt DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt DateTime  @updatedAt @db.Timestamptz(3)
@@ -389,6 +421,8 @@ model ShiftComment {
   @@index([shiftInstanceId])
   @@index([shiftInstanceId, stationId])
   @@index([stationId])
+  @@index([authorKind, authorId])
+  @@index([sourceDisplayId])
 }
 
 /// Supervisor sign-off ("post") of a shift recap for one workcenter.

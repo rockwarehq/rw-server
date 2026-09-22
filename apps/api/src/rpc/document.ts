@@ -2,10 +2,17 @@ import { z } from "zod";
 import { ORPCError } from "@orpc/server";
 import type { DocumentTargetType } from "@rw/db";
 import * as documents from "@rw/services/document/index";
+import {
+  authorizeDocument,
+  authorizeDocumentTarget,
+  authorizeDocumentTree,
+  readableDocumentIds,
+} from "@rw/services/document/access-scope";
+import type { IAMContext } from "@rw/auth/context";
 import { storageConfig } from "../config.js";
 import { Principal } from "../auth/index.js";
 import { authRequired, displayRequired, userOrDisplayRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
+import { authorize, authorizeReferenceRead } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
 import { throwServiceError } from "./errors.js";
 
@@ -121,35 +128,23 @@ async function assertDisplayCanAccessDocument(
 }
 
 export const createFolder = authRequired.input(createFolderInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, {
-      permission: "facility:write",
-      scope: input.siteId ? { kind: "site", siteId: input.siteId } : { kind: "anySite" },
-    }),
-  );
+  const { workspaceId, siteId } = await authorizeCreate(context.iam, input);
 
-  const result = await documents.createFolder({ ...input, workspaceId });
+  const result = await documents.createFolder({ ...input, siteId: siteId ?? null, workspaceId });
   if ("error" in result) throwServiceError(result);
   return result.data;
 });
 
 export const createUpload = authRequired.input(createUploadInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, {
-      permission: "facility:write",
-      scope: input.siteId ? { kind: "site", siteId: input.siteId } : { kind: "anySite" },
-    }),
-  );
+  const { workspaceId, siteId } = await authorizeCreate(context.iam, input);
 
-  const result = await documents.createUpload({ ...input, workspaceId });
+  const result = await documents.createUpload({ ...input, siteId: siteId ?? null, workspaceId });
   if ("error" in result) throwServiceError(result);
   return result.data;
 });
 
 export const completeUpload = authRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "document", id: input.documentId } }),
-  );
+  grant(await authorizeDocument(context.iam, input.documentId, true));
 
   const result = await documents.completeUpload(input.documentId);
   if (result.error !== undefined) throwServiceError(result);
@@ -157,14 +152,16 @@ export const completeUpload = authRequired.input(documentIdInputSchema).handler(
 });
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
+  const siteId = input.siteId === undefined ? context.iam.siteId : input.siteId;
+  if (siteId === undefined) throw new ORPCError("BAD_REQUEST", { message: "Site context required" });
   grant(
-    await authorize(context.iam, {
-      permission: "facility:read",
-      scope: input.siteId ? { kind: "site", siteId: input.siteId } : { kind: "anySite" },
-    }),
+    siteId === null
+      ? await authorize(context.iam, { permission: "configuration:read", scope: { kind: "workspace" } })
+      : await authorizeReferenceRead(context.iam, { scope: { kind: "site", siteId } }),
   );
-
-  return documents.list(input);
+  if (input.parentId) assertDocumentSite(grant(await authorizeDocument(context.iam, input.parentId)), siteId);
+  if (input.linkedTo) assertDocumentSite(grant(await authorizeDocumentTarget(context.iam, input.linkedTo)), siteId);
+  return documents.list({ ...input, siteId }, { siteId, documentIds: await readableDocumentIds(context.iam, siteId) });
 });
 
 export const get = userOrDisplayRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
@@ -176,9 +173,7 @@ export const get = userOrDisplayRequired.input(documentIdInputSchema).handler(as
     return result.data;
   }
 
-  grant(
-    await authorize(context.iam, { permission: "facility:read", scope: { kind: "document", id: input.documentId } }),
-  );
+  grant(await authorizeDocument(context.iam, input.documentId));
 
   const result = await documents.getById(input.documentId, { includePending: true });
   if (!result) throw new ORPCError("NOT_FOUND", { message: "Document not found" });
@@ -190,9 +185,7 @@ export const download = userOrDisplayRequired.input(documentIdInputSchema).handl
   if (context.iam.principal === Principal.DISPLAY) {
     await assertDisplayCanAccessDocument(context, input.documentId);
   } else {
-    grant(
-      await authorize(context.iam, { permission: "facility:read", scope: { kind: "document", id: input.documentId } }),
-    );
+    grant(await authorizeDocument(context.iam, input.documentId));
   }
 
   const result = await documents.getDownloadUrl(input.documentId);
@@ -204,9 +197,7 @@ export const open = userOrDisplayRequired.input(documentIdInputSchema).handler(a
   if (context.iam.principal === Principal.DISPLAY) {
     await assertDisplayCanAccessDocument(context, input.documentId);
   } else {
-    grant(
-      await authorize(context.iam, { permission: "facility:read", scope: { kind: "document", id: input.documentId } }),
-    );
+    grant(await authorizeDocument(context.iam, input.documentId));
   }
 
   const result = await documents.getOpenUrl(input.documentId);
@@ -215,9 +206,17 @@ export const open = userOrDisplayRequired.input(documentIdInputSchema).handler(a
 });
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "document", id: input.documentId } }),
-  );
+  const scope = grant(await authorizeDocumentTree(context.iam, input.documentId));
+  if (input.parentId)
+    assertDocumentSite(grant(await authorizeDocument(context.iam, input.parentId, true)), scope.siteId ?? null);
+  if (input.parentId === null) {
+    grant(
+      await authorize(context.iam, {
+        permission: "configuration:write",
+        scope: scope.siteId ? { kind: "site", siteId: scope.siteId } : { kind: "workspace" },
+      }),
+    );
+  }
 
   const { documentId, ...updateData } = input;
   const result = await documents.update(documentId, updateData);
@@ -226,9 +225,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 });
 
 export const remove = authRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "facility:admin", scope: { kind: "document", id: input.documentId } }),
-  );
+  grant(await authorizeDocumentTree(context.iam, input.documentId));
 
   const result = await documents.remove(input.documentId);
   if (result.error !== undefined) throwServiceError(result);
@@ -236,9 +233,8 @@ export const remove = authRequired.input(documentIdInputSchema).handler(async ({
 });
 
 export const link = authRequired.input(documentLinkInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "document", id: input.documentId } }),
-  );
+  grant(await authorizeDocumentTree(context.iam, input.documentId));
+  grant(await authorizeDocumentTarget(context.iam, input, true));
 
   const result = await documents.link(input.documentId, input.targetType as DocumentTargetType, input.targetId);
   if ("error" in result) throwServiceError(result);
@@ -246,17 +242,32 @@ export const link = authRequired.input(documentLinkInputSchema).handler(async ({
 });
 
 export const unlink = authRequired.input(documentLinkInputSchema).handler(async ({ input, context }) => {
+  const scope = grant(await authorizeDocumentTree(context.iam, input.documentId));
+  grant(await authorizeDocumentTarget(context.iam, input, true));
+  // Removing the last target can broaden a document to plant-shared visibility.
   grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "document", id: input.documentId } }),
+    await authorize(context.iam, {
+      permission: "configuration:write",
+      scope: scope.siteId ? { kind: "site", siteId: scope.siteId } : { kind: "workspace" },
+    }),
   );
 
   return documents.unlink(input.documentId, input.targetType as DocumentTargetType, input.targetId);
 });
 
 export const listForTarget = authRequired.input(targetInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "facility:read", scope: { kind: "anySite" } }));
-
-  return documents.listForTarget(input.targetType as DocumentTargetType, input.targetId, getLabelFilter(input));
+  const scope = grant(await authorizeDocumentTarget(context.iam, input));
+  const result = await documents.listForTarget(
+    input.targetType as DocumentTargetType,
+    input.targetId,
+    getLabelFilter(input),
+  );
+  const data = [];
+  for (const document of result.data) {
+    if (document.siteId !== null && document.siteId !== scope.siteId) continue;
+    if ((await authorizeDocument(context.iam, document.id)).ok) data.push(document);
+  }
+  return { data };
 });
 
 export const listForDisplayContext = displayRequired
@@ -264,3 +275,23 @@ export const listForDisplayContext = displayRequired
   .handler(async ({ input, context }) => {
     return documents.listForDisplayContext(getDisplayDocumentContext(context), getLabelFilter(input));
   });
+
+function assertDocumentSite(scope: { siteId?: string }, siteId: string | null) {
+  if ((scope.siteId ?? null) !== siteId) throw new ORPCError("FORBIDDEN", { message: "Document scope mismatch" });
+}
+
+async function authorizeCreate(iam: IAMContext, input: { siteId?: string | null; parentId?: string | null }) {
+  if (input.parentId) {
+    const parent = grant(await authorizeDocument(iam, input.parentId, true));
+    if (input.siteId !== undefined) assertDocumentSite(parent, input.siteId);
+    return parent;
+  }
+  const siteId = input.siteId === undefined ? iam.siteId : input.siteId;
+  if (siteId === undefined) throw new ORPCError("BAD_REQUEST", { message: "Site context required" });
+  return grant(
+    await authorize(iam, {
+      permission: "configuration:write",
+      scope: siteId ? { kind: "site", siteId } : { kind: "workspace" },
+    }),
+  );
+}

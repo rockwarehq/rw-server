@@ -17,6 +17,8 @@ export interface UpdateWorkcenterInput {
 }
 
 export interface ListWorkcentersFilter {
+  workspaceId?: string;
+  workcenterIds?: string[];
   siteId?: string;
   parentId?: string | null;
   name?: string;
@@ -85,9 +87,11 @@ export async function create(input: CreateWorkcenterInput) {
  * List workcenters with optional filtering
  */
 export async function list(filter: ListWorkcentersFilter = {}) {
-  const { siteId, parentId, name, limit = 50, offset = 0 } = filter;
+  const { workspaceId, workcenterIds, siteId, parentId, name, limit = 50, offset = 0 } = filter;
 
   const where: Record<string, unknown> = {};
+  if (workspaceId) where.site = { workspaceId };
+  if (workcenterIds) where.id = { in: workcenterIds };
 
   if (siteId) {
     where.siteId = siteId;

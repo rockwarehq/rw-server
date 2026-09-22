@@ -4,6 +4,7 @@ import { hashPassword } from "@rw/auth/password";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
 import { rpcCall } from "./helpers/rpc-call.js";
+import { withLegacyLabelSchema } from "./helpers/label-migration.js";
 
 const PREFIX = "lbltest";
 const OFFICE_EMAIL = "lbltest-office@test.local";
@@ -21,7 +22,7 @@ const listRows = (res: { json: unknown }) => (res.json as { data: Row[] }).data;
 // least one of the filter's labels are eligible — enforced on assignment
 // (changeJob, downtime reason, scrap reason). Pickers narrow client-side:
 // station reads carry the filters, the client passes the filter's labels as
-// labelIds. Managing the label list needs settings:write; tagging a record
+// labelIds. Managing the label list needs configuration:write; tagging a record
 // only needs permission to edit that record.
 describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tier 2)", () => {
   let server: TestServer;
@@ -74,16 +75,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tie
       select: { id: true },
     });
 
-    // Custom role: job:write without settings:write — a Plant Member can't tag
+    // Custom role: production:write without configuration:write — a Plant Member can't tag
     // (no writes at all) and a Plant Admin could also create labels.
     const officeRole = await prisma.role.upsert({
       where: { workspaceId_name_scope: { workspaceId, name: `${PREFIX}-job-writer`, scope: "SITE" } },
-      update: { permissions: ["facility:read", "job:read", "job:write"] },
+      update: { permissions: ["production:write"] },
       create: {
         workspaceId,
         name: `${PREFIX}-job-writer`,
         scope: "SITE",
-        permissions: ["facility:read", "job:read", "job:write"],
+        permissions: ["production:write"],
       },
       select: { id: true },
     });
@@ -118,7 +119,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tie
   }, 30_000);
 
   afterAll(async () => {
-    const stationIds = [stationOpen.id, stationFiltered.id];
+    const stationIds = [stationOpen?.id, stationFiltered?.id].filter((id): id is string => !!id);
     const jobIds = (
       await prisma.job.findMany({ where: { versions: { some: { name: { startsWith: PREFIX } } } }, select: { id: true } })
     ).map((j) => j.id);
@@ -138,7 +139,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tie
     await prisma.role.deleteMany({ where: { name: { startsWith: PREFIX }, isSystem: false } });
     await prisma.workspaceMembership.deleteMany({ where: { user: { email: OFFICE_EMAIL } } });
     await prisma.user.deleteMany({ where: { email: OFFICE_EMAIL } });
-    await prisma.site.deleteMany({ where: { id: siteB.id } });
+    await prisma.site.deleteMany({ where: { name: `${PREFIX} Site B` } });
     await server.close();
   });
 
@@ -422,9 +423,29 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tie
     expect((miss.json as { data: unknown[] }).data.length).toBe(0);
   });
 
-  it("the rename migration kept existing rows: the old classification is now a label", async () => {
-    const carried = await prisma.label.findFirst({ where: { name: "Night Crew" }, select: { id: true } });
-    expect(carried).not.toBeNull();
+  it("the label migration preserves legacy ids, site boundaries, collisions, and attachments", async () => {
+    await withLegacyLabelSchema(async (client, ids, migrate) => {
+      await migrate();
+      const labels = (await client.query('SELECT "id", "name", "siteId", "createdAt" FROM "Label"')).rows;
+      expect(labels).toHaveLength(4);
+      expect(labels).toEqual(expect.arrayContaining([
+        { id: ids.stationClass, name: "Night Crew", siteId: ids.siteA, createdAt: new Date("2020-01-02T00:00:00Z") },
+        { id: ids.otherSiteClass, name: "Night Crew", siteId: ids.siteB, createdAt: new Date("2020-01-02T00:00:00Z") },
+        { id: ids.toolClass, name: "Fixtures", siteId: ids.siteA, createdAt: new Date("2020-01-02T00:00:00Z") },
+        { id: ids.process, name: "Molding", siteId: ids.siteA, createdAt: new Date("2020-01-02T00:00:00Z") },
+      ]));
+      expect((await client.query('SELECT "A", "B" FROM "_LabelToTool"')).rows).toEqual(expect.arrayContaining([
+        { A: ids.stationClass, B: ids.toolA }, // Colliding tool classification maps to the existing label.
+        { A: ids.toolClass, B: ids.toolB },
+      ]));
+      expect((await client.query('SELECT "A", "B" FROM "_LabelToStation"')).rows).toEqual(expect.arrayContaining([
+        { A: ids.stationClass, B: ids.station }, { A: ids.process, B: ids.station },
+      ]));
+      expect((await client.query('SELECT "A", "B" FROM "_JobToLabel"')).rows).toEqual([{ A: ids.job, B: ids.process }]);
+      expect((await client.query('SELECT "A", "B" FROM "_LabelToStatusReason"')).rows).toEqual([{ A: ids.process, B: ids.statusReason }]);
+      expect((await client.query('SELECT "A", "B" FROM "_ItemDispositionReasonToLabel"')).rows).toEqual([{ A: ids.scrapReason, B: ids.process }]);
+      expect((await client.query(`SELECT to_regclass('"StationClassification"') AS legacy`)).rows[0].legacy).toBeNull();
+    });
   });
 
   it("a label used by a station filter cannot be deleted; a free label detaches everywhere", async () => {

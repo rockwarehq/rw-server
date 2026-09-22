@@ -1,10 +1,9 @@
 import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
-import { workspace } from "../services/account/index.js";
+import { workspace, user } from "../services/account/index.js";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
 import { requirePermission } from "../plugins/require-permission.js";
 import { hasPermission } from "@rw/auth/iam/index";
-import { authorize } from "@rw/auth/iam/policy";
 import { replyPolicyDenial } from "./authz.js";
 
 const workspaceSchema = {
@@ -60,6 +59,7 @@ const roleAssignmentSchema = {
   properties: {
     id: { type: "string", format: "uuid" },
     siteId: { type: ["string", "null"], format: "uuid" },
+    workcenterId: { type: ["string", "null"], format: "uuid" },
     site: {
       type: ["object", "null"],
       properties: {
@@ -73,7 +73,7 @@ const roleAssignmentSchema = {
         id: { type: "string", format: "uuid" },
         name: { type: "string" },
         isSystem: { type: "boolean" },
-        scope: { type: "string", enum: ["WORKSPACE", "SITE"] },
+        scope: { type: "string", enum: ["WORKSPACE", "SITE", "WORKCENTER"] },
         permissions: { type: "array", items: { type: "string" } },
       },
     },
@@ -199,6 +199,8 @@ const updateRoleBodySchema = {
   type: "object",
   properties: {
     roleId: { type: "string", format: "uuid" },
+    siteId: { type: "string", format: "uuid" },
+    workcenterId: { type: "string", format: "uuid" },
   },
   required: ["roleId"],
 } as const satisfies JSONSchema;
@@ -276,14 +278,14 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       }
 
       // Spinning up another workspace is an org-level privilege: require
-      // settings:admin in the caller's workspace. A token without workspace
+      // owner:all in the caller's workspace. A token without workspace
       // context cannot prove it, so it is denied (fail-closed).
       if (!workspaceId) {
         return reply.status(401).send({ error: "No workspace context" });
       }
-      const ok = await hasPermission(userId, "settings:admin", { workspaceId });
+      const ok = await hasPermission(userId, "owner:all", { workspaceId });
       if (!ok) {
-        return reply.status(403).send({ error: "forbidden", required: "settings:admin" });
+        return reply.status(403).send({ error: "forbidden", required: "owner:all" });
       }
 
       if (request.body.slug && (await workspace.slugExists(request.body.slug))) {
@@ -332,11 +334,14 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
     },
   });
 
-  // Update workspace (requires settings:write)
+  // Update workspace (requires workspace plant:admin)
   fastify.route({
     method: "PUT",
     url: "/:id",
-    preHandler: [fastify.verifyAccessToken, requirePermission("settings:write", { workspaceParam: "id" })],
+    preHandler: [
+      fastify.verifyAccessToken,
+      requirePermission("plant:admin", { workspaceParam: "id", scope: "workspace" }),
+    ],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -357,11 +362,14 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
     },
   });
 
-  // Delete workspace (requires settings:admin — ownership-level destructive op)
+  // Delete workspace (requires owner:all)
   fastify.route({
     method: "DELETE",
     url: "/:id",
-    preHandler: [fastify.verifyAccessToken, requirePermission("settings:admin", { workspaceParam: "id" })],
+    preHandler: [
+      fastify.verifyAccessToken,
+      requirePermission("owner:all", { workspaceParam: "id", scope: "workspace" }),
+    ],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -408,18 +416,24 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       if (!isMember) {
         return reply.status(403).send({ error: "Not a member of this workspace" });
       }
-      const auth = await authorize(request.iam, { permission: "user:read", scope: { kind: "anySite" } });
+      if (request.params.id !== request.iam?.workspaceId) {
+        return reply.status(403).send({ error: "Not in requested workspace context" });
+      }
+      const auth = await user.authorizePopulation(request.iam);
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
-      return workspace.listMembers(request.params.id);
+      return workspace.listMembers(auth.workspaceId, auth.siteId);
     },
   });
 
-  // Add workspace member (requires user:write)
+  // Add workspace member (requires workspace plant:admin)
   fastify.route({
     method: "POST",
     url: "/:id/members",
-    preHandler: [fastify.verifyAccessToken, requirePermission("user:write", { workspaceParam: "id" })],
+    preHandler: [
+      fastify.verifyAccessToken,
+      requirePermission("plant:admin", { workspaceParam: "id", scope: "workspace" }),
+    ],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -440,16 +454,23 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       }
 
       try {
-        const member = await workspace.addMember(request.params.id, request.body.userId, request.body.roleId);
+        const member = await workspace.addMember(
+          request.params.id,
+          request.body.userId,
+          request.body.roleId,
+          (request.iam as { id: string }).id,
+        );
         return reply.status(201).send(member);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Invalid role";
-        return reply.status(400).send({ error: message });
+        return reply
+          .status(message === "Forbidden" || message.startsWith("Missing permission:") ? 403 : 400)
+          .send({ error: message });
       }
     },
   });
 
-  // Update member role (requires user:write or user:admin)
+  // Update member role (requires plant:admin at the assignment's scope)
   fastify.route({
     method: "PUT",
     url: "/:id/members/:userId",
@@ -482,8 +503,9 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
         actorUserId: currentUserId,
         targetUserId: request.params.userId,
         workspaceId,
-        siteId: request.iam?.siteId,
+        siteId: request.body.siteId ?? (request.body.workcenterId ? undefined : request.iam?.siteId),
         roleId: request.body.roleId,
+        workcenterId: request.body.workcenterId,
       });
 
       if (result.success) {
@@ -504,14 +526,14 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
     },
   });
 
-  // Remove member (requires workspace-scoped user:admin — this deletes the
+  // Remove member (requires workspace-scoped plant:admin — this deletes the
   // whole membership across every site, so a site-scoped grant must not pass)
   fastify.route({
     method: "DELETE",
     url: "/:id/members/:userId",
     preHandler: [
       fastify.verifyAccessToken,
-      requirePermission("user:admin", { workspaceParam: "id", scope: "workspace" }),
+      requirePermission("plant:admin", { workspaceParam: "id", scope: "workspace" }),
     ],
     schema: {
       tags: ["workspaces"],
@@ -547,18 +569,19 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       if (result.error === "MEMBER_NOT_FOUND") {
         return reply.status(404).send({ error: "Member not found" });
       }
+      if (result.error === "FORBIDDEN") return reply.status(403).send({ error: "Owner permission required" });
       return reply.status(400).send({ error: "Cannot remove the last workspace owner" });
     },
   });
 
   // Remove a member's access to the caller's current site only (site-scoped
-  // user:admin suffices — the blast radius is one site). The site comes from
+  // plant:admin suffices — the blast radius is one site). The site comes from
   // the token, mirroring PUT /:id/members/:userId. If no role assignments
   // remain afterwards, the membership itself is removed (see removeSiteAccess).
   fastify.route({
     method: "DELETE",
     url: "/:id/members/:userId/site-access",
-    preHandler: [fastify.verifyAccessToken, requirePermission("user:admin", { scope: "site" })],
+    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { scope: "site" })],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -597,6 +620,8 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
         return { success: true };
       }
       switch (result.error) {
+        case "FORBIDDEN":
+          return reply.status(403).send({ error: "Owner permission required" });
         case "MEMBER_NOT_FOUND":
           return reply.status(404).send({ error: "Member not found" });
         case "NO_SITE_ACCESS":

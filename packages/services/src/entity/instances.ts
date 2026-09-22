@@ -10,6 +10,7 @@ import { SYSTEM_ENTITY_KEYS } from "./registry.js";
 import { publishEntityEvent } from "./events.js";
 import { errorResult, type EntityScope, type ListResult, type ServiceResult } from "./types.js";
 import { asValueRecord, validateInstanceValues } from "./validation.js";
+import { stationReadWhere } from "./access-scope.js";
 
 const instanceInclude = {
   schema: {
@@ -109,6 +110,7 @@ async function listSystemInstances(
   if (key === SYSTEM_ENTITY_KEYS.Workcenter) {
     const where = {
       siteId: scope.siteId,
+      ...(scope.workcenterIds ? { id: { in: [...scope.workcenterIds] } } : {}),
       site: { workspaceId: scope.workspaceId },
       ...(name ? { name: { contains: name, mode: "insensitive" as const } } : {}),
     };
@@ -123,7 +125,10 @@ async function listSystemInstances(
           name: workcenter.name,
           description: workcenter.description,
           siteId: workcenter.siteId,
-          parentId: workcenter.parentId,
+          parentId:
+            !scope.workcenterIds || (workcenter.parentId && scope.workcenterIds.includes(workcenter.parentId))
+              ? workcenter.parentId
+              : null,
         }),
       ),
       total,
@@ -134,7 +139,7 @@ async function listSystemInstances(
 
   if (key === SYSTEM_ENTITY_KEYS.Station) {
     const where = {
-      siteId: scope.siteId,
+      ...stationReadWhere(scope),
       site: { workspaceId: scope.workspaceId },
       deletedAt: null,
       ...(name ? { name: { contains: name, mode: "insensitive" as const } } : {}),
@@ -343,8 +348,6 @@ async function listSystemInstances(
             pmLimit: tool.currentVersion?.pmLimit ?? null,
             pmWarn: tool.currentVersion?.pmWarn ?? null,
             cavityCount: tool.currentVersion?.cavityCount ?? null,
-            pmCount: tool.pmCount,
-            lifeCount: tool.lifeCount,
             siteId: tool.siteId,
             createdAt: tool.createdAt,
             updatedAt: tool.updatedAt,

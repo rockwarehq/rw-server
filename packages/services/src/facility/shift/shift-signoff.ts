@@ -1,4 +1,5 @@
-import prisma from "@rw/db";
+import prisma, { type Prisma } from "@rw/db";
+import { validateLocation } from "./shift-comment.js";
 
 /**
  * Shift recap sign-off ("post"): at most one ACTIVE sign-off per
@@ -9,6 +10,7 @@ import prisma from "@rw/db";
  */
 
 export interface GetShiftSignoffFilter {
+  siteId?: string;
   shiftInstanceId: string;
   workcenterId: string;
 }
@@ -45,11 +47,15 @@ const signoffSelect = {
   },
 } as const;
 
+type ShiftSignoffRecord = Prisma.ShiftSignoffGetPayload<{ select: typeof signoffSelect }>;
+type Result<T> = { data: T; error?: never; code?: never } | { data?: never; error: string; code: string };
+
 export async function get(filter: GetShiftSignoffFilter) {
   const signoff = await prisma.shiftSignoff.findFirst({
     where: {
       shiftInstanceId: filter.shiftInstanceId,
       workcenterId: filter.workcenterId,
+      siteId: filter.siteId,
       deletedAt: null,
     },
     select: signoffSelect,
@@ -58,28 +64,10 @@ export async function get(filter: GetShiftSignoffFilter) {
   return { data: signoff };
 }
 
-export async function create(input: CreateShiftSignoffInput) {
+export async function create(input: CreateShiftSignoffInput): Promise<Result<ShiftSignoffRecord>> {
   const { siteId, shiftInstanceId, workcenterId, postedById } = input;
-
-  const shiftInstance = await prisma.shiftInstance.findUnique({
-    where: { id: shiftInstanceId },
-    select: { id: true, siteId: true, workCenterId: true },
-  });
-
-  if (!shiftInstance) {
-    return { error: "Shift instance not found", code: "SHIFT_INSTANCE_NOT_FOUND" };
-  }
-
-  if (shiftInstance.siteId !== siteId) {
-    return { error: "Shift instance must belong to the specified site", code: "SITE_MISMATCH" };
-  }
-
-  if (shiftInstance.workCenterId && shiftInstance.workCenterId !== workcenterId) {
-    return {
-      error: "Shift instance is scoped to a different workcenter",
-      code: "WORKCENTER_MISMATCH",
-    };
-  }
+  const invalid = await validateLocation(input);
+  if (invalid) return invalid;
 
   const existing = await prisma.shiftSignoff.findUnique({
     where: { shiftInstanceId_workcenterId: { shiftInstanceId, workcenterId } },

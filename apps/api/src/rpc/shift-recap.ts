@@ -1,11 +1,60 @@
 import { z } from "zod";
-import { authRequired, userOrDisplayRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
+import { ORPCError } from "@orpc/server";
+import { type IAMContext, Principal } from "@rw/auth/context";
+import { authorizeList } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
+import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import prisma from "@rw/db";
 import * as shiftCommentService from "@rw/services/facility/shift/shift-comment";
 import * as shiftSignoffService from "@rw/services/facility/shift/shift-signoff";
 import { throwServiceError } from "./errors.js";
+import {
+  authorizeTerminalAction,
+  hasProductionAdmin,
+  resolveTerminalActor,
+  terminalForbidden,
+} from "./terminal-authz.js";
+
+async function recapScope(
+  iam: IAMContext,
+  input: { siteId: string; workCenterId?: string; stationId?: string | null; shiftInstanceId?: string },
+  action: "production.read" | "comment.create" = "production.read",
+) {
+  if (iam.principal === Principal.USER)
+    grant(
+      await authorizeList(iam, {
+        permission: action === "production.read" ? "production:read" : "production:write",
+        requestedSiteId: input.siteId,
+      }),
+    );
+  const locationId = input.stationId || input.workCenterId;
+  if (!locationId) terminalForbidden("LOCATION_REQUIRED", "Select a station or workcenter");
+  const location = await authorizeTerminalAction(iam, {
+    action,
+    scope: { kind: input.stationId ? "station" : "workcenter", id: locationId },
+  });
+  if (location.siteId !== input.siteId || (input.workCenterId && input.workCenterId !== location.workcenterId))
+    terminalForbidden("LOCATION_MISMATCH", "Related location ids do not match");
+  if (input.shiftInstanceId) {
+    if (location.workcenterId) {
+      const invalid = await shiftCommentService.validateLocation({
+        siteId: location.siteId,
+        shiftInstanceId: input.shiftInstanceId,
+        workcenterId: location.workcenterId,
+        stationId: input.stationId,
+      });
+      if (invalid) throwServiceError(invalid);
+    } else {
+      const shift = await prisma.shiftInstance.findUnique({
+        where: { id: input.shiftInstanceId },
+        select: { siteId: true, workCenterId: true },
+      });
+      if (!shift || shift.siteId !== location.siteId || shift.workCenterId)
+        terminalForbidden("SHIFT_SCOPE_MISMATCH", "Shift does not match this location");
+    }
+  }
+  return location;
+}
 
 // ============================================================================
 // Shift Instance List (by site + business date + optional workcenter)
@@ -30,7 +79,7 @@ const shiftInstanceSelect = {
 export const shiftInstanceList = authRequired
   .input(shiftInstanceListInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "site", siteId: input.siteId } }));
+    await recapScope(context.iam, input);
 
     const rows = await prisma.shiftInstance.findMany({
       where: {
@@ -56,7 +105,7 @@ const currentShiftInstanceInputSchema = z.object({
 export const currentShiftInstance = userOrDisplayRequired
   .input(currentShiftInstanceInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "site", siteId: input.siteId } }));
+    await recapScope(context.iam, input);
 
     const now = new Date();
     const row = await prisma.shiftInstance.findFirst({
@@ -85,7 +134,7 @@ const metricBucketLogListInputSchema = z.object({
 export const metricBucketLogList = authRequired
   .input(metricBucketLogListInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
+    await recapScope(context.iam, input);
 
     // Get stations belonging to this workcenter
     const stations = await prisma.station.findMany({
@@ -165,7 +214,7 @@ const stationJobLogListInputSchema = z.object({
 export const stationJobLogList = authRequired
   .input(stationJobLogListInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
+    await recapScope(context.iam, input);
 
     // Look up the shift instance for its time boundaries
     const shiftInstance = await prisma.shiftInstance.findFirstOrThrow({
@@ -227,7 +276,7 @@ const jobMetricsListInputSchema = z.object({
 });
 
 export const jobMetricsList = authRequired.input(jobMetricsListInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
+  await recapScope(context.iam, input);
 
   // Get stations in workcenter to build path filter
   const stations = await prisma.station.findMany({
@@ -332,7 +381,8 @@ const downtimeLogListInputSchema = z.object({
 export const downtimeLogList = userOrDisplayRequired
   .input(downtimeLogListInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "status:read", scope: { kind: "site", siteId: input.siteId } }));
+    if (!input.stationId && !input.workCenterId) return [];
+    await recapScope(context.iam, input);
 
     const shiftInstance = await prisma.shiftInstance.findFirstOrThrow({
       where: { id: input.shiftInstanceId, siteId: input.siteId },
@@ -409,7 +459,7 @@ const scrapByReasonListInputSchema = z.object({
 export const scrapByReasonList = userOrDisplayRequired
   .input(scrapByReasonListInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
+    await recapScope(context.iam, input);
 
     const stations = await prisma.station.findMany({
       where: { siteId: input.siteId, workcenterId: input.workCenterId },
@@ -459,9 +509,10 @@ const commentListInputSchema = z.object({
 });
 
 export const commentList = userOrDisplayRequired.input(commentListInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "site", siteId: input.siteId } }));
+  await recapScope(context.iam, input);
 
   const result = await shiftCommentService.list({
+    siteId: input.siteId,
     shiftInstanceId: input.shiftInstanceId,
     workcenterId: input.workCenterId,
   });
@@ -474,47 +525,66 @@ const commentCreateInputSchema = z.object({
   workCenterId: z.uuid(),
   stationId: z.uuid().nullable().optional(),
   text: z.string().min(1).max(5000),
+  employeeId: z.uuid().optional(),
+  operatorSessionId: z.uuid().optional(),
 });
 
-export const commentCreate = authRequired.input(commentCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "site", siteId: input.siteId } }));
+export const commentCreate = userOrDisplayRequired
+  .input(commentCreateInputSchema)
+  .handler(async ({ input, context }) => {
+    const location = await recapScope(context.iam, input, "comment.create");
+    const actor = await resolveTerminalActor(context.iam, location, input);
 
-  const result = await shiftCommentService.create({
-    siteId: input.siteId,
-    shiftInstanceId: input.shiftInstanceId,
-    workcenterId: input.workCenterId,
-    stationId: input.stationId ?? null,
-    text: input.text,
-    createdById: context.iam.id,
+    const result = await shiftCommentService.create({
+      siteId: input.siteId,
+      shiftInstanceId: input.shiftInstanceId,
+      workcenterId: input.workCenterId,
+      stationId: input.stationId ?? null,
+      text: input.text,
+      actor,
+    });
+    if (result.error !== undefined) throwServiceError(result);
+    return result.data;
   });
-  if (result.error !== undefined) throwServiceError(result);
-  return result.data;
-});
 
 const commentUpdateInputSchema = z.object({
   id: z.uuid(),
   text: z.string().min(1).max(5000),
+  employeeId: z.uuid().optional(),
+  operatorSessionId: z.uuid().optional(),
 });
 
-export const commentUpdate = authRequired.input(commentUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "shiftComment", id: input.id } }));
+export const commentUpdate = userOrDisplayRequired
+  .input(commentUpdateInputSchema)
+  .handler(async ({ input, context }) => {
+    const location = await authorizeTerminalAction(context.iam, {
+      action: "comment.edit",
+      scope: { kind: "shiftComment", id: input.id },
+    });
+    const record = await shiftCommentService.getLocation(input.id);
+    if (!record) throw new ORPCError("NOT_FOUND", { message: "Shift comment not found" });
+    const invalid = await shiftCommentService.validateLocation(record);
+    if (invalid) throwServiceError(invalid);
+    const actor = await resolveTerminalActor(context.iam, location, input);
 
-  const result = await shiftCommentService.update(input.id, {
-    text: input.text,
-    actorId: context.iam.id,
+    const result = await shiftCommentService.update(input.id, {
+      text: input.text,
+      actor,
+    });
+    if (result.error !== undefined) throwServiceError(result);
+    return result.data;
   });
-  if (result.error !== undefined) throwServiceError(result);
-  return result.data;
-});
 
 const commentDeleteInputSchema = z.object({
   id: z.uuid(),
 });
 
 export const commentDelete = authRequired.input(commentDeleteInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "shiftComment", id: input.id } }));
-
-  const result = await shiftCommentService.remove(input.id, { actorId: context.iam.id });
+  const record = await shiftCommentService.getLocation(input.id);
+  if (!record) throw new ORPCError("NOT_FOUND", { message: "Shift comment not found" });
+  if (!(await hasProductionAdmin(context.iam, record)))
+    terminalForbidden("COMMENT_DELETE_ADMIN_REQUIRED", "Deleting comments requires administration of this location");
+  const result = await shiftCommentService.remove(input.id, { actorId: context.iam.id, iam: context.iam });
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
@@ -530,9 +600,10 @@ const signoffInputSchema = z.object({
 });
 
 export const signoffGet = userOrDisplayRequired.input(signoffInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "site", siteId: input.siteId } }));
+  await recapScope(context.iam, input);
 
   const result = await shiftSignoffService.get({
+    siteId: input.siteId,
     shiftInstanceId: input.shiftInstanceId,
     workcenterId: input.workCenterId,
   });
@@ -540,7 +611,7 @@ export const signoffGet = userOrDisplayRequired.input(signoffInputSchema).handle
 });
 
 export const signoffCreate = authRequired.input(signoffInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "site", siteId: input.siteId } }));
+  await recapScope(context.iam, input, "comment.create");
 
   const result = await shiftSignoffService.create({
     siteId: input.siteId,
@@ -553,7 +624,7 @@ export const signoffCreate = authRequired.input(signoffInputSchema).handler(asyn
 });
 
 export const signoffDelete = authRequired.input(signoffInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "site", siteId: input.siteId } }));
+  await recapScope(context.iam, input, "comment.create");
 
   const result = await shiftSignoffService.remove({
     siteId: input.siteId,

@@ -24,6 +24,8 @@ export interface MetricBucketScope {
   entityType: "STATION" | "WORKCENTER";
   entityId: string;
   granularity: "HOUR" | "SHIFT" | "DAY";
+  /** Server-injected grant predicate, never taken from a client selector. */
+  workcenterIds?: string[];
 }
 
 const rowSelect = {
@@ -109,6 +111,18 @@ function scopeWhere(scope: MetricBucketScope): Prisma.MetricBucketWhereInput & P
     entityType: scope.entityType,
     entityId: scope.entityId,
     granularity: scope.granularity,
+    ...(scope.workcenterIds
+      ? {
+          AND: [
+            {
+              OR: scope.workcenterIds.flatMap((id) => [
+                { path: { startsWith: `site.${scope.siteId}.workcenter.${id}.` } },
+                { path: { equals: `site.${scope.siteId}.workcenter.${id}` } },
+              ]),
+            },
+          ],
+        }
+      : {}),
   };
 }
 
@@ -228,7 +242,11 @@ async function fetchRange(
   if (page.pageToken) {
     const token = decodePageToken(page.pageToken);
     if (!token) return { error: "Malformed page token", code: "BAD_CURSOR" };
-    where.AND = [keysetAfter(token)];
+    // scopeWhere's predicates use only columns shared by live and archive.
+    const grantPredicates = (where.AND ?? []) as Array<
+      Prisma.MetricBucketWhereInput & Prisma.MetricBucketLogWhereInput
+    >;
+    where.AND = [...grantPredicates, keysetAfter(token)];
   }
 
   // Both tables share the keyset predicate and ordering, so merging the two

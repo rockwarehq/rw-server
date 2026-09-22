@@ -1,6 +1,16 @@
 import { z } from "zod";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { authorize, authorizeReferenceRead, scopeFilter } from "@rw/auth/iam/policy";
+import prisma from "@rw/db";
+import {
+  assertRelatedSite,
+  assertProductionLinks,
+  authorizeTerminalAction,
+  authorizeProductionList,
+  authorizeReferenceList,
+  authorizeSiteOperation,
+  terminalForbidden,
+} from "./terminal-authz.js";
 import { grant } from "./authz.js";
 import * as dispositionService from "@rw/services/inventory/disposition";
 import * as dispositionReasonService from "@rw/services/inventory/disposition-reason";
@@ -129,7 +139,7 @@ const logListInputSchema = z.object({
 export const dispositionCreate = authRequired
   .input(dispositionCreateInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "site", siteId: input.siteId } }));
+    await authorizeSiteOperation(context.iam, "configuration:write", { kind: "site", siteId: input.siteId });
 
     return unwrap(await dispositionService.create(input));
   });
@@ -137,12 +147,12 @@ export const dispositionCreate = authRequired
 export const dispositionList = userOrDisplayRequired
   .input(dispositionListInputSchema)
   .handler(async ({ input, context }) => {
-    const scope = grant(await authorizeList(context.iam, { permission: "job:read", requestedSiteId: input.siteId }));
+    const scope = await authorizeReferenceList(context.iam, input.siteId);
     return dispositionService.list({ ...input, ...scopeFilter(scope) });
   });
 
 export const dispositionGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "disposition", id: input.id } }));
+  grant(await authorizeReferenceRead(context.iam, { scope: { kind: "disposition", id: input.id } }));
 
   return unwrap(await dispositionService.getById(input.id), { notFoundMessage: "Disposition not found" });
 });
@@ -150,14 +160,14 @@ export const dispositionGet = authRequired.input(idInputSchema).handler(async ({
 export const dispositionUpdate = authRequired
   .input(dispositionUpdateInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "disposition", id: input.id } }));
+    await authorizeSiteOperation(context.iam, "configuration:write", { kind: "disposition", id: input.id });
 
     const { id, ...updateData } = input;
     return unwrap(await dispositionService.update(id, updateData));
   });
 
 export const dispositionDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:admin", scope: { kind: "disposition", id: input.id } }));
+  await authorizeSiteOperation(context.iam, "configuration:write", { kind: "disposition", id: input.id });
 
   const result = await dispositionService.remove(input.id);
   if (result.error) throwServiceError(result);
@@ -169,7 +179,7 @@ export const dispositionDelete = authRequired.input(idInputSchema).handler(async
 // ============================================================================
 
 export const reasonCreate = authRequired.input(reasonCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "site", siteId: input.siteId } }));
+  await authorizeSiteOperation(context.iam, "configuration:write", { kind: "site", siteId: input.siteId });
 
   const result = await dispositionReasonService.create(input);
   if ("error" in result && result.error) throwServiceError(result);
@@ -177,12 +187,12 @@ export const reasonCreate = authRequired.input(reasonCreateInputSchema).handler(
 });
 
 export const reasonList = userOrDisplayRequired.input(reasonListInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "job:read", requestedSiteId: input.siteId }));
+  const scope = await authorizeReferenceList(context.iam, input.siteId);
   return dispositionReasonService.list({ ...input, ...scopeFilter(scope) });
 });
 
 export const reasonGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "dispositionReason", id: input.id } }));
+  grant(await authorizeReferenceRead(context.iam, { scope: { kind: "dispositionReason", id: input.id } }));
 
   return unwrap(await dispositionReasonService.getById(input.id), {
     notFoundMessage: "Disposition reason not found",
@@ -190,7 +200,7 @@ export const reasonGet = authRequired.input(idInputSchema).handler(async ({ inpu
 });
 
 export const reasonUpdate = authRequired.input(reasonUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "dispositionReason", id: input.id } }));
+  await authorizeSiteOperation(context.iam, "configuration:write", { kind: "dispositionReason", id: input.id });
 
   const { id, ...updateData } = input;
   const result = await dispositionReasonService.update(id, updateData);
@@ -199,7 +209,7 @@ export const reasonUpdate = authRequired.input(reasonUpdateInputSchema).handler(
 });
 
 export const reasonDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:admin", scope: { kind: "dispositionReason", id: input.id } }));
+  await authorizeSiteOperation(context.iam, "configuration:write", { kind: "dispositionReason", id: input.id });
 
   const result = await dispositionReasonService.remove(input.id);
   if (result.error) throwServiceError(result);
@@ -211,7 +221,16 @@ export const reasonDelete = authRequired.input(idInputSchema).handler(async ({ i
 // ============================================================================
 
 export const logRecord = userOrDisplayRequired.input(logRecordInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "station", id: input.stationId } }));
+  const location = await authorizeTerminalAction(context.iam, {
+    action: "disposition.record",
+    scope: { kind: "station", id: input.stationId },
+  });
+  await assertProductionLinks(location, input);
+  await assertRelatedSite(location.siteId, [
+    { kind: "product", id: input.productId },
+    ...(input.jobId ? [{ kind: "job" as const, id: input.jobId }] : []),
+    ...(input.toolCavityId ? [{ kind: "toolCavity" as const, id: input.toolCavityId }] : []),
+  ]);
 
   const result = await dispositionLogService.record(input);
   if ("error" in result) throwServiceError(result, dispositionLogOverrides);
@@ -219,7 +238,50 @@ export const logRecord = userOrDisplayRequired.input(logRecordInputSchema).handl
 });
 
 export const logCreate = authRequired.input(logCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "station", id: input.stationId } }));
+  const location = await authorizeTerminalAction(context.iam, {
+    action: "disposition.record",
+    scope: { kind: "station", id: input.stationId },
+  });
+  await assertProductionLinks(location, input);
+  const productVersion = await prisma.productVersion.findUnique({
+    where: { id: input.productVersionId },
+    select: { productId: true },
+  });
+  if (!productVersion) terminalForbidden("PRODUCT_VERSION_INVALID", "Product version not found");
+  await assertRelatedSite(location.siteId, [{ kind: "product", id: productVersion.productId }]);
+  if (input.stationVersionId) {
+    const version = await prisma.stationVersion.findUnique({
+      where: { id: input.stationVersionId },
+      select: { stationId: true },
+    });
+    if (version?.stationId !== input.stationId)
+      terminalForbidden("STATION_VERSION_MISMATCH", "Station version belongs to another station");
+  }
+  if (input.jobProductVersionId) {
+    const version = await prisma.jobProductVersion.findUnique({
+      where: { id: input.jobProductVersionId },
+      select: { jobProduct: { select: { productId: true, jobId: true } } },
+    });
+    if (!version || version.jobProduct.productId !== productVersion.productId)
+      terminalForbidden("JOB_PRODUCT_VERSION_MISMATCH", "Job item does not match the product");
+    await assertRelatedSite(location.siteId, [{ kind: "job", id: version.jobProduct.jobId }]);
+  }
+  if (input.toolVersionId) {
+    const version = await prisma.toolVersion.findUnique({
+      where: { id: input.toolVersionId },
+      select: { toolId: true },
+    });
+    if (!version) terminalForbidden("TOOL_VERSION_INVALID", "Tool version not found");
+    await assertRelatedSite(location.siteId, [{ kind: "tool", id: version.toolId }]);
+  }
+  if (input.toolCavityVersionId) {
+    const version = await prisma.toolCavityVersion.findUnique({
+      where: { id: input.toolCavityVersionId },
+      select: { toolCavityId: true },
+    });
+    if (!version) terminalForbidden("TOOL_CAVITY_VERSION_INVALID", "Tool cavity version not found");
+    await assertRelatedSite(location.siteId, [{ kind: "toolCavity", id: version.toolCavityId }]);
+  }
 
   const result = await dispositionLogService.create(input);
   if ("error" in result) throwServiceError(result, dispositionLogOverrides);
@@ -227,18 +289,68 @@ export const logCreate = authRequired.input(logCreateInputSchema).handler(async 
 });
 
 export const logList = userOrDisplayRequired.input(logListInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "job:read", requestedSiteId: input.siteId }));
-  return dispositionLogService.list({ ...input, ...scopeFilter(scope) });
+  const scope = await authorizeProductionList(context.iam, input);
+  if (!scope.workcenterIds)
+    return dispositionLogService.list({ ...input, ...scopeFilter(scope), stationId: scope.stationId });
+  // Filter before pagination. The service's unscoped list is also used by internal callers.
+  const where = {
+    siteId: scope.siteId,
+    deletedAt: null,
+    stationId: scope.stationId,
+    workcenterId: { in: scope.workcenterIds },
+    shiftInstanceId: input.shiftInstanceId,
+    dispositionReasonId: input.dispositionReasonId,
+    createdAt: { gte: input.startDate, lte: input.endDate },
+  };
+  const include = {
+    station: { select: { id: true, name: true } },
+    itemDisposition: { select: { id: true, name: true } },
+    dispositionReason: { select: { id: true, name: true } },
+    productVersion: { select: { id: true, version: true, name: true, sku: true, productId: true } },
+    stationVersion: { select: { id: true, version: true } },
+    toolVersion: { select: { id: true, version: true, name: true } },
+    toolCavityVersion: { select: { id: true, version: true, name: true, toolCavityId: true } },
+    jobProductVersion: { select: { id: true, version: true, jobProduct: { select: { jobId: true } } } },
+    productMaterialVersions: {
+      select: {
+        id: true,
+        version: true,
+        weight: true,
+        weightUnits: true,
+        itemCost: true,
+        materialVersion: { select: { id: true, version: true, name: true, materialNumber: true, shortCode: true } },
+      },
+    },
+    shiftInstance: { select: { id: true, shiftName: true, businessDate: true, startTime: true, endTime: true } },
+    cycle: { select: { id: true } },
+  } as const;
+  const [data, total] = await Promise.all([
+    prisma.itemDispositionLog.findMany({
+      where,
+      include,
+      ...(input.limit > 0 ? { take: input.limit } : {}),
+      skip: input.offset,
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.itemDispositionLog.count({ where }),
+  ]);
+  return { data, total, limit: input.limit, offset: input.offset };
 });
 
 export const logGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "dispositionLog", id: input.id } }));
+  await authorizeTerminalAction(context.iam, {
+    action: "production.read",
+    scope: { kind: "dispositionLog", id: input.id },
+  });
 
   return unwrap(await dispositionLogService.getById(input.id), { notFoundMessage: "Disposition log not found" });
 });
 
 export const logUpdate = authRequired.input(logUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "dispositionLog", id: input.id } }));
+  await authorizeTerminalAction(context.iam, {
+    action: "disposition.record",
+    scope: { kind: "dispositionLog", id: input.id },
+  });
 
   const { id, ...updateData } = input;
   const result = await dispositionLogService.update(id, updateData);
@@ -247,7 +359,9 @@ export const logUpdate = authRequired.input(logUpdateInputSchema).handler(async 
 });
 
 export const logDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:admin", scope: { kind: "dispositionLog", id: input.id } }));
+  grant(
+    await authorize(context.iam, { permission: "production:admin", scope: { kind: "dispositionLog", id: input.id } }),
+  );
 
   const result = await dispositionLogService.remove(input.id);
   if (result.error) throwServiceError(result);

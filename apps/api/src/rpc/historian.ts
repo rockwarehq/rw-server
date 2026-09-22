@@ -13,7 +13,9 @@ import {
   type ShiftWindow,
 } from "@rw/historian";
 import { userOrDisplayRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
+import { authorizeList } from "@rw/auth/iam/policy";
+import type { IAMContext } from "@rw/auth/context";
+import { canReadMetricEntity } from "@rw/services/entity/access-scope";
 import { grant } from "./authz.js";
 import { throwServiceError } from "./errors.js";
 
@@ -75,8 +77,9 @@ const changesInputSchema = z.object({
  */
 async function authorizeSeries(
   series: SeriesSelector,
+  iam: IAMContext,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-): Promise<SeriesDefinition<any, any>> {
+): Promise<{ definition: SeriesDefinition<any, any>; series: SeriesSelector & { workcenterIds?: string[] } }> {
   const definition = getSeries(series.seriesType);
   if (!definition) {
     throw new ORPCError("BAD_REQUEST", { message: `Unknown series type: ${series.seriesType}` });
@@ -85,7 +88,16 @@ async function authorizeSeries(
   const scope = await definition.assertScope(series);
   if (isHistorianError(scope)) throwServiceError(scope);
 
-  return definition;
+  const access = grant(await authorizeList(iam, { permission: "production:read", requestedSiteId: series.siteId }));
+  const entity = series.seriesType === "stationState" ? { entityType: "STATION", entityId: series.stationId } : series;
+  if (!(await canReadMetricEntity(access, entity))) {
+    throw new ORPCError("FORBIDDEN", { message: "Series is outside the production read scope" });
+  }
+
+  return {
+    definition,
+    series: { ...series, ...(access.workcenterIds ? { workcenterIds: [...access.workcenterIds].sort() } : {}) },
+  };
 }
 
 // ============================================================================
@@ -144,13 +156,10 @@ async function dbNowMs(): Promise<number> {
 // ============================================================================
 
 export const query = userOrDisplayRequired.input(queryInputSchema).handler(async ({ context, input }) => {
-  grant(
-    await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.series.siteId } }),
-  );
-  const definition = await authorizeSeries(input.series);
+  const { definition, series } = await authorizeSeries(input.series, context.iam);
 
-  const window = await resolveSnapshotPage(input.series.seriesType, input.series, input.pageToken, () =>
-    resolveRange(definition, input.series, input.range),
+  const window = await resolveSnapshotPage(series.seriesType, series, input.pageToken, () =>
+    resolveRange(definition, series, input.range),
   );
   if (isHistorianError(window)) throwServiceError(window);
   if (!window) {
@@ -168,11 +177,9 @@ export const query = userOrDisplayRequired.input(queryInputSchema).handler(async
   // The change cursor is stamped at first-page time; rows that mutate while
   // the client pages through the snapshot are redelivered by the first
   // `changes` call.
-  const cursor = input.pageToken
-    ? null
-    : encodeCursor(input.series.seriesType, input.series, window.range, await dbNowMs());
+  const cursor = input.pageToken ? null : encodeCursor(series.seriesType, series, window.range, await dbNowMs());
 
-  const page = await definition.fetchRange(input.series, window.range, {
+  const page = await definition.fetchRange(series, window.range, {
     limit: input.limit,
     pageToken: window.pageToken,
   });
@@ -183,23 +190,20 @@ export const query = userOrDisplayRequired.input(queryInputSchema).handler(async
     shift: shiftMeta(window.shift),
     rows: page.rows,
     nextPageToken: page.nextPageToken
-      ? encodeSnapshotPageToken(input.series.seriesType, input.series, window, page.nextPageToken)
+      ? encodeSnapshotPageToken(series.seriesType, series, window, page.nextPageToken)
       : null,
     cursor,
   };
 });
 
 export const changes = userOrDisplayRequired.input(changesInputSchema).handler(async ({ context, input }) => {
-  grant(
-    await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.series.siteId } }),
-  );
-  const definition = await authorizeSeries(input.series);
+  const { definition, series } = await authorizeSeries(input.series, context.iam);
 
-  const decoded = decodeCursor(input.cursor, input.series.seriesType, input.series, Date.now());
+  const decoded = decodeCursor(input.cursor, series.seriesType, series, Date.now());
   if (isHistorianError(decoded)) throwServiceError(decoded);
 
   const result = await definition.fetchChanges(
-    input.series,
+    series,
     decoded.range,
     decoded.watermarkMs,
     input.limit,
@@ -209,13 +213,7 @@ export const changes = userOrDisplayRequired.input(changesInputSchema).handler(a
 
   return {
     deltas: result.deltas,
-    cursor: encodeCursor(
-      input.series.seriesType,
-      input.series,
-      decoded.range,
-      result.nextWatermarkMs,
-      result.continuation,
-    ),
+    cursor: encodeCursor(series.seriesType, series, decoded.range, result.nextWatermarkMs, result.continuation),
     hasMore: result.hasMore,
   };
 });

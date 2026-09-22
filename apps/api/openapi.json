@@ -1011,8 +1011,23 @@
                                 "type": "string",
                                 "enum": [
                                   "WORKSPACE",
-                                  "SITE"
+                                  "SITE",
+                                  "WORKCENTER"
                                 ]
+                              },
+                              "siteId": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ],
+                                "format": "uuid"
+                              },
+                              "workcenterId": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ],
+                                "format": "uuid"
                               }
                             }
                           }
@@ -1580,6 +1595,10 @@
                     "format": "uuid"
                   },
                   "siteId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "workcenterId": {
                     "type": "string",
                     "format": "uuid"
                   },
@@ -2899,6 +2918,13 @@
                               ],
                               "format": "uuid"
                             },
+                            "workcenterId": {
+                              "type": [
+                                "null",
+                                "string"
+                              ],
+                              "format": "uuid"
+                            },
                             "site": {
                               "type": [
                                 "null",
@@ -2931,7 +2957,8 @@
                                   "type": "string",
                                   "enum": [
                                     "WORKSPACE",
-                                    "SITE"
+                                    "SITE",
+                                    "WORKCENTER"
                                   ]
                                 },
                                 "permissions": {
@@ -3681,6 +3708,13 @@
                               ],
                               "format": "uuid"
                             },
+                            "workcenterId": {
+                              "type": [
+                                "null",
+                                "string"
+                              ],
+                              "format": "uuid"
+                            },
                             "site": {
                               "type": [
                                 "null",
@@ -3713,7 +3747,8 @@
                                   "type": "string",
                                   "enum": [
                                     "WORKSPACE",
-                                    "SITE"
+                                    "SITE",
+                                    "WORKCENTER"
                                   ]
                                 },
                                 "permissions": {
@@ -3972,6 +4007,13 @@
                             ],
                             "format": "uuid"
                           },
+                          "workcenterId": {
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "format": "uuid"
+                          },
                           "site": {
                             "type": [
                               "null",
@@ -4004,7 +4046,8 @@
                                 "type": "string",
                                 "enum": [
                                   "WORKSPACE",
-                                  "SITE"
+                                  "SITE",
+                                  "WORKCENTER"
                                 ]
                               },
                               "permissions": {
@@ -4138,6 +4181,14 @@
                 "type": "object",
                 "properties": {
                   "roleId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "siteId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "workcenterId": {
                     "type": "string",
                     "format": "uuid"
                   }
@@ -4283,6 +4334,13 @@
                             ],
                             "format": "uuid"
                           },
+                          "workcenterId": {
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "format": "uuid"
+                          },
                           "site": {
                             "type": [
                               "null",
@@ -4315,7 +4373,8 @@
                                 "type": "string",
                                 "enum": [
                                   "WORKSPACE",
-                                  "SITE"
+                                  "SITE",
+                                  "WORKCENTER"
                                 ]
                               },
                               "permissions": {

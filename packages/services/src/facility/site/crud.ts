@@ -128,7 +128,6 @@ export async function getById(id: string, workspaceId?: string) {
           id: true,
           name: true,
           serialNumber: true,
-          status: true,
         },
         orderBy: { name: "asc" },
       },

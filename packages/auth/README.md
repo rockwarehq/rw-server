@@ -12,7 +12,7 @@ import { verifyAccessToken } from "@rw/auth/verify";
 
 ## Design constraints
 
-- **One workspace per deployment.** The policy layer enforces permission + **site** scope only; workspace containment is vacuously true and costs zero queries.
+- **Plant/workcenter scope.** Permissions flow down from workspace/site assignments, while workcenter grants stay local. Related target IDs must belong to the proven scope.
 - **`authorize` never throws.** Every check returns a verified grant or a typed denial; transports decide how a denial becomes an HTTP/oRPC error.
 - **Token claims are never trusted for authorization.** The API auth plugin loads a per-request `PermissionSnapshot`, so every policy check in a request is query-free.
 - **JWT verification is DB-free.** `@rw/auth/verify` has no `@rw/db` import, so services with their own Prisma pool (e.g. livestore) can verify tokens without opening a second connection pool.
@@ -21,9 +21,10 @@ import { verifyAccessToken } from "@rw/auth/verify";
 
 | Subpath | Purpose |
 | --- | --- |
-| `iam/policy` | `authorize` / `authorizeList` / `authorizeAccessibleSites` — the authorization decision point |
-| `iam/permissions` | Permission catalog, `PermissionSnapshot`, system-role (staff) permissions |
-| `iam/policy-resolvers` | `RESOLVERS` table — derives a resource's site from its id (~50 kinds) |
+| `iam/policy` | User authorization, scoped lists, site visibility and explicit shared-reference reads |
+| `iam/permissions` | Eight-permission registry/metadata, implication, snapshots, staff permissions, migration preview |
+| `iam/policy-resolvers` | `RESOLVERS` table — derives actual site/workcenter/station ownership |
+| `iam/terminal` | Explicit DISPLAY action authorization, independent of account-user RBAC |
 | `iam/index` | `roles` and `assignments` services (DB-backed role bundles) |
 | `verify` | HS256 access-token sign/verify, per-audience HKDF keys, 15-min expiry |
 | `tokens` | Rotating 7-day refresh tokens with reuse-theft detection (user + display) |
@@ -39,7 +40,7 @@ import { verifyAccessToken } from "@rw/auth/verify";
 One call per protected operation: authorize a **permission** against a **scope**, producing a verified grant or a typed denial.
 
 ```ts
-authorize(iam, { permission: "job:read", scope: { kind: "customer", id: input.id } });
+authorize(iam, { permission: "planning:read", scope: { kind: "customer", id: input.id } });
 // → SiteGrant | WorkspaceGrant | PolicyDenial
 ```
 
@@ -48,11 +49,11 @@ authorize(iam, { permission: "job:read", scope: { kind: "customer", id: input.id
 | Scope | Meaning |
 | --- | --- |
 | `{ kind: "workspace" }` | Workspace-level action (e.g. site.create) |
-| `{ kind: "anySite" }` | Permission held workspace-wide or at ≥1 site |
-| `{ kind: "site", siteId }` | A literal site id from input/params |
+| `{ kind: "anySite" }` | Read permission at ≥1 site; writes/admin require workspace authority |
+| `{ kind: "site", siteId, workcenterId? }` | A site or exact workcenter target |
 | `{ kind: "order", id }`, … | A resource ref — its site is resolved via `RESOLVERS` |
 
-Denials carry a code, never an exception: `UNAUTHENTICATED`, `NO_WORKSPACE`, `NOT_FOUND`, `FORBIDDEN`. Resource resolution runs **before** the permission check, so a nonexistent id is `NOT_FOUND` and existence is never disclosed to an unauthorized caller.
+Denials carry a code, never an exception: `UNAUTHENTICATED`, `NO_WORKSPACE`, `NOT_FOUND`, `FORBIDDEN`. Existing resource targets are resolved before the scoped permission check; an unknown target returns `NOT_FOUND`.
 
 ### In an oRPC handler
 
@@ -60,7 +61,7 @@ The `grant()` adapter (`apps/api/src/rpc/authz.ts`) unwraps a grant or throws th
 
 ```ts
 export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "customer", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "planning:read", scope: { kind: "customer", id: input.id } }));
   return unwrap(await customerService.getById(input.id));
 });
 ```
@@ -71,7 +72,7 @@ A user works within one site, so list queries are never cross-site. `authorizeLi
 
 ```ts
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "job:read", requestedSiteId: input.siteId }));
+  const scope = grant(await authorizeList(context.iam, { permission: "planning:read", requestedSiteId: input.siteId }));
   return customerService.list({ ...input, ...scopeFilter(scope) });
 });
 ```
@@ -79,18 +80,24 @@ export const list = authRequired.input(listInputSchema).handler(async ({ input, 
 The one sanctioned multi-site shape is `authorizeAccessibleSites` (site picker / directory surfaces). REST handlers use `replyPolicyDenial()` (`apps/api/src/api/authz.ts`) instead of `grant()`:
 
 ```ts
-const scope = await authorizeAccessibleSites(request.iam, { permission: "facility:read" });
+const scope = await authorizeAccessibleSites(request.iam);
 if (!scope.ok) return replyPolicyDenial(reply, scope);
 return site.list({ ...request.query, workspaceId: scope.workspaceId, siteIds: scope.siteIds });
 ```
 
 ## Permission model
 
-Permissions are `resource:action` over 13 resources (`facility`, `schedule`, `job`, `status`, `tool`, `product`, `dashboard`, `entity`, `graph`, `user`, `employee`, `billing`, `settings`) × three actions (`read`, `write`, `admin`), plus the reserved `owner:all`.
+The customer catalog is `production:read/write/admin`, `planning:read/write`, `configuration:read/write`, and `plant:admin`. `owner:all` is reserved for company ownership. `PERMISSION_DEFINITIONS` provides labels, scope support and implications; arbitrary resource/action combinations are not valid permissions.
 
-The **catalog is hardcoded** — it is the type-safe contract the whole codebase compiles against. **Roles and assignments live in the DB** (workspace-owned bundles of permissions, assignable workspace-wide or per site). Rockware-staff permissions (`SUPPORT`, `ENGINEER`) live in `SYSTEM_ROLE_PERMISSIONS` in code, so customer data can never influence them.
+The **catalog lives in code**; **roles and assignments live in the DB**, including custom roles. Assignments can be workspace-, site-, or workcenter-scoped. Workcenter roles support Production permissions only. `WorkcenterGrant.READ/WRITE` is a shortcut for scoped Production access and never grants shared-definition or planning writes. Rockware-staff permissions (`SUPPORT`, `ENGINEER`) live in `SYSTEM_ROLE_PERMISSIONS`, independently of customer data.
 
-`loadPermissionSnapshot(userId, workspaceId)` captures a user's system role and role assignments in two queries; the pure evaluators (`snapshotHasPermission`, `snapshotAccessibleSites`) run against it without touching the DB.
+`loadPermissionSnapshot(userId, workspaceId)` captures staff role, assignments and workcenter grants. Pure evaluators expand write/read implications only after selecting matching scope. Site visibility is derived from membership/grants; it does not imply unrestricted production reads. Scoped list consumers must apply `workcenterIds`; `scopeFilter` preserves it and `scopeWorkcenterWhere` produces the corresponding predicate.
+
+`authorizeReferenceRead` deliberately permits shared production references when a user has Planning read or Production read somewhere in the same plant. It must not be used for live operational data or mutations.
+
+DISPLAY mutation/admin checks are denied by the generic user policy. Approved terminal writes call `authorizeTerminal` instead. APP graph-read access has its own middleware/site contract and never inherits customer permission implications.
+
+See `docs/architecture/permission-simplification.md` for rollout, custom-role migration, and existing terminal compatibility.
 
 ## Tokens & sessions
 

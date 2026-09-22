@@ -16,9 +16,9 @@ export type PrincipalType = (typeof Principal)[keyof typeof Principal];
  */
 export interface IAMPermissionSnapshot {
   systemRole: string | null;
-  assignments: Array<{ siteId: string | null; permissions: string[] }>;
+  assignments: Array<{ siteId: string | null; workcenterId?: string | null; permissions: string[] }>;
   workcenterGrants?: Array<{ workcenterId: string; siteId: string; access: string }>;
-  /** Sites whose baseWorkcenterAccess policy is GRANTS_REQUIRED (absent = ALL). */
+  /** @deprecated Wire compatibility only; has no evaluator effect. */
   grantsRequiredSiteIds?: string[];
 }
 

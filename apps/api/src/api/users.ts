@@ -5,7 +5,7 @@ import { validHttpOrigin } from "@rw/services/email/index";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
 import { sensitiveRateLimit } from "../plugins/ratelimit.js";
 import { requirePermission } from "../plugins/require-permission.js";
-import { authorize } from "@rw/auth/iam/policy";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import { replyPolicyDenial } from "./authz.js";
 
 const userSchema = {
@@ -76,6 +76,7 @@ const inviteBodySchema = {
     roleId: { type: "string", format: "uuid" },
     // Required for site-scoped roles unless the caller's token has site context.
     siteId: { type: "string", format: "uuid" },
+    workcenterId: { type: "string", format: "uuid" },
     // Workcenter grants for the invitee (GitHub-collaborator style).
     workcenterGrants: {
       type: "array",
@@ -197,7 +198,9 @@ const accessRoleSchema = {
   properties: {
     id: { type: "string", format: "uuid" },
     name: { type: "string" },
-    scope: { type: "string", enum: ["WORKSPACE", "SITE"] },
+    scope: { type: "string", enum: ["WORKSPACE", "SITE", "WORKCENTER"] },
+    siteId: { type: ["string", "null"], format: "uuid" },
+    workcenterId: { type: ["string", "null"], format: "uuid" },
   },
 } as const satisfies JSONSchema;
 
@@ -228,9 +231,7 @@ const getMeResponseSchema = {
       properties: {
         roles: { type: "array", items: accessRoleSchema },
         permissions: { type: "array", items: { type: "string" } },
-        // Per-workcenter grants with their server-computed effective
-        // permission sets (roles ∪ grant global ∪ grant scoped at that
-        // workcenter) — clients never expand the grant maps themselves.
+        // Per-workcenter effective permissions, including custom role assignments.
         workcenterGrants: {
           type: "array",
           items: {
@@ -307,6 +308,13 @@ const lockStatusResponseSchema = {
 } as const satisfies JSONSchema;
 
 export default async function userRoutes(fastify: FastifyTypedInstance) {
+  const targetRequired =
+    (global = false) =>
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string };
+      const scope = await user.authorizeTarget(request.iam, id, global);
+      if (!scope.ok) return replyPolicyDenial(reply, scope);
+    };
   // Get current user (me)
   fastify.route({
     method: "GET",
@@ -457,7 +465,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
     },
   });
 
-  // List users (requires user:read)
+  // List the population administered by this caller.
   fastify.route({
     method: "GET",
     url: "/",
@@ -473,16 +481,14 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      // Roster reads align with RPC workspace.listMembers: user:read held at
-      // any site suffices (site Plant Admins manage their people).
-      const auth = await authorize(request.iam, { permission: "user:read", scope: { kind: "anySite" } });
+      const auth = await user.authorizePopulation(request.iam);
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
-      return user.list(request.query);
+      return user.list({ ...request.query, workspaceId: auth.workspaceId, siteId: auth.siteId });
     },
   });
 
-  // Invite user (requires user:write; checks live in the service)
+  // Invite user (requires plant:admin; checks live in the service)
   fastify.route({
     method: "POST",
     url: "/invite",
@@ -507,13 +513,14 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
 
-      const { email, roleId, siteId, workcenterGrants, firstName, lastName } = request.body;
+      const { email, roleId, siteId, workcenterId, workcenterGrants, firstName, lastName } = request.body;
       const result = await user.createInvite({
         email,
         inviterId,
         workspaceId,
         roleId,
         siteId,
+        workcenterId,
         workcenterGrants,
         fallbackSiteId: request.iam?.siteId,
         firstName,
@@ -667,7 +674,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
     },
   });
 
-  // Get user by ID (requires user:read)
+  // Get user by ID within the administered population.
   fastify.route({
     method: "GET",
     url: "/:id",
@@ -684,10 +691,10 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { permission: "user:read", scope: { kind: "anySite" } });
+      const auth = await user.authorizeTarget(request.iam, request.params.id);
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
-      const result = await user.getById(request.params.id);
+      const result = await user.getById(request.params.id, auth.workspaceId);
       if (!result) {
         return reply.status(404).send({ error: "User not found" });
       }
@@ -695,7 +702,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
     },
   });
 
-  // Get user lock status (requires user:read)
+  // Get user lock status within the administered population.
   fastify.route({
     method: "GET",
     url: "/:id/lock-status",
@@ -712,7 +719,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { permission: "user:read", scope: { kind: "anySite" } });
+      const auth = await user.authorizeTarget(request.iam, request.params.id);
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await user.getLockStatus(request.params.id);
@@ -723,11 +730,15 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
     },
   });
 
-  // Update user (requires user:write)
+  // Global profile changes require workspace plant:admin.
   fastify.route({
     method: "PUT",
     url: "/:id",
-    preHandler: [fastify.verifyAccessToken, requirePermission("user:write", { scope: "workspace" })],
+    preHandler: [
+      fastify.verifyAccessToken,
+      requirePermission("plant:admin", { scope: "workspace" }),
+      targetRequired(true),
+    ],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -748,11 +759,15 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
     },
   });
 
-  // Disable user (requires user:admin)
+  // Disable user (requires workspace plant:admin)
   fastify.route({
     method: "POST",
     url: "/:id/disable",
-    preHandler: [fastify.verifyAccessToken, requirePermission("user:admin", { scope: "workspace" })],
+    preHandler: [
+      fastify.verifyAccessToken,
+      requirePermission("plant:admin", { scope: "workspace" }),
+      targetRequired(true),
+    ],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -789,11 +804,15 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
     },
   });
 
-  // Enable user (requires user:admin)
+  // Enable user (requires workspace plant:admin)
   fastify.route({
     method: "POST",
     url: "/:id/enable",
-    preHandler: [fastify.verifyAccessToken, requirePermission("user:admin", { scope: "workspace" })],
+    preHandler: [
+      fastify.verifyAccessToken,
+      requirePermission("plant:admin", { scope: "workspace" }),
+      targetRequired(true),
+    ],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -824,11 +843,15 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
     },
   });
 
-  // Unlock user account (requires user:admin)
+  // Unlock user account (requires workspace plant:admin)
   fastify.route({
     method: "POST",
     url: "/:id/unlock",
-    preHandler: [fastify.verifyAccessToken, requirePermission("user:admin", { scope: "workspace" })],
+    preHandler: [
+      fastify.verifyAccessToken,
+      requirePermission("plant:admin", { scope: "workspace" }),
+      targetRequired(true),
+    ],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -863,12 +886,16 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
     },
   });
 
-  // Set a user's password (requires user:admin). Generated passwords are
+  // Set a user's password (requires workspace plant:admin). Generated passwords are
   // always temporary; permanent mode requires an explicit password.
   fastify.route({
     method: "POST",
     url: "/:id/password",
-    preHandler: [fastify.verifyAccessToken, requirePermission("user:admin", { scope: "workspace" })],
+    preHandler: [
+      fastify.verifyAccessToken,
+      requirePermission("plant:admin", { scope: "workspace" }),
+      targetRequired(true),
+    ],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -911,6 +938,8 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       switch (result.error) {
         case "USER_NOT_FOUND":
           return reply.status(404).send({ error: "User not found" });
+        case "FORBIDDEN":
+          return reply.status(403).send({ error: "Workspace authority required" });
         case "SYSTEM_USER":
           return reply.status(403).send({ error: "Cannot set a system user's password" });
         case "OWNER_PERMISSION_REQUIRED":

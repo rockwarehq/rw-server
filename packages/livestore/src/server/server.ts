@@ -6,6 +6,8 @@ import { deriveUiChangeSubject, parseUiChangeEvent } from "@rw/runtime/ui-change
 import type { GraphRuntime } from "../engine/runtime.js";
 import type { LivestoreLogger, ValueEnvelope } from "../types/index.js";
 import { bearerFromAuthorizationHeader, type LivestorePrincipal } from "./auth.js";
+import { PublishedGraphAccess } from "../graph/read-scope.js";
+import { canReadMetricEntity } from "@rw/services/entity/access-scope";
 
 // Structural so tests (and future transports) can stub it; LivestoreAuthenticator
 // in ./auth.js is the production implementation.
@@ -134,7 +136,11 @@ export function registerGraphRoutes(
   server.get("/graph/nodes", async (request, reply) => {
     const principal = await requirePrincipal(request, reply);
     if (!principal) return reply;
-    return { data: runtime.listNodesForSite(principal.siteId) };
+    const nodes = runtime.listNodesForSite(principal.siteId);
+    if (principal.kind !== "user") return { data: nodes };
+    const access = new PublishedGraphAccess(principal.readScope);
+    const visible = await Promise.all(nodes.map((node) => access.node(node)));
+    return { data: visible.filter((node) => node !== null) };
   });
 
   server.get<{ Params: { id: string } }>("/graph/nodes/:id", async (request, reply) => {
@@ -145,7 +151,9 @@ export function registerGraphRoutes(
     if (!node || node.siteId !== principal.siteId) {
       return reply.code(404).send({ error: "Graph node not found" });
     }
-    return node;
+    if (principal.kind !== "user") return node;
+    const visible = await new PublishedGraphAccess(principal.readScope).node(node);
+    return visible ?? reply.code(404).send({ error: "Graph node not found" });
   });
 
   const graphSocketHandler = (socket: unknown, request: FastifyRequest) => {
@@ -160,6 +168,8 @@ export function registerGraphRoutes(
     // as their first message within authTimeoutMs.
     let principal: LivestorePrincipal | null = null;
     let appToken: string | null = null; // retained for periodic revalidation
+    let userToken: string | null = null;
+    let access: PublishedGraphAccess | null = null;
     let authTimer: ReturnType<typeof setTimeout> | null = null;
     let expiryWarnTimer: ReturnType<typeof setTimeout> | null = null;
     let expiryCloseTimer: ReturnType<typeof setTimeout> | null = null;
@@ -180,6 +190,9 @@ export function registerGraphRoutes(
     };
 
     const closeUnauthorized = (code: string, error: string) => {
+      principal = null;
+      access = null;
+      pending.clear();
       sendJson({ op: "error", error, code });
       ws.close(CLOSE_UNAUTHORIZED, error);
     };
@@ -203,14 +216,54 @@ export function registerGraphRoutes(
       }, opts.appRevalidateIntervalMs);
     };
 
+    const scheduleUserRevalidation = () => {
+      revalidateTimer = setInterval(
+        () => {
+          if (!userToken || principal?.kind !== "user") return;
+          const previous = principal;
+          void authenticator
+            .authenticate(userToken)
+            .then((next) => {
+              if (
+                !next ||
+                next.kind !== "user" ||
+                next.userId !== previous.userId ||
+                JSON.stringify(next.readScope) !== JSON.stringify(previous.readScope)
+              ) {
+                closeUnauthorized("AUTH_EXPIRED", "membership or read scope changed");
+              } else if (principal === previous) {
+                access?.invalidate();
+                pending.clear();
+                principal = next;
+                access = new PublishedGraphAccess(next.readScope);
+              }
+            })
+            .catch(() => closeUnauthorized("AUTH_EXPIRED", "unable to revalidate membership"));
+        },
+        Math.min(opts.appRevalidateIntervalMs, 30_000),
+      );
+    };
+
     // Adopt (or replace, on re-auth) the connection's principal and reset the
     // lifecycle timers that go with it.
     const applyPrincipal = (next: LivestorePrincipal) => {
       clearAuthTimers();
+      access?.invalidate();
       principal = next;
+      access = next.kind === "user" ? new PublishedGraphAccess(next.readScope) : null;
       if (next.expMs !== null) scheduleJwtExpiry(next.expMs);
       if (next.kind === "app") scheduleAppRevalidation();
-      sendJson({ op: "ready", siteId: next.siteId, authExpiresAt: next.expMs });
+      if (next.kind === "user") scheduleUserRevalidation();
+      sendJson({
+        op: "ready",
+        siteId: next.siteId,
+        authExpiresAt: next.expMs,
+        scope: {
+          siteId: next.siteId,
+          workspaceId: next.workspaceId,
+          ...(next.kind === "user" ? { workcenterIds: next.readScope.workcenterIds } : {}),
+        },
+      });
     };
 
     const handleAuthMessage = async (token: string) => {
@@ -221,11 +274,17 @@ export function registerGraphRoutes(
       }
       // Re-auth may refresh credentials but not move the connection to
       // another tenant; existing subscriptions were authorized per-site.
-      if (principal && next.siteId !== principal.siteId) {
+      if (principal && (next.siteId !== principal.siteId || next.workspaceId !== principal.workspaceId)) {
         sendJson({ op: "error", error: "site mismatch", code: "SITE_MISMATCH" });
         return;
       }
       appToken = next.kind === "app" ? token : null;
+      userToken = next.kind === "user" ? token : null;
+      // Refresh may change grants or identity. Discard authorized-under-old-scope watchers.
+      if (principal && JSON.stringify(principal) !== JSON.stringify(next)) {
+        for (const id of watchers.keys()) stopWatcher(id);
+        pending.clear();
+      }
       applyPrincipal(next);
     };
 
@@ -271,12 +330,13 @@ export function registerGraphRoutes(
     };
 
     // lates wins per property to avoid backpressure
-    const pending = new Map<string, unknown>();
+    const pending = new Map<string, ValueEnvelope>();
     // Highest timestamp sent per property: the initial read can serve a queued
     // write-behind value newer than the KV watcher's first delivery, and the
     // client must never see the older one after it.
     const lastSentTs = new Map<string, number>();
     let drainTimer: ReturnType<typeof setInterval> | null = null;
+    let draining = false;
 
     const clearDrainTimer = () => {
       if (drainTimer) {
@@ -286,36 +346,57 @@ export function registerGraphRoutes(
     };
 
     // Flush queued updates while under the high-water mark; retry the rest on a short timer (§9.3).
-    const flushPending = () => {
+    const flushPending = async () => {
+      if (draining) return;
       if (ws.readyState !== OPEN) {
         pending.clear();
         clearDrainTimer();
         return;
       }
-      for (const [propertyId, envelope] of pending) {
-        if (ws.bufferedAmount > HIGH_WATER_MARK) break;
-        pending.delete(propertyId);
-        ws.send(JSON.stringify({ op: "value", propertyId, envelope }));
-      }
-      if (pending.size > 0) {
-        if (!drainTimer) drainTimer = setInterval(flushPending, 50);
-      } else {
-        clearDrainTimer();
+      draining = true;
+      try {
+        for (const [propertyId, envelope] of pending) {
+          if (ws.bufferedAmount > HIGH_WATER_MARK) break;
+          const checkedPrincipal = principal;
+          const checkedAccess = access;
+          let allowed = !!checkedPrincipal;
+          try {
+            // A buffered value may outlive the proof TTL. Recheck at actual
+            // delivery; memoized ownership avoids new queries on the hot path.
+            if (allowed && checkedAccess)
+              allowed = await checkedAccess.property(propertyId, new Set(), envelope.timestamp);
+          } catch {
+            allowed = false;
+          }
+          if (pending.get(propertyId) !== envelope) continue;
+          pending.delete(propertyId);
+          if (allowed && principal === checkedPrincipal && access === checkedAccess && ws.readyState === OPEN) {
+            ws.send(JSON.stringify({ op: "value", propertyId, envelope }));
+          }
+        }
+      } finally {
+        draining = false;
+        if (pending.size > 0) {
+          if (!drainTimer) drainTimer = setInterval(() => void flushPending(), 50);
+        } else {
+          clearDrainTimer();
+        }
       }
     };
 
     const sendValue = (propertyId: string, envelope: ValueEnvelope) => {
-      if (ws.readyState !== OPEN) return;
+      if (ws.readyState !== OPEN || !principal) return;
       const last = lastSentTs.get(propertyId);
       if (last !== undefined && envelope.timestamp < last) return;
       lastSentTs.set(propertyId, envelope.timestamp);
       pending.set(propertyId, envelope);
-      flushPending();
+      void flushPending();
     };
 
     const stopWatcher = (propertyId: string) => {
       watchers.get(propertyId)?.stop();
       watchers.delete(propertyId);
+      pending.delete(propertyId);
       lastSentTs.delete(propertyId);
     };
 
@@ -346,7 +427,17 @@ export function registerGraphRoutes(
         // Register the in-process listener BEFORE reading the initial value, so
         // a commit racing the async read isn't missed; the monotonic lastSentTs
         // guard in sendValue resolves ordering between the two.
-        const unsubscribe = runtime.subscribeToProperty(propertyId, (envelope) => sendValue(propertyId, envelope));
+        const deliver = async (envelope: ValueEnvelope) => {
+          const checkedPrincipal = principal;
+          const checkedAccess = access;
+          if (!checkedPrincipal) return;
+          if (checkedAccess && !(await checkedAccess.property(propertyId, new Set(), envelope.timestamp))) return;
+          if (principal !== checkedPrincipal || access !== checkedAccess || !watchers.has(propertyId)) return;
+          sendValue(propertyId, envelope);
+        };
+        const unsubscribe = runtime.subscribeToProperty(propertyId, (envelope) => {
+          void deliver(envelope).catch(() => {});
+        });
         watchers.set(propertyId, { stop: unsubscribe });
 
         const initial = (await runtime.getCvgValue(propertyId)) ?? runtime.getCurrentOrStale(propertyId);
@@ -354,7 +445,7 @@ export function registerGraphRoutes(
           stopWatcher(propertyId);
           return;
         }
-        sendValue(propertyId, initial);
+        await deliver(initial);
       }
     };
 
@@ -395,7 +486,9 @@ export function registerGraphRoutes(
           const allowed: string[] = [];
           const rejected: string[] = [];
           for (const propertyId of message.propertyIds) {
-            (runtime.getPropertySiteId(propertyId) === siteId ? allowed : rejected).push(propertyId);
+            const readable =
+              runtime.getPropertySiteId(propertyId) === siteId && (!access || (await access.property(propertyId)));
+            (readable ? allowed : rejected).push(propertyId);
           }
           if (rejected.length > 0) {
             sendJson({ op: "error", error: "forbidden", code: "FORBIDDEN", propertyIds: rejected });
@@ -410,7 +503,7 @@ export function registerGraphRoutes(
         }
 
         if (message.op === "subscribe-changes") {
-          // Scoped to the principal's site; the payload is ids only, so nothing to filter further.
+          // Ownership changes invalidate cached proofs even if their UI ping is suppressed.
           stopChanges ??= runtime.subscribeSubject(deriveUiChangeSubject(principal.siteId), (data) => {
             let event = null;
             try {
@@ -418,7 +511,24 @@ export function registerGraphRoutes(
             } catch {
               return;
             }
-            if (event) sendJson({ op: "change", event });
+            if (!event || !principal || event.siteId !== principal.siteId) return;
+            access?.invalidate();
+            pending.clear();
+            if (principal.kind !== "user") {
+              sendJson({ op: "change", event });
+              return;
+            }
+            const checkedPrincipal = principal;
+            const readScope = checkedPrincipal.readScope;
+            if (!event.stationId) {
+              if (readScope.workcenterIds === undefined) sendJson({ op: "change", event });
+              return;
+            }
+            void canReadMetricEntity(readScope, { entityType: "STATION", entityId: event.stationId })
+              .then((ok) => {
+                if (ok && principal === checkedPrincipal) sendJson({ op: "change", event });
+              })
+              .catch(() => {});
           });
           return;
         }

@@ -52,6 +52,10 @@ export interface ListStationsFilter {
   workspaceId?: string;
   siteId?: string;
   workcenterId?: string;
+  /** Account authorization filter; intersects any requested workcenter. */
+  workcenterIds?: string[];
+  /** Fixed terminal authorization filter. */
+  stationId?: string;
   /** Only return stations that have at least one of these labels. */
   labelIds?: string[];
   name?: string;
@@ -269,7 +273,17 @@ export async function create(input: CreateStationInput) {
  * List stations with optional filtering
  */
 export async function list(filter: ListStationsFilter = {}) {
-  const { workspaceId, siteId, workcenterId, labelIds, name, limit = 50, offset = 0 } = filter;
+  const {
+    workspaceId,
+    siteId,
+    workcenterId,
+    workcenterIds,
+    stationId,
+    labelIds,
+    name,
+    limit = 50,
+    offset = 0,
+  } = filter;
 
   const where: Record<string, unknown> = {};
 
@@ -284,6 +298,8 @@ export async function list(filter: ListStationsFilter = {}) {
   if (workcenterId) {
     where.workcenterId = workcenterId;
   }
+  if (workcenterIds) where.AND = [{ workcenterId: { in: workcenterIds } }];
+  if (stationId) where.id = stationId;
 
   if (labelIds && labelIds.length > 0) {
     where.labels = { some: { id: { in: labelIds } } };
@@ -578,7 +594,24 @@ export async function remove(id: string, workspaceId?: string) {
     return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
-  await prisma.station.delete({ where: { id } });
+  const displayConflict = {
+    error: "Unassign or reassign all displays bound to this station before deleting it",
+    code: "DISPLAY_STATION_BOUND",
+  };
+  if (await prisma.display.count({ where: { stationId: id } })) return displayConflict;
+  try {
+    await prisma.station.delete({ where: { id } });
+  } catch (error) {
+    // The restrictive FK closes the race with concurrent display assignment.
+    // PostgreSQL 18's RESTRICT violation is SQLSTATE 23001. Prisma's pg
+    // adapter currently exposes it as DriverAdapterError.cause instead of P2003.
+    const cause = error && typeof error === "object" && "cause" in error ? error.cause : null;
+    const foreignKeyViolation =
+      (error && typeof error === "object" && "code" in error && error.code === "P2003") ||
+      (cause && typeof cause === "object" && "code" in cause && (cause.code === "23001" || cause.code === "23503"));
+    if (foreignKeyViolation && (await prisma.display.count({ where: { stationId: id } }))) return displayConflict;
+    throw error;
+  }
 
   publishStationEntityEvent({
     action: "deleted",

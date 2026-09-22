@@ -22,6 +22,8 @@ import type {
 export interface StationStateScope {
   siteId: string;
   stationId: string;
+  /** Server-injected grant predicate, never taken from a client selector. */
+  workcenterIds?: string[];
 }
 
 const rowInclude = {
@@ -40,13 +42,32 @@ const rowInclude = {
 
 export type StationStateRow = Prisma.StationStateLogGetPayload<{ include: typeof rowInclude }>;
 
+function readScopeWhere(scope: StationStateScope): Prisma.StationStateLogWhereInput {
+  // Stamps are historical ownership. Only pre-stamp rows may fall back to the
+  // actual station; a move must never override an explicit foreign stamp.
+  const AND: Prisma.StationStateLogWhereInput[] = [
+    {
+      OR: [{ siteId: scope.siteId }, { siteId: null, station: { siteId: scope.siteId } }],
+    },
+  ];
+  if (scope.workcenterIds !== undefined) {
+    AND.push({
+      OR: [
+        { workcenterId: { in: scope.workcenterIds } },
+        { workcenterId: null, station: { siteId: scope.siteId, workcenterId: { in: scope.workcenterIds } } },
+      ],
+    });
+  }
+  return { stationId: scope.stationId, AND };
+}
+
 /**
  * Interval-overlap window predicate: `startTime < to AND (endTime > from OR
  * endTime IS NULL)`. Soft-deleted rows intentionally included.
  */
 function overlapWhere(scope: StationStateScope, range: ResolvedRange): Prisma.StationStateLogWhereInput {
   const where: Prisma.StationStateLogWhereInput = {
-    stationId: scope.stationId,
+    ...readScopeWhere(scope),
     OR: [{ endTime: { gt: range.from } }, { endTime: null }],
   };
   if (range.to) {
@@ -137,6 +158,7 @@ async function fetchRange(
     }
     const after = new Date(token.s);
     where.AND = [
+      ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
       {
         OR: [{ startTime: { gt: after } }, { startTime: after, id: { gt: token.i } }],
       },
@@ -175,7 +197,7 @@ async function fetchChanges(
   // Revisions can move a previously delivered interval outside the window.
   // Deliver the station's full changed rows; clients replace by id then clip.
   const where: Prisma.StationStateLogWhereInput = {
-    stationId: scope.stationId,
+    ...readScopeWhere(scope),
     updatedAt: { lte: new Date(frontierMs) },
     OR: continuation
       ? [
