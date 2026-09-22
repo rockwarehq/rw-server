@@ -148,7 +148,6 @@ describe.skipIf(!process.env.DATABASE_URL)("stock adjustments", () => {
     const order = await orders.create({
       siteId,
       orderNumber: `ADJ-${randomUUID().slice(0, 8)}`,
-      status: "OPEN",
       lineItems: [{ productId: productD, targetQuantity: 5 }],
     });
     if ("error" in order) throw new Error(order.error);

@@ -9,18 +9,15 @@ import { throwServiceError, unwrap } from "./errors.js";
 // Input Schemas
 // ============================================================================
 
-const orderStatusEnum = z.enum(["DRAFT", "OPEN", "IN_PROGRESS", "ON_HOLD", "COMPLETED", "CANCELLED"]);
+const orderStatusEnum = z.enum(["OPEN", "COMPLETED", "CANCELLED"]);
 
 const createInputSchema = z.object({
   siteId: z.uuid(),
   orderNumber: z.string().min(1),
-  status: z.enum(["DRAFT", "OPEN"]).default("DRAFT"),
   customerId: z.uuid().optional(),
   poNumber: z.string().optional(),
   startDate: z.coerce.date().optional(),
   dueDate: z.coerce.date().optional(),
-  // DEPRECATED: accepted for old clients, ignored — sequence is the only ordering.
-  priority: z.number().int().min(0).max(3).default(0),
   defaultTargetQuantity: z.number().positive().default(1),
   notes: z.string().optional(),
   lineItems: z
@@ -40,8 +37,6 @@ const updateInputSchema = z.object({
   poNumber: z.string().nullable().optional(),
   startDate: z.coerce.date().nullable().optional(),
   dueDate: z.coerce.date().nullable().optional(),
-  // DEPRECATED: accepted for old clients, ignored.
-  priority: z.number().int().min(0).max(3).optional(),
   defaultTargetQuantity: z.number().positive().optional(),
   notes: z.string().nullable().optional(),
 });
@@ -52,7 +47,7 @@ const listInputSchema = z.object({
   customerId: z.uuid().optional(),
   productId: z.uuid().optional(),
   search: z.string().optional(),
-  sortBy: z.enum(["orderNumber", "customer", "status", "dueDate", "createdAt"]).optional(),
+  sortBy: z.enum(["orderNumber", "customer", "status", "dueDate", "createdAt", "completedAt"]).optional(),
   sortDir: z.enum(["asc", "desc"]).default("asc"),
   limit: z.number().min(0).default(200),
   offset: z.number().min(0).default(0),
@@ -62,7 +57,7 @@ const idInputSchema = z.object({ id: z.uuid() });
 
 const transitionStatusInputSchema = z.object({
   id: z.uuid(),
-  status: z.enum(["OPEN", "IN_PROGRESS", "ON_HOLD", "COMPLETED", "CANCELLED"]),
+  status: z.enum(["COMPLETED", "CANCELLED"]),
   /** Completing with coverage < 100% requires explicit confirmation. */
   allowPartial: z.boolean().default(false),
 });
@@ -96,11 +91,13 @@ const nextNumberInputSchema = z.object({
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
   grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "site", siteId: input.siteId } }));
 
-  const { priority: _priority, ...createData } = input;
   // DUPLICATE_PRODUCT here means duplicate products within the create payload
   // and historically fell through to BAD_REQUEST (unlike addLineItem, where the
   // same code is a CONFLICT with existing state).
-  return unwrap(await orderService.create(createData), { overrides: { DUPLICATE_PRODUCT: "BAD_REQUEST" } });
+  // createdByUserId is the same identity transitionStatus already records.
+  return unwrap(await orderService.create({ ...input, createdByUserId: context.iam.id ?? null }), {
+    overrides: { DUPLICATE_PRODUCT: "BAD_REQUEST" },
+  });
 });
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
@@ -117,7 +114,7 @@ export const get = authRequired.input(idInputSchema).handler(async ({ input, con
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "order", id: input.id } }));
 
-  const { id, priority: _priority, ...updateData } = input;
+  const { id, ...updateData } = input;
   return unwrap(await orderService.update(id, updateData));
 });
 

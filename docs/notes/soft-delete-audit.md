@@ -48,14 +48,12 @@ filter — they'd be correct under soft-delete; the tick discovery would not.
 
 ## B. Active bugs (fix now — writers exist for these models)
 
-**B1. Order line-item healer touches soft-deleted orders.**
-`packages/services/src/order/allocation.ts:31-38` — the OrderLineItem
-status-heal UPDATE scopes via `"orderId" IN (SELECT id FROM "Order" WHERE
-"siteId" = ...)` with no deletedAt filter; the sibling order-heal UPDATE
-directly below (line ~43) filters `"deletedAt" IS NULL`, proving intent.
-Effect: line items of soft-deleted orders get flipped to COMPLETED on every
-allocation (also: this site-wide heal runs per produced item — separate perf
-note). Fix: add `AND "deletedAt" IS NULL` to the subquery.
+**B1. Order line-item healer touches soft-deleted orders. — RESOLVED, moot.**
+The healer lived in `packages/services/src/order/allocation.ts`, which was
+deleted with the automatic allocation engine. The `OrderLineItem.status`
+column it healed was dropped in the order-lifecycle simplification, along
+with `completedQuantity` and `scrapQuantity`. There is nothing left to heal:
+fulfillment is computed coverage plus `OrderConsumption`.
 
 **B2. Deletion guards count soft-deleted children → deletion over-blocked.**
 `_count` guards lack per-relation `where: { deletedAt: null }` (Prisma
@@ -154,8 +152,7 @@ version connects. Tool soft-delete exists. Borderline-active; cheap fix.
 - Verified-filtering (spot list): compute.ts cycles/state logs/dispositions,
   cascade.ts state_slice + parent rollup stations, all StationStateLog
   queries in facility/station/state.ts, logs.ts main log queries,
-  entity/instances.ts, disposition-log.ts, material.ts, allocation.ts's
-  other two statements.
+  entity/instances.ts, disposition-log.ts, material.ts.
 
 ## Suggested order of attack
 

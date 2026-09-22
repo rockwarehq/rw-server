@@ -1,6 +1,6 @@
 import prisma from "@rw/db";
 import { getSiteSettings } from "../facility/site/settings.js";
-import { computeCoverage } from "./coverage.js";
+import { QUEUE_STATUSES, computeCoverage } from "./coverage.js";
 import { transitionStatus } from "./order.js";
 
 // ============================================================================
@@ -33,7 +33,7 @@ export async function checkAutoComplete(siteId: string, productIds: string[]): P
   const candidates = await prisma.order.findMany({
     where: {
       siteId,
-      status: { in: ["OPEN", "IN_PROGRESS"] },
+      status: { in: [...QUEUE_STATUSES] },
       deletedAt: null,
       lineItems: { some: { productId: { in: productIds } } },
     },

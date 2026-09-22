@@ -445,7 +445,7 @@ erDiagram
     uuid siteId FK "no cascade"
     uuid customerId FK "nullable, SetNull"
     string orderNumber "unique per site"
-    OrderStatus status
+    OrderStatus status "OPEN | COMPLETED | CANCELLED"
     string poNumber
     datetime deletedAt
   }
@@ -453,14 +453,7 @@ erDiagram
     uuid id PK
     uuid orderId FK "cascade"
     uuid productId FK "Restrict"
-    LineItemStatus status
     int targetQuantity
-  }
-  OrderInventoryAllocation {
-    uuid id PK
-    uuid inventoryItemId FK "nullable"
-    uuid orderLineItemId FK "cascade"
-    int quantity
   }
 
   Site ||--o{ Customer : "cascade"
@@ -468,8 +461,6 @@ erDiagram
   Site ||--o{ Order : "no cascade"
   Order ||--o{ OrderLineItem : "cascade"
   Product ||--o{ OrderLineItem : "Restrict"
-  OrderLineItem ||--o{ OrderInventoryAllocation : "cascade"
-  InventoryItem |o--o{ OrderInventoryAllocation : ""
 ```
 
 ### Products & materials
@@ -1247,7 +1238,7 @@ Station, Job, Tool, ToolCavity, Product, Material, ProductMaterial, JobProduct, 
 
 ### 5. Two unrelated "order" concepts
 
-`WorkOrder` (`workorder.prisma`, production; `Cycle.orderId` → **WorkOrder**) vs. `Order`/`OrderLineItem`/`OrderInventoryAllocation` (`inventory.prisma`, fulfillment). Both use `orderNumber` unique-per-site. Nothing links a WorkOrder to the fulfillment Order it serves; if that relationship exists operationally, it's currently implicit.
+`WorkOrder` (`workorder.prisma`, production; `Cycle.orderId` → **WorkOrder**) vs. `Order`/`OrderLineItem` (`inventory.prisma`, fulfillment). Both use `orderNumber` unique-per-site. Nothing links a WorkOrder to the fulfillment Order it serves; if that relationship exists operationally, it's currently implicit.
 
 ### 6. Tenancy scoping inconsistencies
 

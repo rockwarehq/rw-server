@@ -1,5 +1,5 @@
 import prisma from "@rw/db";
-import type { Prisma } from "@rw/db";
+import type { OrderStatus, Prisma } from "@rw/db";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { resolveShiftStamp } from "../facility/work-context.js";
@@ -9,24 +9,26 @@ import { computeCoverage, isQueueStatus } from "./coverage.js";
 // Types
 // ============================================================================
 
-type OrderStatus = "DRAFT" | "OPEN" | "IN_PROGRESS" | "ON_HOLD" | "COMPLETED" | "CANCELLED";
-
 // The single source of truth for Order.status: every transition — user-driven
-// or the auto-complete rule — goes through transitionStatus. Production never
-// writes to orders; IN_PROGRESS is a user-set "we're working on this" marker.
+// or the auto-complete rule — goes through transitionStatus. An order is
+// raised OPEN and leaves in one of two ways, both terminal. Production never
+// writes to orders.
 const STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
-  DRAFT: ["OPEN", "CANCELLED"],
-  OPEN: ["IN_PROGRESS", "COMPLETED", "ON_HOLD", "CANCELLED"],
-  IN_PROGRESS: ["ON_HOLD", "COMPLETED", "CANCELLED"],
-  ON_HOLD: ["OPEN", "IN_PROGRESS", "CANCELLED"],
+  OPEN: ["COMPLETED", "CANCELLED"],
   COMPLETED: [],
   CANCELLED: [],
 };
 
+/** Terminal orders are frozen: no transitions out, no edits to them or their lines. */
+function isTerminal(status: OrderStatus): boolean {
+  return status === "COMPLETED" || status === "CANCELLED";
+}
+
 export interface CreateOrderInput {
   siteId: string;
   orderNumber: string;
-  status?: "DRAFT" | "OPEN";
+  /** Who raised it; null for non-interactive creators. */
+  createdByUserId?: string | null;
   customerId?: string;
   poNumber?: string;
   startDate?: Date;
@@ -46,7 +48,7 @@ export interface UpdateOrderInput {
   notes?: string | null;
 }
 
-export type OrderSortKey = "orderNumber" | "customer" | "status" | "dueDate" | "createdAt";
+export type OrderSortKey = "orderNumber" | "customer" | "status" | "dueDate" | "createdAt" | "completedAt";
 
 export interface ListOrdersFilter {
   siteId?: string;
@@ -243,7 +245,7 @@ export async function getNextOrderNumber(siteId: string) {
 // ============================================================================
 
 export async function create(input: CreateOrderInput) {
-  const { siteId, orderNumber, status = "DRAFT", customerId, lineItems, ...rest } = input;
+  const { siteId, orderNumber, createdByUserId, customerId, lineItems, ...rest } = input;
 
   const site = await prisma.site.findUnique({
     where: { id: siteId },
@@ -287,35 +289,40 @@ export async function create(input: CreateOrderInput) {
     }
   }
 
-  // Assign sequence when creating as OPEN
-  let sequence: number | null = null;
-  if (status === "OPEN") {
-    const maxSeq = await prisma.order.aggregate({
-      where: { siteId, deletedAt: null },
+  // Every order is raised OPEN and enters the fill queue immediately, so the
+  // sequence and the opened stamp are both assigned here. The read-then-write
+  // on max(sequence) runs inside the create transaction under a per-site
+  // advisory lock: it is unguarded by any unique constraint, so two concurrent
+  // creates would otherwise hand out the same position.
+  const order = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`order-seq:${siteId}`}))`;
+    const maxSeq = await tx.order.aggregate({
+      // Terminal orders keep their position for history but must not inflate
+      // the counter for everything raised after them.
+      where: { siteId, deletedAt: null, status: "OPEN" },
       _max: { sequence: true },
     });
-    sequence = (maxSeq._max.sequence ?? 0) + 1;
-  }
-
-  const order = await prisma.order.create({
-    data: {
-      siteId,
-      orderNumber,
-      status,
-      sequence,
-      customerId: customerId ?? null,
-      ...rest,
-      lineItems:
-        lineItems && lineItems.length > 0
-          ? {
-              create: lineItems.map((li) => ({
-                productId: li.productId,
-                targetQuantity: li.targetQuantity,
-              })),
-            }
-          : undefined,
-    },
-    include: orderInclude,
+    return tx.order.create({
+      data: {
+        siteId,
+        orderNumber,
+        sequence: (maxSeq._max.sequence ?? 0) + 1,
+        openedAt: new Date(),
+        createdByUserId: createdByUserId ?? null,
+        customerId: customerId ?? null,
+        ...rest,
+        lineItems:
+          lineItems && lineItems.length > 0
+            ? {
+                create: lineItems.map((li) => ({
+                  productId: li.productId,
+                  targetQuantity: li.targetQuantity,
+                })),
+              }
+            : undefined,
+      },
+      include: orderInclude,
+    });
   });
 
   publishEntityEvent({
@@ -386,6 +393,10 @@ export async function list(filter: ListOrdersFilter = {}) {
         return [{ dueDate: { sort: sortDir, nulls: "last" } }, { orderNumber: "asc" }];
       case "createdAt":
         return [{ createdAt: sortDir }];
+      // A closed list ordered by when things closed. Nulls last so an
+      // unclosed order never leads a "most recently completed" page.
+      case "completedAt":
+        return [{ completedAt: { sort: sortDir, nulls: "last" } }, { orderNumber: "asc" }];
       default:
         return [{ sequence: { sort: "asc", nulls: "last" } }, { createdAt: "desc" }];
     }
@@ -431,7 +442,7 @@ export async function update(id: string, input: UpdateOrderInput) {
 
   // Terminal statuses: no edits at all. Everything else is fully editable —
   // production no longer writes to orders, so there is nothing to protect.
-  if (order.status === "COMPLETED" || order.status === "CANCELLED") {
+  if (isTerminal(order.status)) {
     return { error: "Cannot edit completed or cancelled orders", code: "NOT_EDITABLE" };
   }
 
@@ -473,8 +484,11 @@ export async function remove(id: string) {
     return { error: "Order not found", code: "ORDER_NOT_FOUND" };
   }
 
-  if (order.status !== "DRAFT" && order.status !== "CANCELLED") {
-    return { error: "Can only delete orders in DRAFT or CANCELLED status", code: "NOT_DELETABLE" };
+  // Closing and binning are distinct acts: an order must be cancelled before
+  // it can be removed, so every deleted order carries a recorded reason for
+  // being closed. A completed one consumed stock and is never deletable.
+  if (order.status !== "CANCELLED") {
+    return { error: "Only cancelled orders can be deleted", code: "NOT_DELETABLE" };
   }
 
   await prisma.order.update({
@@ -512,9 +526,7 @@ export async function transitionStatus(id: string, targetStatus: OrderStatus, op
       id: true,
       siteId: true,
       status: true,
-      previousStatus: true,
       deletedAt: true,
-      sequence: true,
       site: { select: { workspaceId: true } },
     },
   });
@@ -539,26 +551,13 @@ export async function transitionStatus(id: string, targetStatus: OrderStatus, op
     return completeOrder(order.id, order.siteId, order.site.workspaceId, opts);
   }
 
-  const updateData: Record<string, unknown> = { status: targetStatus };
-
-  // Store previous status when entering ON_HOLD
-  if (targetStatus === "ON_HOLD") {
-    updateData.previousStatus = currentStatus;
-  }
-
-  // Restore previous status when leaving ON_HOLD
-  if (currentStatus === "ON_HOLD" && (targetStatus === "OPEN" || targetStatus === "IN_PROGRESS")) {
-    updateData.previousStatus = null;
-  }
-
-  // Assign sequence when transitioning to OPEN (if not already set)
-  if (targetStatus === "OPEN" && order.sequence == null) {
-    const maxSeq = await prisma.order.aggregate({
-      where: { siteId: order.siteId, deletedAt: null },
-      _max: { sequence: true },
-    });
-    updateData.sequence = (maxSeq._max.sequence ?? 0) + 1;
-  }
+  // Completion returned above, so cancellation is the only target left: an
+  // order is created OPEN (which is where openedAt and sequence are assigned)
+  // and never returns to OPEN from anywhere.
+  const updateData: Record<string, unknown> = {
+    status: targetStatus,
+    cancelledAt: new Date(),
+  };
 
   const updated = await prisma.order.update({
     where: { id },
@@ -612,9 +611,10 @@ async function completeOrder(orderId: string, siteId: string, workspaceId: strin
     const txRaw = tx as unknown as { $queryRaw: typeof prisma.$queryRaw };
     const stockRows =
       productIds.length > 0
-        ? await txRaw.$queryRaw<Array<{ productId: string; available: number }>>`
+        ? await txRaw.$queryRaw<Array<{ productId: string; available: number; raw: number }>>`
             SELECT "productId",
-                   GREATEST(produced - scrapped - consumed + adjustment, 0)::float8 AS available
+                   GREATEST(produced - scrapped - consumed + adjustment, 0)::float8 AS available,
+                   (produced - scrapped - consumed + adjustment)::float8 AS raw
             FROM "ProductStock"
             WHERE "siteId" = ${siteId}::uuid AND "productId" = ANY(${productIds}::uuid[])
             ORDER BY "productId"
@@ -631,10 +631,38 @@ async function completeOrder(orderId: string, siteId: string, workspaceId: strin
       return { lineItemId: li.id, productId: li.productId, target, take };
     });
 
+    // A clamped-negative availability means the stock cache says less than
+    // nothing is on hand. Every take against it is 0, so the order would
+    // complete with an empty ledger and no explanation. Say so once, loudly,
+    // rather than letting it fail silently forever.
+    for (const row of stockRows) {
+      if (row.raw < 0) {
+        console.error(
+          `[order] ProductStock for site ${siteId} product ${row.productId} is negative (${row.raw}); ` +
+            `availability clamps to 0, so completing order ${orderId} will consume nothing for it.`,
+        );
+      }
+    }
+
     const shortCount = takes.filter((t) => t.take < t.target).length;
-    if (shortCount > 0 && !allowPartial) {
+
+    // Take is derived from raw on-hand, but the fill queue shows FIFO
+    // coverage — so an order can take stock the queue attributed to an
+    // earlier one. That is allowed (nothing is reserved; first to complete
+    // wins) but it must never happen silently: it needs the same explicit
+    // confirmation completing short does. Walked against `tx`, under the
+    // locks held above, so the answer cannot drift before the consume.
+    const coverage = productIds.length > 0 ? await computeCoverage(siteId, productIds, tx) : null;
+    const jumpingQueue = takes.some(
+      (t) => t.take > (coverage?.byLineItem.get(t.lineItemId)?.coveredQuantity ?? t.take),
+    );
+
+    if ((shortCount > 0 || jumpingQueue) && !allowPartial) {
       return {
-        error: `Order is not fully covered by stock (${shortCount} line${shortCount === 1 ? "" : "s"} short)`,
+        error:
+          shortCount > 0
+            ? `Order is not fully covered by stock (${shortCount} line${shortCount === 1 ? "" : "s"} short)`
+            : "Completing this order would take stock the fill queue has ahead of it",
         code: "PARTIAL_COVERAGE",
       } as const;
     }
@@ -666,7 +694,9 @@ async function completeOrder(orderId: string, siteId: string, workspaceId: strin
 
     const updated = await tx.order.update({
       where: { id: orderId },
-      data: { status: "COMPLETED" },
+      // Stamped in the same transaction as the consumption rows, so the two
+      // can never disagree about when the order closed.
+      data: { status: "COMPLETED", completedAt: new Date() },
       include: orderDetailInclude,
     });
     return { data: updated, consumedProducts: consuming.map((t) => t.productId) };
@@ -680,7 +710,7 @@ async function completeOrder(orderId: string, siteId: string, workspaceId: strin
     entityId: orderId,
     siteId,
     workspaceId,
-    changedFields: ["status"],
+    changedFields: ["status", "completedAt"],
   });
   for (const productId of new Set(result.consumedProducts)) {
     publishEntityEvent({
@@ -710,7 +740,7 @@ export async function addLineItem(orderId: string, input: { productId: string; t
     return { error: "Order not found", code: "ORDER_NOT_FOUND" };
   }
 
-  if (order.status === "COMPLETED" || order.status === "CANCELLED") {
+  if (isTerminal(order.status)) {
     return { error: "Cannot modify line items on a completed or cancelled order", code: "NOT_EDITABLE" };
   }
 
@@ -774,7 +804,7 @@ export async function updateLineItem(lineItemId: string, input: { targetQuantity
     return { error: "Line item not found", code: "LINE_ITEM_NOT_FOUND" };
   }
 
-  if (lineItem.order.status === "COMPLETED" || lineItem.order.status === "CANCELLED") {
+  if (isTerminal(lineItem.order.status)) {
     return { error: "Cannot modify line items on a completed or cancelled order", code: "NOT_EDITABLE" };
   }
 
@@ -826,7 +856,7 @@ export async function removeLineItem(lineItemId: string) {
     return { error: "Line item not found", code: "LINE_ITEM_NOT_FOUND" };
   }
 
-  if (lineItem.order.status === "COMPLETED" || lineItem.order.status === "CANCELLED") {
+  if (isTerminal(lineItem.order.status)) {
     return { error: "Cannot modify line items on a completed or cancelled order", code: "NOT_EDITABLE" };
   }
 

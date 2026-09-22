@@ -67,6 +67,11 @@ const EXACT: Record<string, OrpcErrorCode> = {
   REPLACEMENT_IS_SELF: "CONFLICT",
   REPLACEMENT_NOT_IN_GROUP: "CONFLICT",
   INVALID_STATE: "CONFLICT",
+  // The order lifecycle's three state gates: the request was well-formed, the
+  // record was in the wrong state for it.
+  INVALID_TRANSITION: "CONFLICT",
+  NOT_EDITABLE: "CONFLICT",
+  NOT_DELETABLE: "CONFLICT",
   STATION_EVENT_DISABLED: "CONFLICT",
   DOCUMENT_PENDING: "CONFLICT",
   INVALID_PARENT: "CONFLICT",
