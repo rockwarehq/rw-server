@@ -52,19 +52,22 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           echo "Publishing @rockwarehq/api-client@${VERSION}"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          DIST_TAG=$(node -p "require('./package.json').publishConfig?.tag || 'latest'")
+          echo "dist_tag=${DIST_TAG}" >> $GITHUB_OUTPUT
         working-directory: packages/api-client
 
       - name: Publish to GitHub Packages
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "Dry run enabled - running npm publish --dry-run"
-            pnpm publish --no-git-checks --dry-run
+            pnpm publish --no-git-checks --tag "$NPM_DIST_TAG" --dry-run
           else
-            pnpm publish --no-git-checks
+            pnpm publish --no-git-checks --tag "$NPM_DIST_TAG"
           fi
         working-directory: packages/api-client
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_DIST_TAG: ${{ steps.version.outputs.dist_tag }}
 
       - name: Summary
         run: |

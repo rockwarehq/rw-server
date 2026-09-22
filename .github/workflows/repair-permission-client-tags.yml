@@ -1,0 +1,25 @@
+name: Repair permission client tags
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://npm.pkg.github.com"
+      - name: Assign prerelease tags and restore stable tags
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npm dist-tag add @rockwarehq/rpc-client@0.37.0-permissions.0 permissions
+          npm dist-tag add @rockwarehq/rpc-client@0.36.0 latest
+          npm dist-tag add @rockwarehq/api-client@0.12.0-permissions.0 permissions
+          npm dist-tag add @rockwarehq/api-client@0.11.0 latest
