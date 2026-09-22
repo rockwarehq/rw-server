@@ -7,6 +7,10 @@ on:
         description: "Dry run (skip actual publish)"
         type: boolean
         default: false
+      repair_tags:
+        description: "Restore stable latest and assign the permission prerelease tag without publishing"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -58,7 +62,10 @@ jobs:
 
       - name: Publish to GitHub Packages
         run: |
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
+          if [ "${{ inputs.repair_tags }}" = "true" ]; then
+            pnpm dist-tag add @rockwarehq/api-client@0.12.0-permissions.0 permissions
+            pnpm dist-tag add @rockwarehq/api-client@0.11.0 latest
+          elif [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "Dry run enabled - running npm publish --dry-run"
             pnpm publish --no-git-checks --tag "$NPM_DIST_TAG" --dry-run
           else
