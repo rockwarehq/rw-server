@@ -27,10 +27,99 @@ export const RESERVED_PERMISSIONS = [OWNER_PERMISSION] as const;
 export type Resource = (typeof RESOURCES)[number];
 export type Action = (typeof ACTIONS)[number];
 export type ReservedPermission = (typeof RESERVED_PERMISSIONS)[number];
-export type Permission = `${Resource}:${Action}` | ReservedPermission;
+
+// ── Customer permission catalog (target model) ──────────────────────────
+// The catalog is shrinking to eight responsibility-based keys. During the
+// transition BOTH vocabularies are valid: the legacy `resource:action`
+// strings above stay in the Permission union (and role rows carry both key
+// sets) until every call site checks the new keys, after which the legacy
+// half of the union and the legacy data are removed together.
+
+export const CUSTOMER_PERMISSIONS = [
+  "production:read",
+  "production:write",
+  "production:admin",
+  "planning:read",
+  "planning:write",
+  "configuration:read",
+  "configuration:write",
+  "plant:admin",
+] as const;
+
+export type CustomerPermission = (typeof CUSTOMER_PERMISSIONS)[number];
+export type LegacyPermission = `${Resource}:${Action}`;
+export type Permission = LegacyPermission | CustomerPermission | ReservedPermission;
+
+export interface PermissionDefinition {
+  label: string;
+  description: string;
+  implies?: readonly CustomerPermission[];
+}
+
+/** Shared metadata for authorization, role validation and role editors. */
+export const PERMISSION_DEFINITIONS: Readonly<Record<CustomerPermission, PermissionDefinition>> = {
+  "production:read": {
+    label: "View production",
+    description: "View production in the assigned scope and shared production references.",
+  },
+  "production:write": {
+    label: "Manage production",
+    description: "Manage operational work; plant scope also allows shared definitions and inventory changes.",
+    implies: ["production:read"],
+  },
+  "production:admin": {
+    label: "Administer production",
+    description: "Manage production plus privileged production actions.",
+    implies: ["production:write"],
+  },
+  "planning:read": {
+    label: "View planning",
+    description: "View orders, schedules, shift calendars and supporting production references.",
+  },
+  "planning:write": {
+    label: "Manage planning",
+    description: "Manage orders, customers, scheduling and shift calendars.",
+    implies: ["planning:read"],
+  },
+  "configuration:read": {
+    label: "View technical setup",
+    description: "View equipment, dashboards, data configuration, integrations and automation configuration.",
+  },
+  "configuration:write": {
+    label: "Manage technical setup",
+    description: "Configure equipment, dashboards, data models, integrations and automations.",
+    implies: ["configuration:read"],
+  },
+  "plant:admin": {
+    label: "Administer plant",
+    description: "Manage account access, employee profiles and administrative settings in the assigned scope.",
+  },
+};
+
+/**
+ * Close a permission set over `implies`: write implies read, production
+ * admin implies write (and read, transitively). Applied only AFTER a
+ * grant's exact scope is selected, so implication can never widen scope.
+ * plant:admin and owner:all imply nothing — they are independent
+ * capabilities, not wildcards. Legacy keys have no implications.
+ */
+export function expandPermissions(input: Iterable<string>): Set<Permission> {
+  const out = new Set<Permission>();
+  for (const p of input) {
+    if (isPermission(p)) out.add(p);
+  }
+  // Set iteration also visits members added during the loop, so the
+  // admin → write → read chain closes in one pass.
+  for (const permission of out) {
+    const implied = PERMISSION_DEFINITIONS[permission as CustomerPermission]?.implies;
+    if (implied) for (const p of implied) out.add(p);
+  }
+  return out;
+}
 
 export const ALL_PERMISSIONS: Permission[] = [
   ...RESOURCES.flatMap((r) => ACTIONS.map((a) => `${r}:${a}` as Permission)),
+  ...CUSTOMER_PERMISSIONS,
   ...RESERVED_PERMISSIONS,
 ];
 
@@ -88,6 +177,9 @@ const WC_READ_GLOBAL: readonly Permission[] = [
   "employee:read",
 ];
 
+// No new-vocabulary keys here on purpose: in the target model a workcenter
+// grant confers production access only, so the legacy global reads/writes
+// below simply disappear at the contract step instead of being renamed.
 export const WC_GRANT_GLOBAL_PERMISSIONS: Record<WorkcenterAccessLevel, readonly Permission[]> = {
   READ: WC_READ_GLOBAL,
   WRITE: [
@@ -108,8 +200,18 @@ export const WC_GRANT_GLOBAL_PERMISSIONS: Record<WorkcenterAccessLevel, readonly
 // settings/user/billing/notifications appear in neither map: those stay
 // with plant admins.
 export const WC_GRANT_SCOPED_PERMISSIONS: Record<WorkcenterAccessLevel, readonly Permission[]> = {
-  READ: ["status:read", "calls:read", "modes:read"],
-  WRITE: ["status:read", "status:write", "calls:read", "calls:write", "modes:read", "modes:write", "facility:write"],
+  READ: ["status:read", "calls:read", "modes:read", "production:read"],
+  WRITE: [
+    "status:read",
+    "status:write",
+    "calls:read",
+    "calls:write",
+    "modes:read",
+    "modes:write",
+    "facility:write",
+    "production:read",
+    "production:write",
+  ],
 };
 
 function workcenterAccessPermissions(access: string): {
@@ -136,8 +238,18 @@ function workcenterAccessPermissions(access: string): {
 export const BASE_WORKCENTER_ACCESS_KEY = "baseWorkcenterAccess" as const;
 export type BaseWorkcenterAccess = "ALL" | "GRANTS_REQUIRED";
 
-const POLICY_FLOOR_PERMISSIONS: ReadonlySet<Permission> = new Set(["status:read", "calls:read", "modes:read"]);
-const POLICY_EXEMPT_MARKER: Permission = "status:write";
+// production:read is the new-vocabulary floor read; production:write/admin
+// mark management tier the way status:write does for legacy arrays. The
+// floor is dropped from the RAW role array BEFORE implication expansion, so
+// a stripped role cannot imply its way back to floor visibility (exempt
+// roles are never stripped in the first place).
+const POLICY_FLOOR_PERMISSIONS: ReadonlySet<Permission> = new Set([
+  "status:read",
+  "calls:read",
+  "modes:read",
+  "production:read",
+]);
+const POLICY_EXEMPT_MARKERS: ReadonlySet<string> = new Set(["status:write", "production:write", "production:admin"]);
 
 function assignmentDropsFloor(
   assignment: { siteId: string | null; permissions: string[] },
@@ -146,8 +258,28 @@ function assignmentDropsFloor(
   return (
     assignment.siteId !== null &&
     grantsRequired.has(assignment.siteId) &&
-    !assignment.permissions.includes(POLICY_EXEMPT_MARKER)
+    !assignment.permissions.some((p) => POLICY_EXEMPT_MARKERS.has(p))
   );
+}
+
+/**
+ * The permission set ONE role assignment contributes: validate the raw
+ * strings, apply the floor drop, then close over implications. Every
+ * evaluation path (snapshot and fresh-load alike) funnels through here.
+ *
+ * A role row may hold legacy keys, new keys, or both during the transition;
+ * each string is evaluated literally — there is no mapping between the two
+ * vocabularies at runtime. The expand/contract data migrations own that
+ * translation.
+ */
+function effectiveAssignmentPermissions(permissions: readonly string[], dropFloor: boolean): Set<Permission> {
+  const held: string[] = [];
+  for (const p of permissions) {
+    if (!ALL_PERMISSIONS_SET.has(p as Permission)) continue;
+    if (dropFloor && POLICY_FLOOR_PERMISSIONS.has(p as Permission)) continue;
+    held.push(p);
+  }
+  return expandPermissions(held);
 }
 
 // ── Permission checks ────────────────────────────────────────────────────
@@ -255,11 +387,8 @@ export function snapshotEffectivePermissions(
     // GRANTS_REQUIRED sites strip the floor reads from read-tier site roles;
     // workcenter grants re-add them per workcenter in the loop below.
     const dropFloor = assignmentDropsFloor(assignment, grantsRequired);
-    for (const p of assignment.permissions) {
-      if (dropFloor && POLICY_FLOOR_PERMISSIONS.has(p as Permission)) continue;
-      if (ALL_PERMISSIONS_SET.has(p as Permission)) {
-        out.add(p as Permission);
-      }
+    for (const p of effectiveAssignmentPermissions(assignment.permissions, dropFloor)) {
+      out.add(p);
     }
   }
   for (const grantRow of snapshot.workcenterGrants ?? []) {
@@ -295,13 +424,12 @@ export function snapshotAccessibleSites(snapshot: PermissionSnapshot, permission
   const siteIds = new Set<string>();
   const grantsRequired = new Set(snapshot.grantsRequiredSiteIds ?? []);
   for (const assignment of snapshot.assignments) {
-    if (!assignment.permissions.includes(permission)) continue;
-    // Keep "held at X" ⇔ "X accessible" consistent under the base-access
-    // policy: floor perms stripped by GRANTS_REQUIRED don't make the site
-    // accessible either (grants below still add their sites).
-    if (POLICY_FLOOR_PERMISSIONS.has(permission) && assignmentDropsFloor(assignment, grantsRequired)) {
-      continue;
-    }
+    // Evaluating the EFFECTIVE per-assignment set keeps "held at X" ⇔ "X
+    // accessible" consistent everywhere: floor perms stripped by
+    // GRANTS_REQUIRED don't make the site accessible (grants below still
+    // add their sites), while implied keys do.
+    const dropFloor = assignmentDropsFloor(assignment, grantsRequired);
+    if (!effectiveAssignmentPermissions(assignment.permissions, dropFloor).has(permission)) continue;
     if (assignment.siteId === null) return { all: true };
     siteIds.add(assignment.siteId);
   }
@@ -312,6 +440,29 @@ export function snapshotAccessibleSites(snapshot: PermissionSnapshot, permission
     }
   }
 
+  return { all: false, siteIds: [...siteIds] };
+}
+
+/**
+ * Sites where the snapshot holds ANY access at all — membership visibility
+ * for the site directory and token site claims. Decoupled from any single
+ * permission on purpose: as call sites migrate off the legacy keys, roles
+ * stop being guaranteed to carry facility:read, but a role assignment (or a
+ * workcenter grant) at a site should still make that site visible.
+ */
+export function snapshotVisibleSites(snapshot: PermissionSnapshot): AccessibleSites {
+  if (snapshot.systemRole) {
+    return systemRolePermissions(snapshot.systemRole) ? { all: true } : { all: false, siteIds: [] };
+  }
+  const siteIds = new Set<string>();
+  for (const assignment of snapshot.assignments) {
+    if (assignment.siteId === null) return { all: true };
+    siteIds.add(assignment.siteId);
+  }
+  for (const grantRow of snapshot.workcenterGrants ?? []) {
+    const { global, scoped } = workcenterAccessPermissions(grantRow.access);
+    if (global.length || scoped.length) siteIds.add(grantRow.siteId);
+  }
   return { all: false, siteIds: [...siteIds] };
 }
 
@@ -366,12 +517,24 @@ export async function getAccessibleSites(
   return snapshotAccessibleSites(snapshot, permission);
 }
 
+export async function getVisibleSites(userId: string, workspaceId: string): Promise<AccessibleSites> {
+  const snapshot = await loadPermissionSnapshot(userId, workspaceId);
+  if (!snapshot) return { all: false, siteIds: [] };
+  return snapshotVisibleSites(snapshot);
+}
+
+/**
+ * Without a permission this lists the user's VISIBLE sites (any assignment
+ * or grant there); with one it lists sites holding that permission.
+ */
 export async function listAccessibleSites(
   userId: string,
   workspaceId: string,
-  permission: Permission = "facility:read",
+  permission?: Permission,
 ): Promise<AccessibleSiteRef[]> {
-  const access = await getAccessibleSites(userId, permission, workspaceId);
+  const access = permission
+    ? await getAccessibleSites(userId, permission, workspaceId)
+    : await getVisibleSites(userId, workspaceId);
   return prisma.site.findMany({
     where: {
       workspaceId,
