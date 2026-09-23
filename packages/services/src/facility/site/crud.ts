@@ -189,7 +189,11 @@ export async function update(id: string, input: UpdateSiteInput) {
 
   const site = await prisma.site.update({
     where: { id },
-    data: updateData,
+    data: {
+      ...updateData,
+      // The plant bucket carries the site's name.
+      ...(name !== undefined ? { buckets: { updateMany: { where: { kind: "PLANT" }, data: { name } } } } : {}),
+    },
     include: {
       _count: {
         select: { workcenters: true, gateways: true, datasources: true },

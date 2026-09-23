@@ -213,6 +213,8 @@ export async function update(id: string, input: UpdateWorkcenterInput) {
       },
     },
   });
+  // The workcenter's bucket carries its name.
+  if (name !== undefined) await prisma.bucket.updateMany({ where: { workcenterId: id }, data: { name } });
 
   publishEntityEvent({
     action: "updated",
