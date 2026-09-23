@@ -1,5 +1,8 @@
 // The schema is split into one file per model. Each file also holds that
-// model's enums. Old models that no code uses live in archive/.
+// model's enums. A folder groups a model with the models that only exist to
+// serve it (station/ holds station, station-version, station-state-log...).
+// Models with no such family stay here. Old models that no code uses live in
+// archive/.
 
 generator client {
   provider     = "prisma-client"

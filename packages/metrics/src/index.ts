@@ -6,7 +6,7 @@
  * update the functions here to match.
  *
  * SQL source:
- *   packages/db/schema/metric-bucket.prisma (generated column comments)
+ *   packages/db/schema/metric-bucket/metric-bucket.prisma (generated column comments)
  *   packages/db/migrations/20260325000000_oee_zero_not_null/migration.sql
  */
 

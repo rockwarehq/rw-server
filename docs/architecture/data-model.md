@@ -40,7 +40,7 @@ Other domains: `iam` (roles/assignments), `api-token`, `audit`, `automation`, `d
 
 ## Metric buckets
 
-`MetricBucket` (`packages/db/schema/metric-bucket.prisma`) is the time-sliced aggregate that powers every KPI:
+`MetricBucket` (`packages/db/schema/metric-bucket/metric-bucket.prisma`) is the time-sliced aggregate that powers every KPI:
 
 - **Keyed by** `(entityType, entityId, granularity, startTime)` — entity is STATION, WORKCENTER, SITE, or JOB; granularity is MINUTE, HOUR, SHIFT, or DAY.
 - **Shift-aware**: HOUR/SHIFT buckets link a `ShiftInstance` and carry `businessDate`/`businessShift`, so "yesterday's night shift" is an indexed query, not timezone math.

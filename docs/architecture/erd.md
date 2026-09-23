@@ -8,7 +8,7 @@ Crow's-foot ER diagrams for all ~100 models in `packages/db/schema/`, one diagra
 - **Dashed line** — a *soft reference*: an id column with **no FK constraint** (polymorphic columns, loose audit ids, string keys). Every dashed line is an audit target — nothing stops these ids from dangling.
 - **Crow's foot cardinality** — `||` exactly one, `|o` zero or one, `o{` zero or more.
 - Relationship labels note the `onDelete` behavior only where it's surprising (Restrict, SetNull, or a missing Cascade on a hot path).
-- **Attributes are deliberately incomplete.** Each entity shows its PK, FK and soft-ref columns, unique/discriminator columns, and its soft-delete column. Full column lists live in the Prisma files. Each model has its own file, named after the model (`StationStateLog` → `station-state-log.prisma`). Models no code uses are in `archive/`. Entities drawn without attributes are stubs owned by another section; a stub's own relationships (e.g. its Site ownership) are drawn only in its home diagram.
+- **Attributes are deliberately incomplete.** Each entity shows its PK, FK and soft-ref columns, unique/discriminator columns, and its soft-delete column. Full column lists live in the Prisma files. Each model has its own file, named after the model (`StationStateLog` → `station-state-log.prisma`). A folder groups a model with the models that only exist to serve it (`station/` holds `station.prisma`, `station-version.prisma`, …). Models no code uses are in `archive/`. Entities drawn without attributes are stubs owned by another section; a stub's own relationships (e.g. its Site ownership) are drawn only in its home diagram.
 - Polymorphic soft refs (`MetricBucket.entityId`, `DocumentLink.targetId`) are drawn `..o|` toward *each* possible target even though the column itself is required — per row, only the one target matching the type discriminator applies.
 
 ## Overview — core entities
@@ -48,7 +48,7 @@ erDiagram
 
 ## Tenancy & IAM
 
-Source: `packages/db/schema/` — `workspace.prisma`, `site.prisma`, `user.prisma`, `bucket.prisma`, `bucket-access.prisma`, `api-token.prisma`, `audit-log.prisma`; old models in `archive/`.
+Source: `packages/db/schema/` — `workspace.prisma`, `site/`, `user/`, `bucket/`, `api-token.prisma`, `audit-log.prisma`; old models in `archive/`.
 
 ```mermaid
 erDiagram
@@ -158,7 +158,7 @@ erDiagram
 
 ## Asset hierarchy
 
-Source: `packages/db/schema/` — `workcenter.prisma` and the `station*.prisma` files.
+Source: `packages/db/schema/` — `workcenter.prisma` and `station/`.
 
 ```mermaid
 erDiagram
@@ -258,7 +258,7 @@ erDiagram
 
 ## Job & Tool
 
-Source: `packages/db/schema/` — the `job*.prisma` and `tool*.prisma` files.
+Source: `packages/db/schema/` — `job/` and `tool/`.
 
 ```mermaid
 erDiagram
@@ -428,7 +428,7 @@ erDiagram
 
 ## Inventory, Orders & Materials
 
-Source: `packages/db/schema/` — the `order*`, `customer`, `product*`, `material*`, `inventory-item` and `item-disposition*` files. The densest domain, split into four diagrams.
+Source: `packages/db/schema/` — `order/`, `product/`, `material/` and `inventory-item/`. The densest domain, split into four diagrams.
 
 ### Fulfillment orders
 
@@ -650,7 +650,7 @@ erDiagram
 
 ## Shifts
 
-Source: `packages/db/schema/` — the `shift*.prisma` files.
+Source: `packages/db/schema/` — `shift/`.
 
 ```mermaid
 erDiagram
@@ -721,7 +721,7 @@ erDiagram
 
 ## Metrics
 
-Source: `packages/db/schema/metric-bucket.prisma`. `MetricBucketLog` is an identical archive twin (plus `archivedAt`) with the same soft references — omitted from the diagram for brevity.
+Source: `packages/db/schema/metric-bucket/`. `MetricBucketLog` is an identical archive twin (plus `archivedAt`) with the same soft references — omitted from the diagram for brevity.
 
 ```mermaid
 erDiagram
@@ -763,7 +763,7 @@ erDiagram
 
 ## Graph (LiveStore configuration)
 
-Source: `packages/db/schema/` — the `graph*.prisma` files. These tables are the *definitions* for the in-house reactive graph engine; computed values never touch Postgres.
+Source: `packages/db/schema/` — `graph/`. These tables are the *definitions* for the in-house reactive graph engine; computed values never touch Postgres.
 
 ```mermaid
 erDiagram
@@ -843,7 +843,7 @@ Cross-store relationships (not FK-enforceable):
 
 ## User-defined entities (EAV / JSONB)
 
-Source: `packages/db/schema/` — the `object-*.prisma` files.
+Source: `packages/db/schema/` — `object-schema/`.
 
 ```mermaid
 erDiagram
@@ -885,7 +885,7 @@ erDiagram
 
 ## Edge & devices
 
-Source: `packages/db/schema/` — `gateway*.prisma`, `command-queue.prisma`, `datasource.prisma`, `point*.prisma`, `driver.prisma`.
+Source: `packages/db/schema/` — `gateway/` and `datasource/`.
 
 ```mermaid
 erDiagram
@@ -962,7 +962,7 @@ erDiagram
 
 ## Employees & operators
 
-Source: `packages/db/schema/` — the `employee*.prisma` files and `station-logon-session.prisma`.
+Source: `packages/db/schema/` — `employee/` and `station/station-logon-session.prisma`.
 
 ```mermaid
 erDiagram
@@ -1021,7 +1021,7 @@ erDiagram
 
 ## Presentation
 
-Source: `packages/db/schema/` — `dashboard.prisma`, `display*.prisma`, `site-andon-rule.prisma`, `saved-view.prisma`, `document*.prisma`.
+Source: `packages/db/schema/` — `dashboard.prisma`, `display/`, `site/site-andon-rule.prisma`, `saved-view.prisma`, `document/`.
 
 ```mermaid
 erDiagram
@@ -1103,7 +1103,7 @@ erDiagram
 
 ## Integrations & Automations
 
-Source: `packages/db/schema/` — the `integration*.prisma` and `automation*.prisma` files.
+Source: `packages/db/schema/` — `integration/` and `automation/`.
 
 ```mermaid
 erDiagram
@@ -1238,7 +1238,7 @@ Station, Job, Tool, ToolCavity, Product, Material, ProductMaterial, JobProduct, 
 
 ### 5. Two unrelated "order" concepts
 
-`WorkOrder` (`archive/work-order.prisma`; `Cycle.orderId` → **WorkOrder**) vs. `Order`/`OrderLineItem` (`order.prisma`, fulfillment). `WorkOrder` is archived: no code reads or writes it, and it waits to be dropped. `Order` is the only live one.
+`WorkOrder` (`archive/work-order.prisma`; `Cycle.orderId` → **WorkOrder**) vs. `Order`/`OrderLineItem` (`order/`, fulfillment). `WorkOrder` is archived: no code reads or writes it, and it waits to be dropped. `Order` is the only live one.
 
 ### 6. Tenancy scoping inconsistencies
 
