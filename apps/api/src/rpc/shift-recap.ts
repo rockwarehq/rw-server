@@ -523,23 +523,30 @@ const commentCreateInputSchema = z.object({
   workCenterId: z.uuid(),
   stationId: z.uuid().nullable().optional(),
   text: z.string().min(1).max(5000),
+  /** Who is writing it. Required from an operator terminal, which has no user. */
+  employeeId: z.uuid().optional(),
 });
 
-export const commentCreate = userRequired.input(commentCreateInputSchema).handler(async ({ input, context }) => {
-  // Written on the workcenter's own site, whatever siteId was sent.
-  const { siteId } = await context.access.require("MANAGE", { workcenter: input.workCenterId });
+// Open to operator terminals, like calls: a display writes at its own site,
+// and the operator names themselves since the display is no one.
+export const commentCreate = userOrDisplayRequired
+  .input(commentCreateInputSchema)
+  .handler(async ({ input, context }) => {
+    // Written on the workcenter's own site, whatever siteId was sent.
+    const { siteId } = await context.access.require("MANAGE", { workcenter: input.workCenterId });
 
-  const result = await shiftCommentService.create({
-    siteId,
-    shiftInstanceId: input.shiftInstanceId,
-    workcenterId: input.workCenterId,
-    stationId: input.stationId ?? null,
-    text: input.text,
-    createdById: context.current.user.id,
+    const result = await shiftCommentService.create({
+      siteId,
+      shiftInstanceId: input.shiftInstanceId,
+      workcenterId: input.workCenterId,
+      stationId: input.stationId ?? null,
+      text: input.text,
+      createdById: context.current.kind === "user" ? context.current.user.id : null,
+      createdByEmployeeId: input.employeeId,
+    });
+    if (result.error !== undefined) throwServiceError(result);
+    return result.data;
   });
-  if (result.error !== undefined) throwServiceError(result);
-  return result.data;
-});
 
 const commentUpdateInputSchema = z.object({
   id: z.uuid(),

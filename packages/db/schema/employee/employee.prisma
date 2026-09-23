@@ -32,6 +32,8 @@ model Employee {
   startedModeLogs StationModeLog[] @relation("ModeLogStartedBy")
   endedModeLogs   StationModeLog[] @relation("ModeLogEndedBy")
 
+  shiftComments ShiftComment[] @relation("ShiftCommentCreatedBy")
+
   notificationGroups     NotificationGroup[]    @relation("NotificationGroupMembers")
   notificationDeliveries NotificationDelivery[]
 

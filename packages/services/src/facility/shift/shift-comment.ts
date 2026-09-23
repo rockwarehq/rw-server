@@ -1,12 +1,20 @@
 import prisma from "@rw/db";
 
+import { resolveEmployee } from "../../employee/actor-role.js";
+
 export interface CreateShiftCommentInput {
   siteId: string;
   shiftInstanceId: string;
   workcenterId: string;
   stationId?: string | null;
   text: string;
-  createdById: string;
+  /** The signed-in user, when there is one; null from an operator terminal. */
+  createdById: string | null;
+  /**
+   * The employee writing it. Required in practice from a terminal (the RPC
+   * enforces that); for a user, omitted means their linked employee.
+   */
+  createdByEmployeeId?: string;
 }
 
 export interface UpdateShiftCommentInput {
@@ -40,19 +48,31 @@ const commentSelect = {
       email: true,
     },
   },
+  createdByEmployee: {
+    select: {
+      id: true,
+      version: { select: { firstName: true, lastName: true, employeeNumber: true } },
+    },
+  },
 } as const;
 
 export async function create(input: CreateShiftCommentInput) {
-  const { siteId, shiftInstanceId, workcenterId, stationId, text, createdById } = input;
+  const { siteId, shiftInstanceId, workcenterId, stationId, text, createdById, createdByEmployeeId } = input;
 
   const trimmed = text.trim();
   if (!trimmed) {
     return { error: "Comment text is required", code: "TEXT_REQUIRED" };
   }
 
+  // A comment always has an author: the signed-in user, or — from a
+  // terminal, where there is no user — the operator who wrote it.
+  if (!createdById && !createdByEmployeeId) {
+    return { error: "Choose who is writing this comment", code: "EMPLOYEE_REQUIRED" };
+  }
+
   const shiftInstance = await prisma.shiftInstance.findUnique({
     where: { id: shiftInstanceId },
-    select: { id: true, siteId: true, workCenterId: true },
+    select: { id: true, siteId: true, workCenterId: true, site: { select: { workspaceId: true } } },
   });
 
   if (!shiftInstance) {
@@ -92,6 +112,9 @@ export async function create(input: CreateShiftCommentInput) {
     }
   }
 
+  const author = await resolveEmployee(shiftInstance.site.workspaceId, createdByEmployeeId, createdById ?? undefined);
+  if ("error" in author) return author;
+
   const comment = await prisma.shiftComment.create({
     data: {
       siteId,
@@ -100,6 +123,8 @@ export async function create(input: CreateShiftCommentInput) {
       stationId: stationId ?? null,
       text: trimmed,
       createdById,
+      createdByEmployeeId: author.employeeId,
+      createdByEmployeeVersionId: author.employeeVersionId,
     },
     select: commentSelect,
   });
