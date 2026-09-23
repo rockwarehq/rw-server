@@ -3,8 +3,6 @@
 /// to organize, to filter lists, and to slice reports. A record can carry
 /// many labels and a label can be on many records, so groups can overlap:
 /// adding up totals per label can count the same record twice (ADR-0011).
-/// Labels replaced the old "process groups" (ProcessType) and the never-used
-/// ToolClassification/StationClassification tables.
 model Label {
   id    String  @id @default(uuid()) @db.Uuid
   name  String

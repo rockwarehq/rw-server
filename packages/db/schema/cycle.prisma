@@ -50,11 +50,12 @@ model Cycle {
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
   /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
   /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
-  isScheduled Boolean @default(true)
+  isScheduled     Boolean        @default(true)
 
   /// Business date of that shift.
   businessDate DateTime? @db.Date
 
+  // ARCHIVED (never set)
   orderId String?    @db.Uuid
   order   WorkOrder? @relation(fields: [orderId], references: [id])
 

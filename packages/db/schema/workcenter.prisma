@@ -16,7 +16,7 @@ model Workcenter {
   parent   Workcenter?  @relation("WorkcenterHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
   children Workcenter[] @relation("WorkcenterHierarchy")
 
-  // Stations
+  // Relations
   stations            Station[]
   shiftAssignment     ShiftAssignment[]
   shiftInstances      ShiftInstance[]
@@ -26,21 +26,21 @@ model Workcenter {
   displays            Display[]
   itemDispositionLogs ItemDispositionLog[]
   shiftComments       ShiftComment[]
-  signoffs       ShiftSignoff[]
+  signoffs            ShiftSignoff[]
   calls               Call[]
   modeLogs            StationModeLog[]
-  grants              WorkcenterGrant[]
+  grants              WorkcenterGrant[] // ARCHIVED
   cycles              Cycle[]
   inventoryItems      InventoryItem[]
   stateLogs           StationStateLog[]
   jobLogs             StationJobLog[]
   logonSessions       StationLogonSession[]
   materialShiftUsage  MaterialShiftUsage[]
+  bucket              Bucket?
 
   @@unique([siteId, parentId, name])
   @@index([siteId])
   @@index([parentId])
-  bucket Bucket?
 }
 
 enum StationState {
@@ -105,7 +105,7 @@ model Station {
   currentJobId String? @db.Uuid
   currentJob   Job?    @relation("StationCurrentJob", fields: [currentJobId], references: [id], onDelete: SetNull)
 
-  // Version versioning (config fields)
+  // Versioning (config fields)
   currentVersionId String?          @unique @db.Uuid
   currentVersion   StationVersion?  @relation("StationCurrent", fields: [currentVersionId], references: [id])
   versions         StationVersion[] @relation("StationVersions")
@@ -113,8 +113,7 @@ model Station {
   labels       Label[]
   labelFilters LabelFilter[]
 
-  // Allowed jobs (many-to-many via join table)
-  allowedJobs   StationJob[]
+  allowedJobs   StationJob[] // ARCHIVED
   statusReasons StatusReason[]
 
   // Relations
@@ -285,8 +284,6 @@ model StationVersion {
   slowDetect            Decimal?           @db.Decimal(10, 2)
   slowDetectUnit        SlowDetectUnit     @default(PERCENTAGE)
 
-  // Process type (optional, single)
-
   stationId String  @db.Uuid
   station   Station @relation("StationVersions", fields: [stationId], references: [id], onDelete: Cascade)
 
@@ -337,7 +334,7 @@ model StationJobLog {
   jobId String @db.Uuid
   job   Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
-  /// Snapshot of the job version version at assignment time.
+  /// Snapshot of the job version at assignment time.
   jobVersionId String @db.Uuid
 
   startTime         DateTime  @db.Timestamptz(3)
@@ -421,7 +418,8 @@ model JobHistoryAmendment {
   @@index([siteId, status])
 }
 
-/// Assignment: links allowed Jobs to a Station
+/// ARCHIVED — was meant to list the jobs a station may run. Nothing
+/// reads or writes it; it waits to be dropped.
 model StationJob {
   id String @id @default(uuid()) @db.Uuid
 

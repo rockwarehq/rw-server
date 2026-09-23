@@ -3,14 +3,14 @@
 /// Basecamp's single-tenant Campfire puts on its accounts table). Users
 /// carry no workspace column; the one workspace is implied.
 model Workspace {
-  id          String  @id @default(uuid()) @db.Uuid
+  id             String  @id @default(uuid()) @db.Uuid
   /// Always 0. Unique, so the table holds one row.
-  singletonGuard Int  @default(0) @unique
-  name        String  @unique
-  slug        String  @unique
-  description String?
-  isDefault   Boolean @default(false) // Auto-assign new users here
-  settings    Json    @default("{}")
+  singletonGuard Int     @unique @default(0)
+  name           String  @unique
+  slug           String  @unique
+  description    String?
+  isDefault      Boolean @default(false) // Left over from many workspaces; always one now
+  settings       Json    @default("{}")
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -18,7 +18,7 @@ model Workspace {
   // ARCHIVED (pre-account-admin model)
   memberships WorkspaceMembership[]
 
-  // Root SITE locations owned by this workspace (deprecated - use sites)
+  // ARCHIVED (Location replaced by Site)
   locations Location[]
 
   // Sites owned by this workspace
@@ -103,7 +103,7 @@ model Site {
   materials               Material[]
   tools                   Tool[]
   jobs                    Job[]
-  orders                  WorkOrder[]
+  orders                  WorkOrder[] // ARCHIVED
   shiftPattern            ShiftPattern[]
   shiftAssignment         ShiftAssignment[]
   shiftInstances          ShiftInstance[]
@@ -113,13 +113,13 @@ model Site {
   statusReasons           StatusReason[]
   metricBuckets           MetricBucket[]
   metricBucketLogs        MetricBucketLog[]
-  toolStatuses            ToolStatus[]
-  toolLocations           ToolLocation[]
+  toolStatuses            ToolStatus[] // ARCHIVED
+  toolLocations           ToolLocation[] // ARCHIVED
   dashboards              Dashboard[]
   displays                Display[]
   documents               Document[]
   andonRules              SiteAndonRule[]
-  stautsCategories        StatusCategory[]
+  statusCategories        StatusCategory[]
   itemDispositions        ItemDisposition[]
   itemDispositionReason   ItemDispositionReason[]
   itemDispositionLogs     ItemDispositionLog[]
@@ -131,9 +131,9 @@ model Site {
   orderConsumptions       OrderConsumption[]
   productStockAdjustments ProductStockAdjustment[]
   shiftComments           ShiftComment[]
-  shiftSignoffs      ShiftSignoff[]
+  shiftSignoffs           ShiftSignoff[]
   buckets                 Bucket[]
-  roleAssignments         RoleAssignment[]
+  roleAssignments         RoleAssignment[] // ARCHIVED
   materialLedgerEntries   MaterialLedgerEntry[]
   materialShiftUsage      MaterialShiftUsage[]
   graphNodes              GraphNode[]

@@ -8,8 +8,10 @@ model User {
   id           String     @id @default(uuid()) @db.Uuid
   email        String     @unique
   passwordHash String? // Null until invited/registered
-  firstName    String? // Depricated - use employee profile
-  lastName     String? // Depricated - use employee profile
+  /// @deprecated Use the employee profile.
+  firstName    String?
+  /// @deprecated Use the employee profile.
+  lastName     String?
   avatarKey    String? // S3 key for the account avatar; null = initials fallback
   status       UserStatus @default(PENDING)
 
@@ -53,17 +55,17 @@ model User {
   updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
 
   // Relations
-  bucketAccesses             BucketAccess[]
-  memberships                WorkspaceMembership[] // ARCHIVED
-  refreshTokens              RefreshToken[]
-  shiftComments              ShiftComment[]
-  shiftSignoffsPosted   ShiftSignoff[]      @relation("ShiftSignoffPostedBy")
-  shiftSignoffsReopened ShiftSignoff[]      @relation("ShiftSignoffReopenedBy")
-  shiftAmendments            ShiftAmendment[]
-  materialLedgerEntries      MaterialLedgerEntry[]
-  productStockAdjustments    ProductStockAdjustment[]
-  apiTokensCreated           ApiToken[]
-  savedViewsCreated          SavedView[]
+  bucketAccesses          BucketAccess[]
+  memberships             WorkspaceMembership[] // ARCHIVED
+  refreshTokens           RefreshToken[]
+  shiftComments           ShiftComment[]
+  shiftSignoffsPosted     ShiftSignoff[]           @relation("ShiftSignoffPostedBy")
+  shiftSignoffsReopened   ShiftSignoff[]           @relation("ShiftSignoffReopenedBy")
+  shiftAmendments         ShiftAmendment[]
+  materialLedgerEntries   MaterialLedgerEntry[]
+  productStockAdjustments ProductStockAdjustment[]
+  apiTokensCreated        ApiToken[]
+  savedViewsCreated       SavedView[]
 
   // SMS consent decisions this user recorded
   smsConsentEvents SmsConsentEvent[]

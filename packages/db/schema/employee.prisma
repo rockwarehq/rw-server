@@ -35,8 +35,8 @@ model Employee {
   version   EmployeeVersion?  @relation("EmployeeCurrentVersion", fields: [versionId], references: [id])
   versions  EmployeeVersion[] @relation("EmployeeVersions")
 
-  siteAccess  EmployeeSiteAccess[]
-  user        User?
+  siteAccess EmployeeSiteAccess[]
+  user       User?
 
   // Login lockout
   failedLoginAttempts Int       @default(0)
@@ -145,7 +145,7 @@ model StationLogonSession {
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
   /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
   /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
-  isScheduled Boolean @default(true)
+  isScheduled     Boolean        @default(true)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)

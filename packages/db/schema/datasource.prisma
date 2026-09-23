@@ -34,7 +34,7 @@ model Datasource {
   gateway   Gateway? @relation(fields: [gatewayId], references: [id], onDelete: SetNull)
   gatewayId String?  @db.Uuid
 
-  // @deprecated - Use siteId instead. This field is kept for database migration purposes only.
+  /// @deprecated Use siteId. Kept only until the Location table is dropped.
   locationId String?   @db.Uuid
   location   Location? @relation(fields: [locationId], references: [id], onDelete: Restrict)
 

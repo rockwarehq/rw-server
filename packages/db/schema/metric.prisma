@@ -70,7 +70,7 @@ model MetricBucket {
   shiftInstanceId String? @db.Uuid
   /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
   /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
-  isScheduled Boolean @default(true)
+  isScheduled     Boolean @default(true)
 
   /// Business date this bucket belongs to. Derived from ShiftInstance.businessDate
   /// when a shift schedule exists, or from the local calendar date (using
@@ -146,7 +146,7 @@ model MetricBucket {
   // rows every 5s, and any index containing updatedAt makes every one of those
   // updates non-HOT (full index churn on all indexes + planner edge-probe
   // bloat). A [siteId, updatedAt] index existed and had zero scans in
-  // production; see migration 20260812_metricbucket_hot_updates.
+  // production; see migration 20260812190000_metricbucket_hot_updates.
 
   @@unique([entityType, entityId, granularity, startTime])
   @@index([siteId, granularity, startTime])
@@ -177,7 +177,7 @@ model MetricBucketLog {
   shiftInstanceId String? @db.Uuid
   /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
   /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
-  isScheduled Boolean @default(true)
+  isScheduled     Boolean @default(true)
 
   businessDate  DateTime? @db.Date
   businessShift String?

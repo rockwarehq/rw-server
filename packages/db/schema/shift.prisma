@@ -246,7 +246,7 @@ model ShiftInstance {
   materialLedgerEntries   MaterialLedgerEntry[]
   orderConsumptions       OrderConsumption[]
   productStockAdjustments ProductStockAdjustment[]
-  signoffs           ShiftSignoff[]
+  signoffs                ShiftSignoff[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 

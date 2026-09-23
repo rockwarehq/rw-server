@@ -1,19 +1,18 @@
-/// Bucket-based access control for users.
-///
-/// Rows live in containers; access is membership in the container:
-/// - PLANT bucket (one per site): everyone at the plant can read it.
-///   VIEW = read the plant's shared things. MANAGE ("member") = also change
-///   them (jobs, orders, products…). ADMIN = also shop-floor setup, people,
-///   access and settings, and MANAGE on every workcenter at the site.
-/// - WORKCENTER bucket (one per workcenter): the crew.
-///   VIEW = watch the cell's floor. MANAGE = run the cell.
-/// Account admins (User.isAccountAdmin) and
-/// Rockware staff bypass buckets. Evaluated in code:
-/// packages/auth/src/iam/access.ts.
+// Bucket-based access control for users.
+//
+// Rows live in containers; access is membership in the container:
+// - PLANT bucket (one per site): everyone at the plant can read it.
+//   VIEW = read the plant's shared things. MANAGE ("member") = also change
+//   them (jobs, orders, products…). ADMIN = also shop-floor setup, people,
+//   access and settings, and MANAGE on every workcenter at the site.
+// - WORKCENTER bucket (one per workcenter): the crew.
+//   VIEW = watch the cell's floor. MANAGE = run the cell.
+// Account admins (User.isAccountAdmin) and Rockware staff skip buckets.
+// Checked in code: packages/auth/src/iam/access.ts.
 
-/// Internal Rockware staff. Users with a SystemRole resolve access from
-/// code (SUPPORT = read everywhere, ENGINEER = manage/admin everywhere);
-/// they never appear as members of a customer workspace.
+/// Internal Rockware staff. Users with a SystemRole get access from code
+/// (SUPPORT = read everywhere, ENGINEER = manage/admin everywhere). They
+/// hold no bucket access and are not account admins.
 enum SystemRole {
   SUPPORT
   ENGINEER
@@ -33,23 +32,23 @@ enum BucketLevel {
 /// One PLANT bucket per site: partial unique index "Bucket_one_plant_per_site",
 /// hand-written in the bucket_integrity migration (Prisma cannot express it).
 model Bucket {
-  id          String     @id @default(uuid()) @db.Uuid
-  workspaceId String     @db.Uuid
+  id           String     @id @default(uuid()) @db.Uuid
+  workspaceId  String     @db.Uuid
   /// Every bucket belongs to a site today; kept nullable so a future
   /// workspace-level container needs no migration.
-  siteId      String?    @db.Uuid
-  kind        BucketKind
+  siteId       String?    @db.Uuid
+  kind         BucketKind
   /// Set exactly when kind = WORKCENTER (CHECK "Bucket_kind_workcenter_check").
-  workcenterId String?   @unique @db.Uuid
+  workcenterId String?    @unique @db.Uuid
   /// Follows the site/workcenter name; the facility services keep it in step.
-  name        String
+  name         String
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  site       Site?       @relation(fields: [siteId], references: [id], onDelete: Cascade)
-  workcenter Workcenter? @relation(fields: [workcenterId], references: [id], onDelete: Cascade)
+  workspace  Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  site       Site?          @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  workcenter Workcenter?    @relation(fields: [workcenterId], references: [id], onDelete: Cascade)
   accesses   BucketAccess[]
 
   @@index([siteId, kind])
@@ -57,16 +56,16 @@ model Bucket {
 }
 
 model BucketAccess {
-  id           String     @id @default(uuid()) @db.Uuid
-  bucketId     String     @db.Uuid
-  userId       String     @db.Uuid
-  level        BucketLevel
+  id       String      @id @default(uuid()) @db.Uuid
+  bucketId String      @db.Uuid
+  userId   String      @db.Uuid
+  level    BucketLevel
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  bucket     Bucket              @relation(fields: [bucketId], references: [id], onDelete: Cascade)
-  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bucket Bucket @relation(fields: [bucketId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([bucketId, userId])
   @@index([userId])
@@ -76,7 +75,7 @@ model BucketAccess {
 // The role/permission era: Role rows carried permission-string arrays,
 // RoleAssignment linked memberships to them, WorkcenterGrant was the flat
 // per-workcenter grant. The bucket migration compiled all of it into
-// Bucket/BucketAccess rows and workspaceRole. These tables are kept as a
+// Bucket/BucketAccess rows and User.isAccountAdmin. These tables are kept as a
 // frozen audit/rollback archive — NO code reads or writes them.
 
 enum RoleScope {
@@ -86,14 +85,14 @@ enum RoleScope {
 
 /// ARCHIVED — see the bucket migration. No code paths.
 model Role {
-  id          String    @id @default(uuid()) @db.Uuid
-  workspaceId String    @db.Uuid
-  name        String
-  description String?
-  scope       RoleScope
-  permissions String[]
+  id                String    @id @default(uuid()) @db.Uuid
+  workspaceId       String    @db.Uuid
+  name              String
+  description       String?
+  scope             RoleScope
+  permissions       String[]
   legacyPermissions Json?
-  isSystem    Boolean   @default(false)
+  isSystem          Boolean   @default(false)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -127,7 +126,7 @@ model WorkcenterGrant {
   @@index([workcenterId])
 }
 
-/// ARCHIVED — compiled into Plant BucketAccess rows / workspaceRole. No code paths.
+/// ARCHIVED — compiled into Plant BucketAccess rows / User.isAccountAdmin. No code paths.
 model RoleAssignment {
   id           String @id @default(uuid()) @db.Uuid
   membershipId String @db.Uuid

@@ -4,9 +4,7 @@
 
 /// An order is raised OPEN, then either COMPLETED — consuming covered stock and
 /// writing the OrderConsumption ledger — or CANCELLED, closing without
-/// consuming. Both are terminal. DRAFT, IN_PROGRESS and ON_HOLD were the
-/// vocabulary of the retired automatic allocation engine and were removed in
-/// the order-lifecycle simplification.
+/// consuming. Both are terminal.
 enum OrderStatus {
   OPEN
   COMPLETED
@@ -31,24 +29,23 @@ model Customer {
 }
 
 model Order {
-  id                    String       @id @default(uuid()) @db.Uuid
+  id                    String      @id @default(uuid()) @db.Uuid
   orderNumber           String
-  status                OrderStatus  @default(OPEN)
+  status                OrderStatus @default(OPEN)
   /// Manual fill-queue position: the FIFO key coverage walks. Assigned at
   /// creation, rewritten wholesale by `reorder`.
   sequence              Int?
   notes                 String?
   poNumber              String?
-  defaultTargetQuantity Decimal      @default(1) @db.Decimal(18, 4)
-  startDate             DateTime?    @db.Timestamptz(3)
-  dueDate               DateTime?    @db.Timestamptz(3)
+  defaultTargetQuantity Decimal     @default(1) @db.Decimal(18, 4)
+  startDate             DateTime?   @db.Timestamptz(3)
+  dueDate               DateTime?   @db.Timestamptz(3)
 
   /// When the order was raised. Every order is created OPEN, so this is
   /// stamped once at creation and never moves.
   openedAt    DateTime? @db.Timestamptz(3)
-  /// When the order was completed. This is the fact `updatedAt` was standing
-  /// in for; unlike `updatedAt` it cannot drift if anything else touches the
-  /// row.
+  /// When the order was completed. Unlike `updatedAt`, it does not move when
+  /// something else touches the row.
   completedAt DateTime? @db.Timestamptz(3)
   /// When the order was cancelled. COMPLETED and CANCELLED are terminal and
   /// mutually exclusive, so at most one of these two is ever set.
@@ -156,7 +153,7 @@ model ProductStockAdjustment {
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
   /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
   /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
-  isScheduled Boolean @default(true)
+  isScheduled     Boolean        @default(true)
 
   /// Business date of that shift.
   businessDate DateTime? @db.Date
@@ -205,7 +202,7 @@ model OrderConsumption {
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
   /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
   /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
-  isScheduled Boolean @default(true)
+  isScheduled     Boolean        @default(true)
 
   /// Business date of that shift.
   businessDate DateTime? @db.Date
@@ -247,7 +244,7 @@ model Product {
   labels              Label[]
   materialShiftUsage  MaterialShiftUsage[]
   jobProducts         JobProduct[]
-  workOrders          WorkOrder[]
+  workOrders          WorkOrder[] // ARCHIVED
   pictures            ProductPicture[]
   orderLineItems      OrderLineItem[]
   stock               ProductStock[]
@@ -430,7 +427,8 @@ model InventoryItem {
   /// events may supply a measured quantity (e.g. wire length per cycle).
   quantity Decimal @default(1) @db.Decimal(18, 4)
 
-  /// Unit for `quantity`. Blank until a unit source is decided.
+  /// Unit for `quantity`, copied from the station's quantity unit. Blank when
+  /// the station has none.
   quantityUnit String @default("")
 
   cycleId String @db.Uuid
@@ -466,7 +464,7 @@ model InventoryItem {
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
   /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
   /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
-  isScheduled Boolean @default(true)
+  isScheduled     Boolean        @default(true)
 
   /// Business date of that shift.
   businessDate DateTime? @db.Date
@@ -599,7 +597,7 @@ model ItemDispositionLog {
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id])
   /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
   /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
-  isScheduled Boolean @default(true)
+  isScheduled     Boolean        @default(true)
 
   /// Business date of the shift above (star pattern for BI).
   businessDate DateTime? @db.Date
@@ -692,7 +690,7 @@ model MaterialLedgerEntry {
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
   /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
   /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
-  isScheduled Boolean @default(true)
+  isScheduled     Boolean        @default(true)
 
   /// Business date of that shift.
   businessDate DateTime? @db.Date
@@ -736,7 +734,7 @@ model MaterialShiftUsage {
   shiftInstance   ShiftInstance @relation(fields: [shiftInstanceId], references: [id], onDelete: Cascade)
   /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
   /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
-  isScheduled Boolean @default(true)
+  isScheduled     Boolean       @default(true)
 
   stationId String  @db.Uuid
   station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)

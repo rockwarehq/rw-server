@@ -1,6 +1,5 @@
-// @deprecated - This model is kept for database migration purposes only.
-// Use Site, Workcenter, and Station models instead.
-// All application code should use the new hierarchy: Site -> Workcenter -> Station
+// ARCHIVED — Site, Workcenter and Station replaced Location. No code reads
+// or writes it; it waits to be dropped.
 
 enum LocationType {
   SITE
@@ -31,7 +30,7 @@ model Location {
   // Gateways at this location (deprecated - use Site)
   gateways Gateway[]
 
-  // Workspace ownership (only set on SITE locations)
+  // Workspace that owned it (was only set on SITE locations)
   workspaceId String?    @db.Uuid
   workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 

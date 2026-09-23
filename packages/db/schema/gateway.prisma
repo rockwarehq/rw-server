@@ -41,7 +41,7 @@ model Gateway {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  // @deprecated - Use siteId instead. This field is kept for database migration purposes only.
+  /// @deprecated Use siteId. Kept only until the Location table is dropped.
   locationId String?   @db.Uuid
   location   Location? @relation(fields: [locationId], references: [id], onDelete: Restrict)
 

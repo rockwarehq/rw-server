@@ -1,8 +1,5 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+// The schema is split into one file per model. Each file also holds that
+// model's enums. Old models that no code uses live in archive/.
 
 generator client {
   provider     = "prisma-client"

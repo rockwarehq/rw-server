@@ -11,11 +11,11 @@ model Tool {
   currentVersion ToolVersion?  @relation("ToolCurrent", fields: [currentVersionId], references: [id])
   versions       ToolVersion[] @relation("ToolVersions")
 
-  // Status (optional, single)
+  // ARCHIVED (never used)
   toolStatusId String?     @db.Uuid
   toolStatus   ToolStatus? @relation(fields: [toolStatusId], references: [id], onDelete: SetNull)
 
-  // Location (optional, one-to-one)
+  // ARCHIVED (never used)
   toolLocationId String?       @unique @db.Uuid
   toolLocation   ToolLocation? @relation(fields: [toolLocationId], references: [id], onDelete: SetNull)
 
@@ -113,11 +113,11 @@ model Job {
 
   tools       JobTool[]
   jobProducts JobProduct[]
-  orders      WorkOrder[]
+  orders      WorkOrder[] // ARCHIVED
   labels      Label[]
 
   currentOfStations    Station[]             @relation("StationCurrentJob")
-  stationJobs          StationJob[]
+  stationJobs          StationJob[] // ARCHIVED
   stationJobLogs       StationJobLog[]
   materialShiftUsage   MaterialShiftUsage[]
   calls                Call[]
@@ -244,6 +244,7 @@ model JobProductVersion {
   @@index([jobProductId])
 }
 
+/// ARCHIVED — never used. Waits to be dropped.
 model ToolStatus {
   id   String @id @default(uuid()) @db.Uuid
   name String
@@ -261,6 +262,7 @@ model ToolStatus {
   @@index([siteId])
 }
 
+/// ARCHIVED — never used. Waits to be dropped.
 model ToolLocation {
   id       String @id @default(uuid()) @db.Uuid
   location String
