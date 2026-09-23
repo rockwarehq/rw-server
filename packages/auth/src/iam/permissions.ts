@@ -544,3 +544,119 @@ export async function listAccessibleSites(
     orderBy: { name: "asc" },
   });
 }
+
+// ── Legacy → new mapping rules (MIGRATION DATA, never runtime) ───────────
+// The audited old→new translation, consumed only by the vocabulary data
+// migrations and their tests — the runtime evaluator never reads this. Each
+// rule names the COMPLETE legacy bundle a single role must hold to gain the
+// new key; there is no union across roles, and legacy write never implied
+// read, so bundles list reads explicitly. The expand migration
+// (20260922190000_expand_permission_vocabulary) embeds these rules verbatim
+// as JSON; permissions.migration.test.ts asserts the two copies match.
+//
+// Deliberate choices:
+// - planning:write is RELAXED (no job:admin/schedule:admin): the old
+//   planning delete gates collapse into :write at the call sites, so
+//   requiring the admin keys would strip creation/editing from plain
+//   writer roles.
+// - production:write is STRICT (facility:admin and product:admin
+//   required): those old admin delete gates fold into production:write,
+//   so a writer-without-admin custom role must not gain them silently.
+// - production:admin requires the entire legacy catalog: privileged
+//   production actions are new authority.
+
+export interface LegacyPermissionRule {
+  permission: CustomerPermission;
+  /** Every entry must be present in ONE role's array. Legacy vocabulary. */
+  requiredPermissions: readonly string[];
+  explanation: string;
+}
+
+const legacyBundle = (resources: readonly Resource[], actions: readonly Action[]): string[] =>
+  resources.flatMap((resource) => actions.map((action) => `${resource}:${action}`));
+
+const PRODUCTION_LEGACY_READS = legacyBundle(
+  [
+    "facility",
+    "job",
+    "status",
+    "calls",
+    "modes",
+    "tool",
+    "product",
+    "schedule",
+    "dashboard",
+    "employee",
+    "graph",
+    "entity",
+  ],
+  ["read"],
+);
+
+const CONFIGURATION_LEGACY_RESOURCES: readonly Resource[] = [
+  "facility",
+  "job",
+  "status",
+  "calls",
+  "modes",
+  "notifications",
+  "dashboard",
+  "entity",
+  "graph",
+  "settings",
+];
+
+export const LEGACY_PERMISSION_RULES: readonly LegacyPermissionRule[] = [
+  {
+    permission: "production:read",
+    requiredPermissions: PRODUCTION_LEGACY_READS,
+    explanation: "Complete live-production, reference, recap, directory and published graph/entity reads.",
+  },
+  {
+    permission: "production:write",
+    requiredPermissions: [
+      ...PRODUCTION_LEGACY_READS,
+      "facility:write",
+      "facility:admin",
+      "job:write",
+      "status:write",
+      "calls:write",
+      "modes:write",
+      "tool:write",
+      "product:write",
+      "product:admin",
+      "schedule:write",
+    ],
+    explanation: "Production reads plus all operational writes, including the old admin-tier delete gates.",
+  },
+  {
+    permission: "production:admin",
+    requiredPermissions: legacyBundle([...RESOURCES], [...ACTIONS]),
+    explanation: "Privileged production actions are new authority: only the entire legacy catalog qualifies.",
+  },
+  {
+    permission: "planning:read",
+    requiredPermissions: legacyBundle(["job", "schedule"], ["read"]),
+    explanation: "Both order/job-planning and schedule reads must be present in the same role.",
+  },
+  {
+    permission: "planning:write",
+    requiredPermissions: legacyBundle(["job", "schedule"], ["read", "write"]),
+    explanation: "Complete job and schedule read/write; old planning delete gates now require only write.",
+  },
+  {
+    permission: "configuration:read",
+    requiredPermissions: legacyBundle(CONFIGURATION_LEGACY_RESOURCES, ["read"]),
+    explanation: "Complete configuration/catalog reads, including disposition definitions and automations.",
+  },
+  {
+    permission: "configuration:write",
+    requiredPermissions: legacyBundle(CONFIGURATION_LEGACY_RESOURCES, [...ACTIONS]),
+    explanation: "Complete configuration read/write/admin bundles, including every old configuration delete gate.",
+  },
+  {
+    permission: "plant:admin",
+    requiredPermissions: legacyBundle(["user", "employee", "settings"], [...ACTIONS]),
+    explanation: "Complete user, employee and settings administration; never workspace ownership.",
+  },
+];

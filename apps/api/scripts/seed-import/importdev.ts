@@ -26,7 +26,7 @@ import * as gatewaySvc from "@rw/services/device/gateway/index";
 
 const DEFAULT_ROLES = ["Operator", "Supervisor", "Lead", "Quality", "Maintenance", "Contractor", "Engineer", "Manager"];
 
-type SystemRoleName = "Company Administrator" | "Plant Admin" | "Plant Member";
+type SystemRoleName = "Company Administrator" | "Plant Admin" | "Plant Member" | "Planner" | "Plant Engineer";
 type SiteKey = "primary" | "secondary";
 
 interface RoleAssignmentSpec {
@@ -62,6 +62,22 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     persona: "Plant Member",
     description: "Plant member with read access to all plant data.",
     assignments: [{ roleName: "Plant Member", scope: "SITE", site: "primary" }],
+  },
+  {
+    email: "planner@example.com",
+    firstName: "Order",
+    lastName: "Planner",
+    persona: "Planner",
+    description: "Manages orders, customers and scheduling. Production visibility follows workcenter access.",
+    assignments: [{ roleName: "Planner", scope: "SITE", site: "primary" }],
+  },
+  {
+    email: "plantengineer@example.com",
+    firstName: "Plant",
+    lastName: "Engineer",
+    persona: "Plant Engineer",
+    description: "Full production, planning and technical setup authority for the primary plant.",
+    assignments: [{ roleName: "Plant Engineer", scope: "SITE", site: "primary" }],
   },
   {
     email: "coadmin@example.com",
