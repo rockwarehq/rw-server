@@ -1,15 +1,15 @@
 /// Bucket-based access control for the User principal tier.
 ///
 /// Rows live in containers; access is membership in the container:
-/// - PLANT bucket (one per site): everyone at the plant is a member.
-///   VIEW = read the common plant things. MANAGE = write the plant and
-///   everything in it (cascades to every workcenter). ADMIN = the reserved
-///   shelf: people, access administration, dangerous settings.
+/// - PLANT bucket (one per site): everyone at the plant can read it.
+///   VIEW = read the plant's shared things. MANAGE ("member") = also change
+///   them (jobs, orders, products…). ADMIN = also shop-floor setup, people,
+///   access and settings, and MANAGE on every workcenter at the site.
 /// - WORKCENTER bucket (one per workcenter): the crew.
-///   VIEW = watch the cell's floor. MANAGE = operate and configure it.
+///   VIEW = watch the cell's floor. MANAGE = run the cell.
 /// Workspace owners (WorkspaceMembership.workspaceRole = OWNER) and
 /// Rockware staff bypass buckets. Evaluated in code:
-/// packages/auth/src/iam/buckets.ts.
+/// packages/auth/src/iam/access.ts.
 
 /// Internal Rockware staff. Users with a SystemRole resolve access from
 /// code (SUPPORT = read everywhere, ENGINEER = manage/admin everywhere);
@@ -25,9 +25,9 @@ enum BucketKind {
 }
 
 enum BucketTier {
-  VIEW // Plant: member (read the common things). Workcenter: watch the floor.
-  MANAGE // Plant: write the plant and everything in it. Workcenter: operate and configure the cell.
-  ADMIN // Plant only: people, access administration, dangerous settings.
+  VIEW // Plant: read the shared things. Workcenter: watch the floor.
+  MANAGE // Plant: "member", change the shared things. Workcenter: run the cell.
+  ADMIN // Plant only: shop-floor setup, people, access, settings; reaches every workcenter.
 }
 
 /// One PLANT bucket per site: partial unique index "Bucket_one_plant_per_site",

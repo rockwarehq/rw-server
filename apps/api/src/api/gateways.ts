@@ -228,7 +228,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      await request.access.require("MANAGE", { site: request.body.siteId });
+      await request.access.require("ADMIN", { site: request.body.siteId });
 
       try {
         const result = await gateway.create(request.body);
@@ -260,7 +260,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
     handler: async (request, _reply) => {
       if (request.query.unassigned) {
         // Workspace pool: claimed hardware awaiting site assignment.
-        request.access.requireSomewhere("MANAGE");
+        request.access.requireSomewhere("ADMIN");
         return gateway.list({ workspaceId: currentUser(request).workspaceId, unassigned: true });
       }
 
@@ -341,10 +341,10 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      await request.access.require("MANAGE", { gateway: request.params.id });
+      await request.access.require("ADMIN", { gateway: request.params.id });
       if (request.body.siteId) {
         // Moving a gateway requires MANAGE at the TARGET site too.
-        await request.access.require("MANAGE", { site: request.body.siteId });
+        await request.access.require("ADMIN", { site: request.body.siteId });
       }
 
       const result = await gateway.update(request.params.id, request.body);
@@ -372,7 +372,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      await request.access.require("MANAGE", { gateway: request.params.id });
+      await request.access.require("ADMIN", { gateway: request.params.id });
 
       const result = await gateway.remove(request.params.id);
       if ("error" in result) {
@@ -400,7 +400,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      await request.access.require("MANAGE", { gateway: request.params.id });
+      await request.access.require("ADMIN", { gateway: request.params.id });
       const result = await gateway.tokens.create({
         gatewayId: request.params.id,
         name: request.body?.name,
@@ -426,7 +426,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      await request.access.require("MANAGE", { gateway: request.params.id });
+      await request.access.require("ADMIN", { gateway: request.params.id });
 
       const result = await gateway.tokens.revoke(request.params.id, request.params.tokenId);
       if (!result) {
@@ -456,7 +456,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      await request.access.require("MANAGE", { gateway: request.params.id });
+      await request.access.require("ADMIN", { gateway: request.params.id });
       const cmd = await gateway.commands.queue({
         gatewayId: request.params.id,
         command: request.body.command,
@@ -532,7 +532,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      await request.access.require("MANAGE", { gateway: request.params.id });
+      await request.access.require("ADMIN", { gateway: request.params.id });
 
       const result = await gateway.commands.cancel(request.params.id, request.params.commandId);
       if (result.error === "not_found") {

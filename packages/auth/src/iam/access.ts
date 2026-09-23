@@ -5,15 +5,17 @@
 // transport maps to its wire error once.
 //
 // Users are checked against buckets:
-//   PLANT (one per site)      VIEW = read the common plant things.
-//                             MANAGE = write the plant and everything in it.
-//                             ADMIN = people, access, dangerous settings.
-//   WORKCENTER (one per cell) VIEW = watch the floor. MANAGE = operate and
-//                             configure the cell.
+//   PLANT (one per site)      VIEW = read the plant's shared things.
+//                             MANAGE ("member") = also change them: jobs,
+//                             orders, products, tools, dashboards…
+//                             ADMIN = also set up the shop floor, people,
+//                             access and settings, in every workcenter.
+//   WORKCENTER (one per cell) VIEW = watch the floor. MANAGE = run the cell.
 // A Person holds only the rows they were given. Two rules are worked out
 // at check time:
-//   - Any access at a site makes you a plant member (plant VIEW).
-//   - Plant MANAGE or ADMIN means MANAGE on every workcenter at that site.
+//   - Any access at a site lets you read the plant (plant VIEW).
+//   - Plant ADMIN means MANAGE on every workcenter at that site. A plant
+//     member only reaches the workcenters they were given.
 // Owners and Rockware staff skip the buckets (the bypass below).
 //
 // Displays and API tokens stay simple: they are bound to one site. A
@@ -150,11 +152,16 @@ export function plantTier(person: Person, siteId: string): Tier | null {
   return null;
 }
 
+/** Plant ADMIN reaches every workcenter at its site. */
+function cascades(person: Person, siteId: string): boolean {
+  return tierAtLeast(person.plants.get(siteId), "ADMIN");
+}
+
 /** The tier held on one workcenter, plant cascade included. */
 export function workcenterTier(person: Person, workcenterId: string, siteId: string): Tier | null {
   const direct = person.workcenters.get(workcenterId);
   const own = direct && direct.siteId === siteId ? direct.tier : null;
-  const cascade = tierAtLeast(person.plants.get(siteId), "MANAGE") ? "MANAGE" : null;
+  const cascade = cascades(person, siteId) ? "MANAGE" : null;
   return higher(own, cascade);
 }
 
@@ -191,7 +198,10 @@ export interface ListScope {
 }
 
 export interface Access {
-  /** Throw unless the caller holds `tier` on the target. Returns where it lives. */
+  /**
+   * Throw unless the caller holds `tier` on the target. Returns where it lives.
+   * ADMIN is always checked on the target's plant, even for floor rows.
+   */
   require<T extends Target>(tier: Tier, target: T): Promise<Located<T>>;
   /** Yes/no for branching. Sites only, so no lookup is needed. */
   can(tier: Tier, target: { site: string }): boolean;
@@ -241,7 +251,12 @@ export class UserAccess implements Access {
       return { siteId: null } as Located<T>;
     }
     if (bypasses(this.person, tier)) return { siteId } as Located<T>;
-    const held = workcenterId ? workcenterTier(this.person, workcenterId, siteId) : plantTier(this.person, siteId);
+    // ADMIN is a plant level: setting up a station or workcenter asks the
+    // row's plant, not its workcenter.
+    const held =
+      workcenterId && tier !== "ADMIN"
+        ? workcenterTier(this.person, workcenterId, siteId)
+        : plantTier(this.person, siteId);
     if (!tierAtLeast(held, tier)) throw deny("FORBIDDEN", `Requires ${tier} access here`);
     return { siteId } as Located<T>;
   }
@@ -261,8 +276,8 @@ export class UserAccess implements Access {
       throw deny("FORBIDDEN", `Requires ${tier} access here`);
     }
 
-    // Floor lists: plant managers see every cell; the crew see their own.
-    if (tierAtLeast(plant, "MANAGE")) return { siteId: site };
+    // Floor lists: plant admins see every cell; everyone else sees their own.
+    if (cascades(this.person, site)) return { siteId: site };
     const workcenterIds = [...this.person.workcenters]
       .filter(([, wc]) => wc.siteId === site && tierAtLeast(wc.tier, tier))
       .map(([id]) => id);
@@ -389,10 +404,9 @@ export async function describeAccess(person: Person): Promise<AccessEntry[]> {
       entries.push(direct ? { ...base, tier: direct, via: "direct" } : { ...base, tier: "VIEW", via: "member" });
     } else if (b.workcenterId) {
       const direct = person.workcenters.get(b.workcenterId)?.tier;
-      const cascades = tierAtLeast(person.plants.get(b.siteId), "MANAGE");
-      if (direct && (!cascades || tierAtLeast(direct, "MANAGE")))
-        entries.push({ ...base, tier: direct, via: "direct" });
-      else if (cascades) entries.push({ ...base, tier: "MANAGE", via: "cascade" });
+      const cascade = cascades(person, b.siteId);
+      if (direct && (!cascade || tierAtLeast(direct, "MANAGE"))) entries.push({ ...base, tier: direct, via: "direct" });
+      else if (cascade) entries.push({ ...base, tier: "MANAGE", via: "cascade" });
     }
   }
   const order: Record<AccessVia, number> = { direct: 0, member: 1, cascade: 2 };

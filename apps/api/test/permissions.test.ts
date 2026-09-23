@@ -65,6 +65,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access data (Tier 2)", (
     member: "bucket-data-member@test.local",
     crew: "bucket-data-crew@test.local",
     manager: "bucket-data-manager@test.local",
+    admin: "bucket-data-admin@test.local",
   };
   let workspaceId: string;
   let siteId: string;
@@ -112,6 +113,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access data (Tier 2)", (
       manager: await makeUser(workspaceId, EMAILS.manager, "bucket-data-pass-1", {
         plants: [{ siteId, tier: "MANAGE" }],
       }),
+      admin: await makeUser(workspaceId, EMAILS.admin, "bucket-data-pass-1", {
+        plants: [{ siteId, tier: "ADMIN" }],
+      }),
     };
   });
 
@@ -127,22 +131,31 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access data (Tier 2)", (
     expect(await allowed(access.require("VIEW", { station: stationInWc1 }))).toBe(false);
   });
 
-  it("crew: member of the plant via the hook, manages only their own cell", async () => {
+  it("crew: reads the plant via the hook, runs only their own cell", async () => {
     const access = await accessFor(users.crew.userId);
-    // Hook: workcenter access makes them a plant member.
+    // Hook: workcenter access lets them read the plant.
     expect(await allowed(access.require("VIEW", { site: siteId }))).toBe(true);
-    // Their cell, including configuration.
+    // They run their cell, but setting it up is plant ADMIN.
     expect(await allowed(access.require("MANAGE", { station: stationInWc1 }))).toBe(true);
+    expect(await allowed(access.require("ADMIN", { station: stationInWc1 }))).toBe(false);
     // Not the other cell, not the plant.
     expect(await allowed(access.require("MANAGE", { workcenter: wc2 }))).toBe(false);
     expect(await allowed(access.require("MANAGE", { site: siteId }))).toBe(false);
   });
 
-  it("manager: the cascade manages every cell with zero per-cell rows", async () => {
+  it("plant MANAGE (member): writes plant things, reaches no cell it was not given", async () => {
     const access = await accessFor(users.manager.userId);
+    expect(await allowed(access.require("MANAGE", { site: siteId }))).toBe(true);
+    expect(await allowed(access.require("VIEW", { station: stationInWc1 }))).toBe(false);
+    expect(await allowed(access.require("VIEW", { workcenter: wc2 }))).toBe(false);
+    // Setup and people stay with ADMIN.
+    expect(await allowed(access.require("ADMIN", { site: siteId }))).toBe(false);
+  });
+
+  it("admin: the cascade manages every cell with zero per-cell rows", async () => {
+    const access = await accessFor(users.admin.userId);
     expect(await allowed(access.require("MANAGE", { station: stationInWc1 }))).toBe(true);
     expect(await allowed(access.require("MANAGE", { workcenter: wc2 }))).toBe(true);
-    // The reserved shelf stays shut.
-    expect(await allowed(access.require("ADMIN", { site: siteId }))).toBe(false);
+    expect(await allowed(access.require("ADMIN", { station: stationInWc1 }))).toBe(true);
   });
 });

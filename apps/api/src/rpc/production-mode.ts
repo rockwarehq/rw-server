@@ -68,7 +68,7 @@ const listLogsInputSchema = z.object({
 // ============================================================================
 
 export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { site: input.siteId });
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await productionMode.create(input);
   if ("error" in result) throwServiceError(result);
@@ -88,7 +88,7 @@ export const get = userRequired.input(idInputSchema).handler(async ({ input, con
 });
 
 export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { productionMode: input.id });
+  await context.access.require("ADMIN", { productionMode: input.id });
 
   const { id, ...updateData } = input;
   const result = await productionMode.update(id, updateData);
@@ -97,7 +97,7 @@ export const update = userRequired.input(updateInputSchema).handler(async ({ inp
 });
 
 export const archive = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { productionMode: input.id });
+  await context.access.require("ADMIN", { productionMode: input.id });
 
   const result = await productionMode.archive(input.id);
   if ("error" in result) throwServiceError(result);

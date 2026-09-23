@@ -189,8 +189,8 @@ export const create = userRequired.input(createInputSchema).handler(async ({ inp
   // With a workcenter, the crew who manage that cell may create here (the
   // service checks the cell belongs to the site); without one it is a plant
   // thing.
-  if (input.workcenterId) await context.access.require("MANAGE", { workcenter: input.workcenterId });
-  else await context.access.require("MANAGE", { site: input.siteId });
+  if (input.workcenterId) await context.access.require("ADMIN", { workcenter: input.workcenterId });
+  else await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await station.create(input);
   if (result.error !== undefined) throwServiceError(result);
@@ -225,7 +225,7 @@ export const get = userRequired.input(idInputSchema).handler(async ({ input, con
  */
 export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
-  await context.access.require("MANAGE", { station: id });
+  await context.access.require("ADMIN", { station: id });
 
   const result = await station.update(id, updateData);
   if (result.error !== undefined) throwServiceError(result, UPDATE_OVERRIDES);
@@ -236,10 +236,10 @@ export const update = userRequired.input(updateInputSchema).handler(async ({ inp
  * Move station to a different workcenter (within same site)
  */
 export const move = userRequired.input(moveInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { station: input.id });
-  // Moving INTO a workcenter also needs MANAGE there — otherwise a crew
-  // could push stations into someone else's cell.
-  if (input.workcenterId) await context.access.require("MANAGE", { workcenter: input.workcenterId });
+  await context.access.require("ADMIN", { station: input.id });
+  // The destination is checked too, so a station can't be pushed into a
+  // workcenter at another plant.
+  if (input.workcenterId) await context.access.require("ADMIN", { workcenter: input.workcenterId });
 
   const result = await station.move(input.id, input.workcenterId);
   if (result.error !== undefined) throwServiceError(result);
@@ -250,7 +250,7 @@ export const move = userRequired.input(moveInputSchema).handler(async ({ input, 
  * Delete station
  */
 export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { station: input.id });
+  await context.access.require("ADMIN", { station: input.id });
 
   const result = await station.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
@@ -261,7 +261,7 @@ export const remove = userRequired.input(idInputSchema).handler(async ({ input, 
  * Create station event
  */
 export const createEvent = userRequired.input(createEventInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { station: input.stationId });
+  await context.access.require("ADMIN", { station: input.stationId });
 
   const result = await station.createEvent(input as station.CreateStationEventInput);
   if ("error" in result && result.error !== undefined) throwServiceError(result, EVENT_ACTION_OVERRIDES);
@@ -272,7 +272,7 @@ export const createEvent = userRequired.input(createEventInputSchema).handler(as
  * Update station event
  */
 export const updateEvent = userRequired.input(updateEventInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { station: input.stationId });
+  await context.access.require("ADMIN", { station: input.stationId });
 
   const result = await station.updateEvent(input as station.UpdateStationEventInput);
   if ("error" in result && result.error !== undefined) throwServiceError(result, EVENT_ACTION_OVERRIDES);
@@ -345,7 +345,7 @@ export const getTagSnapshotsForProcessor = processorRequired
  * Toggle station event
  */
 export const toggleEvent = userRequired.input(toggleEventInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { station: input.stationId });
+  await context.access.require("ADMIN", { station: input.stationId });
 
   const result = await station.toggleEvent(input.stationId, input.eventId, input.enabled);
   if ("error" in result && result.error !== undefined) throwServiceError(result);
@@ -370,7 +370,7 @@ export const triggerEvent = processorRequired.input(triggerEventInputSchema).han
  * Delete station event
  */
 export const deleteEvent = userRequired.input(stationEventIdInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { station: input.stationId });
+  await context.access.require("ADMIN", { station: input.stationId });
 
   const result = await station.removeEvent(input.stationId, input.eventId);
   if ("error" in result && result.error !== undefined) throwServiceError(result);
@@ -400,7 +400,7 @@ const stationIdInputSchema = z.object({
  * Validates all belong to the same site
  */
 export const addDatasource = userRequired.input(addDatasourceInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { station: input.stationId });
+  await context.access.require("ADMIN", { station: input.stationId });
 
   const result = await station.addDatasource(input.stationId, input.datasourceIds);
   if (result.error !== undefined) throwServiceError(result);
@@ -411,7 +411,7 @@ export const addDatasource = userRequired.input(addDatasourceInputSchema).handle
  * Remove a datasource from a station
  */
 export const removeDatasource = userRequired.input(removeDatasourceInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { station: input.stationId });
+  await context.access.require("ADMIN", { station: input.stationId });
 
   const result = await station.removeDatasource(input.stationId, input.datasourceId);
   if (result.error !== undefined) throwServiceError(result);
@@ -583,7 +583,7 @@ const setLabelFilterInputSchema = z.object({
  * Set (or clear) one of the station's label filters.
  */
 export const setLabelFilter = userRequired.input(setLabelFilterInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { station: input.stationId });
+  await context.access.require("ADMIN", { station: input.stationId });
 
   const result = await station.setLabelFilter(input);
   if (result.error !== undefined) throwServiceError(result);

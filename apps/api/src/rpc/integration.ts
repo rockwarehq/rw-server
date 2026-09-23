@@ -54,7 +54,7 @@ const scopedIdInputSchema = idInputSchema.extend({ siteId: z.uuid() });
 
 export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...rest } = input;
-  const scope = await workspaceSiteScope(context, "MANAGE", { site: siteId });
+  const scope = await workspaceSiteScope(context, "ADMIN", { site: siteId });
   return unwrap(await integrations.create(rest, scope));
 });
 
@@ -71,12 +71,12 @@ export const get = userRequired.input(scopedIdInputSchema).handler(async ({ inpu
 
 export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { id, siteId, ...updates } = input;
-  const scope = await workspaceSiteScope(context, "MANAGE", { site: siteId });
+  const scope = await workspaceSiteScope(context, "ADMIN", { site: siteId });
   return unwrap(await integrations.update(id, updates, scope));
 });
 
 export const remove = userRequired.input(scopedIdInputSchema).handler(async ({ input, context }) => {
-  const scope = await workspaceSiteScope(context, "MANAGE", { site: input.siteId });
+  const scope = await workspaceSiteScope(context, "ADMIN", { site: input.siteId });
   return unwrap(await integrations.remove(input.id, scope));
 });
 
@@ -186,7 +186,7 @@ const triggerListInputSchema = z.object({
 
 export const triggerCreate = userRequired.input(triggerCreateInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...rest } = input;
-  const scope = await workspaceSiteScope(context, "MANAGE", { site: siteId });
+  const scope = await workspaceSiteScope(context, "ADMIN", { site: siteId });
   return unwrap(await graph.triggers.create(rest, scope));
 });
 
@@ -203,11 +203,11 @@ export const triggerGet = userRequired.input(scopedIdInputSchema).handler(async 
 
 export const triggerUpdate = userRequired.input(triggerUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, siteId, ...updates } = input;
-  const scope = await workspaceSiteScope(context, "MANAGE", { site: siteId });
+  const scope = await workspaceSiteScope(context, "ADMIN", { site: siteId });
   return unwrap(await graph.triggers.update(id, updates, scope));
 });
 
 export const triggerDelete = userRequired.input(scopedIdInputSchema).handler(async ({ input, context }) => {
-  const scope = await workspaceSiteScope(context, "MANAGE", { site: input.siteId });
+  const scope = await workspaceSiteScope(context, "ADMIN", { site: input.siteId });
   return unwrap(await graph.triggers.remove(input.id, scope));
 });

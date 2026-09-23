@@ -48,7 +48,7 @@ const listInputSchema = z.object({
  * Create a new workcenter
  */
 export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { site: input.siteId });
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await workcenter.create(input);
   if (result.error !== undefined) throwServiceError(result);
@@ -79,7 +79,7 @@ export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ i
  */
 export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
-  await context.access.require("MANAGE", { workcenter: id });
+  await context.access.require("ADMIN", { workcenter: id });
 
   const result = await workcenter.update(id, updateData);
   if (result.error !== undefined) throwServiceError(result);
@@ -90,7 +90,7 @@ export const update = userRequired.input(updateInputSchema).handler(async ({ inp
  * Move workcenter to a new parent (within same site)
  */
 export const move = userRequired.input(moveInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { workcenter: input.id });
+  await context.access.require("ADMIN", { workcenter: input.id });
 
   const result = await workcenter.move(input.id, input.parentId);
   if (result.error !== undefined) throwServiceError(result);
@@ -101,7 +101,7 @@ export const move = userRequired.input(moveInputSchema).handler(async ({ input, 
  * Delete workcenter
  */
 export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { workcenter: input.id });
+  await context.access.require("ADMIN", { workcenter: input.id });
 
   const result = await workcenter.remove(input.id);
   // HAS_CHILDREN / HAS_STATIONS map to CONFLICT via the shared table

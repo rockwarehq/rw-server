@@ -182,7 +182,7 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      await request.access.require("MANAGE", { site: request.body.siteId });
+      await request.access.require("ADMIN", { site: request.body.siteId });
 
       const result = await workcenter.create(request.body);
       if ("error" in result && typeof result.error === "string") {
@@ -263,7 +263,7 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      await request.access.require("MANAGE", { workcenter: request.params.id });
+      await request.access.require("ADMIN", { workcenter: request.params.id });
 
       const result = await workcenter.update(request.params.id, request.body);
       if ("error" in result && typeof result.error === "string") {
@@ -294,7 +294,7 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      await request.access.require("MANAGE", { workcenter: request.params.id });
+      await request.access.require("ADMIN", { workcenter: request.params.id });
 
       const result = await workcenter.move(request.params.id, request.body.parentId);
       if ("error" in result && typeof result.error === "string") {
@@ -324,7 +324,7 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      await request.access.require("MANAGE", { workcenter: request.params.id });
+      await request.access.require("ADMIN", { workcenter: request.params.id });
 
       const result = await workcenter.remove(request.params.id);
       if ("error" in result && typeof result.error === "string") {

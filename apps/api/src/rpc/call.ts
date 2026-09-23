@@ -91,7 +91,7 @@ const searchInputSchema = z.object({
 // ============================================================================
 
 export const definitionCreate = userRequired.input(definitionCreateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { site: input.siteId });
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await call.createDefinition(input);
   if ("error" in result) throwServiceError(result);
@@ -113,7 +113,7 @@ export const definitionGet = userRequired.input(idInputSchema).handler(async ({ 
 });
 
 export const definitionUpdate = userRequired.input(definitionUpdateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { callDefinition: input.id });
+  await context.access.require("ADMIN", { callDefinition: input.id });
 
   const { id, ...updateData } = input;
   const result = await call.updateDefinition(id, updateData);
@@ -122,7 +122,7 @@ export const definitionUpdate = userRequired.input(definitionUpdateInputSchema).
 });
 
 export const definitionArchive = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { callDefinition: input.id });
+  await context.access.require("ADMIN", { callDefinition: input.id });
 
   const result = await call.archiveDefinition(input.id);
   if ("error" in result) throwServiceError(result);

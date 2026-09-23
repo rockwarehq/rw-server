@@ -124,7 +124,7 @@ export default async function points(fastify: FastifyTypedInstance) {
       const { id } = request.params;
       const body = request.body;
 
-      await request.access.require("MANAGE", { point: id });
+      await request.access.require("ADMIN", { point: id });
 
       const result = await datasource.points.update(id, body);
       if ("error" in result) {
@@ -150,7 +150,7 @@ export default async function points(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { id } = request.params;
-      await request.access.require("MANAGE", { point: id });
+      await request.access.require("ADMIN", { point: id });
 
       const result = await datasource.points.remove(id);
       if ("error" in result) {

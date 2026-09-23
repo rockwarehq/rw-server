@@ -222,7 +222,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
 
     it("plant VIEW members canNOT read the floor: stations are crew territory", async () => {
       // FLIP from the key model: plant membership no longer implies floor
-      // visibility — station reads require crew membership (or plant MANAGE
+      // visibility — station reads require crew membership (or plant ADMIN
       // via the cascade).
       const get = await rpcCall(server, "station/get", { id: stationA.id }, memberToken);
       expect(get.statusCode).toBe(403);
@@ -233,11 +233,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
       expect(wcs.statusCode).toBe(200);
     });
 
-    it("station update by the cell's crew MANAGE member succeeds", async () => {
-      // FLIP from the key model: a workcenter WRITE grant could not update
-      // stations; crew MANAGE = operate AND configure the cell.
-      // The bucket snapshot is resolved per request, so upgrading the
-      // member's crew access takes effect without a new login.
+    it("station update needs plant ADMIN: crew MANAGE runs the cell but cannot set it up", async () => {
+      // Setting up stations is shop-floor setup (plant ADMIN). The bucket
+      // snapshot is resolved per request, so upgrading the member's crew
+      // access takes effect without a new login.
       await setWorkcenterAccess(memberMembershipId, wcA.id, "MANAGE");
       try {
         const res = await rpcCall(
@@ -246,7 +245,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
           { id: stationA.id, description: "authz crew manage" },
           memberToken,
         );
-        expect(res.statusCode).toBe(200);
+        expect(res.statusCode).toBe(403);
       } finally {
         await prisma.bucketAccess.deleteMany({
           where: { membershipId: memberMembershipId, bucket: { workcenterId: wcA.id } },
@@ -298,7 +297,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
         data: { siteId: siteA.id, name: "authz-wc-legacy-child", parentId: parent.id },
         select: { id: true },
       });
-      // Raw-prisma workcenter: heal its bucket so the plant-MANAGE cascade
+      // Raw-prisma workcenter: heal its bucket so the plant-ADMIN cascade
       // has a container to land on (no bucket = no access, even cascaded).
       const workspace = await prisma.site.findUniqueOrThrow({
         where: { id: siteA.id },

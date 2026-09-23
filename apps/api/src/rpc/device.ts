@@ -82,7 +82,7 @@ const datasourceListInputSchema = z.object({
  * Create a new gateway at a site
  */
 export const gatewayCreate = userRequired.input(gatewayCreateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { site: input.siteId });
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await gateway.create(input);
   if (result.error !== undefined) throwServiceError(result);
@@ -96,7 +96,7 @@ export const gatewayList = userRequired.input(gatewayListInputSchema).handler(as
   if (input.unassigned) {
     // Workspace pool: claimed hardware awaiting site assignment — visible to
     // anyone who could assign it (MANAGE held somewhere).
-    context.access.requireSomewhere("MANAGE");
+    context.access.requireSomewhere("ADMIN");
     return gateway.list({ workspaceId: context.current.workspaceId, unassigned: true });
   }
 
@@ -122,10 +122,10 @@ export const gatewayGet = userRequired.input(gatewayIdInputSchema).handler(async
  */
 export const gatewayUpdate = userRequired.input(gatewayUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
-  await context.access.require("MANAGE", { gateway: id });
+  await context.access.require("ADMIN", { gateway: id });
   if (input.siteId) {
     // Moving a gateway requires MANAGE at the TARGET site too.
-    await context.access.require("MANAGE", { site: input.siteId });
+    await context.access.require("ADMIN", { site: input.siteId });
   }
 
   const result = await gateway.update(id, updateData);
@@ -137,7 +137,7 @@ export const gatewayUpdate = userRequired.input(gatewayUpdateInputSchema).handle
  * Delete gateway
  */
 export const gatewayDelete = userRequired.input(gatewayIdInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { gateway: input.id });
+  await context.access.require("ADMIN", { gateway: input.id });
 
   const result = await gateway.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
@@ -152,7 +152,7 @@ export const gatewayDelete = userRequired.input(gatewayIdInputSchema).handler(as
  * Create a new datasource (always creates as DRAFT)
  */
 export const datasourceCreate = userRequired.input(datasourceCreateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { site: input.siteId });
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await datasource.create(input);
   if ("error" in result) {
@@ -174,7 +174,7 @@ export const datasourceCreate = userRequired.input(datasourceCreateInputSchema).
  */
 export const datasourceUpdate = userRequired.input(datasourceUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
-  await context.access.require("MANAGE", { datasource: id });
+  await context.access.require("ADMIN", { datasource: id });
 
   const result = await datasource.update(id, updateData);
 
@@ -193,7 +193,7 @@ export const datasourceUpdate = userRequired.input(datasourceUpdateInputSchema).
  * Delete datasource
  */
 export const datasourceDelete = userRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { datasource: input.id });
+  await context.access.require("ADMIN", { datasource: input.id });
 
   const result = await datasource.remove(input.id);
   if ("error" in result) {
@@ -212,7 +212,7 @@ export const datasourceDelete = userRequired.input(datasourceIdInputSchema).hand
  * Validates connection info exists and is valid against driver schema
  */
 export const datasourcePublish = userRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { datasource: input.id });
+  await context.access.require("ADMIN", { datasource: input.id });
 
   const result = await datasource.publish(input.id);
   if ("error" in result) {
@@ -232,7 +232,7 @@ export const datasourcePublish = userRequired.input(datasourceIdInputSchema).han
  * Removes datasource from gateway sync
  */
 export const datasourceUnpublish = userRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { datasource: input.id });
+  await context.access.require("ADMIN", { datasource: input.id });
 
   const result = await datasource.unpublish(input.id);
   if ("error" in result) {

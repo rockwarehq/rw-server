@@ -7,7 +7,8 @@ import prisma from "@rw/db";
 // Plant data: shared by every workcenter at the plant (jobs, products,
 // tools, materials, orders, customers, reason codes, shift patterns…).
 // Everyone at the plant can see it, crew included, so they can pick a job
-// or look up a part. Only plant members can change it.
+// or look up a part. Plant members (MANAGE) change the everyday things;
+// setup things (reason codes, shift patterns…) need plant ADMIN.
 //
 // Workcenter data: what happens on the floor (cycles, state logs, calls,
 // inventory made, dispositions) and the stations themselves. It is checked

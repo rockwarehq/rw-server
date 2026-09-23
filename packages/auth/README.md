@@ -64,16 +64,20 @@ Rows live in containers. Your access is the containers you are in.
 
 | Container | Tier | Meaning |
 | --- | --- | --- |
-| **Plant** (one per site) | VIEW | member: read the common plant things (orders, catalogs, schedules, dashboards, equipment lists) |
-| | MANAGE | write the plant and everything in it, every workcenter included |
-| | ADMIN | people, access, and dangerous settings |
+| **Account** | owner | sites, the workspace, ownership |
+| **Plant** (one per site) | VIEW | viewer: read the plant's shared things (orders, catalogs, schedules, dashboards, equipment lists) |
+| | MANAGE ("member") | also change them: jobs, orders, products, tools, materials, customers, labels, dashboards, documents |
+| | ADMIN | also set up the shop floor (workcenters, stations, reason codes, call definitions, modes, dispositions, andon rules, shift patterns, devices, integrations, graph, automations, site settings), people and access. Reaches every workcenter. |
 | **Workcenter** (one per cell) | VIEW | watch the cell's floor |
-| | MANAGE | operate and configure the cell |
+| | MANAGE | run the cell: change jobs, calls, modes, downtime reasons, dispositions, comments, sign-offs |
 
 A `Person` holds only the rows they were given. Two rules are worked out at check time:
 
-- **Membership rule.** Any workcenter access makes you a plant member (plant VIEW).
-- **Cascade rule.** Plant MANAGE means MANAGE on every cell at that site.
+- **Membership rule.** Any workcenter access lets you read the plant (plant VIEW).
+- **Cascade rule.** Plant ADMIN means MANAGE on every cell at that site. A plant member only reaches the cells they were given.
+- **ADMIN is a plant level.** `require("ADMIN", { station })` asks the station's plant, so setting up a cell needs plant ADMIN.
+
+Typical people: plant manager and engineer = plant ADMIN; planner = plant MANAGE; shift supervisor = plant MANAGE (or VIEW) plus MANAGE on their cells; maintenance lead = plant MANAGE plus the cells they look after.
 
 Two kinds of people skip the buckets, like Basecamp's account roles:
 
@@ -84,8 +88,9 @@ Two kinds of people skip the buckets, like Basecamp's account roles:
 
 ### Plant data vs workcenter data
 
-- **Plant data** is shared by every workcenter at the plant: jobs, products, tools, materials, orders, customers, reason codes, shift patterns. Everyone at the plant can see it, crew included, so they can pick a job or look up a part. Only plant members change it.
+- **Plant data** is shared by every workcenter at the plant: jobs, products, tools, materials, orders, customers, reason codes, shift patterns. Everyone at the plant can see it, crew included, so they can pick a job or look up a part. Plant members (MANAGE) change the everyday things; setup things need ADMIN.
 - **Workcenter data** is what happens on the floor (cycles, state logs, calls, inventory made, dispositions) plus the stations themselves. It is checked on its workcenter, so crew see and change only their own workcenters' data.
+- **Data is sorted by where it was made, not where it is shown.** Logs, metrics, shift recaps and historian series add up floor data, so they are floor data too, even on a plant-wide screen. Use `floorFilter` (log searches) or `requireFloorEntities` (metric series) from `apps/api/src/rpc/scope.ts`: crew get their own cells, and only callers who see the whole floor get site-wide or job-wide totals.
 - **Using plant data on the floor** is checked where the write lands. For example, `station.changeJob` needs MANAGE on the station's workcenter; the job only has to be in the same plant. Crew never need edit rights on the job.
 - **Which jobs show up at which station** is not an access question. Labels and station label filters decide that.
 

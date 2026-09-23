@@ -20,8 +20,8 @@ const plant = (tier: "VIEW" | "MANAGE" | "ADMIN", siteId = SITE_A) =>
 const crew = (tier: "VIEW" | "MANAGE", workcenterId = WC_1) =>
   personFromRows([{ tier, kind: "WORKCENTER", siteId: SITE_A, workcenterId }]);
 
-const MEMBER = plant("VIEW");
-const MANAGER = plant("MANAGE");
+const VIEWER = plant("VIEW");
+const MEMBER = plant("MANAGE");
 const ADMIN = plant("ADMIN");
 const CREW = crew("MANAGE");
 const OWNER = emptyPerson({ owner: true });
@@ -50,18 +50,18 @@ async function denied(p: Promise<unknown> | (() => unknown)) {
 }
 
 describe("users: plant things", () => {
-  it("members read, managers write, admins hold the shelf above", async () => {
-    await expect(user(MEMBER).require("VIEW", { site: SITE_A })).resolves.toEqual({ siteId: SITE_A });
-    expect((await denied(user(MEMBER).require("MANAGE", { site: SITE_A }))).message).toBe(
+  it("viewers read, members write, admins hold the shelf above", async () => {
+    await expect(user(VIEWER).require("VIEW", { site: SITE_A })).resolves.toEqual({ siteId: SITE_A });
+    expect((await denied(user(VIEWER).require("MANAGE", { site: SITE_A }))).message).toBe(
       "Requires MANAGE access here",
     );
-    await user(MANAGER).require("MANAGE", { job: "job-1" });
-    await denied(user(MANAGER).require("ADMIN", { site: SITE_A }));
+    await user(MEMBER).require("MANAGE", { job: "job-1" });
+    await denied(user(MEMBER).require("ADMIN", { site: SITE_A }));
     await user(ADMIN).require("ADMIN", { site: SITE_A });
   });
 
   it("is site-sensitive", async () => {
-    await denied(user(MANAGER).require("VIEW", { job: "job-b" }));
+    await denied(user(MEMBER).require("VIEW", { job: "job-b" }));
   });
 
   it("missing rows are NOT_FOUND with the kind's message", async () => {
@@ -70,14 +70,15 @@ describe("users: plant things", () => {
     expect(err.message).toBe("Station not found");
   });
 
-  it("any access at a site makes you a plant member", async () => {
+  it("any access at a site lets you read the plant", async () => {
     await user(CREW).require("VIEW", { site: SITE_A });
     await denied(user(CREW).require("MANAGE", { site: SITE_A }));
   });
 });
 
 describe("users: floor things", () => {
-  it("plant members do not see the floor; the crew does", async () => {
+  it("plant viewers and members do not see the floor; the crew does", async () => {
+    await denied(user(VIEWER).require("VIEW", { station: "st-1" }));
     await denied(user(MEMBER).require("VIEW", { station: "st-1" }));
     await user(crew("VIEW")).require("VIEW", { station: "st-1" });
   });
@@ -87,17 +88,34 @@ describe("users: floor things", () => {
     await denied(user(CREW).require("VIEW", { station: "st-2" }));
   });
 
-  it("plant MANAGE cascades to every cell", async () => {
-    await user(MANAGER).require("MANAGE", { station: "st-2" });
+  it("only plant ADMIN cascades to every cell", async () => {
+    await denied(user(MEMBER).require("VIEW", { station: "st-2" }));
     await user(ADMIN).require("MANAGE", { station: "st-2" });
+  });
+
+  it("ADMIN on a floor row asks the row's plant", async () => {
+    await user(ADMIN).require("ADMIN", { station: "st-2" });
+    await denied(user(CREW).require("ADMIN", { station: "st-1" }));
+    await denied(user(MEMBER).require("ADMIN", { station: "st-1" }));
+  });
+
+  it("a plant member with a cell reaches that cell only", async () => {
+    const person = personFromRows([
+      { tier: "MANAGE", kind: "PLANT", siteId: SITE_A, workcenterId: null },
+      { tier: "MANAGE", kind: "WORKCENTER", siteId: SITE_A, workcenterId: WC_1 },
+    ]);
+    await user(person).require("MANAGE", { job: "job-1" });
+    await user(person).require("MANAGE", { station: "st-1" });
+    await denied(user(person).require("VIEW", { station: "st-2" }));
+    expect(user(person).list("VIEW", undefined, "WORKCENTER")).toEqual({ siteId: SITE_A, workcenterIds: [WC_1] });
   });
 });
 
 describe("users: site-less rows, somewhere, owner", () => {
   it("site-less rows: reads need any site, changes need the tier at some plant", async () => {
-    await expect(user(MEMBER).require("VIEW", { gateway: "g" })).resolves.toEqual({ siteId: null });
-    await denied(user(MEMBER).require("MANAGE", { gateway: "g" }));
-    await user(MANAGER).require("MANAGE", { gateway: "g" });
+    await expect(user(VIEWER).require("VIEW", { gateway: "g" })).resolves.toEqual({ siteId: null });
+    await denied(user(VIEWER).require("MANAGE", { gateway: "g" }));
+    await user(MEMBER).require("MANAGE", { gateway: "g" });
     await denied(user(emptyPerson()).require("VIEW", { gateway: "g" }));
   });
 
@@ -125,29 +143,30 @@ describe("users: site-less rows, somewhere, owner", () => {
   });
 
   it("can() answers without throwing", () => {
-    expect(user(MANAGER).can("MANAGE", { site: SITE_A })).toBe(true);
-    expect(user(MEMBER).can("MANAGE", { site: SITE_A })).toBe(false);
+    expect(user(MEMBER).can("MANAGE", { site: SITE_A })).toBe(true);
+    expect(user(VIEWER).can("MANAGE", { site: SITE_A })).toBe(false);
     expect(user(OWNER).can("ADMIN", { site: SITE_B })).toBe(true);
   });
 });
 
 describe("users: lists", () => {
   it("PLANT lists need the tier on the plant", async () => {
-    expect(user(MEMBER).list("VIEW")).toEqual({ siteId: SITE_A });
+    expect(user(VIEWER).list("VIEW")).toEqual({ siteId: SITE_A });
     expect(user(CREW).list("VIEW")).toEqual({ siteId: SITE_A });
-    await denied(() => user(MEMBER).list("MANAGE"));
+    await denied(() => user(VIEWER).list("MANAGE"));
   });
 
-  it("WORKCENTER lists: crew narrow to their cells, managers see the floor", async () => {
+  it("WORKCENTER lists: crew narrow to their cells, admins see the floor", async () => {
     expect(user(CREW).list("VIEW", undefined, "WORKCENTER")).toEqual({ siteId: SITE_A, workcenterIds: [WC_1] });
-    expect(user(MANAGER).list("VIEW", undefined, "WORKCENTER")).toEqual({ siteId: SITE_A });
+    expect(user(ADMIN).list("VIEW", undefined, "WORKCENTER")).toEqual({ siteId: SITE_A });
     await denied(() => user(MEMBER).list("VIEW", undefined, "WORKCENTER"));
+    await denied(() => user(VIEWER).list("VIEW", undefined, "WORKCENTER"));
   });
 
   it("needs a site context and honors an explicit site", async () => {
-    const err = await denied(() => user(MEMBER, null).list("VIEW"));
+    const err = await denied(() => user(VIEWER, null).list("VIEW"));
     expect(err.code).toBe("NO_WORKSPACE");
-    await denied(() => user(MEMBER).list("VIEW", SITE_B));
+    await denied(() => user(VIEWER).list("VIEW", SITE_B));
     expect(user(OWNER, null).list("VIEW", SITE_B)).toEqual({ siteId: SITE_B });
   });
 

@@ -127,7 +127,7 @@ const logListInputSchema = z.object({
 export const dispositionCreate = userRequired
   .input(dispositionCreateInputSchema)
   .handler(async ({ input, context }) => {
-    await context.access.require("MANAGE", { site: input.siteId });
+    await context.access.require("ADMIN", { site: input.siteId });
 
     return unwrap(await dispositionService.create(input));
   });
@@ -148,14 +148,14 @@ export const dispositionGet = userRequired.input(idInputSchema).handler(async ({
 export const dispositionUpdate = userRequired
   .input(dispositionUpdateInputSchema)
   .handler(async ({ input, context }) => {
-    await context.access.require("MANAGE", { disposition: input.id });
+    await context.access.require("ADMIN", { disposition: input.id });
 
     const { id, ...updateData } = input;
     return unwrap(await dispositionService.update(id, updateData));
   });
 
 export const dispositionDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { disposition: input.id });
+  await context.access.require("ADMIN", { disposition: input.id });
 
   const result = await dispositionService.remove(input.id);
   if (result.error) throwServiceError(result);
@@ -167,7 +167,7 @@ export const dispositionDelete = userRequired.input(idInputSchema).handler(async
 // ============================================================================
 
 export const reasonCreate = userRequired.input(reasonCreateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { site: input.siteId });
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await dispositionReasonService.create(input);
   if ("error" in result && result.error) throwServiceError(result);
@@ -188,7 +188,7 @@ export const reasonGet = userRequired.input(idInputSchema).handler(async ({ inpu
 });
 
 export const reasonUpdate = userRequired.input(reasonUpdateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { dispositionReason: input.id });
+  await context.access.require("ADMIN", { dispositionReason: input.id });
 
   const { id, ...updateData } = input;
   const result = await dispositionReasonService.update(id, updateData);
@@ -197,7 +197,7 @@ export const reasonUpdate = userRequired.input(reasonUpdateInputSchema).handler(
 });
 
 export const reasonDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { dispositionReason: input.id });
+  await context.access.require("ADMIN", { dispositionReason: input.id });
 
   const result = await dispositionReasonService.remove(input.id);
   if (result.error) throwServiceError(result);

@@ -121,7 +121,7 @@ export default async function groups(fastify: FastifyTypedInstance) {
       const { id } = request.params;
       const body = request.body;
 
-      await request.access.require("MANAGE", { pointGroup: id });
+      await request.access.require("ADMIN", { pointGroup: id });
 
       const result = await datasource.groups.update(id, body);
       if ("error" in result) {
@@ -148,7 +148,7 @@ export default async function groups(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { id } = request.params;
-      await request.access.require("MANAGE", { pointGroup: id });
+      await request.access.require("ADMIN", { pointGroup: id });
 
       const result = await datasource.groups.remove(id);
       if ("error" in result) {

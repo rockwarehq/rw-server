@@ -54,7 +54,7 @@ const listInputSchema = z.object({
 // ── Groups ───────────────────────────────────────────────────────────────
 
 export const groupCreate = userRequired.input(groupCreateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { site: input.siteId });
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await notification.createGroup(input);
   if ("error" in result) throwServiceError(result);
@@ -72,7 +72,7 @@ export const groupGet = userRequired.input(idInputSchema).handler(async ({ input
 });
 
 export const groupUpdate = userRequired.input(groupUpdateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { notificationGroup: input.id });
+  await context.access.require("ADMIN", { notificationGroup: input.id });
 
   const { id, ...data } = input;
   const result = await notification.updateGroup(id, data);
@@ -81,7 +81,7 @@ export const groupUpdate = userRequired.input(groupUpdateInputSchema).handler(as
 });
 
 export const groupArchive = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { notificationGroup: input.id });
+  await context.access.require("ADMIN", { notificationGroup: input.id });
 
   const result = await notification.archiveGroup(input.id);
   if ("error" in result) throwServiceError(result);

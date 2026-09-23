@@ -143,7 +143,7 @@ export const createAutomation = userRequired
     }),
   )
   .handler(async ({ input, context }) => {
-    await context.access.require("MANAGE", { site: input.siteId });
+    await context.access.require("ADMIN", { site: input.siteId });
 
     const fw = await getAutomationFramework();
     const eventSchema = fw.eventSchemas[input.event];
@@ -184,7 +184,7 @@ export const updateAutomation = userRequired
     }),
   )
   .handler(async ({ input, context }) => {
-    await context.access.require("MANAGE", { automation: input.id });
+    await context.access.require("ADMIN", { automation: input.id });
 
     const fw = await getAutomationFramework();
     const existing = fw.store.get(input.id);
@@ -217,7 +217,7 @@ export const updateAutomation = userRequired
   });
 
 export const deleteAutomation = userRequired.input(z.object({ id: z.string() })).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { automation: input.id });
+  await context.access.require("ADMIN", { automation: input.id });
 
   const fw = await getAutomationFramework();
   if (!(await fw.store.remove(input.id))) throw new ORPCError("NOT_FOUND", { message: "automation not found" });

@@ -334,7 +334,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     preHandler: fastify.verifyAccessToken,
     handler: async (request, reply) => {
       const body = request.body;
-      await request.access.require("MANAGE", { site: request.body.siteId });
+      await request.access.require("ADMIN", { site: request.body.siteId });
 
       const result = await datasource.create(body);
       if ("error" in result) {
@@ -418,7 +418,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const { id } = request.params;
       const body = request.body;
-      await request.access.require("MANAGE", { datasource: id });
+      await request.access.require("ADMIN", { datasource: id });
 
       const result = await datasource.update(id, body);
       if ("error" in result) {
@@ -445,7 +445,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     preHandler: fastify.verifyAccessToken,
     handler: async (request, reply) => {
       const { id } = request.params;
-      await request.access.require("MANAGE", { datasource: id });
+      await request.access.require("ADMIN", { datasource: id });
 
       const result = await datasource.remove(id);
       if ("error" in result) {
@@ -474,10 +474,10 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const { id } = request.params;
       const { gatewayId } = request.body;
-      await request.access.require("MANAGE", { datasource: id });
+      await request.access.require("ADMIN", { datasource: id });
       if (gatewayId) {
         // Attaching to a gateway requires MANAGE for the gateway's site too.
-        await request.access.require("MANAGE", { gateway: gatewayId });
+        await request.access.require("ADMIN", { gateway: gatewayId });
       }
 
       const result = await datasource.assign(id, gatewayId);
@@ -512,7 +512,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const { datasourceId } = request.params;
       const body = request.body;
 
-      await request.access.require("MANAGE", { datasource: datasourceId });
+      await request.access.require("ADMIN", { datasource: datasourceId });
 
       const result = await datasource.groups.create(datasourceId, body);
       if ("error" in result) {
@@ -575,7 +575,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const { datasourceId } = request.params;
       const body = request.body;
 
-      await request.access.require("MANAGE", { datasource: datasourceId });
+      await request.access.require("ADMIN", { datasource: datasourceId });
 
       const result = await datasource.points.create(datasourceId, body);
       if ("error" in result) {
@@ -637,7 +637,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const { datasourceId } = request.params;
       const { points } = request.body;
 
-      await request.access.require("MANAGE", { datasource: datasourceId });
+      await request.access.require("ADMIN", { datasource: datasourceId });
 
       const result = await datasource.points.bulkCreate(datasourceId, points);
       if ("error" in result) {

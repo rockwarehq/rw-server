@@ -43,7 +43,7 @@ const listInputSchema = z.object({
 // ============================================================================
 
 export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { site: input.siteId });
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await statusReason.create(input);
   if (result.error !== undefined) throwServiceError(result);
@@ -63,7 +63,7 @@ export const get = userRequired.input(idInputSchema).handler(async ({ input, con
 });
 
 export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { statusReason: input.id });
+  await context.access.require("ADMIN", { statusReason: input.id });
 
   const { id, ...updateData } = input;
   const result = await statusReason.update(id, updateData);
@@ -72,7 +72,7 @@ export const update = userRequired.input(updateInputSchema).handler(async ({ inp
 });
 
 export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { statusReason: input.id });
+  await context.access.require("ADMIN", { statusReason: input.id });
 
   const result = await statusReason.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);

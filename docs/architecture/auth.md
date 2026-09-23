@@ -43,7 +43,7 @@ Opaque `rw_app_`-prefixed tokens for customer integrations: SHA-256 hash lookup 
 
 ## RBAC
 
-- Access is bucket membership: a PLANT bucket per site (VIEW = member, MANAGE = write everything incl. every workcenter, ADMIN = people/access) and a WORKCENTER bucket per cell (VIEW = watch, MANAGE = operate + configure). Workspace owners and Rockware staff bypass. No permission vocabulary; evaluated in `packages/auth/src/iam/access.ts`.
+- Access is bucket membership: a PLANT bucket per site (VIEW = read, MANAGE = "member": change the shared plant things, ADMIN = shop-floor setup + people/access + every workcenter) and a WORKCENTER bucket per cell (VIEW = watch, MANAGE = run the cell). Floor data (logs, metrics, recaps) stays in its workcenter even on plant-wide screens. Workspace owners and Rockware staff bypass. No permission vocabulary; evaluated in `packages/auth/src/iam/access.ts`.
 - Access rows are `BucketAccess` (membership ↔ bucket ↔ tier; schema: `packages/db/schema/iam.prisma`). The old `Role` / `RoleAssignment` / `WorkcenterGrant` tables are a frozen archive with no code paths.
 - `SystemRole` (SUPPORT, ENGINEER) marks internal staff without workspace membership.
 - Enforcement is two-tier: oRPC middleware admits the right kinds of caller (user, display, API token); handlers then ask `context.access` (for example `await context.access.require("MANAGE", { station: id })`), which throws `AccessDenied` on a "no".

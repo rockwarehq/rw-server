@@ -303,7 +303,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      await request.access.require("MANAGE", { site: request.params.id });
+      await request.access.require("ADMIN", { site: request.params.id });
 
       const result = await site.update(request.params.id, request.body);
       if ("error" in result) {
@@ -333,7 +333,8 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      await request.access.require("MANAGE", { site: request.params.id });
+      // Sites are account-level: only the owner adds or removes them.
+      request.access.requireOwner();
 
       const result = await site.remove(request.params.id);
       if ("error" in result) {

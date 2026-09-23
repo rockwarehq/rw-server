@@ -51,7 +51,7 @@ function throwServiceError(result: { error: string; code: string }): never {
 }
 
 export const modelCreate = userRequired.input(modelCreateInputSchema).handler(async ({ input, context }) => {
-  const scope = await tokenSite(context, "MANAGE");
+  const scope = await tokenSite(context, "ADMIN");
   return unwrap(await entity.models.create(input, scope));
 });
 
@@ -76,36 +76,36 @@ export const modelGet = userRequired.input(idInputSchema).handler(async ({ input
 });
 
 export const modelUpdate = userRequired.input(modelUpdateInputSchema).handler(async ({ input, context }) => {
-  const scope = await tokenSite(context, "MANAGE");
+  const scope = await tokenSite(context, "ADMIN");
   const { id, ...updates } = input;
   return unwrap(await entity.models.update(id, updates, scope));
 });
 
 export const modelDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = await tokenSite(context, "MANAGE");
+  const scope = await tokenSite(context, "ADMIN");
   return unwrap(await entity.models.remove(input.id, scope));
 });
 
 export const modelFieldCreate = userRequired.input(modelFieldCreateInputSchema).handler(async ({ input, context }) => {
-  const scope = await tokenSite(context, "MANAGE");
+  const scope = await tokenSite(context, "ADMIN");
   return unwrap(await entity.models.createField(input, scope));
 });
 
 export const modelFieldUpdate = userRequired.input(modelFieldUpdateInputSchema).handler(async ({ input, context }) => {
-  const scope = await tokenSite(context, "MANAGE");
+  const scope = await tokenSite(context, "ADMIN");
   const { id, ...updates } = input;
   return unwrap(await entity.models.updateField(id, updates, scope));
 });
 
 export const modelFieldDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = await tokenSite(context, "MANAGE");
+  const scope = await tokenSite(context, "ADMIN");
   return unwrap(await entity.models.removeField(input.id, scope));
 });
 
 export const modelFieldReorder = userRequired
   .input(modelFieldReorderInputSchema)
   .handler(async ({ input, context }) => {
-    const scope = await tokenSite(context, "MANAGE");
+    const scope = await tokenSite(context, "ADMIN");
     return unwrap(await entity.models.reorderFields(input.schemaId, input.fieldIds, scope));
   });
 

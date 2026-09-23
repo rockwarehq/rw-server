@@ -136,7 +136,7 @@ const assignmentListInputSchema = z.object({
 // ============================================================================
 
 export const patternCreate = userRequired.input(patternCreateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { site: input.siteId });
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await shift.pattern.create(input);
   if (result.error !== undefined) throwServiceError(result);
@@ -161,7 +161,7 @@ export const patternGet = userRequired.input(idInputSchema).handler(async ({ inp
 });
 
 export const patternUpdate = userRequired.input(patternUpdateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { shiftPattern: input.id });
+  await context.access.require("ADMIN", { shiftPattern: input.id });
 
   const { id, ...updateData } = input;
   const result = await shift.pattern.update(id, updateData);
@@ -170,7 +170,7 @@ export const patternUpdate = userRequired.input(patternUpdateInputSchema).handle
 });
 
 export const patternDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { shiftPattern: input.id });
+  await context.access.require("ADMIN", { shiftPattern: input.id });
 
   const result = await shift.pattern.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
@@ -178,7 +178,7 @@ export const patternDelete = userRequired.input(idInputSchema).handler(async ({ 
 });
 
 export const patternDuplicate = userRequired.input(duplicateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { shiftPattern: input.id });
+  await context.access.require("ADMIN", { shiftPattern: input.id });
 
   const result = await shift.pattern.duplicate(input.id, input.name);
   if (result.error !== undefined) throwServiceError(result);
@@ -190,7 +190,7 @@ export const patternDuplicate = userRequired.input(duplicateInputSchema).handler
 // ============================================================================
 
 export const definitionCreate = userRequired.input(definitionCreateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { shiftPattern: input.patternId });
+  await context.access.require("ADMIN", { shiftPattern: input.patternId });
 
   const result = await shift.definition.create(input);
   if (result.error !== undefined) throwServiceError(result);
@@ -211,7 +211,7 @@ export const definitionGet = userRequired.input(idInputSchema).handler(async ({ 
 });
 
 export const definitionUpdate = userRequired.input(definitionUpdateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { shiftDefinition: input.id });
+  await context.access.require("ADMIN", { shiftDefinition: input.id });
 
   const { id, ...updateData } = input;
   const result = await shift.definition.update(id, updateData);
@@ -220,7 +220,7 @@ export const definitionUpdate = userRequired.input(definitionUpdateInputSchema).
 });
 
 export const definitionDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { shiftDefinition: input.id });
+  await context.access.require("ADMIN", { shiftDefinition: input.id });
 
   const result = await shift.definition.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
@@ -232,7 +232,7 @@ export const definitionDelete = userRequired.input(idInputSchema).handler(async 
 // ============================================================================
 
 export const assignmentCreate = userRequired.input(assignmentCreateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { site: input.siteId });
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await shift.assignment.create(input);
   if (result.error !== undefined) throwServiceError(result, ASSIGNMENT_CREATE_OVERRIDES);
@@ -252,7 +252,7 @@ export const assignmentGet = userRequired.input(idInputSchema).handler(async ({ 
 });
 
 export const assignmentUpdate = userRequired.input(assignmentUpdateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { shiftAssignment: input.id });
+  await context.access.require("ADMIN", { shiftAssignment: input.id });
 
   const { id, ...updateData } = input;
   const result = await shift.assignment.update(id, updateData);
@@ -283,7 +283,7 @@ export const assignmentPreview = userRequired
   });
 
 export const assignmentUnpublish = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { shiftAssignment: input.id });
+  await context.access.require("ADMIN", { shiftAssignment: input.id });
 
   const result = await shift.assignment.unpublish(input.id);
   if (result.error !== undefined) throwServiceError(result);

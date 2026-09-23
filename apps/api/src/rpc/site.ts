@@ -132,7 +132,7 @@ export const getSettings = userRequired.input(idInputSchema).handler(async ({ in
  * Update typed site settings — merges only known keys into Site.attrs.
  */
 export const updateSettings = userRequired.input(updateSettingsInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { site: input.id });
+  await context.access.require("ADMIN", { site: input.id });
 
   return unwrap(await site.updateSiteSettings(input.id, input.settings));
 });
@@ -142,7 +142,7 @@ export const updateSettings = userRequired.input(updateSettingsInputSchema).hand
  */
 export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
-  await context.access.require("MANAGE", { site: id });
+  await context.access.require("ADMIN", { site: id });
 
   const result = await site.update(id, updateData);
   if (result.error !== undefined) throwServiceError(result);
@@ -153,7 +153,8 @@ export const update = userRequired.input(updateInputSchema).handler(async ({ inp
  * Delete site
  */
 export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { site: input.id });
+  // Sites are account-level: only the owner adds or removes them.
+  context.access.requireOwner();
 
   const result = await site.remove(input.id);
   // HAS_WORKCENTERS / HAS_GATEWAYS / HAS_DATASOURCES map to CONFLICT via the shared table

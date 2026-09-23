@@ -57,7 +57,7 @@ export const list = userOrDisplayRequired.input(listInputSchema).handler(async (
 });
 
 export const create = userRequired.input(andonRuleInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { site: input.siteId });
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await site.andonRules.create(input);
   if (hasAndonRuleError(result)) {
@@ -68,7 +68,7 @@ export const create = userRequired.input(andonRuleInputSchema).handler(async ({ 
 });
 
 export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { siteAndonRule: input.id });
+  await context.access.require("ADMIN", { siteAndonRule: input.id });
 
   const result = await site.andonRules.update(input);
   if (hasAndonRuleError(result)) {
@@ -79,7 +79,7 @@ export const update = userRequired.input(updateInputSchema).handler(async ({ inp
 });
 
 export const remove = userRequired.input(deleteInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { siteAndonRule: input.id });
+  await context.access.require("ADMIN", { siteAndonRule: input.id });
 
   const result = await site.andonRules.remove(input.id);
   if (hasAndonRuleError(result)) {
@@ -90,7 +90,7 @@ export const remove = userRequired.input(deleteInputSchema).handler(async ({ inp
 });
 
 export const reorder = userRequired.input(reorderInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { site: input.siteId });
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await site.andonRules.reorder(input);
   if (hasAndonRuleError(result)) {

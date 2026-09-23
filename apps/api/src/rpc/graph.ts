@@ -194,7 +194,7 @@ function unwrap<T>(result: { data: T } | { error: string; code: string } | null)
 
 export const nodeCreate = userRequired.input(nodeCreateInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...nodeInput } = input;
-  const scope = await workspaceSiteScope(context, "MANAGE", { site: siteId });
+  const scope = await workspaceSiteScope(context, "ADMIN", { site: siteId });
   return unwrap(await graph.nodes.create(nodeInput, scope));
 });
 
@@ -217,12 +217,12 @@ export const nodeGet = graphReadRequired.input(idInputSchema).handler(async ({ i
 
 export const nodeUpdate = userRequired.input(nodeUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updates } = input;
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphNode: id });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphNode: id });
   return unwrap(await graph.nodes.update(id, updates, scope));
 });
 
 export const nodeDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphNode: input.id });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphNode: input.id });
   return unwrap(await graph.nodes.remove(input.id, scope));
 });
 
@@ -233,7 +233,7 @@ export const typeCatalog = graphReadRequired.input(siteInputSchema).handler(asyn
 
 export const typeCreate = userRequired.input(typeCreateInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...typeInput } = input;
-  const scope = await workspaceSiteScope(context, "MANAGE", { site: siteId });
+  const scope = await workspaceSiteScope(context, "ADMIN", { site: siteId });
   return unwrap(await graph.nodeTypes.create(typeInput, scope));
 });
 
@@ -250,65 +250,65 @@ export const typeGet = graphReadRequired.input(idInputSchema).handler(async ({ i
 
 export const typeUpdate = userRequired.input(typeUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updates } = input;
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphNodeType: id });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphNodeType: id });
   return unwrap(await graph.nodeTypes.update(id, updates, scope));
 });
 
 export const typeDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphNodeType: input.id });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphNodeType: input.id });
   return unwrap(await graph.nodeTypes.remove(input.id, scope));
 });
 
 export const typeInputCreate = userRequired.input(typeInputCreateInputSchema).handler(async ({ input, context }) => {
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphNodeType: input.typeId });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphNodeType: input.typeId });
   return unwrap(await graph.nodeTypes.createInput(input, scope));
 });
 
 export const typeInputUpdate = userRequired.input(typeInputUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updates } = input;
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphTypeInput: id });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphTypeInput: id });
   return unwrap(await graph.nodeTypes.updateInput(id, updates, scope));
 });
 
 export const typeInputDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphTypeInput: input.id });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphTypeInput: input.id });
   return unwrap(await graph.nodeTypes.removeInput(input.id, scope));
 });
 
 export const typeFacetCreate = userRequired.input(typeFacetCreateInputSchema).handler(async ({ input, context }) => {
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphNodeType: input.typeId });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphNodeType: input.typeId });
   return unwrap(await graph.nodeTypes.createFacet(input, scope));
 });
 
 export const typeFacetUpdate = userRequired.input(typeFacetUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updates } = input;
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphTypeFacet: id });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphTypeFacet: id });
   return unwrap(await graph.nodeTypes.updateFacet(id, updates, scope));
 });
 
 export const typeFacetDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphTypeFacet: input.id });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphTypeFacet: input.id });
   return unwrap(await graph.nodeTypes.removeFacet(input.id, scope));
 });
 
 export const typeFieldCreate = userRequired.input(typeFieldCreateInputSchema).handler(async ({ input, context }) => {
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphNodeType: input.typeId });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphNodeType: input.typeId });
   return unwrap(await graph.nodeTypes.createField(input, scope));
 });
 
 export const typeFieldUpdate = userRequired.input(typeFieldUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updates } = input;
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphTypeField: id });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphTypeField: id });
   return unwrap(await graph.nodeTypes.updateField(id, updates, scope));
 });
 
 export const typeFieldDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphTypeField: input.id });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphTypeField: input.id });
   return unwrap(await graph.nodeTypes.removeField(input.id, scope));
 });
 
 export const propertyCreate = userRequired.input(propertyCreateInputSchema).handler(async ({ input, context }) => {
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphNode: input.nodeId });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphNode: input.nodeId });
   return unwrap(await graph.properties.create(input, scope));
 });
 
@@ -335,12 +335,12 @@ export const propertyGet = graphReadRequired.input(idInputSchema).handler(async 
 
 export const propertyUpdate = userRequired.input(propertyUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updates } = input;
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphProperty: id });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphProperty: id });
   return unwrap(await graph.properties.update(id, updates, scope));
 });
 
 export const propertyDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphProperty: input.id });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphProperty: input.id });
   return unwrap(await graph.properties.remove(input.id, scope));
 });
 
@@ -350,13 +350,13 @@ export const propertyDependents = graphReadRequired.input(idInputSchema).handler
 });
 
 export const propertyValidate = userRequired.input(propertyValidateInputSchema).handler(async ({ input, context }) => {
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphNode: input.nodeId });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphNode: input.nodeId });
   return unwrap(await graph.properties.validate(input, scope));
 });
 
 export const hookCreate = userRequired.input(hookCreateInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...hookInput } = input;
-  const scope = await workspaceSiteScope(context, "MANAGE", { site: siteId });
+  const scope = await workspaceSiteScope(context, "ADMIN", { site: siteId });
   return unwrap(await graph.hooks.create(hookInput, scope));
 });
 
@@ -373,12 +373,12 @@ export const hookGet = userRequired.input(idInputSchema).handler(async ({ input,
 
 export const hookUpdate = userRequired.input(hookUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updates } = input;
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphHook: id });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphHook: id });
   return unwrap(await graph.hooks.update(id, updates, scope));
 });
 
 export const hookDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = await workspaceSiteScope(context, "MANAGE", { graphHook: input.id });
+  const scope = await workspaceSiteScope(context, "ADMIN", { graphHook: input.id });
   return unwrap(await graph.hooks.remove(input.id, scope));
 });
 
@@ -489,7 +489,7 @@ const planInputSchema = z.object({
 // Requires graph:write — a plan is a rehearsal of writes and can probe names/ids.
 export const introspectPlan = userRequired.input(planInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...changeset } = input;
-  const scope = await workspaceSiteScope(context, "MANAGE", { site: siteId });
+  const scope = await workspaceSiteScope(context, "ADMIN", { site: siteId });
   return unwrap(await graph.planner.plan(changeset, scope));
 });
 

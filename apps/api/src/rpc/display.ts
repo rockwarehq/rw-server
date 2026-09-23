@@ -76,7 +76,7 @@ export const heartbeat = publicProcedure.input(idInputSchema).handler(async ({ i
  * Claim a display by its claim code
  */
 export const claim = userRequired.input(claimInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { site: input.siteId });
+  await context.access.require("ADMIN", { site: input.siteId });
   const { workspaceId } = context.current;
 
   const result = await display.claim(workspaceId, input.claimCode, {
@@ -103,7 +103,7 @@ export const list = userRequired.input(listInputSchema).handler(async ({ input, 
  * Assign a dashboard to a display
  */
 export const assignDashboard = userRequired.input(assignDashboardInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { display: input.id });
+  await context.access.require("ADMIN", { display: input.id });
   const { workspaceId } = context.current;
 
   const result = await display.assignDashboard(workspaceId, input.id, input.dashboardId);
@@ -117,7 +117,7 @@ export const assignDashboard = userRequired.input(assignDashboardInputSchema).ha
  * Unassign dashboard from a display
  */
 export const unassignDashboard = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { display: input.id });
+  await context.access.require("ADMIN", { display: input.id });
   const { workspaceId } = context.current;
 
   const result = await display.unassignDashboard(workspaceId, input.id);
@@ -129,7 +129,7 @@ export const unassignDashboard = userRequired.input(idInputSchema).handler(async
  * Update display (rename)
  */
 export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { display: input.id });
+  await context.access.require("ADMIN", { display: input.id });
   const { workspaceId } = context.current;
 
   const { id, ...updateData } = input;
@@ -146,7 +146,7 @@ export const update = userRequired.input(updateInputSchema).handler(async ({ inp
  * Delete display
  */
 export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { display: input.id });
+  await context.access.require("ADMIN", { display: input.id });
   const { workspaceId } = context.current;
 
   const result = await display.remove(workspaceId, input.id);
