@@ -199,10 +199,8 @@ const listCommandsResponseSchema = {
 } as const satisfies JSONSchema;
 
 // Helper to map error codes to HTTP status
-function getStatusForCode(code: string): 401 | 404 | 400 | 500 {
+function getStatusForCode(code: string): 404 | 500 {
   switch (code) {
-    case "WORKSPACE_MISMATCH":
-      return 401;
     case "SITE_NOT_FOUND":
     case "GATEWAY_NOT_FOUND":
       return 404;
@@ -231,10 +229,9 @@ export default async function gateways(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       await request.access.require("MANAGE", { site: request.body.siteId });
-      const workspaceId = currentUser(request).workspaceId;
 
       try {
-        const result = await gateway.create({ ...request.body, workspaceId });
+        const result = await gateway.create(request.body);
         if ("error" in result) {
           return reply.status(getStatusForCode(result.code ?? "UNKNOWN")).send({ error: result.error });
         }
@@ -295,9 +292,6 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       if (!result) {
         return reply.status(404).send({ error: "Gateway not found" });
       }
-      if ("error" in result) {
-        return reply.status(401).send({ error: result.error });
-      }
       return result.data;
     },
   });
@@ -352,9 +346,8 @@ export default async function gateways(fastify: FastifyTypedInstance) {
         // Moving a gateway requires MANAGE at the TARGET site too.
         await request.access.require("MANAGE", { site: request.body.siteId });
       }
-      const workspaceId = currentUser(request).workspaceId;
 
-      const result = await gateway.update(request.params.id, { ...request.body, workspaceId });
+      const result = await gateway.update(request.params.id, request.body);
       if ("error" in result) {
         return reply.status(getStatusForCode(result.code ?? "UNKNOWN")).send({ error: result.error });
       }
@@ -383,9 +376,8 @@ export default async function gateways(fastify: FastifyTypedInstance) {
 
       const result = await gateway.remove(request.params.id);
       if ("error" in result) {
-        // remove only returns GATEWAY_NOT_FOUND (404) or WORKSPACE_MISMATCH (401)
-        const status = result.code === "WORKSPACE_MISMATCH" ? 401 : 404;
-        return reply.status(status).send({ error: result.error });
+        // remove only returns GATEWAY_NOT_FOUND
+        return reply.status(404).send({ error: result.error });
       }
       return { success: true };
     },

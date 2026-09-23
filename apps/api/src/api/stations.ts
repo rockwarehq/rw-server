@@ -189,7 +189,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
       await request.access.require("VIEW", { station: request.params.id });
 
       const result = await station.getById(request.params.id);
-      if (!result || "error" in result) {
+      if (!result) {
         return reply.status(404).send({ error: "Station not found" });
       }
       return result.data;

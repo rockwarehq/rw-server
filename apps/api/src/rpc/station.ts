@@ -217,7 +217,6 @@ export const get = userRequired.input(idInputSchema).handler(async ({ input, con
   if (!result) {
     throw new ORPCError("NOT_FOUND", { message: "Station not found" });
   }
-  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -299,9 +298,7 @@ export const listEventExecutions = userRequired
   .handler(async ({ input, context }) => {
     await context.access.require("VIEW", { station: input.stationId });
 
-    const result = await station.listEventExecutions(input.stationId, undefined, {
-      limit: input.limit,
-    });
+    const result = await station.listEventExecutions(input.stationId, { limit: input.limit });
     if ("error" in result && result.error !== undefined) throwServiceError(result);
     return result.data;
   });

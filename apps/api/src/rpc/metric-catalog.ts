@@ -34,11 +34,9 @@ export const list = userOrDisplayRequired
   .output(listOutputSchema)
   .handler(async ({ context, input }) => {
     await context.access.require("VIEW", { site: input.siteId });
-    const { workspaceId } = context.current;
 
     const result = await listMetrics({
       siteId: input.siteId,
-      workspaceId,
       entityType: input.entityType,
     });
 

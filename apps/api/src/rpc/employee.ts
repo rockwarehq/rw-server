@@ -81,9 +81,7 @@ export const update = userRequired.input(updateInputSchema).handler(async ({ inp
 
   const { id, ...updateData } = input;
   const result = await crud.update(id, updateData);
-  // Historical mapping: a role from another workspace surfaced as NOT_FOUND
-  // here (the role is invisible to the caller), not the shared FORBIDDEN default.
-  if (result.error !== undefined) throwServiceError(result, { WORKSPACE_MISMATCH: "NOT_FOUND" });
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 

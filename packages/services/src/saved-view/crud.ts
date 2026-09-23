@@ -57,21 +57,18 @@ const viewSelect = {
 // Helpers
 // ============================================================================
 
-async function assertSiteWorkspace(siteId: string, workspaceId: string) {
+async function assertSiteExists(siteId: string) {
   const site = await prisma.site.findUnique({
     where: { id: siteId },
-    select: { id: true, workspaceId: true },
+    select: { id: true },
   });
   if (!site) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
-  if (site.workspaceId !== workspaceId) {
-    return { error: "Site does not belong to this workspace", code: "WORKSPACE_MISMATCH" };
-  }
   return null;
 }
 
-async function loadForMutation(id: string, workspaceId: string) {
+async function loadForMutation(id: string) {
   const current = await prisma.savedView.findUnique({
     where: { id },
     select: {
@@ -79,14 +76,10 @@ async function loadForMutation(id: string, workspaceId: string) {
       deletedAt: true,
       visibility: true,
       createdById: true,
-      site: { select: { workspaceId: true } },
     },
   });
   if (!current || current.deletedAt) {
     return { error: "Saved view not found", code: "SAVED_VIEW_NOT_FOUND" };
-  }
-  if (current.site.workspaceId !== workspaceId) {
-    return { error: "Saved view does not belong to this workspace", code: "WORKSPACE_MISMATCH" };
   }
   return { current };
 }
@@ -95,8 +88,8 @@ async function loadForMutation(id: string, workspaceId: string) {
 // CRUD
 // ============================================================================
 
-export async function create(input: CreateSavedViewInput, workspaceId: string) {
-  const siteError = await assertSiteWorkspace(input.siteId, workspaceId);
+export async function create(input: CreateSavedViewInput) {
+  const siteError = await assertSiteExists(input.siteId);
   if (siteError) return { error: siteError.error, code: siteError.code };
 
   const name = input.name.trim();
@@ -122,8 +115,8 @@ export async function create(input: CreateSavedViewInput, workspaceId: string) {
 }
 
 /** Views visible to the caller: every WORKSPACE view plus their own PRIVATE ones. */
-export async function list(filter: ListSavedViewsFilter, workspaceId: string) {
-  const siteError = await assertSiteWorkspace(filter.siteId, workspaceId);
+export async function list(filter: ListSavedViewsFilter) {
+  const siteError = await assertSiteExists(filter.siteId);
   if (siteError) return { error: siteError.error, code: siteError.code };
 
   const views = await prisma.savedView.findMany({
@@ -141,8 +134,8 @@ export async function list(filter: ListSavedViewsFilter, workspaceId: string) {
   return { data: views };
 }
 
-export async function update(id: string, input: UpdateSavedViewInput, workspaceId: string) {
-  const loaded = await loadForMutation(id, workspaceId);
+export async function update(id: string, input: UpdateSavedViewInput) {
+  const loaded = await loadForMutation(id);
   if ("error" in loaded) return { error: loaded.error, code: loaded.code };
   const { current } = loaded;
 
@@ -178,8 +171,8 @@ export async function update(id: string, input: UpdateSavedViewInput, workspaceI
   return { data: view };
 }
 
-export async function remove(id: string, input: { actorId: string }, workspaceId: string) {
-  const loaded = await loadForMutation(id, workspaceId);
+export async function remove(id: string, input: { actorId: string }) {
+  const loaded = await loadForMutation(id);
   if ("error" in loaded) return { error: loaded.error, code: loaded.code };
   const { current } = loaded;
 

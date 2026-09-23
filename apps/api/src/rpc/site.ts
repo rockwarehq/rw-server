@@ -82,7 +82,6 @@ export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ i
   if (!result) {
     throw new ORPCError("NOT_FOUND", { message: "Site not found" });
   }
-  if (result.error !== undefined) throwServiceError(result);
   return { ...result.data, logoUrl: await site.resolveLogoUrl(result.data.attrs) };
 });
 

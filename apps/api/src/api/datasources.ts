@@ -1,5 +1,4 @@
 import type { JSONSchema } from "json-schema-to-ts";
-import { currentUser } from "./authz.js";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { datasource } from "../services/device/index.js";
 import { errorWithDetailsSchema, idParamsSchema, gatewaySummarySchema } from "./schemas.js";
@@ -302,7 +301,6 @@ function getStatusForCode(code: string): 400 | 404 | 500 {
     case "GROUP_NOT_FOUND":
     case "DRIVER_NOT_FOUND":
     case "SITE_NOT_FOUND":
-    case "WORKSPACE_MISMATCH": // Treat as 404 for REST (auth issues)
       return 404;
     case "VALIDATION_FAILED":
     case "GROUP_MISMATCH":
@@ -338,7 +336,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const body = request.body;
       await request.access.require("MANAGE", { site: request.body.siteId });
 
-      const result = await datasource.create({ ...body, workspaceId: currentUser(request).workspaceId });
+      const result = await datasource.create(body);
       if ("error" in result) {
         return reply.status(getStatusForCode(result.code ?? "UNKNOWN")).send({ error: result.error });
       }

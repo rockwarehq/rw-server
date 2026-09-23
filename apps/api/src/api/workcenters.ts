@@ -236,7 +236,7 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
       await request.access.require("VIEW", { workcenter: request.params.id });
 
       const result = await workcenter.getById(request.params.id);
-      if (!result || "error" in result) {
+      if (!result) {
         return reply.status(404).send({ error: "Workcenter not found" });
       }
       return result.data;

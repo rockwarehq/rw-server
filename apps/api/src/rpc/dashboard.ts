@@ -46,9 +46,8 @@ const listInputSchema = z.object({
  */
 export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
   await context.access.require("MANAGE", { site: input.siteId });
-  const { workspaceId } = context.current;
 
-  const result = await dashboard.create(input, workspaceId);
+  const result = await dashboard.create(input);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -67,9 +66,8 @@ export const list = userOrDisplayRequired.input(listInputSchema).handler(async (
  */
 export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
   await context.access.require("VIEW", { dashboard: input.id });
-  const { workspaceId } = context.current;
 
-  const result = await dashboard.getById(input.id, workspaceId);
+  const result = await dashboard.getById(input.id);
   if (!result) {
     throw new ORPCError("NOT_FOUND", { message: "Dashboard not found" });
   }
@@ -82,10 +80,9 @@ export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ i
  */
 export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   await context.access.require("MANAGE", { dashboard: input.id });
-  const { workspaceId } = context.current;
 
   const { id, ...updateData } = input;
-  const result = await dashboard.update(id, updateData, workspaceId);
+  const result = await dashboard.update(id, updateData);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -95,9 +92,8 @@ export const update = userRequired.input(updateInputSchema).handler(async ({ inp
  */
 export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
   await context.access.require("MANAGE", { dashboard: input.id });
-  const { workspaceId } = context.current;
 
-  const result = await dashboard.remove(input.id, workspaceId);
+  const result = await dashboard.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });

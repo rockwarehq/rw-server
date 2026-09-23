@@ -83,9 +83,8 @@ const datasourceListInputSchema = z.object({
  */
 export const gatewayCreate = userRequired.input(gatewayCreateInputSchema).handler(async ({ input, context }) => {
   await context.access.require("MANAGE", { site: input.siteId });
-  const { workspaceId } = context.current;
 
-  const result = await gateway.create({ ...input, workspaceId });
+  const result = await gateway.create(input);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -110,15 +109,11 @@ export const gatewayList = userRequired.input(gatewayListInputSchema).handler(as
  */
 export const gatewayGet = userRequired.input(gatewayIdInputSchema).handler(async ({ input, context }) => {
   await context.access.require("VIEW", { gateway: input.id });
-  const { workspaceId } = context.current;
 
-  // gateway.getById only emits WORKSPACE_MISMATCH, which the shared table maps
-  // to FORBIDDEN — same as the previous blanket FORBIDDEN here.
-  const result = await gateway.getById(input.id, workspaceId);
+  const result = await gateway.getById(input.id);
   if (!result) {
     throw new ORPCError("NOT_FOUND", { message: "Gateway not found" });
   }
-  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -128,13 +123,12 @@ export const gatewayGet = userRequired.input(gatewayIdInputSchema).handler(async
 export const gatewayUpdate = userRequired.input(gatewayUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
   await context.access.require("MANAGE", { gateway: id });
-  const { workspaceId } = context.current;
   if (input.siteId) {
     // Moving a gateway requires MANAGE at the TARGET site too.
     await context.access.require("MANAGE", { site: input.siteId });
   }
 
-  const result = await gateway.update(id, { ...updateData, workspaceId });
+  const result = await gateway.update(id, updateData);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -144,9 +138,8 @@ export const gatewayUpdate = userRequired.input(gatewayUpdateInputSchema).handle
  */
 export const gatewayDelete = userRequired.input(gatewayIdInputSchema).handler(async ({ input, context }) => {
   await context.access.require("MANAGE", { gateway: input.id });
-  const { workspaceId } = context.current;
 
-  const result = await gateway.remove(input.id, workspaceId);
+  const result = await gateway.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
@@ -160,14 +153,12 @@ export const gatewayDelete = userRequired.input(gatewayIdInputSchema).handler(as
  */
 export const datasourceCreate = userRequired.input(datasourceCreateInputSchema).handler(async ({ input, context }) => {
   await context.access.require("MANAGE", { site: input.siteId });
-  const { workspaceId } = context.current;
 
-  const result = await datasource.create({ ...input, workspaceId });
+  const result = await datasource.create(input);
   if ("error" in result) {
     // intentional catch-all mapping — see ADR-0003 (service emits SITE_NOT_FOUND,
-    // WORKSPACE_MISMATCH, DRIVER_NOT_FOUND, GATEWAY_NOT_FOUND, which the shared
-    // mapper would surface as NOT_FOUND/FORBIDDEN; this endpoint has always
-    // returned BAD_REQUEST for all of them)
+    // DRIVER_NOT_FOUND, GATEWAY_NOT_FOUND, which the shared mapper would surface
+    // as NOT_FOUND; this endpoint has always returned BAD_REQUEST for all of them)
     throw new ORPCError("BAD_REQUEST", {
       message: result.error,
       cause: result,
@@ -184,13 +175,12 @@ export const datasourceCreate = userRequired.input(datasourceCreateInputSchema).
 export const datasourceUpdate = userRequired.input(datasourceUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
   await context.access.require("MANAGE", { datasource: id });
-  const { workspaceId } = context.current;
 
-  const result = await datasource.update(id, updateData, workspaceId);
+  const result = await datasource.update(id, updateData);
 
   if ("error" in result) {
-    // intentional catch-all mapping — see ADR-0003 (NOT_FOUND / WORKSPACE_MISMATCH
-    // / VALIDATION_FAILED all historically surface as BAD_REQUEST here)
+    // intentional catch-all mapping — see ADR-0003 (NOT_FOUND / VALIDATION_FAILED
+    // historically surface as BAD_REQUEST here)
     throw new ORPCError("BAD_REQUEST", {
       message: result.error,
       cause: result,
@@ -204,12 +194,11 @@ export const datasourceUpdate = userRequired.input(datasourceUpdateInputSchema).
  */
 export const datasourceDelete = userRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
   await context.access.require("MANAGE", { datasource: input.id });
-  const { workspaceId } = context.current;
 
-  const result = await datasource.remove(input.id, workspaceId);
+  const result = await datasource.remove(input.id);
   if ("error" in result) {
-    // intentional catch-all mapping — see ADR-0003 (NOT_FOUND / WORKSPACE_MISMATCH
-    // historically surface as BAD_REQUEST here)
+    // intentional catch-all mapping — see ADR-0003 (NOT_FOUND historically
+    // surfaces as BAD_REQUEST here)
     throw new ORPCError("BAD_REQUEST", {
       message: result.error,
       cause: result,
@@ -224,13 +213,12 @@ export const datasourceDelete = userRequired.input(datasourceIdInputSchema).hand
  */
 export const datasourcePublish = userRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
   await context.access.require("MANAGE", { datasource: input.id });
-  const { workspaceId } = context.current;
 
-  const result = await datasource.publish(input.id, workspaceId);
+  const result = await datasource.publish(input.id);
   if ("error" in result) {
-    // intentional catch-all mapping — see ADR-0003 (NOT_FOUND / WORKSPACE_MISMATCH /
-    // INVALID_STATUS / CONNECTION_REQUIRED / VALIDATION_FAILED all historically
-    // surface as BAD_REQUEST here)
+    // intentional catch-all mapping — see ADR-0003 (NOT_FOUND / INVALID_STATUS /
+    // CONNECTION_REQUIRED / VALIDATION_FAILED all historically surface as
+    // BAD_REQUEST here)
     throw new ORPCError("BAD_REQUEST", {
       message: result.error,
       cause: result,
@@ -245,12 +233,11 @@ export const datasourcePublish = userRequired.input(datasourceIdInputSchema).han
  */
 export const datasourceUnpublish = userRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
   await context.access.require("MANAGE", { datasource: input.id });
-  const { workspaceId } = context.current;
 
-  const result = await datasource.unpublish(input.id, workspaceId);
+  const result = await datasource.unpublish(input.id);
   if ("error" in result) {
-    // intentional catch-all mapping — see ADR-0003 (NOT_FOUND / WORKSPACE_MISMATCH /
-    // INVALID_STATUS historically surface as BAD_REQUEST here)
+    // intentional catch-all mapping — see ADR-0003 (NOT_FOUND / INVALID_STATUS
+    // historically surface as BAD_REQUEST here)
     throw new ORPCError("BAD_REQUEST", {
       message: result.error,
       cause: result,

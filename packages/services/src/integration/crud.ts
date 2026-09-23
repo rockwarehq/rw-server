@@ -62,23 +62,17 @@ function toView(row: PublicIntegration, hasSecret: boolean): IntegrationView {
 }
 
 async function assertSite(scope: IntegrationScope) {
-  const site = await prisma.site.findUnique({ where: { id: scope.siteId }, select: { workspaceId: true } });
+  const site = await prisma.site.findUnique({ where: { id: scope.siteId }, select: { id: true } });
   if (!site) return errorResult("SITE_NOT_FOUND", "Site not found");
-  if (site.workspaceId !== scope.workspaceId) {
-    return errorResult("WORKSPACE_MISMATCH", "Site does not belong to this workspace");
-  }
   return null;
 }
 
 async function loadForMutation(id: string, scope: IntegrationScope) {
   const current = await prisma.integration.findUnique({
     where: { id },
-    select: { ...publicSelect, secretCipher: true, site: { select: { workspaceId: true } } },
+    select: { ...publicSelect, secretCipher: true },
   });
   if (!current || current.isDeleted) return errorResult("INTEGRATION_NOT_FOUND", "Integration not found");
-  if (current.site.workspaceId !== scope.workspaceId) {
-    return errorResult("WORKSPACE_MISMATCH", "Integration does not belong to this workspace");
-  }
   if (current.siteId !== scope.siteId) {
     return errorResult("SITE_MISMATCH", "Integration does not belong to this site");
   }
@@ -217,7 +211,7 @@ export async function remove(id: string, scope: IntegrationScope) {
 export async function getById(id: string, scope: IntegrationScope) {
   const loaded = await loadForMutation(id, scope);
   if ("error" in loaded) return loaded;
-  const { secretCipher, site: _site, ...row } = loaded.current;
+  const { secretCipher, ...row } = loaded.current;
   return { data: toView(row, Boolean(secretCipher)) };
 }
 

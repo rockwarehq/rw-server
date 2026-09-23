@@ -276,7 +276,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
       await request.access.require("VIEW", { site: request.params.id });
 
       const result = await site.getById(request.params.id);
-      if (!result || "error" in result) {
+      if (!result) {
         return reply.status(404).send({ error: "Site not found" });
       }
       return result.data;

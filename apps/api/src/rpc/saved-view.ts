@@ -114,55 +114,47 @@ const idInputSchema = z.object({ id: z.uuid() });
 
 export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
   const userId = context.current.user.id;
-  const { workspaceId } = context.current;
   await context.access.require("MANAGE", { site: input.siteId });
 
-  const result = await savedView.create(
-    {
-      siteId: input.siteId,
-      page: input.page,
-      scopeId: input.scopeId ?? null,
-      name: input.name,
-      description: input.description ?? null,
-      visibility: input.visibility,
-      config: input.config,
-      createdById: userId,
-    },
-    workspaceId,
-  );
+  const result = await savedView.create({
+    siteId: input.siteId,
+    page: input.page,
+    scopeId: input.scopeId ?? null,
+    name: input.name,
+    description: input.description ?? null,
+    visibility: input.visibility,
+    config: input.config,
+    createdById: userId,
+  });
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
 export const list = userRequired.input(listInputSchema).handler(async ({ input, context }) => {
   const userId = context.current.user.id;
-  const { workspaceId } = context.current;
   await context.access.require("VIEW", { site: input.siteId });
 
-  const result = await savedView.list(
-    { siteId: input.siteId, page: input.page, scopeId: input.scopeId ?? null, userId },
-    workspaceId,
-  );
+  const result = await savedView.list({
+    siteId: input.siteId,
+    page: input.page,
+    scopeId: input.scopeId ?? null,
+    userId,
+  });
   if (result.error !== undefined) throwServiceError(result);
   return { data: result.data };
 });
 
 export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const userId = context.current.user.id;
-  const { workspaceId } = context.current;
   await context.access.require("MANAGE", { savedView: input.id });
 
-  const result = await savedView.update(
-    input.id,
-    {
-      actorId: userId,
-      name: input.name,
-      description: input.description === undefined ? undefined : (input.description ?? null),
-      visibility: input.visibility,
-      config: input.config,
-    },
-    workspaceId,
-  );
+  const result = await savedView.update(input.id, {
+    actorId: userId,
+    name: input.name,
+    description: input.description === undefined ? undefined : (input.description ?? null),
+    visibility: input.visibility,
+    config: input.config,
+  });
   if (result.error !== undefined) {
     throwServiceError({ error: result.error, code: result.code ?? "BAD_REQUEST" });
   }
@@ -171,10 +163,9 @@ export const update = userRequired.input(updateInputSchema).handler(async ({ inp
 
 export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const userId = context.current.user.id;
-  const { workspaceId } = context.current;
   await context.access.require("MANAGE", { savedView: input.id });
 
-  const result = await savedView.remove(input.id, { actorId: userId }, workspaceId);
+  const result = await savedView.remove(input.id, { actorId: userId });
   if (result.error !== undefined) {
     throwServiceError({ error: result.error, code: result.code ?? "BAD_REQUEST" });
   }
