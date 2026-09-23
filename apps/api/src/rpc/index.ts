@@ -531,6 +531,7 @@ export const router = {
   operator: {
     config: operator.config,
     logon: operator.operatorLogon,
+    identify: operator.operatorIdentify,
     logoff: operator.operatorLogoff,
     logoffAll: operator.operatorLogoffAll,
     activeSessions: operator.activeSessions,
