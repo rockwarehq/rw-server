@@ -54,8 +54,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production domain authorization
 
     // Bucket fixtures: FA administers site A's plant; the reader is a plain
     // plant member (VIEW). Neither holds anything at site B.
-    await makeUser(workspaceId, FA_EMAIL, PASSWORD, { plants: [{ siteId: rockware.id, tier: "ADMIN" }] });
-    await makeUser(workspaceId, READER_EMAIL, PASSWORD, { plants: [{ siteId: rockware.id, tier: "VIEW" }] });
+    await makeUser(workspaceId, FA_EMAIL, PASSWORD, { plants: [{ siteId: rockware.id, level: "ADMIN" }] });
+    await makeUser(workspaceId, READER_EMAIL, PASSWORD, { plants: [{ siteId: rockware.id, level: "VIEW" }] });
 
     faToken = (await loginAs(server, FA_EMAIL, PASSWORD)).accessToken;
     readerToken = (await loginAs(server, READER_EMAIL, PASSWORD)).accessToken;
@@ -88,7 +88,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production domain authorization
     expect(update.statusCode).toBe(403);
   });
 
-  it("access tiers apply within the granted site: a VIEW member cannot write", async () => {
+  it("access levels apply within the granted site: a VIEW member cannot write", async () => {
     const res = await rpcCall(server, "order/create", { siteId: siteB.id, orderNumber: "x" }, readerToken);
     expect(res.statusCode).toBe(403);
     const disposition = await rpcCall(server, "disposition/create", { siteId: siteB.id, name: "x" }, readerToken);

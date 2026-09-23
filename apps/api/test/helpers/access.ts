@@ -4,7 +4,7 @@ import { hashPassword } from "@rw/auth/password";
 // Bucket-era test fixtures: create users with plant/workcenter accesses.
 // Replaces the role-assignment helpers from the permission era.
 
-export type Tier = "VIEW" | "MANAGE" | "ADMIN";
+export type Level = "VIEW" | "MANAGE" | "ADMIN";
 
 export async function plantBucketId(siteId: string): Promise<string> {
   const bucket = await prisma.bucket.findFirstOrThrow({
@@ -49,29 +49,29 @@ export async function ensureWorkcenterBucket(
   return bucket.id;
 }
 
-export async function setPlantAccess(membershipId: string, siteId: string, tier: Tier): Promise<void> {
+export async function setPlantAccess(membershipId: string, siteId: string, level: Level): Promise<void> {
   const bucketId = await plantBucketId(siteId);
   await prisma.bucketAccess.upsert({
     where: { bucketId_membershipId: { bucketId, membershipId } },
-    update: { tier },
-    create: { bucketId, membershipId, tier },
+    update: { level },
+    create: { bucketId, membershipId, level },
   });
 }
 
-export async function setWorkcenterAccess(membershipId: string, workcenterId: string, tier: Tier): Promise<void> {
+export async function setWorkcenterAccess(membershipId: string, workcenterId: string, level: Level): Promise<void> {
   const bucketId = await workcenterBucketId(workcenterId);
   await prisma.bucketAccess.upsert({
     where: { bucketId_membershipId: { bucketId, membershipId } },
-    update: { tier },
-    create: { bucketId, membershipId, tier },
+    update: { level },
+    create: { bucketId, membershipId, level },
   });
 }
 
 export interface AccessSpec {
-  /** Plant accesses: siteId → tier. */
-  plants?: Array<{ siteId: string; tier: Tier }>;
-  /** Workcenter accesses: workcenterId → tier (VIEW | MANAGE). */
-  workcenters?: Array<{ workcenterId: string; tier: Tier }>;
+  /** Plant accesses: siteId → level. */
+  plants?: Array<{ siteId: string; level: Level }>;
+  /** Workcenter accesses: workcenterId → level (VIEW | MANAGE). */
+  workcenters?: Array<{ workcenterId: string; level: Level }>;
   owner?: boolean;
 }
 
@@ -96,10 +96,10 @@ export async function makeUser(
     select: { id: true },
   });
   for (const p of access.plants ?? []) {
-    await setPlantAccess(membership.id, p.siteId, p.tier);
+    await setPlantAccess(membership.id, p.siteId, p.level);
   }
   for (const w of access.workcenters ?? []) {
-    await setWorkcenterAccess(membership.id, w.workcenterId, w.tier);
+    await setWorkcenterAccess(membership.id, w.workcenterId, w.level);
   }
   return { userId: user.id, membershipId: membership.id };
 }

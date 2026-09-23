@@ -54,7 +54,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
   let nopermToken: string;
 
   // A read-only bucket access at the default plant — the common invite grant.
-  const viewAccess = () => [{ bucketId: plantBucket, tier: "VIEW" }];
+  const viewAccess = () => [{ bucketId: plantBucket, level: "VIEW" }];
 
   beforeAll(async () => {
     server = buildServer();
@@ -69,7 +69,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
     // Inviter: plant ADMIN at the site — invite authority is ADMIN at each
     // invited bucket's site plant. Noperm: plain member, no accesses.
     await makeUser(workspaceId, INVITER_EMAIL, INVITER_PASSWORD, {
-      plants: [{ siteId, tier: "ADMIN" }],
+      plants: [{ siteId, level: "ADMIN" }],
     });
     await makeUser(workspaceId, NOPERM_EMAIL, NOPERM_PASSWORD);
 
@@ -112,7 +112,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
     // Plant ADMIN so the invitee can pass the admin-gated roster later.
     const res = await invite(adminToken, {
       email: INVITEE_EMAILS[0],
-      bucketAccesses: [{ bucketId: plantBucket, tier: "ADMIN" }],
+      bucketAccesses: [{ bucketId: plantBucket, level: "ADMIN" }],
       firstName: "Ada",
     });
     expect(res.statusCode).toBe(201);
@@ -140,7 +140,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
       include: { bucketAccesses: true },
     });
     expect(membership?.bucketAccesses).toHaveLength(1);
-    expect(membership?.bucketAccesses[0]?.tier).toBe("ADMIN");
+    expect(membership?.bucketAccesses[0]?.level).toBe("ADMIN");
 
     const audit = await prisma.auditLog.findFirst({
       where: { action: "USER_INVITED", userId: row.id },

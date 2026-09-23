@@ -15,10 +15,10 @@ const SITE_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const WC_1 = "11111111-1111-4111-8111-111111111111";
 const WC_2 = "22222222-2222-4222-8222-222222222222";
 
-const plant = (tier: "VIEW" | "MANAGE" | "ADMIN", siteId = SITE_A) =>
-  personFromRows([{ tier, kind: "PLANT", siteId, workcenterId: null }]);
-const crew = (tier: "VIEW" | "MANAGE", workcenterId = WC_1) =>
-  personFromRows([{ tier, kind: "WORKCENTER", siteId: SITE_A, workcenterId }]);
+const plant = (level: "VIEW" | "MANAGE" | "ADMIN", siteId = SITE_A) =>
+  personFromRows([{ level, kind: "PLANT", siteId, workcenterId: null }]);
+const crew = (level: "VIEW" | "MANAGE", workcenterId = WC_1) =>
+  personFromRows([{ level, kind: "WORKCENTER", siteId: SITE_A, workcenterId }]);
 
 const VIEWER = plant("VIEW");
 const MEMBER = plant("MANAGE");
@@ -101,8 +101,8 @@ describe("users: floor things", () => {
 
   it("a plant member with a cell reaches that cell only", async () => {
     const person = personFromRows([
-      { tier: "MANAGE", kind: "PLANT", siteId: SITE_A, workcenterId: null },
-      { tier: "MANAGE", kind: "WORKCENTER", siteId: SITE_A, workcenterId: WC_1 },
+      { level: "MANAGE", kind: "PLANT", siteId: SITE_A, workcenterId: null },
+      { level: "MANAGE", kind: "WORKCENTER", siteId: SITE_A, workcenterId: WC_1 },
     ]);
     await user(person).require("MANAGE", { job: "job-1" });
     await user(person).require("MANAGE", { station: "st-1" });
@@ -112,7 +112,7 @@ describe("users: floor things", () => {
 });
 
 describe("users: site-less rows, somewhere, owner", () => {
-  it("site-less rows: reads need any site, changes need the tier at some plant", async () => {
+  it("site-less rows: reads need any site, changes need the level at some plant", async () => {
     await expect(user(VIEWER).require("VIEW", { gateway: "g" })).resolves.toEqual({ siteId: null });
     await denied(user(VIEWER).require("MANAGE", { gateway: "g" }));
     await user(MEMBER).require("MANAGE", { gateway: "g" });
@@ -150,7 +150,7 @@ describe("users: site-less rows, somewhere, owner", () => {
 });
 
 describe("users: lists", () => {
-  it("PLANT lists need the tier on the plant", async () => {
+  it("PLANT lists need the level on the plant", async () => {
     expect(user(VIEWER).list("VIEW")).toEqual({ siteId: SITE_A });
     expect(user(CREW).list("VIEW")).toEqual({ siteId: SITE_A });
     await denied(() => user(VIEWER).list("MANAGE"));
@@ -181,7 +181,7 @@ describe("devices", () => {
   const display = new DeviceAccess("display", SITE_A, locate as never);
   const app = new DeviceAccess("app", SITE_A, locate as never);
 
-  it("displays: any tier at their own site (unchanged rule)", async () => {
+  it("displays: any level at their own site (unchanged rule)", async () => {
     await display.require("MANAGE", { station: "st-2" });
     await display.require("MANAGE", { site: SITE_A });
     expect((await denied(display.require("VIEW", { job: "job-b" }))).message).toBe(

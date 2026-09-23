@@ -48,12 +48,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access authorization (Ti
     await prisma.station.create({ data: { siteId, name: "ba-s-null" } });
 
     const crew = await makeUser(workspaceId, EMAILS.crew, PASSWORD, {
-      workcenters: [{ workcenterId: wc1, tier: "VIEW" }],
+      workcenters: [{ workcenterId: wc1, level: "VIEW" }],
     });
     crewUserId = crew.userId;
-    await makeUser(workspaceId, EMAILS.member, PASSWORD, { plants: [{ siteId, tier: "VIEW" }] });
-    await makeUser(workspaceId, EMAILS.admin, PASSWORD, { plants: [{ siteId, tier: "ADMIN" }] });
-    await makeUser(workspaceId, EMAILS.admin2, PASSWORD, { plants: [{ siteId, tier: "ADMIN" }] });
+    await makeUser(workspaceId, EMAILS.member, PASSWORD, { plants: [{ siteId, level: "VIEW" }] });
+    await makeUser(workspaceId, EMAILS.admin, PASSWORD, { plants: [{ siteId, level: "ADMIN" }] });
+    await makeUser(workspaceId, EMAILS.admin2, PASSWORD, { plants: [{ siteId, level: "ADMIN" }] });
 
     for (const key of Object.keys(EMAILS) as Array<keyof typeof EMAILS>) {
       tokens[key] = (await loginAs(server, EMAILS[key], PASSWORD)).accessToken;
@@ -79,7 +79,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access authorization (Ti
     expect(res.statusCode).toBe(403);
   });
 
-  it("/users/me tells the whole access story: direct, hook and tiers", async () => {
+  it("/users/me tells the whole access story: direct, hook and levels", async () => {
     const res = await server.inject({
       method: "GET",
       url: "/users/me",
@@ -89,12 +89,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access authorization (Ti
     const access = (res.json() as { access: { workspaceRole: string; buckets: Array<Record<string, unknown>> } })
       .access;
     expect(access.workspaceRole).toBe("MEMBER");
-    const byKind = new Map(access.buckets.map((b) => [`${b.kind}:${b.via}`, b.tier]));
+    const byKind = new Map(access.buckets.map((b) => [`${b.kind}:${b.via}`, b.level]));
     expect(byKind.get("WORKCENTER:direct")).toBe("VIEW");
     expect(byKind.get("PLANT:member")).toBe("VIEW");
   });
 
-  it("bucket rpc: members roster is ADMIN-only; setAccess upgrades a tier", async () => {
+  it("bucket rpc: members roster is ADMIN-only; setAccess upgrades a level", async () => {
     const denied = await rpcCall(server, "bucket/members", { bucketId: wc1Bucket }, tokens.crew);
     expect(denied.statusCode).toBe(403);
 
@@ -107,7 +107,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access authorization (Ti
     const upgraded = await rpcCall(
       server,
       "bucket/setAccess",
-      { userId: crewUserId, bucketId: wc1Bucket, tier: "MANAGE" },
+      { userId: crewUserId, bucketId: wc1Bucket, level: "MANAGE" },
       tokens.admin,
     );
     expect(upgraded.statusCode).toBe(200);
@@ -116,19 +116,19 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access authorization (Ti
     const memberTry = await rpcCall(
       server,
       "bucket/setAccess",
-      { userId: crewUserId, bucketId: wc1Bucket, tier: "VIEW" },
+      { userId: crewUserId, bucketId: wc1Bucket, level: "VIEW" },
       tokens.member,
     );
     expect(memberTry.statusCode).toBe(403);
 
     // Workcenter buckets top out at MANAGE.
-    const badTier = await rpcCall(
+    const badLevel = await rpcCall(
       server,
       "bucket/setAccess",
-      { userId: crewUserId, bucketId: wc1Bucket, tier: "ADMIN" },
+      { userId: crewUserId, bucketId: wc1Bucket, level: "ADMIN" },
       tokens.admin,
     );
-    expect(badTier.statusCode).toBe(400);
+    expect(badLevel.statusCode).toBe(400);
   });
 
   it("the last plant admin cannot be removed or downgraded", async () => {
@@ -153,7 +153,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access authorization (Ti
     const downgrade = await rpcCall(
       server,
       "bucket/setAccess",
-      { userId: adminUser.id, bucketId: plant.id, tier: "MANAGE" },
+      { userId: adminUser.id, bucketId: plant.id, level: "MANAGE" },
       tokens.admin,
     );
     expect(downgrade.statusCode).toBe(400);

@@ -72,7 +72,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("admin password reset (Tier 2)",
     // Site plant ADMIN — the old plant:admin. Workspace-scope routes still
     // exclude site admins, same as before.
     await makeUser(workspace.id, PLANT_ADMIN_EMAIL, PLANT_ADMIN_PASSWORD, {
-      plants: [{ siteId: site.id, tier: "ADMIN" }],
+      plants: [{ siteId: site.id, level: "ADMIN" }],
     });
 
     const targetIds = await makeUser(workspace.id, TARGET_EMAIL, TARGET_PASSWORD);

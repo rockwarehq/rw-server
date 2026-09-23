@@ -17,7 +17,7 @@ import { ORPCError } from "@orpc/server";
 import { type CodeOverrides, throwServiceError as throwServiceErrorShared, unwrap as unwrapService } from "./errors.js";
 import * as entity from "@rw/services/entity/index";
 import type { EntityScope } from "@rw/services/entity/index";
-import type { Tier } from "@rw/auth/iam/access";
+import type { Level } from "@rw/auth/iam/access";
 import type { CallerContext } from "./context.js";
 
 import { userRequired } from "./middleware.js";
@@ -26,12 +26,12 @@ import { userRequired } from "./middleware.js";
  * entity.* keeps the token-site model: the active site comes from the
  * caller's switch-site token, never from input. Site presence is checked
  * before access so a missing site context does not leak whether the
- * caller holds the tier.
+ * caller holds the level.
  */
-async function tokenSite(context: CallerContext<"user">, tier: Tier): Promise<EntityScope> {
+async function tokenSite(context: CallerContext<"user">, level: Level): Promise<EntityScope> {
   const siteId = context.current.siteId;
   if (!siteId) throw new ORPCError("BAD_REQUEST", { message: "Site context required" });
-  await context.access.require(tier, { site: siteId });
+  await context.access.require(level, { site: siteId });
   return { workspaceId: context.current.workspaceId, siteId };
 }
 

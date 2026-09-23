@@ -1,7 +1,7 @@
 import prisma from "@rw/db";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD } from "./global-setup.js";
-import { ensurePlantBucket, makeUser, plantBucketId, type Tier } from "./helpers/access.js";
+import { ensurePlantBucket, makeUser, plantBucketId, type Level } from "./helpers/access.js";
 import { buildServer, type TestServer } from "./helpers/build-server.js";
 
 const FACTORY_ADMIN_EMAIL = "site-remover@test.local";
@@ -68,7 +68,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
     options: {
       status?: "ACTIVE" | "PENDING";
       password?: string;
-      plants: Array<{ siteId: string; tier: Tier }>;
+      plants: Array<{ siteId: string; level: Level }>;
     },
   ): Promise<string> {
     const { userId } = await makeUser(workspaceId, email, options.password ?? "MemberPass123!", {
@@ -124,29 +124,29 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
 
     factoryAdminUserId = await createMember(FACTORY_ADMIN_EMAIL, {
       password: FACTORY_ADMIN_PASSWORD,
-      plants: [{ siteId: siteAId, tier: "ADMIN" }],
+      plants: [{ siteId: siteAId, level: "ADMIN" }],
     });
     // A second, independent plant ADMIN at site A (the old custom-role admin).
     await createMember(SECOND_SITE_ADMIN_EMAIL, {
       password: SECOND_SITE_ADMIN_PASSWORD,
-      plants: [{ siteId: siteAId, tier: "ADMIN" }],
+      plants: [{ siteId: siteAId, level: "ADMIN" }],
     });
     siteOnlyUserId = await createMember(SITE_ONLY_EMAIL, {
-      plants: [{ siteId: siteAId, tier: "VIEW" }],
+      plants: [{ siteId: siteAId, level: "VIEW" }],
     });
     // "Hybrid": access at both sites, so removing site A leaves site B.
     hybridUserId = await createMember(HYBRID_EMAIL, {
       plants: [
-        { siteId: siteAId, tier: "VIEW" },
-        { siteId: siteBId, tier: "VIEW" },
+        { siteId: siteAId, level: "VIEW" },
+        { siteId: siteBId, level: "VIEW" },
       ],
     });
     pendingUserId = await createMember(PENDING_EMAIL, {
       status: "PENDING",
-      plants: [{ siteId: siteAId, tier: "VIEW" }],
+      plants: [{ siteId: siteAId, level: "VIEW" }],
     });
     otherSiteUserId = await createMember(OTHER_SITE_EMAIL, {
-      plants: [{ siteId: siteBId, tier: "VIEW" }],
+      plants: [{ siteId: siteBId, level: "VIEW" }],
     });
 
     adminToken = await switchSite(await login(TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD), siteAId);
@@ -170,9 +170,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
     const bucketId = await plantBucketId(siteAId);
     const access = await prisma.bucketAccess.findFirst({
       where: { bucketId, membership: { userId: factoryAdminUserId } },
-      select: { tier: true },
+      select: { level: true },
     });
-    expect(access?.tier).toBe("ADMIN");
+    expect(access?.level).toBe("ADMIN");
   });
 
   it("factory admin removes a site-only member; membership cascades away", async () => {
@@ -243,7 +243,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
 
     // Same actor CAN still use the site-scoped removal at their own site
     const target = await createMember("scoped-target@test.local", {
-      plants: [{ siteId: siteAId, tier: "VIEW" }],
+      plants: [{ siteId: siteAId, level: "VIEW" }],
     });
     const siteRes = await removeSiteAccess(secondSiteAdminToken, target);
     expect(siteRes.statusCode).toBe(200);
@@ -262,7 +262,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
   it("blocks demoting the last plant admin at a site until another admin exists", async () => {
     // Site B has no admins yet — this member becomes its only one.
     const loneAdminId = await createMember(LONE_ADMIN_EMAIL, {
-      plants: [{ siteId: siteBId, tier: "ADMIN" }],
+      plants: [{ siteId: siteBId, level: "ADMIN" }],
     });
     const siteBBucketId = await plantBucketId(siteBId);
     const demote = (userId: string) =>
@@ -270,7 +270,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
         method: "PUT",
         url: `/workspaces/${workspaceId}/members/${userId}`,
         headers: { authorization: `Bearer ${adminToken}` },
-        payload: { set: [{ bucketId: siteBBucketId, tier: "VIEW" }] },
+        payload: { set: [{ bucketId: siteBBucketId, level: "VIEW" }] },
         remoteAddress: nextIp(),
       });
 
@@ -280,7 +280,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
 
     // A second admin at the site unblocks the demotion.
     await createMember(SECOND_ADMIN_EMAIL, {
-      plants: [{ siteId: siteBId, tier: "ADMIN" }],
+      plants: [{ siteId: siteBId, level: "ADMIN" }],
     });
     const allowed = await demote(loneAdminId);
     expect(allowed.statusCode).toBe(200);

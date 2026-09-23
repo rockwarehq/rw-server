@@ -1,6 +1,6 @@
 import prisma from "@rw/db";
 import { securityConfig } from "../../../config.js";
-import type { Tier as BucketTier, UserAccess } from "@rw/auth/iam/access";
+import type { Level as BucketLevel, UserAccess } from "@rw/auth/iam/access";
 import { hashPassword } from "@rw/auth/password";
 import { sendInviteEmail } from "@rw/services/email/index";
 import { logEvent } from "@rw/services/audit/index";
@@ -19,7 +19,7 @@ export interface CreateInviteInput {
    * users). New invites need bucketAccesses or asOwner; resending an
    * existing pending invite needs neither.
    */
-  bucketAccesses?: Array<{ bucketId: string; tier: BucketTier }>;
+  bucketAccesses?: Array<{ bucketId: string; level: BucketLevel }>;
   /** Invite as workspace owner — reserved; only an owner may do this. */
   asOwner?: boolean;
   firstName?: string;
@@ -50,14 +50,14 @@ export interface InviteContext {
 }
 
 interface ResolvedInviteAccess {
-  accesses: Array<{ bucketId: string; tier: BucketTier; siteId: string | null }>;
+  accesses: Array<{ bucketId: string; level: BucketLevel; siteId: string | null }>;
   asOwner: boolean;
 }
 
 /** Resolve and validate the invite's access: bucket accesses, ownership, or both. */
 async function resolveInviteAccess(input: {
   workspaceId: string;
-  bucketAccesses?: Array<{ bucketId: string; tier: BucketTier }>;
+  bucketAccesses?: Array<{ bucketId: string; level: BucketLevel }>;
   asOwner?: boolean;
 }): Promise<{ ok: true; access: ResolvedInviteAccess } | { ok: false; error: string }> {
   const wanted = input.bucketAccesses ?? [];
@@ -148,13 +148,13 @@ export async function createInvite(
   let mode: "resent" | "adopted" | "new";
   let auditAccess: {
     asOwner?: boolean;
-    bucketAccesses?: Array<{ bucketId: string; tier: string }>;
+    bucketAccesses?: Array<{ bucketId: string; level: string }>;
   } = {};
 
   const auditFromAccess = (access: ResolvedInviteAccess): typeof auditAccess => ({
     ...(access.asOwner ? { asOwner: true } : {}),
     ...(access.accesses.length
-      ? { bucketAccesses: access.accesses.map((a) => ({ bucketId: a.bucketId, tier: a.tier })) }
+      ? { bucketAccesses: access.accesses.map((a) => ({ bucketId: a.bucketId, level: a.level })) }
       : {}),
   });
 

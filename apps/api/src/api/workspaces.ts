@@ -33,7 +33,7 @@ const bucketAccessSchema = {
     siteId: { type: ["string", "null"], format: "uuid" },
     workcenterId: { type: ["string", "null"], format: "uuid" },
     name: { type: "string" },
-    tier: { type: "string", enum: ["VIEW", "MANAGE", "ADMIN"] },
+    level: { type: "string", enum: ["VIEW", "MANAGE", "ADMIN"] },
   },
 } as const satisfies JSONSchema;
 
@@ -123,9 +123,9 @@ const addMemberBodySchema = {
         type: "object",
         properties: {
           bucketId: { type: "string", format: "uuid" },
-          tier: { type: "string", enum: ["VIEW", "MANAGE", "ADMIN"] },
+          level: { type: "string", enum: ["VIEW", "MANAGE", "ADMIN"] },
         },
-        required: ["bucketId", "tier"],
+        required: ["bucketId", "level"],
       },
     },
   },
@@ -150,9 +150,9 @@ const updateAccessBodySchema = {
         type: "object",
         properties: {
           bucketId: { type: "string", format: "uuid" },
-          tier: { type: "string", enum: ["VIEW", "MANAGE", "ADMIN"] },
+          level: { type: "string", enum: ["VIEW", "MANAGE", "ADMIN"] },
         },
-        required: ["bucketId", "tier"],
+        required: ["bucketId", "level"],
       },
     },
     remove: { type: "array", items: { type: "string", format: "uuid" } },

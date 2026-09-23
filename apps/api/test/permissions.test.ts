@@ -105,16 +105,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access data (Tier 2)", (
 
     users = {
       member: await makeUser(workspaceId, EMAILS.member, "bucket-data-pass-1", {
-        plants: [{ siteId, tier: "VIEW" }],
+        plants: [{ siteId, level: "VIEW" }],
       }),
       crew: await makeUser(workspaceId, EMAILS.crew, "bucket-data-pass-1", {
-        workcenters: [{ workcenterId: wc1, tier: "MANAGE" }],
+        workcenters: [{ workcenterId: wc1, level: "MANAGE" }],
       }),
       manager: await makeUser(workspaceId, EMAILS.manager, "bucket-data-pass-1", {
-        plants: [{ siteId, tier: "MANAGE" }],
+        plants: [{ siteId, level: "MANAGE" }],
       }),
       admin: await makeUser(workspaceId, EMAILS.admin, "bucket-data-pass-1", {
-        plants: [{ siteId, tier: "ADMIN" }],
+        plants: [{ siteId, level: "ADMIN" }],
       }),
     };
   });

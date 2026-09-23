@@ -78,9 +78,9 @@ const inviteBodySchema = {
         type: "object",
         properties: {
           bucketId: { type: "string", format: "uuid" },
-          tier: { type: "string", enum: ["VIEW", "MANAGE", "ADMIN"] },
+          level: { type: "string", enum: ["VIEW", "MANAGE", "ADMIN"] },
         },
-        required: ["bucketId", "tier"],
+        required: ["bucketId", "level"],
       },
     },
     // Invite as workspace owner — reserved; only an owner may do this.
@@ -228,7 +228,7 @@ const getMeResponseSchema = {
               siteId: { type: "string", format: "uuid", nullable: true },
               workcenterId: { type: "string", format: "uuid", nullable: true },
               name: { type: "string" },
-              tier: { type: "string", enum: ["VIEW", "MANAGE", "ADMIN"] },
+              level: { type: "string", enum: ["VIEW", "MANAGE", "ADMIN"] },
               via: { type: "string", enum: ["direct", "member", "cascade"] },
             },
           },

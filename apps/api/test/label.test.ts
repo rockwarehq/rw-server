@@ -78,9 +78,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tie
     await ensurePlantBucket(workspaceId, siteB.id, `${PREFIX} Site B`);
 
     // Bucket fixtures: "office" is a plant manager — job writes (create/tag)
-    // sit at plant MANAGE, and the same tier now covers the label catalog
+    // sit at plant MANAGE, and the same level now covers the label catalog
     // (the old job:write-without-settings:write role has no bucket analogue).
-    await makeUser(workspaceId, OFFICE_EMAIL, PASSWORD, { plants: [{ siteId: site.id, tier: "MANAGE" }] });
+    await makeUser(workspaceId, OFFICE_EMAIL, PASSWORD, { plants: [{ siteId: site.id, level: "MANAGE" }] });
 
     adminToken = (
       await loginAs(
@@ -126,7 +126,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tie
     expect(dup.statusCode).toBe(409);
 
     // EXPECTATION FLIP (was 403): the label catalog sits at plant MANAGE
-    // now — the same tier that writes jobs — so the old writer-without-
+    // now — the same level that writes jobs — so the old writer-without-
     // settings denial no longer exists; the plant manager creates labels.
     const managerCreate = await rpcCall(server, "label/create", { siteId: site.id, name: `${PREFIX}-rogue` }, officeToken);
     expect(managerCreate.statusCode).toBe(200);

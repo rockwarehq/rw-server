@@ -1,4 +1,4 @@
-/// Bucket-based access control for the User principal tier.
+/// Bucket-based access control for users.
 ///
 /// Rows live in containers; access is membership in the container:
 /// - PLANT bucket (one per site): everyone at the plant can read it.
@@ -24,7 +24,7 @@ enum BucketKind {
   WORKCENTER // one per workcenter: the crew's bucket
 }
 
-enum BucketTier {
+enum BucketLevel {
   VIEW // Plant: read the shared things. Workcenter: watch the floor.
   MANAGE // Plant: "member", change the shared things. Workcenter: run the cell.
   ADMIN // Plant only: shop-floor setup, people, access, settings; reaches every workcenter.
@@ -60,7 +60,7 @@ model BucketAccess {
   id           String     @id @default(uuid()) @db.Uuid
   bucketId     String     @db.Uuid
   membershipId String     @db.Uuid
-  tier         BucketTier
+  level        BucketLevel
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)

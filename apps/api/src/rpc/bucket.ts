@@ -8,7 +8,7 @@ import { describeAccess, staffLabel } from "@rw/auth/iam/access";
 import { workspace as workspaceService } from "../services/account/index.js";
 import { userRequired } from "./middleware.js";
 
-const tierSchema = z.enum(["VIEW", "MANAGE", "ADMIN"]);
+const levelSchema = z.enum(["VIEW", "MANAGE", "ADMIN"]);
 
 /** My buckets — the "plants and cells I'm in" screen. */
 export const list = userRequired.handler(async ({ context }) => {
@@ -35,19 +35,19 @@ export const members = userRequired.input(membersInputSchema).handler(async ({ i
   const accesses = await prisma.bucketAccess.findMany({
     where: { bucketId: input.bucketId },
     select: {
-      tier: true,
+      level: true,
       membership: {
         select: { user: { select: { id: true, email: true, firstName: true, lastName: true } } },
       },
     },
   });
-  return { members: accesses.map((a) => ({ tier: a.tier, user: a.membership.user })) };
+  return { members: accesses.map((a) => ({ level: a.level, user: a.membership.user })) };
 });
 
 const setAccessInputSchema = z.object({
   userId: z.uuid(),
   bucketId: z.uuid(),
-  tier: tierSchema,
+  level: levelSchema,
 });
 
 /** Grant or change one member's access to one bucket. */
@@ -56,7 +56,7 @@ export const setAccess = userRequired.input(setAccessInputSchema).handler(async 
     workspaceId: context.current.workspaceId,
     actor: context.access,
     targetUserId: input.userId,
-    set: [{ bucketId: input.bucketId, tier: input.tier }],
+    set: [{ bucketId: input.bucketId, level: input.level }],
   });
   if (!result.success) {
     const status =

@@ -11,7 +11,7 @@ export function currentUser(request: FastifyRequest): UserCurrent {
 
 /**
  * REST replies for access denials. Bodies match the pre-policy hand-rolled
- * responses in the route files: bare "forbidden" (no tier echo), "No
+ * responses in the route files: bare "forbidden" (no level echo), "No
  * workspace context" as 401. Wired once as the server's error handler.
  */
 export function replyAccessDenied(reply: FastifyReply, denial: AccessDenied): FastifyReply {

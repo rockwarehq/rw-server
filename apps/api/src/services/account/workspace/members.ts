@@ -1,5 +1,5 @@
 import prisma, { type Prisma } from "@rw/db";
-import type { Tier as BucketTier, UserAccess } from "@rw/auth/iam/access";
+import type { Level as BucketLevel, UserAccess } from "@rw/auth/iam/access";
 
 // Workspace member management over the bucket model. A member's access is
 // their workspaceRole (OWNER is reserved ownership) plus their bucket
@@ -11,7 +11,7 @@ export type MemberBucketAccess = {
   siteId: string | null;
   workcenterId: string | null;
   name: string;
-  tier: BucketTier;
+  level: BucketLevel;
 };
 
 export type MemberAccessSummary = {
@@ -22,12 +22,12 @@ export type MemberAccessSummary = {
 };
 
 const ACCESS_SELECT = {
-  tier: true,
+  level: true,
   bucket: { select: { id: true, kind: true, siteId: true, workcenterId: true, name: true } },
 } as const;
 
 type AccessRow = {
-  tier: string;
+  level: string;
   bucket: { id: string; kind: string; siteId: string | null; workcenterId: string | null; name: string };
 };
 
@@ -38,7 +38,7 @@ function summarize(workspaceRole: string, accesses: AccessRow[]): MemberAccessSu
     siteId: a.bucket.siteId,
     workcenterId: a.bucket.workcenterId,
     name: a.bucket.name,
-    tier: a.tier as BucketTier,
+    level: a.level as BucketLevel,
   }));
   return {
     workspaceRole: workspaceRole as "OWNER" | "MEMBER",
@@ -91,7 +91,7 @@ export function adminAt(actor: UserAccess, siteId: string | null): boolean {
 
 export type BucketCheck =
   | { ok: true; buckets: Map<string, { kind: "PLANT" | "WORKCENTER"; siteId: string | null }> }
-  | { ok: false; code: "BUCKET_NOT_FOUND" | "INVALID_TIER"; error: string };
+  | { ok: false; code: "BUCKET_NOT_FOUND" | "INVALID_LEVEL"; error: string };
 
 /**
  * The buckets exist in this workspace, and ADMIN is only asked of plant
@@ -100,7 +100,7 @@ export type BucketCheck =
 export async function checkBuckets(
   workspaceId: string,
   bucketIds: string[],
-  tiers: Array<{ bucketId: string; tier: BucketTier }> = [],
+  levels: Array<{ bucketId: string; level: BucketLevel }> = [],
 ): Promise<BucketCheck> {
   const rows = await prisma.bucket.findMany({
     where: { id: { in: bucketIds } },
@@ -110,8 +110,8 @@ export async function checkBuckets(
   if (bucketIds.some((id) => !buckets.has(id))) {
     return { ok: false, code: "BUCKET_NOT_FOUND", error: "Bucket not found" };
   }
-  if (tiers.some((t) => t.tier === "ADMIN" && buckets.get(t.bucketId)?.kind === "WORKCENTER")) {
-    return { ok: false, code: "INVALID_TIER", error: "ADMIN is a plant tier; workcenter buckets go up to MANAGE" };
+  if (levels.some((t) => t.level === "ADMIN" && buckets.get(t.bucketId)?.kind === "WORKCENTER")) {
+    return { ok: false, code: "INVALID_LEVEL", error: "ADMIN is a plant level; workcenter buckets go up to MANAGE" };
   }
   return { ok: true, buckets };
 }
@@ -120,13 +120,13 @@ export async function checkBuckets(
 export async function writeAccesses(
   tx: Prisma.TransactionClient,
   membershipId: string,
-  accesses: Array<{ bucketId: string; tier: BucketTier }>,
+  accesses: Array<{ bucketId: string; level: BucketLevel }>,
 ) {
   for (const a of accesses) {
     await tx.bucketAccess.upsert({
       where: { bucketId_membershipId: { bucketId: a.bucketId, membershipId } },
-      update: { tier: a.tier },
-      create: { bucketId: a.bucketId, membershipId, tier: a.tier },
+      update: { level: a.level },
+      create: { bucketId: a.bucketId, membershipId, level: a.level },
     });
   }
 }
@@ -141,7 +141,7 @@ async function wouldRemoveLastPlantAdmin(bucketId: string, membershipId: string)
   const bucket = await prisma.bucket.findUnique({ where: { id: bucketId }, select: { kind: true } });
   if (bucket?.kind !== "PLANT") return false;
   const remaining = await prisma.bucketAccess.count({
-    where: { bucketId, tier: "ADMIN", membershipId: { not: membershipId } },
+    where: { bucketId, level: "ADMIN", membershipId: { not: membershipId } },
   });
   return remaining === 0;
 }
@@ -158,7 +158,7 @@ async function isLastOwner(workspaceId: string, membershipId: string): Promise<b
 export type UpdateAccessErrorCode =
   | "MEMBER_NOT_FOUND"
   | "BUCKET_NOT_FOUND"
-  | "INVALID_TIER"
+  | "INVALID_LEVEL"
   | "FORBIDDEN"
   | "LAST_OWNER"
   | "LAST_PLANT_ADMIN";
@@ -169,7 +169,7 @@ export interface UpdateAccessInput {
   actor: UserAccess;
   targetUserId: string;
   /** Upsert these accesses. */
-  set?: Array<{ bucketId: string; tier: BucketTier }>;
+  set?: Array<{ bucketId: string; level: BucketLevel }>;
   /** Remove access to these buckets. */
   remove?: string[];
   /** Change the member's workspace role — owners only, last-owner guarded. */
@@ -207,21 +207,25 @@ export async function updateAccess(input: UpdateAccessInput): Promise<UpdateAcce
   if (touched.some((id) => !adminAt(input.actor, check.buckets.get(id)?.siteId ?? null))) {
     return { success: false, code: "FORBIDDEN", error: "Requires ADMIN access at this plant" };
   }
-  if (set.some((s) => s.tier === "ADMIN" && check.buckets.get(s.bucketId)?.kind === "WORKCENTER")) {
-    return { success: false, code: "INVALID_TIER", error: "ADMIN is a plant tier; workcenter buckets go up to MANAGE" };
+  if (set.some((s) => s.level === "ADMIN" && check.buckets.get(s.bucketId)?.kind === "WORKCENTER")) {
+    return {
+      success: false,
+      code: "INVALID_LEVEL",
+      error: "ADMIN is a plant level; workcenter buckets go up to MANAGE",
+    };
   }
 
   // Last-plant-admin guard: removing or downgrading the final ADMIN access
   // on a plant bucket orphans the site.
   const existing = await prisma.bucketAccess.findMany({
     where: { membershipId: membership.id, bucketId: { in: touched } },
-    select: { bucketId: true, tier: true },
+    select: { bucketId: true, level: true },
   });
-  const existingById = new Map(existing.map((e) => [e.bucketId, e.tier as BucketTier]));
+  const existingById = new Map(existing.map((e) => [e.bucketId, e.level as BucketLevel]));
   for (const id of touched) {
     const had = existingById.get(id);
     if (had !== "ADMIN") continue;
-    const now = remove.includes(id) ? null : set.find((s) => s.bucketId === id)?.tier;
+    const now = remove.includes(id) ? null : set.find((s) => s.bucketId === id)?.level;
     if (now !== "ADMIN" && (await wouldRemoveLastPlantAdmin(id, membership.id))) {
       return { success: false, code: "LAST_PLANT_ADMIN", error: "Cannot remove the last plant admin" };
     }
@@ -250,7 +254,7 @@ export async function updateAccess(input: UpdateAccessInput): Promise<UpdateAcce
 export async function addMember(
   workspaceId: string,
   userId: string,
-  accesses: Array<{ bucketId: string; tier: BucketTier }>,
+  accesses: Array<{ bucketId: string; level: BucketLevel }>,
 ) {
   const check = await checkBuckets(
     workspaceId,
@@ -321,7 +325,7 @@ export async function removeSiteAccess(
   });
   if (plantBucket) {
     const targetAdmin = await prisma.bucketAccess.findFirst({
-      where: { bucketId: plantBucket.id, membershipId: membership.id, tier: "ADMIN" },
+      where: { bucketId: plantBucket.id, membershipId: membership.id, level: "ADMIN" },
       select: { id: true },
     });
     if (targetAdmin && (await wouldRemoveLastPlantAdmin(plantBucket.id, membership.id))) {

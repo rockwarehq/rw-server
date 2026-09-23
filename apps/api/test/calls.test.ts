@@ -79,9 +79,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
     // plant member (VIEW — reads catalogs, no floor writes); "office" is a
     // plant manager, the bucket analogue of the old production:write role
     // (opening/closing calls sits at MANAGE now).
-    const fa = await makeUser(workspaceId, FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, tier: "ADMIN" }] });
-    await makeUser(workspaceId, READER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, tier: "VIEW" }] });
-    const office = await makeUser(workspaceId, OFFICE_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, tier: "MANAGE" }] });
+    const fa = await makeUser(workspaceId, FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
+    await makeUser(workspaceId, READER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "VIEW" }] });
+    const office = await makeUser(workspaceId, OFFICE_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "MANAGE" }] });
 
     // Link the FA user's membership to an employee so USER-initiated calls
     // resolve attribution through WorkspaceMembership.employeeId.

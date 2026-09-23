@@ -12,7 +12,7 @@ import { verifyAccessToken } from "@rw/auth/verify";
 
 ## Design rules
 
-- **One workspace per deployment.** Checks look at the tier and the **site** only.
+- **One workspace per deployment.** Checks look at the level and the **site** only.
 - **Ask the caller, like Basecamp's `Current.person`.** The API's auth plugin works out who is calling once per request (`current`) and gives every handler an `access` object to ask.
 - **A "no" throws.** Every check throws `AccessDenied`. Each transport turns it into its wire error in one place.
 - **Never trust token claims for access.** The plugin loads the caller's bucket rows once per request (one query), so later checks need no more queries.
@@ -36,7 +36,7 @@ import { verifyAccessToken } from "@rw/auth/verify";
 ## Checking access in a handler
 
 ```ts
-// one row: find where it lives, then check the tier there
+// one row: find where it lives, then check the level there
 await context.access.require("MANAGE", { statusReason: input.id });
 
 // a site (create flows)
@@ -54,15 +54,15 @@ if (context.access.can("MANAGE", { site: siteId })) { /* … */ }
 ```
 
 - **Always `await` `require`.** It looks up the row first. A forgotten `await` would skip the check, so the coverage test fails the build when one is missing.
-- **Missing rows are `NOT_FOUND`.** The row lookup runs before the tier check, so an unknown id says "not found" and a caller never learns more than that.
-- **Rows with no site** (unassigned gateways, workspace documents) follow the "somewhere" rule. Reading needs any site. Changing needs the tier at some plant.
+- **Missing rows are `NOT_FOUND`.** The row lookup runs before the level check, so an unknown id says "not found" and a caller never learns more than that.
+- **Rows with no site** (unassigned gateways, workspace documents) follow the "somewhere" rule. Reading needs any site. Changing needs the level at some plant.
 - **REST handlers** use `request.access` the same way. Use `currentUser(request)` for the signed-in user.
 
 ## Access model — buckets
 
 Rows live in containers. Your access is the containers you are in.
 
-| Container | Tier | Meaning |
+| Container | Level | Meaning |
 | --- | --- | --- |
 | **Account** | owner | sites, the workspace, ownership |
 | **Plant** (one per site) | VIEW | viewer: read the plant's shared things (orders, catalogs, schedules, dashboards, equipment lists) |

@@ -53,8 +53,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("device REST authorization (Tier
     // "Plant Admin" role). FLIP: gateway/datasource READS are member reads
     // now — the reader needs only plant VIEW at site A, where the key model
     // required a custom configuration:read role.
-    await makeUser(workspaceId, FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, tier: "ADMIN" }] });
-    await makeUser(workspaceId, READER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, tier: "VIEW" }] });
+    await makeUser(workspaceId, FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
+    await makeUser(workspaceId, READER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "VIEW" }] });
 
     faToken = (await loginAs(server, FA_EMAIL, PASSWORD)).accessToken;
     readerToken = (await loginAs(server, READER_EMAIL, PASSWORD)).accessToken;
@@ -94,7 +94,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("device REST authorization (Tier
     expect(res.statusCode).toBe(403);
   });
 
-  it("remote commands are tier-gated: MANAGE queues, members read", async () => {
+  it("remote commands are level-gated: MANAGE queues, members read", async () => {
     const queue = await call("POST", `/gateways/${gatewayA.id}/commands`, readerToken, { command: "restart" });
     expect(queue.statusCode).toBe(403);
     const list = await call("GET", `/gateways/${gatewayA.id}/commands`, readerToken);

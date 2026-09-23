@@ -39,8 +39,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("graph/entity/integration author
     // "Plant Admin" role). FLIP: graph reads are member reads now (node
     // list was production:read) — the office viewer needs only plant VIEW
     // at site A, where the key model required a custom production:read role.
-    await makeUser(workspaceId, FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, tier: "ADMIN" }] });
-    await makeUser(workspaceId, OFFICE_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, tier: "VIEW" }] });
+    await makeUser(workspaceId, FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
+    await makeUser(workspaceId, OFFICE_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "VIEW" }] });
 
     officeToken = (await loginAs(server, OFFICE_EMAIL, PASSWORD)).accessToken;
     workspaceToken = (await loginAs(server, FA_EMAIL, PASSWORD)).accessToken;
@@ -85,7 +85,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("graph/entity/integration author
   it("integration reads and destructive ops are open to plant ADMIN (MANAGE and up)", async () => {
     const list = await rpcCall(server, "integration/list", { siteId: siteA.id }, workspaceToken);
     expect(list.statusCode).toBe(200);
-    // Plant ADMIN outranks the MANAGE tier the delete demands — the gate
+    // Plant ADMIN outranks the MANAGE level the delete demands — the gate
     // passes and the nonexistent id falls through to NOT_FOUND instead of
     // FORBIDDEN.
     const del = await rpcCall(

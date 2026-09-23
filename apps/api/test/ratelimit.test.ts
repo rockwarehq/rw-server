@@ -29,7 +29,7 @@ describe("rate limiting", () => {
     expect(body).toMatchObject({ statusCode: 429, error: "Too many requests" });
   });
 
-  it("login 429s after 5 requests/min (sensitive tier)", async () => {
+  it("login 429s after 5 requests/min (sensitive level)", async () => {
     let last: Awaited<ReturnType<TestServer["inject"]>> | undefined;
     for (let i = 0; i < 6; i++) {
       last = await server.inject({

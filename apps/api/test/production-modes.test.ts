@@ -97,10 +97,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
     // member (VIEW); "office" is crew MANAGE of stationA's cell only — it
     // can operate the cell (force/clear) but holds nothing plant-wide, the
     // bucket analogue of the old production:write-without-admin role.
-    const fa = await makeUser(workspaceId, FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, tier: "ADMIN" }] });
-    await makeUser(workspaceId, READER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, tier: "VIEW" }] });
+    const fa = await makeUser(workspaceId, FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
+    await makeUser(workspaceId, READER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "VIEW" }] });
     const office = await makeUser(workspaceId, OFFICE_EMAIL, PASSWORD, {
-      workcenters: [{ workcenterId: wcCell.id, tier: "MANAGE" }],
+      workcenters: [{ workcenterId: wcCell.id, level: "MANAGE" }],
     });
 
     // Employee-role gates: FA and Office both hold "ops"; "maint" has no members.

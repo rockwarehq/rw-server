@@ -1039,7 +1039,7 @@
                               "name": {
                                 "type": "string"
                               },
-                              "tier": {
+                              "level": {
                                 "type": "string",
                                 "enum": [
                                   "VIEW",
@@ -1590,7 +1590,7 @@
                           "type": "string",
                           "format": "uuid"
                         },
-                        "tier": {
+                        "level": {
                           "type": "string",
                           "enum": [
                             "VIEW",
@@ -1601,7 +1601,7 @@
                       },
                       "required": [
                         "bucketId",
-                        "tier"
+                        "level"
                       ]
                     }
                   },
@@ -3528,7 +3528,7 @@
                                 "name": {
                                   "type": "string"
                                 },
-                                "tier": {
+                                "level": {
                                   "type": "string",
                                   "enum": [
                                     "VIEW",
@@ -3626,7 +3626,7 @@
                           "type": "string",
                           "format": "uuid"
                         },
-                        "tier": {
+                        "level": {
                           "type": "string",
                           "enum": [
                             "VIEW",
@@ -3637,7 +3637,7 @@
                       },
                       "required": [
                         "bucketId",
-                        "tier"
+                        "level"
                       ]
                     }
                   }
@@ -3791,7 +3791,7 @@
                               "name": {
                                 "type": "string"
                               },
-                              "tier": {
+                              "level": {
                                 "type": "string",
                                 "enum": [
                                   "VIEW",
@@ -3900,7 +3900,7 @@
                           "type": "string",
                           "format": "uuid"
                         },
-                        "tier": {
+                        "level": {
                           "type": "string",
                           "enum": [
                             "VIEW",
@@ -3911,7 +3911,7 @@
                       },
                       "required": [
                         "bucketId",
-                        "tier"
+                        "level"
                       ]
                     }
                   },
@@ -4084,7 +4084,7 @@
                               "name": {
                                 "type": "string"
                               },
-                              "tier": {
+                              "level": {
                                 "type": "string",
                                 "enum": [
                                   "VIEW",

@@ -25,18 +25,18 @@
 import prisma from "@rw/db";
 import { locateRow, NOT_FOUND_MESSAGES, rowRefParts, type RowRef, type SitelessRowKind } from "./rows.js";
 
-export type Tier = "VIEW" | "MANAGE" | "ADMIN";
+export type Level = "VIEW" | "MANAGE" | "ADMIN";
 
-export const TIER_RANK: Record<Tier, number> = { VIEW: 1, MANAGE: 2, ADMIN: 3 };
+export const LEVEL_RANK: Record<Level, number> = { VIEW: 1, MANAGE: 2, ADMIN: 3 };
 
-export function tierAtLeast(held: Tier | null | undefined, required: Tier): boolean {
-  return held != null && TIER_RANK[held] >= TIER_RANK[required];
+export function levelAtLeast(held: Level | null | undefined, required: Level): boolean {
+  return held != null && LEVEL_RANK[held] >= LEVEL_RANK[required];
 }
 
-function higher(a: Tier | null, b: Tier | null): Tier | null {
+function higher(a: Level | null, b: Level | null): Level | null {
   if (!a) return b;
   if (!b) return a;
-  return TIER_RANK[a] >= TIER_RANK[b] ? a : b;
+  return LEVEL_RANK[a] >= LEVEL_RANK[b] ? a : b;
 }
 
 // ── Errors ───────────────────────────────────────────────────────────────
@@ -63,10 +63,10 @@ export interface Person {
   owner: boolean;
   /** Rockware staff: SUPPORT reads everywhere, ENGINEER manages everywhere. */
   staff: "SUPPORT" | "ENGINEER" | null;
-  /** siteId → tier on that site's PLANT bucket. */
-  plants: Map<string, Tier>;
-  /** workcenterId → tier on that cell's bucket, with the cell's site. */
-  workcenters: Map<string, { siteId: string; tier: Tier }>;
+  /** siteId → level on that site's PLANT bucket. */
+  plants: Map<string, Level>;
+  /** workcenterId → level on that cell's bucket, with the cell's site. */
+  workcenters: Map<string, { siteId: string; level: Level }>;
 }
 
 export function emptyPerson(overrides: Partial<Person> = {}): Person {
@@ -82,7 +82,7 @@ export function personSelect(workspaceId: string) {
       select: {
         workspaceRole: true,
         bucketAccesses: {
-          select: { tier: true, bucket: { select: { kind: true, siteId: true, workcenterId: true } } },
+          select: { level: true, bucket: { select: { kind: true, siteId: true, workcenterId: true } } },
         },
       },
     },
@@ -94,7 +94,7 @@ type PersonRows = {
   memberships: Array<{
     workspaceRole: "OWNER" | "MEMBER";
     bucketAccesses: Array<{
-      tier: Tier;
+      level: Level;
       bucket: { kind: "PLANT" | "WORKCENTER"; siteId: string | null; workcenterId: string | null };
     }>;
   }>;
@@ -108,7 +108,7 @@ export function toPerson(user: PersonRows): Person | null {
   if (membership.workspaceRole === "OWNER") return emptyPerson({ owner: true });
   return personFromRows(
     membership.bucketAccesses.map((a) => ({
-      tier: a.tier,
+      level: a.level,
       kind: a.bucket.kind,
       siteId: a.bucket.siteId,
       workcenterId: a.bucket.workcenterId,
@@ -127,23 +127,23 @@ export async function loadPerson(userId: string, workspaceId: string): Promise<P
 
 /** Build a person from BucketAccess rows (kept separate for tests). */
 export function personFromRows(
-  rows: Array<{ tier: Tier; kind: "PLANT" | "WORKCENTER"; siteId: string | null; workcenterId: string | null }>,
+  rows: Array<{ level: Level; kind: "PLANT" | "WORKCENTER"; siteId: string | null; workcenterId: string | null }>,
 ): Person {
   const person = emptyPerson();
   for (const row of rows) {
     if (!row.siteId) continue;
     if (row.kind === "PLANT") {
-      person.plants.set(row.siteId, higher(person.plants.get(row.siteId) ?? null, row.tier) as Tier);
+      person.plants.set(row.siteId, higher(person.plants.get(row.siteId) ?? null, row.level) as Level);
     } else if (row.workcenterId) {
-      const held = person.workcenters.get(row.workcenterId)?.tier ?? null;
-      person.workcenters.set(row.workcenterId, { siteId: row.siteId, tier: higher(held, row.tier) as Tier });
+      const held = person.workcenters.get(row.workcenterId)?.level ?? null;
+      person.workcenters.set(row.workcenterId, { siteId: row.siteId, level: higher(held, row.level) as Level });
     }
   }
   return person;
 }
 
-/** The tier held on a site's plant bucket, membership rule included. */
-export function plantTier(person: Person, siteId: string): Tier | null {
+/** The level held on a site's plant bucket, membership rule included. */
+export function plantLevel(person: Person, siteId: string): Level | null {
   const direct = person.plants.get(siteId) ?? null;
   if (direct) return direct;
   for (const wc of person.workcenters.values()) {
@@ -154,13 +154,13 @@ export function plantTier(person: Person, siteId: string): Tier | null {
 
 /** Plant ADMIN reaches every workcenter at its site. */
 function cascades(person: Person, siteId: string): boolean {
-  return tierAtLeast(person.plants.get(siteId), "ADMIN");
+  return levelAtLeast(person.plants.get(siteId), "ADMIN");
 }
 
-/** The tier held on one workcenter, plant cascade included. */
-export function workcenterTier(person: Person, workcenterId: string, siteId: string): Tier | null {
+/** The level held on one workcenter, plant cascade included. */
+export function workcenterLevel(person: Person, workcenterId: string, siteId: string): Level | null {
   const direct = person.workcenters.get(workcenterId);
-  const own = direct && direct.siteId === siteId ? direct.tier : null;
+  const own = direct && direct.siteId === siteId ? direct.level : null;
   const cascade = cascades(person, siteId) ? "MANAGE" : null;
   return higher(own, cascade);
 }
@@ -174,8 +174,8 @@ export function visibleSites(person: Person): "all" | string[] {
 }
 
 /** The one place owners and staff skip the buckets. */
-function bypasses(person: Person, tier: Tier): boolean {
-  return person.owner || person.staff === "ENGINEER" || (person.staff === "SUPPORT" && tier === "VIEW");
+function bypasses(person: Person, level: Level): boolean {
+  return person.owner || person.staff === "ENGINEER" || (person.staff === "SUPPORT" && level === "VIEW");
 }
 
 // ── The Access interface ─────────────────────────────────────────────────
@@ -199,20 +199,20 @@ export interface ListScope {
 
 export interface Access {
   /**
-   * Throw unless the caller holds `tier` on the target. Returns where it lives.
+   * Throw unless the caller holds `level` on the target. Returns where it lives.
    * ADMIN is always checked on the target's plant, even for floor rows.
    */
-  require<T extends Target>(tier: Tier, target: T): Promise<Located<T>>;
+  require<T extends Target>(level: Level, target: T): Promise<Located<T>>;
   /** Yes/no for branching. Sites only, so no lookup is needed. */
-  can(tier: Tier, target: { site: string }): boolean;
+  can(level: Level, target: { site: string }): boolean;
   /**
    * The one site to list in: `siteId` if given, else the token's site.
-   * PLANT lists need the tier on the plant; WORKCENTER lists narrow the
+   * PLANT lists need the level on the plant; WORKCENTER lists narrow the
    * crew to their own cells.
    */
-  list(tier: Tier, siteId?: string, kind?: "PLANT" | "WORKCENTER"): ListScope;
-  /** Throw unless the caller holds `tier` at some plant (site-less rows, directories). */
-  requireSomewhere(tier: Tier): void;
+  list(level: Level, siteId?: string, kind?: "PLANT" | "WORKCENTER"): ListScope;
+  /** Throw unless the caller holds `level` at some plant (site-less rows, directories). */
+  requireSomewhere(level: Level): void;
   /** Throw unless the caller owns the workspace (ENGINEER staff too, unless `allowStaff: false`). */
   requireOwner(options?: { allowStaff?: boolean }): void;
   /** Sites the caller can see: "all" or a list. */
@@ -242,62 +242,62 @@ export class UserAccess implements Access {
     private readonly locateFn: Locate = locateRow,
   ) {}
 
-  async require<T extends Target>(tier: Tier, target: T): Promise<Located<T>> {
+  async require<T extends Target>(level: Level, target: T): Promise<Located<T>> {
     const { siteId, workcenterId } = await locate(target, this.locateFn);
     if (siteId === null) {
       // A row attached to no site: reads need any site, changes need the
-      // tier at some plant.
-      this.requireSomewhere(tier);
+      // level at some plant.
+      this.requireSomewhere(level);
       return { siteId: null } as Located<T>;
     }
-    if (bypasses(this.person, tier)) return { siteId } as Located<T>;
+    if (bypasses(this.person, level)) return { siteId } as Located<T>;
     // ADMIN is a plant level: setting up a station or workcenter asks the
     // row's plant, not its workcenter.
     const held =
-      workcenterId && tier !== "ADMIN"
-        ? workcenterTier(this.person, workcenterId, siteId)
-        : plantTier(this.person, siteId);
-    if (!tierAtLeast(held, tier)) throw deny("FORBIDDEN", `Requires ${tier} access here`);
+      workcenterId && level !== "ADMIN"
+        ? workcenterLevel(this.person, workcenterId, siteId)
+        : plantLevel(this.person, siteId);
+    if (!levelAtLeast(held, level)) throw deny("FORBIDDEN", `Requires ${level} access here`);
     return { siteId } as Located<T>;
   }
 
-  can(tier: Tier, target: { site: string }): boolean {
-    return bypasses(this.person, tier) || tierAtLeast(plantTier(this.person, target.site), tier);
+  can(level: Level, target: { site: string }): boolean {
+    return bypasses(this.person, level) || levelAtLeast(plantLevel(this.person, target.site), level);
   }
 
-  list(tier: Tier, siteId?: string, kind: "PLANT" | "WORKCENTER" = "PLANT"): ListScope {
+  list(level: Level, siteId?: string, kind: "PLANT" | "WORKCENTER" = "PLANT"): ListScope {
     const site = siteId ?? this.tokenSiteId;
     if (!site) throw deny("NO_WORKSPACE", "Site context required");
-    if (bypasses(this.person, tier)) return { siteId: site };
+    if (bypasses(this.person, level)) return { siteId: site };
 
-    const plant = plantTier(this.person, site);
+    const plant = plantLevel(this.person, site);
     if (kind === "PLANT") {
-      if (tierAtLeast(plant, tier)) return { siteId: site };
-      throw deny("FORBIDDEN", `Requires ${tier} access here`);
+      if (levelAtLeast(plant, level)) return { siteId: site };
+      throw deny("FORBIDDEN", `Requires ${level} access here`);
     }
 
     // Floor lists: plant admins see every cell; everyone else sees their own.
     if (cascades(this.person, site)) return { siteId: site };
     const workcenterIds = [...this.person.workcenters]
-      .filter(([, wc]) => wc.siteId === site && tierAtLeast(wc.tier, tier))
+      .filter(([, wc]) => wc.siteId === site && levelAtLeast(wc.level, level))
       .map(([id]) => id);
     if (workcenterIds.length > 0) return { siteId: site, workcenterIds };
-    throw deny("FORBIDDEN", `Requires ${tier} access here`);
+    throw deny("FORBIDDEN", `Requires ${level} access here`);
   }
 
-  requireSomewhere(tier: Tier): void {
-    if (this.canSomewhere(tier)) return;
-    throw deny("FORBIDDEN", tier === "VIEW" ? "No site access" : `Requires ${tier} access at some plant`);
+  requireSomewhere(level: Level): void {
+    if (this.canSomewhere(level)) return;
+    throw deny("FORBIDDEN", level === "VIEW" ? "No site access" : `Requires ${level} access at some plant`);
   }
 
   /** Yes/no form of {@link requireSomewhere}. */
-  canSomewhere(tier: Tier): boolean {
-    if (bypasses(this.person, tier)) return true;
-    if (tier === "VIEW") {
+  canSomewhere(level: Level): boolean {
+    if (bypasses(this.person, level)) return true;
+    if (level === "VIEW") {
       const sites = visibleSites(this.person);
       return sites === "all" || sites.length > 0;
     }
-    return [...this.person.plants.values()].some((held) => tierAtLeast(held, tier));
+    return [...this.person.plants.values()].some((held) => levelAtLeast(held, level));
   }
 
   requireOwner(options: { allowStaff?: boolean } = {}): void {
@@ -314,7 +314,7 @@ export class UserAccess implements Access {
 // ── Devices: displays and API tokens ─────────────────────────────────────
 
 /**
- * Bound to one site. Displays may use any tier there (which procedures a
+ * Bound to one site. Displays may use any level there (which procedures a
  * display can reach is the middleware's job); API tokens may only read.
  * Neither can act outside its site or at workspace level.
  */
@@ -332,25 +332,25 @@ export class DeviceAccess implements Access {
     );
   }
 
-  private checkTier(tier: Tier): void {
-    if (this.kind === "app" && tier !== "VIEW") throw deny("FORBIDDEN", "Token is read-only");
+  private checkLevel(level: Level): void {
+    if (this.kind === "app" && level !== "VIEW") throw deny("FORBIDDEN", "Token is read-only");
   }
 
-  async require<T extends Target>(tier: Tier, target: T): Promise<Located<T>> {
+  async require<T extends Target>(level: Level, target: T): Promise<Located<T>> {
     const { siteId } = await locate(target, this.locateFn);
     if (siteId === null) throw deny("FORBIDDEN", "This action requires a user account");
     if (siteId !== this.siteId) throw this.wrongSite();
-    this.checkTier(tier);
+    this.checkLevel(level);
     return { siteId } as Located<T>;
   }
 
-  can(tier: Tier, target: { site: string }): boolean {
-    return target.site === this.siteId && (this.kind === "display" || tier === "VIEW");
+  can(level: Level, target: { site: string }): boolean {
+    return target.site === this.siteId && (this.kind === "display" || level === "VIEW");
   }
 
-  list(tier: Tier, siteId?: string, _kind?: "PLANT" | "WORKCENTER"): ListScope {
+  list(level: Level, siteId?: string, _kind?: "PLANT" | "WORKCENTER"): ListScope {
     if (siteId && siteId !== this.siteId) throw this.wrongSite();
-    this.checkTier(tier);
+    this.checkLevel(level);
     return { siteId: this.siteId };
   }
 
@@ -378,7 +378,7 @@ export interface AccessEntry {
   siteId: string;
   workcenterId: string | null;
   name: string;
-  tier: Tier;
+  level: Level;
   via: AccessVia;
 }
 
@@ -401,12 +401,13 @@ export async function describeAccess(person: Person): Promise<AccessEntry[]> {
     const base = { bucketId: b.id, kind: b.kind, siteId: b.siteId, workcenterId: b.workcenterId, name: b.name };
     if (b.kind === "PLANT") {
       const direct = person.plants.get(b.siteId);
-      entries.push(direct ? { ...base, tier: direct, via: "direct" } : { ...base, tier: "VIEW", via: "member" });
+      entries.push(direct ? { ...base, level: direct, via: "direct" } : { ...base, level: "VIEW", via: "member" });
     } else if (b.workcenterId) {
-      const direct = person.workcenters.get(b.workcenterId)?.tier;
+      const direct = person.workcenters.get(b.workcenterId)?.level;
       const cascade = cascades(person, b.siteId);
-      if (direct && (!cascade || tierAtLeast(direct, "MANAGE"))) entries.push({ ...base, tier: direct, via: "direct" });
-      else if (cascade) entries.push({ ...base, tier: "MANAGE", via: "cascade" });
+      if (direct && (!cascade || levelAtLeast(direct, "MANAGE")))
+        entries.push({ ...base, level: direct, via: "direct" });
+      else if (cascade) entries.push({ ...base, level: "MANAGE", via: "cascade" });
     }
   }
   const order: Record<AccessVia, number> = { direct: 0, member: 1, cascade: 2 };

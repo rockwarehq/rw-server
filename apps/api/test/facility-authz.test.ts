@@ -15,7 +15,7 @@ const EMAILS = [FA_EMAIL, READER_EMAIL, MEMBER_EMAIL, NOROLE_EMAIL, ADMIN_EMAIL]
 
 const NONEXISTENT_ID = "00000000-0000-4000-8000-000000000000";
 
-// Tier 2: site-scope and tier enforcement through the policy layer, on both
+// Tier 2: site-scope and level enforcement through the policy layer, on both
 // the RPC and REST surfaces, under the bucket model.
 // Fixtures live in the single default workspace: the seeded "Rockware" site
 // (site A) plus a second site B. Bucket-era cast:
@@ -94,10 +94,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
       select: { id: true },
     });
 
-    await makeUser(workspace.id, FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, tier: "ADMIN" }] });
-    await makeUser(workspace.id, READER_EMAIL, PASSWORD, { workcenters: [{ workcenterId: wcA.id, tier: "VIEW" }] });
+    await makeUser(workspace.id, FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
+    await makeUser(workspace.id, READER_EMAIL, PASSWORD, { workcenters: [{ workcenterId: wcA.id, level: "VIEW" }] });
     const member = await makeUser(workspace.id, MEMBER_EMAIL, PASSWORD, {
-      plants: [{ siteId: siteA.id, tier: "VIEW" }],
+      plants: [{ siteId: siteA.id, level: "VIEW" }],
     });
     memberMembershipId = member.membershipId;
     await makeUser(workspace.id, ADMIN_EMAIL, PASSWORD, { owner: true });
@@ -201,7 +201,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
     });
   });
 
-  describe("tiers within the granted site", () => {
+  describe("levels within the granted site", () => {
     it("a crew VIEW member can watch the floor but not write stations", async () => {
       const read = await rpcCall(server, "station/get", { id: stationA.id }, readerToken);
       expect(read.statusCode).toBe(200);
@@ -258,7 +258,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
       expect(res.statusCode).toBe(200);
     });
 
-    it("plant-scoped tiers cannot create sites (owner-level action)", async () => {
+    it("plant-scoped levels cannot create sites (owner-level action)", async () => {
       const res = await rpcCall(server, "site/create", { name: "authz-should-not-exist" }, faToken);
       expect(res.statusCode).toBe(403);
     });

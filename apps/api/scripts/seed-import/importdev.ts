@@ -29,7 +29,7 @@ type SiteKey = "primary" | "secondary";
 
 interface PlantAccessSpec {
   site: SiteKey;
-  tier: "VIEW" | "MANAGE" | "ADMIN";
+  level: "VIEW" | "MANAGE" | "ADMIN";
 }
 
 interface CustomerDevUser {
@@ -51,7 +51,7 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     lastName: "Admin",
     persona: "Plant Admin",
     description: "Plant administrator with full access to all plant data, settings, and user management.",
-    accesses: [{ site: "primary", tier: "ADMIN" }],
+    accesses: [{ site: "primary", level: "ADMIN" }],
   },
   {
     email: "readonly@example.com",
@@ -59,7 +59,7 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     lastName: "User",
     persona: "Plant Member",
     description: "Plant member: reads the plant's common things, no floor access without a cell bucket.",
-    accesses: [{ site: "primary", tier: "VIEW" }],
+    accesses: [{ site: "primary", level: "VIEW" }],
   },
   {
     email: "planner@example.com",
@@ -67,7 +67,7 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     lastName: "Planner",
     persona: "Plant Manager",
     description: "Manages the plant and everything in it — planning, catalogs, equipment, every cell.",
-    accesses: [{ site: "primary", tier: "MANAGE" }],
+    accesses: [{ site: "primary", level: "MANAGE" }],
   },
   {
     email: "coadmin@example.com",
@@ -103,7 +103,7 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     description:
       "Plant user with DISABLED status — verifies login rejection and session revocation for disabled accounts.",
     status: "DISABLED",
-    accesses: [{ site: "primary", tier: "VIEW" }],
+    accesses: [{ site: "primary", level: "VIEW" }],
   },
   {
     email: "engineer@example.com",
@@ -111,7 +111,7 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     lastName: "User",
     persona: "Site B Plant Admin",
     description: "Plant admin on the secondary site only — verifies cross-site isolation.",
-    accesses: [{ site: "secondary", tier: "ADMIN" }],
+    accesses: [{ site: "secondary", level: "ADMIN" }],
   },
   {
     email: "mixed@example.com",
@@ -121,8 +121,8 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     description:
       "Plant admin on the primary site and plain member on the secondary site — tests per-site differentiation.",
     accesses: [
-      { site: "primary", tier: "ADMIN" },
-      { site: "secondary", tier: "VIEW" },
+      { site: "primary", level: "ADMIN" },
+      { site: "secondary", level: "VIEW" },
     ],
   },
 ];
@@ -168,7 +168,7 @@ async function setBucketAccesses(input: {
       select: { id: true },
     });
     await prisma.bucketAccess.create({
-      data: { bucketId: plant.id, membershipId: input.membershipId, tier: a.tier },
+      data: { bucketId: plant.id, membershipId: input.membershipId, level: a.level },
     });
   }
 }
@@ -177,7 +177,7 @@ function describeAssignments(spec: CustomerDevUser): string {
   if (spec.createMembership === false) return "No workspace membership";
   if (spec.owner) return "Workspace owner";
   if (spec.accesses.length === 0) return "Member, no access";
-  const parts = spec.accesses.map((a) => `Site ${a.site} ${a.tier}`);
+  const parts = spec.accesses.map((a) => `Site ${a.site} ${a.level}`);
   const summary = parts.join(" + ");
   return spec.status === "DISABLED" ? `${summary} (DISABLED)` : summary;
 }

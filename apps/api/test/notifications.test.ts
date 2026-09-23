@@ -47,9 +47,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("notifications", () => {
     // Bucket fixtures: FA administers the plant, the reader is a plain plant
     // member, and "office" is a plant manager — sending and group
     // configuration both sit at plant MANAGE (the old configuration:write).
-    await makeUser(workspaceId, FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, tier: "ADMIN" }] });
-    await makeUser(workspaceId, READER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, tier: "VIEW" }] });
-    await makeUser(workspaceId, OFFICE_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, tier: "MANAGE" }] });
+    await makeUser(workspaceId, FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
+    await makeUser(workspaceId, READER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "VIEW" }] });
+    await makeUser(workspaceId, OFFICE_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "MANAGE" }] });
 
     const employee = async (email: string | null, phone?: string) => {
       const e = await prisma.employee.create({ data: { workspaceId }, select: { id: true } });

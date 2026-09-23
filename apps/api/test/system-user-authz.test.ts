@@ -177,7 +177,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("system-role user authentication
       method: "POST",
       url: "/users/invite",
       headers: { authorization: `Bearer ${supportToken}` },
-      payload: { email: "sys-authz-nope@test.local", bucketAccesses: [{ bucketId: bucket.id, tier: "VIEW" }] },
+      payload: { email: "sys-authz-nope@test.local", bucketAccesses: [{ bucketId: bucket.id, level: "VIEW" }] },
     });
     expect(invite.statusCode).toBe(403);
   });

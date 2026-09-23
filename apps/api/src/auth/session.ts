@@ -44,7 +44,7 @@ export interface AuthContext {
 interface TokenUser {
   id: string;
   email: string;
-  /** Rockware-staff tier (SUPPORT/ENGINEER): permissions resolve from code
+  /** Rockware-staff level (SUPPORT/ENGINEER): permissions resolve from code
    * and no WorkspaceMembership exists — workspace context comes from the
    * deployment's workspace instead. */
   systemRole?: string | null;

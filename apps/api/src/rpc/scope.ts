@@ -1,5 +1,5 @@
 import type { Current } from "@rw/auth/context";
-import { AccessDenied, type Access, type Target, type Tier } from "@rw/auth/iam/access";
+import { AccessDenied, type Access, type Target, type Level } from "@rw/auth/iam/access";
 import type { SitelessRowKind } from "@rw/auth/iam/rows";
 
 /**
@@ -9,10 +9,10 @@ import type { SitelessRowKind } from "@rw/auth/iam/rows";
  */
 export async function workspaceSiteScope<T extends Target>(
   context: { current: Current; access: Access },
-  tier: Tier,
+  level: Level,
   target: T & { [K in SitelessRowKind]?: never },
 ): Promise<{ workspaceId: string; siteId: string }> {
-  const { siteId } = await context.access.require(tier, target);
+  const { siteId } = await context.access.require(level, target);
   return { workspaceId: context.current.workspaceId, siteId: siteId as string };
 }
 
