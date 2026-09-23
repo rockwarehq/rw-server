@@ -194,7 +194,7 @@ export const toolCreate = userRequired.input(toolCreateInputSchema).handler(asyn
 export const toolList = userRequired.input(toolListInputSchema).handler(async ({ input, context }) => {
   const scope = context.access.list("VIEW", input.siteId);
 
-  return tool.list({ ...input, siteId: scope.siteId });
+  return tool.list({ ...input, ...scope });
 });
 
 /**
@@ -289,7 +289,7 @@ export const create = userRequired.input(jobCreateInputSchema).handler(async ({ 
 export const list = userOrDisplayRequired.input(jobListInputSchema).handler(async ({ input, context }) => {
   const scope = context.access.list("VIEW", input.siteId);
 
-  return job.list({ ...input, siteId: scope.siteId });
+  return job.list({ ...input, ...scope });
 });
 
 /**

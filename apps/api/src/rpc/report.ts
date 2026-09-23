@@ -94,7 +94,7 @@ export const query = userOrDisplayRequired.input(querySchema).handler(async ({ i
   const scope = context.access.list("VIEW", input.siteId, "WORKCENTER");
 
   const { siteId, ...reportQuery } = input;
-  const result = await runReportQuery(reportQuery, { siteId, workcenterIds: scope.workcenterIds });
+  const result = await runReportQuery(reportQuery, scope);
   if ("error" in result) throwServiceError(result);
   return result;
 });
@@ -105,7 +105,7 @@ export const rows = userRequired.input(rowsSchema).handler(async ({ input, conte
   const scope = context.access.list("VIEW", input.siteId, "WORKCENTER");
 
   const { siteId, ...rowsQuery } = input;
-  const result = await runReportRows(rowsQuery, { siteId, workcenterIds: scope.workcenterIds });
+  const result = await runReportRows(rowsQuery, scope);
   if ("error" in result) throwServiceError(result);
   return result;
 });

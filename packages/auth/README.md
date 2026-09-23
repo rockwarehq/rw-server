@@ -22,7 +22,7 @@ import { verifyAccessToken } from "@rw/auth/verify";
 
 | Subpath | Purpose |
 | --- | --- |
-| `iam/access` | `Access`, `UserAccess`, `DeviceAccess`, `Person`, `loadPerson`, `AccessDenied`, `scopeWhere` |
+| `iam/access` | `Access`, `UserAccess`, `DeviceAccess`, `Person`, `loadPerson`, `AccessDenied` |
 | `iam/rows` | Where a row lives: site (and workcenter) for ~50 row kinds |
 | `context` | `Current`: who is calling (user, display, or API token) |
 | `verify` | HS256 access-token sign/verify, per-audience HKDF keys, 15-min expiry |
@@ -42,8 +42,10 @@ await context.access.require("MANAGE", { statusReason: input.id });
 // a site (create flows)
 await context.access.require("MANAGE", { site: input.siteId });
 
-// lists: always one site; floor lists narrow the crew to their cells
+// lists: always one site; floor lists narrow the crew to their cells.
+// Spread the whole scope so the crew filter can't be left behind.
 const scope = context.access.list("VIEW", input.siteId, "WORKCENTER");
+return station.list({ ...input, ...scope });
 
 // owner-only, "at some plant", and plain yes/no
 context.access.requireOwner();

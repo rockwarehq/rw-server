@@ -165,7 +165,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
     handler: async (request, _reply) => {
       const scope = request.access.list("VIEW", request.query.siteId, "WORKCENTER");
 
-      return station.list({ ...request.query, siteId: scope.siteId });
+      return station.list({ ...request.query, ...scope });
     },
   });
 

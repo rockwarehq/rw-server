@@ -150,7 +150,7 @@ const MS_PER_DAY = 86_400_000;
 /** Site scope for the policy call each handler makes inline. */
 export const patternList = userRequired.input(patternListInputSchema).handler(async ({ input, context }) => {
   const scope = context.access.list("VIEW", input.siteId);
-  return shift.pattern.list({ ...input, siteId: scope.siteId });
+  return shift.pattern.list({ ...input, ...scope });
 });
 
 export const patternGet = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
@@ -241,7 +241,7 @@ export const assignmentCreate = userRequired.input(assignmentCreateInputSchema).
 
 export const assignmentList = userRequired.input(assignmentListInputSchema).handler(async ({ input, context }) => {
   const scope = context.access.list("VIEW", input.siteId);
-  return shift.assignment.list({ ...input, siteId: scope.siteId });
+  return shift.assignment.list({ ...input, ...scope });
 });
 
 export const assignmentGet = userRequired.input(idInputSchema).handler(async ({ input, context }) => {

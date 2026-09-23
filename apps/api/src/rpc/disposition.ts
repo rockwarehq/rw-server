@@ -136,7 +136,7 @@ export const dispositionList = userOrDisplayRequired
   .input(dispositionListInputSchema)
   .handler(async ({ input, context }) => {
     const scope = context.access.list("VIEW", input.siteId);
-    return dispositionService.list({ ...input, siteId: scope.siteId });
+    return dispositionService.list({ ...input, ...scope });
   });
 
 export const dispositionGet = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
@@ -176,7 +176,7 @@ export const reasonCreate = userRequired.input(reasonCreateInputSchema).handler(
 
 export const reasonList = userOrDisplayRequired.input(reasonListInputSchema).handler(async ({ input, context }) => {
   const scope = context.access.list("VIEW", input.siteId);
-  return dispositionReasonService.list({ ...input, siteId: scope.siteId });
+  return dispositionReasonService.list({ ...input, ...scope });
 });
 
 export const reasonGet = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
@@ -226,7 +226,7 @@ export const logCreate = userRequired.input(logCreateInputSchema).handler(async 
 
 export const logList = userOrDisplayRequired.input(logListInputSchema).handler(async ({ input, context }) => {
   const scope = context.access.list("VIEW", input.siteId, "WORKCENTER");
-  return dispositionLogService.list({ ...input, siteId: scope.siteId });
+  return dispositionLogService.list({ ...input, ...scope });
 });
 
 export const logGet = userRequired.input(idInputSchema).handler(async ({ input, context }) => {

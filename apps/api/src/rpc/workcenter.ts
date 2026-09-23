@@ -61,7 +61,7 @@ export const create = userRequired.input(createInputSchema).handler(async ({ inp
 export const list = userRequired.input(listInputSchema).handler(async ({ input, context }) => {
   // The workcenter directory is a plant thing: every member may read it.
   const scope = context.access.list("VIEW", input.siteId);
-  return workcenter.list({ ...input, siteId: scope.siteId });
+  return workcenter.list({ ...input, ...scope });
 });
 
 /**

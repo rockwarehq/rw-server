@@ -371,7 +371,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
         unassigned: unassigned === "true",
         limit,
         offset,
-        siteId: scope.siteId,
+        ...scope,
       });
     },
   });

@@ -269,7 +269,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
 
       const scope = request.access.list("VIEW", request.query.siteId);
 
-      return gateway.list({ workspaceId: currentUser(request).workspaceId, siteId: scope.siteId });
+      return gateway.list({ workspaceId: currentUser(request).workspaceId, ...scope });
     },
   });
 

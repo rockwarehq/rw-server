@@ -102,7 +102,7 @@ export const definitionList = userOrDisplayRequired
   .input(definitionListInputSchema)
   .handler(async ({ input, context }) => {
     const scope = context.access.list("VIEW", input.siteId);
-    return call.listDefinitions({ ...input, siteId: scope.siteId });
+    return call.listDefinitions({ ...input, ...scope });
   });
 
 export const definitionGet = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
@@ -176,10 +176,10 @@ export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ i
 
 export const listActive = userOrDisplayRequired.input(listActiveInputSchema).handler(async ({ input, context }) => {
   const scope = context.access.list("VIEW", input.siteId, "WORKCENTER");
-  return call.listActive({ ...input, siteId: scope.siteId, workcenterIds: scope.workcenterIds });
+  return call.listActive({ ...input, ...scope });
 });
 
 export const search = userRequired.input(searchInputSchema).handler(async ({ input, context }) => {
   const scope = context.access.list("VIEW", input.siteId, "WORKCENTER");
-  return call.search({ ...input, workcenterIds: scope.workcenterIds });
+  return call.search({ ...input, ...scope });
 });

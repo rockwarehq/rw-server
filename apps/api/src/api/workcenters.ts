@@ -212,7 +212,7 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
       // The workcenter directory is a plant thing: every member may read it.
       const scope = request.access.list("VIEW", request.query.siteId);
 
-      return workcenter.list({ ...request.query, siteId: scope.siteId });
+      return workcenter.list({ ...request.query, ...scope });
     },
   });
 

@@ -63,7 +63,7 @@ export const groupCreate = userRequired.input(groupCreateInputSchema).handler(as
 
 export const groupList = userRequired.input(groupListInputSchema).handler(async ({ input, context }) => {
   const scope = context.access.list("VIEW", input.siteId);
-  return notification.listGroups({ ...input, siteId: scope.siteId });
+  return notification.listGroups({ ...input, ...scope });
 });
 
 export const groupGet = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
@@ -106,7 +106,7 @@ export const send = userRequired.input(sendInputSchema).handler(async ({ input, 
 
 export const list = userRequired.input(listInputSchema).handler(async ({ input, context }) => {
   const scope = context.access.list("VIEW", input.siteId);
-  return notification.list({ ...input, siteId: scope.siteId });
+  return notification.list({ ...input, ...scope });
 });
 
 export const get = userRequired.input(idInputSchema).handler(async ({ input, context }) => {

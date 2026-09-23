@@ -204,7 +204,7 @@ export const list = userOrDisplayRequired.input(listInputSchema).handler(async (
   // Displays are pinned to their own site by the policy; a workcenterId from
   // another site simply intersects to an empty result.
   const scope = context.access.list("VIEW", input.siteId, "WORKCENTER");
-  return station.list({ ...input, siteId: scope.siteId, workcenterIds: scope.workcenterIds });
+  return station.list({ ...input, ...scope });
 });
 
 /**

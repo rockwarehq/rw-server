@@ -96,7 +96,7 @@ export const claim = userRequired.input(claimInputSchema).handler(async ({ input
 export const list = userRequired.input(listInputSchema).handler(async ({ input, context }) => {
   const scope = context.access.list("VIEW", input.siteId);
 
-  return display.listForWorkspace(context.current.workspaceId, { ...input, siteId: scope.siteId });
+  return display.listForWorkspace(context.current.workspaceId, { ...input, ...scope });
 });
 
 /**

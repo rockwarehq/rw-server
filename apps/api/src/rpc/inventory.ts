@@ -104,7 +104,7 @@ const materialListInputSchema = z.object({
 export const inventoryList = userRequired.input(inventoryListInputSchema).handler(async ({ input, context }) => {
   const scope = context.access.list("VIEW", input.siteId, "WORKCENTER");
 
-  return inventory.list({ ...input, siteId: scope.siteId });
+  return inventory.list({ ...input, ...scope });
 });
 
 /**
@@ -154,7 +154,7 @@ export const materialCreate = userRequired.input(materialCreateInputSchema).hand
 export const materialList = userRequired.input(materialListInputSchema).handler(async ({ input, context }) => {
   const scope = context.access.list("VIEW", input.siteId);
 
-  return material.list({ ...input, siteId: scope.siteId });
+  return material.list({ ...input, ...scope });
 });
 
 /**
@@ -315,7 +315,7 @@ export const productCreate = userRequired.input(productCreateInputSchema).handle
 export const productList = userRequired.input(productListInputSchema).handler(async ({ input, context }) => {
   const scope = context.access.list("VIEW", input.siteId);
 
-  return product.list({ ...input, siteId: scope.siteId });
+  return product.list({ ...input, ...scope });
 });
 
 /**
@@ -728,7 +728,7 @@ export const materialLedgerList = userRequired
   .handler(async ({ input, context }) => {
     const scope = context.access.list("VIEW", input.siteId);
 
-    return materialLedger.list({ ...input, siteId: scope.siteId });
+    return materialLedger.list({ ...input, ...scope });
   });
 
 export const materialLedgerUsage = userRequired
@@ -766,7 +766,7 @@ export const inventoryStockAdjustments = userRequired
   .input(stockAdjustmentListInputSchema)
   .handler(async ({ input, context }) => {
     const scope = context.access.list("VIEW", input.siteId);
-    return stockAdjustment.list({ ...input, siteId: scope.siteId });
+    return stockAdjustment.list({ ...input, ...scope });
   });
 
 /**

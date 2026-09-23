@@ -42,7 +42,7 @@ export const create = userRequired.input(createInputSchema).handler(async ({ inp
 
 export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
   const scope = context.access.list("VIEW", input.siteId);
-  return statusCategory.list({ ...input, siteId: scope.siteId });
+  return statusCategory.list({ ...input, ...scope });
 });
 
 export const get = userRequired.input(idInputSchema).handler(async ({ input, context }) => {

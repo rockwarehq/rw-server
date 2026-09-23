@@ -6,6 +6,7 @@ import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { employeeName, snapshotDimensions, toDateString } from "../work-context.js";
 import { publishCallEvent } from "./events.js";
+import { crewFilter } from "../../lib/crew-filter.js";
 
 const callInclude = {
   definition: { select: { id: true, name: true, severity: true } },
@@ -308,9 +309,7 @@ export async function listActive(filter: ListActiveCallsFilter = {}) {
   if (definitionId) where.definitionId = definitionId;
   if (severity) where.severity = severity;
   if (workcenterId) where.workcenterId = workcenterId;
-  if (workcenterIds) {
-    where.AND = [{ OR: [{ workcenterId: { in: workcenterIds } }, { workcenterId: null }] }];
-  }
+  if (workcenterIds) where.AND = [crewFilter(workcenterIds)];
 
   const [calls, total] = await Promise.all([
     prisma.call.findMany({
@@ -350,9 +349,7 @@ export async function search(filter: SearchCallsFilter) {
   if (severity) where.severity = severity;
   if (source) where.source = source;
   if (workcenterId) where.workcenterId = workcenterId;
-  if (workcenterIds) {
-    where.AND = [{ OR: [{ workcenterId: { in: workcenterIds } }, { workcenterId: null }] }];
-  }
+  if (workcenterIds) where.AND = [crewFilter(workcenterIds)];
   if (status === "open") where.closedAt = null;
   if (status === "closed") where.closedAt = { not: null };
   if (openedFrom || openedTo) {

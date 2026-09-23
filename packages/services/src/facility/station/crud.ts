@@ -1,6 +1,7 @@
 import prisma from "@rw/db";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { publishEntityEvent } from "../../entity/events.js";
+import { crewFilter } from "../../lib/crew-filter.js";
 
 export interface CreateStationInput {
   name: string;
@@ -287,9 +288,7 @@ export async function list(filter: ListStationsFilter = {}) {
     where.siteId = siteId;
   }
 
-  if (workcenterIds) {
-    where.AND = [{ OR: [{ workcenterId: { in: workcenterIds } }, { workcenterId: null }] }];
-  }
+  if (workcenterIds) where.AND = [crewFilter(workcenterIds)];
 
   if (workcenterId) {
     where.workcenterId = workcenterId;

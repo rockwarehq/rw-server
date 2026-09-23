@@ -102,7 +102,7 @@ export const gatewayList = userRequired.input(gatewayListInputSchema).handler(as
   }
 
   const scope = context.access.list("VIEW", input.siteId);
-  return gateway.list({ workspaceId: context.current.workspaceId, siteId: scope.siteId });
+  return gateway.list({ workspaceId: context.current.workspaceId, ...scope });
 });
 
 /**
@@ -267,7 +267,7 @@ export const datasourceList = userRequired.input(datasourceListInputSchema).hand
   const scope = context.access.list("VIEW", input.siteId);
 
   // Filter by workspace via site relationship
-  return datasource.list({ ...input, siteId: scope.siteId });
+  return datasource.list({ ...input, ...scope });
 });
 
 /**

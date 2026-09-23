@@ -6,7 +6,6 @@ import {
   noAccess,
   type Person,
   personFromRows,
-  scopeWhere,
   UserAccess,
   visibleSites,
 } from "./access.js";
@@ -150,14 +149,6 @@ describe("users: lists", () => {
     expect(err.code).toBe("NO_WORKSPACE");
     await denied(() => user(MEMBER).list("VIEW", SITE_B));
     expect(user(OWNER, null).list("VIEW", SITE_B)).toEqual({ siteId: SITE_B });
-  });
-
-  it("scopeWhere keeps site-level rows readable when narrowed", () => {
-    expect(scopeWhere({ siteId: SITE_A })).toEqual({ siteId: SITE_A });
-    expect(scopeWhere({ siteId: SITE_A, workcenterIds: [WC_1] })).toEqual({
-      siteId: SITE_A,
-      OR: [{ workcenterId: { in: [WC_1] } }, { workcenterId: null }],
-    });
   });
 
   it("visible sites: membership for people, all for owners and staff", () => {

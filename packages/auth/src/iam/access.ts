@@ -421,13 +421,3 @@ export const noAccess: Access = {
   },
   sites: () => [],
 };
-
-/** Prisma-shaped filter for a list: the site, and the crew's cells when narrowed. */
-export function scopeWhere(scope: ListScope): {
-  siteId: string;
-  OR?: Array<{ workcenterId: { in: string[] } } | { workcenterId: null }>;
-} {
-  return scope.workcenterIds
-    ? { siteId: scope.siteId, OR: [{ workcenterId: { in: scope.workcenterIds } }, { workcenterId: null }] }
-    : { siteId: scope.siteId };
-}
