@@ -1,0 +1,64 @@
+/// Staging area for production consumption during an open shift. Each row is
+/// the running total for one (shift, station, job, product, material) scope;
+/// `quantity` and `itemCount` increment with each cycle close. Once the shift
+/// ends, `flushShiftUsage` writes one immutable PRODUCTION ledger entry per
+/// staging row, sets `flushedAt`, and links the ledger row via
+/// `flushedLedgerEntryId`. Flushed staging rows are kept as audit trails —
+/// they record the exact rollup that produced each ledger entry.
+model MaterialShiftUsage {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  shiftInstanceId String        @db.Uuid
+  shiftInstance   ShiftInstance @relation(fields: [shiftInstanceId], references: [id], onDelete: Cascade)
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled     Boolean       @default(true)
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  // ── Dimension snapshots (star pattern for BI), captured at row creation ──
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id], onDelete: SetNull)
+
+  /// Business date of the shift this row accumulates for.
+  businessDate DateTime? @db.Date
+
+  jobId String @db.Uuid
+  job   Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  materialId String   @db.Uuid
+  material   Material @relation(fields: [materialId], references: [id], onDelete: Restrict)
+
+  /// Running consumption total during the shift. Stored positive (the amount
+  /// CONSUMED). At flush, an immutable ledger entry of `-quantity` is created.
+  quantity Decimal    @db.Decimal(18, 4)
+  unit     WeightUnit
+
+  /// Number of InventoryItems that contributed to this staging row.
+  itemCount Int @default(0)
+
+  /// Timestamp when this staging row was flushed to the ledger. Null while
+  /// the row is still mutable (shift open). Once set, the row is frozen and
+  /// `flushedLedgerEntryId` points at the resulting immutable ledger entry.
+  flushedAt            DateTime?            @db.Timestamptz(3)
+  flushedLedgerEntryId String?              @db.Uuid
+  flushedLedgerEntry   MaterialLedgerEntry? @relation(fields: [flushedLedgerEntryId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([shiftInstanceId, stationId, jobId, productId, materialId])
+  @@index([materialId, flushedAt])
+  @@index([siteId, shiftInstanceId])
+  @@index([siteId, businessDate])
+  @@index([stationId])
+  @@index([jobId])
+  @@index([flushedLedgerEntryId])
+}

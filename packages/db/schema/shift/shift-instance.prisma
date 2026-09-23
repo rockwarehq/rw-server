@@ -1,0 +1,90 @@
+/// Materialized shift window — a concrete, pre-computed row representing
+/// one shift at a specific point in time for a specific entity.
+///
+/// Written ahead by the 60-second materialize tick (a week of lookahead) and
+/// corrected in place by overrides and amendments. Stores absolute UTC
+/// timestamps and the pre-computed business date, so runtime queries are
+/// simple indexed lookups with no rotation math.
+///
+/// Scope:
+///   workCenterId = null → site-level instance (default for all workcenters)
+///   workCenterId = set  → workcenter-level instance (override)
+///
+/// Query patterns:
+///
+///   Find shift for a workcenter at a timestamp (check override first):
+///     WHERE workCenterId = ? AND startTime <= ? AND endTime > ?
+///
+///   Fall back to site-level default:
+///     WHERE siteId = ? AND workCenterId IS NULL
+///       AND startTime <= ? AND endTime > ?
+///
+///   Split a time range across shifts:
+///     WHERE siteId = ? AND workCenterId IS NULL
+///       AND startTime < rangeEnd AND endTime > rangeStart
+///     ORDER BY startTime
+///
+///   All shifts for a business date:
+///     WHERE siteId = ? AND businessDate = ?
+///     ORDER BY startTime
+model ShiftInstance {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// The assignment that was active when this instance was created.
+  assignmentId String          @db.Uuid
+  assignment   ShiftAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  /// The template definition this instance was materialized from.
+  /// Null for filler rows (gaps between scheduled shifts).
+  definitionId String?          @db.Uuid
+  definition   ShiftDefinition? @relation(fields: [definitionId], references: [id])
+
+  /// Site this shift belongs to (always set).
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  /// Workcenter this shift is scoped to. Null = site-level default.
+  workCenterId String?     @db.Uuid
+  workCenter   Workcenter? @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
+
+  /// Human-readable shift name copied from the definition (e.g., "Shift 1"),
+  /// "Off Hours" for gap fillers; a switched-off shift keeps its own name.
+  shiftName String
+
+  /// False for gap fillers and cancelled shifts: the window exists so facts
+  /// get a shift stamp, but it is not production time.
+  isScheduled Boolean @default(true)
+
+  /// Pre-computed business date derived from the pattern's
+  /// useEndDateForBusinessDate flag and the rotation day's shift block.
+  businessDate DateTime @db.Date
+
+  /// Absolute UTC start of this shift.
+  startTime DateTime @db.Timestamptz(3)
+
+  /// Absolute UTC end of this shift.
+  endTime DateTime @db.Timestamptz(3)
+
+  itemDispositionLogs     ItemDispositionLog[]
+  logonSessions           StationLogonSession[]
+  shiftComments           ShiftComment[]
+  materialShiftUsage      MaterialShiftUsage[]
+  calls                   Call[]
+  modeLogs                StationModeLog[]
+  cycles                  Cycle[]
+  inventoryItems          InventoryItem[]
+  stateLogs               StationStateLog[]
+  jobLogs                 StationJobLog[]
+  materialLedgerEntries   MaterialLedgerEntry[]
+  orderConsumptions       OrderConsumption[]
+  productStockAdjustments ProductStockAdjustment[]
+  signoffs                ShiftSignoff[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([assignmentId, startTime])
+  @@index([workCenterId, startTime, endTime])
+  @@index([siteId, startTime, endTime])
+  @@index([siteId, businessDate])
+  @@index([workCenterId, businessDate])
+}

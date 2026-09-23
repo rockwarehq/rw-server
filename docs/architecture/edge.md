@@ -14,7 +14,7 @@ The edge story: a **gateway** (an rw-gateway device on the factory floor) reads 
 3. **Operate** — drivers on the gateway (modbus, opc-ua, …; definitions registered by the API's driver registry) sample configured **datasource points** and publish to NATS subjects. Health snapshots go to `health.gateway.<id>` (~every 5s; subject helpers in `packages/runtime/src/gateway-subjects.ts`).
 4. **Monitored** — `stale-gateway-check` (api, 30s) flips gateways OFFLINE when heartbeats stop; the `gateway-health` worker mirrors health snapshots into Prometheus gauges for Grafana.
 
-Gateway state machine: `PROVISIONED → ONLINE ↔ OFFLINE → DISABLED` (schema: `packages/db/schema/gateway.prisma`).
+Gateway state machine: `PROVISIONED → ONLINE ↔ OFFLINE → DISABLED` (schema: `packages/db/schema/gateway/gateway.prisma`).
 
 ## Commands to gateways
 

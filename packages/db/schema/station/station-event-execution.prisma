@@ -1,0 +1,22 @@
+enum StationEventExecutionStatus {
+  RUNNING
+  FAILED
+  SUCCEEDED
+}
+
+model StationEventExecution {
+  id     String                      @id @default(uuid()) @db.Uuid
+  status StationEventExecutionStatus @default(RUNNING)
+
+  payload Json @default("{}")
+
+  completedAt DateTime? @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+
+  stationEventId String       @db.Uuid
+  stationEvent   StationEvent @relation(fields: [stationEventId], references: [id], onDelete: Cascade)
+
+  @@index([stationEventId, createdAt])
+  @@index([stationEventId, status])
+}

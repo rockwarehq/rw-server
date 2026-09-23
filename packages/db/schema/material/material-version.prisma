@@ -1,0 +1,24 @@
+model MaterialVersion {
+  id             String      @id @default(uuid()) @db.Uuid
+  version        Int
+  name           String?
+  shortCode      String?
+  materialNumber String
+  classification String?
+  description    String?
+  externalNumber String?
+  weightUnits    WeightUnit?
+  unitCost       Decimal?    @db.Decimal(14, 4)
+  attrs          Json        @default("{}")
+
+  materialId String   @db.Uuid
+  material   Material @relation("MaterialVersions", fields: [materialId], references: [id])
+
+  currentOfMaterial       Material?                @relation("MaterialCurrent")
+  productMaterialVersions ProductMaterialVersion[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([materialId, version])
+  @@index([materialId])
+}

@@ -1,0 +1,28 @@
+enum PointSourceType {
+  DRIVER
+  STATIC
+}
+
+model Point {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+
+  sourceType  PointSourceType @default(DRIVER)
+  staticValue Json? // Manually-entered value for STATIC points; delivered via entity.changes, never polled
+  address     String
+  dataType    String
+  scaleFactor Float           @default(1.0) // Multiplier to convert raw to engineering units
+  offset      Float           @default(0.0) // Additive offset after scaling
+  config      Json            @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  datasourceId String     @db.Uuid
+  datasource   Datasource @relation(fields: [datasourceId], references: [id], onDelete: Cascade)
+
+  groupId     String?      @db.Uuid
+  group       PointGroup?  @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  pointValues PointValue[]
+}

@@ -18,7 +18,7 @@ model SavedView {
   name        String
   description String?
 
-  /// "PRIVATE" (creator only) or "WORKSPACE" (visible to all workspace members).
+  /// "PRIVATE" (creator only) or "WORKSPACE" (every user can see it).
   visibility String @default("PRIVATE")
 
   /// Creator; nullable + SetNull so deleting a user keeps their shared views.

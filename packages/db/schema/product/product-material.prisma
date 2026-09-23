@@ -1,0 +1,34 @@
+/// Assignment: links a Material to a Product (versioned data lives in ProductMaterialVersion).
+/// Two independent gates control whether this assignment contributes to a cycle's
+/// InventoryItems and appears in selection UIs:
+///   - `archivedAt`: if non-null, this assignment is globally disabled — never
+///     added to inventory, never shown in alternate-selection dropdowns.
+///   - Group membership: if `altGroupId` is null, the material is standalone.
+///     If set, it's the group's pick only when `group.activeProductMaterialId == id`.
+model ProductMaterial {
+  id               String  @id @default(uuid()) @db.Uuid
+  currentVersionId String? @unique @db.Uuid
+
+  productId  String  @db.Uuid
+  materialId String  @db.Uuid
+  altGroupId String? @db.Uuid
+
+  product  Product                  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  material Material                 @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  altGroup ProductMaterialAltGroup? @relation("ProductMaterialAltGroupOptions", fields: [altGroupId], references: [id], onDelete: SetNull)
+
+  activeOfAltGroup ProductMaterialAltGroup? @relation("ProductMaterialAltGroupActive")
+
+  currentVersion ProductMaterialVersion?  @relation("ProductMaterialCurrent", fields: [currentVersionId], references: [id])
+  versions       ProductMaterialVersion[] @relation("ProductMaterialVersions")
+
+  attrs Json @default("{}")
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  @@unique([productId, materialId])
+  @@index([materialId])
+  @@index([altGroupId])
+}

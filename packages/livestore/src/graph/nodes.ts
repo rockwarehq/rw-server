@@ -495,7 +495,6 @@ async function resolveSystemEntityRecord(
         currentVersion: true,
         materials: { where: { archivedAt: null, material: { deletedAt: null } }, select: { materialId: true } },
         jobProducts: { where: { deletedAt: null, job: { deletedAt: null } }, select: { jobId: true } },
-        workOrders: { where: { deletedAt: null }, select: { id: true } },
       },
     });
     if (!product) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
@@ -505,7 +504,6 @@ async function resolveSystemEntityRecord(
         site: product.siteId,
         materials: product.materials.map((row) => row.materialId),
         jobs: product.jobProducts.map((row) => row.jobId),
-        workOrders: product.workOrders.map((row) => row.id),
         currentVersion: product.currentVersion
           ? { ...product.currentVersion, weight: product.currentVersion.weight?.toNumber() ?? null }
           : null,
@@ -566,14 +564,6 @@ async function resolveSystemEntityRecord(
         products: order.lineItems.map((row) => row.productId),
       },
     };
-  }
-
-  if (entityKey === SYSTEM_ENTITY_KEYS.WorkOrder) {
-    const order = await prisma.workOrder.findFirst({
-      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null },
-    });
-    if (!order) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
-    return { data: { ...order, site: order.siteId, job: order.jobId, product: order.productId } };
   }
 
   if (entityKey === SYSTEM_ENTITY_KEYS.Employee) {

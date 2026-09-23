@@ -1,0 +1,29 @@
+/// One shared list of labels per site. Users put labels on jobs, tools,
+/// products, materials, stations, status/downtime codes, and scrap codes —
+/// to organize, to filter lists, and to slice reports. A record can carry
+/// many labels and a label can be on many records, so groups can overlap:
+/// adding up totals per label can count the same record twice (ADR-0011).
+model Label {
+  id    String  @id @default(uuid()) @db.Uuid
+  name  String
+  /// Display color as #rrggbb; null renders as a neutral chip.
+  color String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  jobs                   Job[]
+  tools                  Tool[]
+  products               Product[]
+  materials              Material[]
+  stations               Station[]
+  statusReasons          StatusReason[]
+  itemDispositionReasons ItemDispositionReason[]
+  labelFilters           LabelFilter[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}

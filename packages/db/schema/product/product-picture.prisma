@@ -1,0 +1,16 @@
+/// Product picture stored in S3-compatible storage (Tigris)
+model ProductPicture {
+  id        String  @id @default(uuid()) @db.Uuid
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  key         String // S3 object key: "products/{productId}/{uuid}.{ext}"
+  filename    String // Original filename
+  contentType String // MIME type (image/jpeg, image/png, etc.)
+  size        Int // File size in bytes
+  isPrimary   Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([productId])
+}

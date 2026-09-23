@@ -1,0 +1,34 @@
+/// A configured outbound target. @rw/integrations declares the shape of config and the sealed secret.
+model Integration {
+  id     String @id @default(uuid()) @db.Uuid
+  siteId String @db.Uuid
+  name   String
+
+  /// Type key from @rw/integrations. String not enum: adding a type must not need a migration.
+  type    String
+  enabled Boolean @default(true)
+
+  /// Validated against the type's configSchema. Plaintext by design; safe to read and log.
+  config Json @default("{}")
+
+  /// Sealed with AES-256-GCM (packages/integrations/src/crypto.ts); never returned over RPC.
+  /// The key lives in the environment, NOT this database. Null when the type needs no secret.
+  /// No gatewayId: actions run in rw-server, which on-prem sits on the plant network.
+  secretCipher Bytes?
+
+  /// Soft delete matches GraphHook so run history survives removal.
+  isDeleted Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  site     Site                 @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  runs     IntegrationRun[]
+  triggers IntegrationTrigger[]
+
+  @@unique([siteId, name])
+  @@index([siteId, enabled])
+  @@index([isDeleted])
+  // Definition reconcile filters on updatedAt (mirrors GraphHook).
+  @@index([updatedAt])
+}

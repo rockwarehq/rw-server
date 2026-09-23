@@ -1,0 +1,54 @@
+model Station {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  attrs       Json    @default("{}")
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  // Site ownership (required)
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  // Workcenter (optional - station can be directly under site)
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id], onDelete: Restrict)
+
+  // Current job assignment (many-to-one — multiple stations can share a job)
+  currentJobId String? @db.Uuid
+  currentJob   Job?    @relation("StationCurrentJob", fields: [currentJobId], references: [id], onDelete: SetNull)
+
+  // Versioning (config fields)
+  currentVersionId String?          @unique @db.Uuid
+  currentVersion   StationVersion?  @relation("StationCurrent", fields: [currentVersionId], references: [id])
+  versions         StationVersion[] @relation("StationVersions")
+
+  labels       Label[]
+  labelFilters LabelFilter[]
+
+  statusReasons StatusReason[]
+
+  // Relations
+  stateLogs            StationStateLog[]
+  stationDatasources   StationDatasource[]
+  events               StationEvent[]
+  cycles               Cycle[]
+  inventoryItems       InventoryItem[]
+  jobLogs              StationJobLog[]
+  itemDispositionLogs  ItemDispositionLog[]
+  displays             Display[]
+  logonSessions        StationLogonSession[]
+  shiftComments        ShiftComment[]
+  materialShiftUsage   MaterialShiftUsage[]
+  calls                Call[]
+  modeLogs             StationModeLog[]
+  jobHistoryAmendments JobHistoryAmendment[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+  @@index([workcenterId])
+  @@index([currentJobId])
+}

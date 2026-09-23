@@ -375,12 +375,6 @@ export async function list(filter: ListInventoryFilter = {}) {
             cycleStatus: true,
             start: true,
             end: true,
-            order: {
-              select: {
-                id: true,
-                orderNumber: true,
-              },
-            },
           },
         },
         productVersion: {
@@ -463,17 +457,6 @@ export async function getById(id: string) {
           site: {
             select: { id: true, name: true },
           },
-          order: {
-            select: {
-              id: true,
-              orderNumber: true,
-              job: {
-                select: {
-                  id: true,
-                },
-              },
-            },
-          },
         },
       },
       productVersion: true,
@@ -513,17 +496,6 @@ export async function getByCycle(cycleId: string) {
       end: true,
       site: {
         select: { id: true, name: true },
-      },
-      order: {
-        select: {
-          id: true,
-          orderNumber: true,
-          job: {
-            select: {
-              id: true,
-            },
-          },
-        },
       },
     },
   });

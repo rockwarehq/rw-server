@@ -1,0 +1,26 @@
+/// Versioned snapshot of employee profile and workspace-wide operator credentials.
+model EmployeeVersion {
+  id      String @id @default(uuid()) @db.Uuid
+  version Int
+
+  firstName      String
+  lastName       String
+  employeeNumber String?
+  pinHash        String? // bcrypt, for operator PIN checks
+  badgeNumber    String? // physical token (RFID/barcode)
+  email          String? // notification contact (not a login — that lives on User)
+  phone          String? // notification contact, E.164 preferred. Consent lives on SmsConsent.
+
+  employeeId String   @db.Uuid
+  employee   Employee @relation("EmployeeVersions", fields: [employeeId], references: [id], onDelete: Cascade)
+
+  currentOf Employee? @relation("EmployeeCurrentVersion")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  logonSessions StationLogonSession[]
+
+  @@unique([employeeId, version])
+  @@index([employeeId])
+  @@index([badgeNumber])
+}

@@ -1,0 +1,49 @@
+// Five models:
+//   - Automation          — the user-authored row (event + conditions + ordered actions)
+//   - AutomationRun       — one row per fw.fire() call (audit + run history)
+//   - AutomationRunMatch  — one row per automation that said yes to a run
+//   - AutomationActionRun — one row per action attempt within a run
+//   - AutomationCooldown  — when an automation may fire again
+//
+// All valid fires ──► AutomationRun           ("event was raised")
+//   └─ filtered to: same event type + enabled + conditions truthy
+//      ──► AutomationRunMatch                 ("automation said yes")
+//        └─ filtered to: each action in that automation's actions[]
+//           ──► AutomationActionRun           ("an action was attempted")
+
+model Automation {
+  id      String  @id @default(uuid()) @db.Uuid
+  label   String
+  enabled Boolean @default(true)
+
+  /// Site this automation belongs to — it only sees that site's events. Null = global (legacy rows);
+  /// the RPC layer requires a site on create.
+  siteId String? @db.Uuid
+  site   Site?   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  /// Event type this automation listens to (e.g. "job.changed"). Matches an `EventSchema.type`
+  /// declared in apps/api/src/automations/events/.
+  event        String
+  eventVersion String
+
+  /// react-querybuilder condition tree (RuleGroupType from @rw/automations). Evaluated by
+  /// json-rules-engine after the ContextBuilder flattens the event into facts.
+  conditions Json
+
+  /// Each fires in sequence when conditions match.
+  actions Json
+
+  /// After firing for a cooldown scope (e.g. a station), further matches for that scope are
+  /// skipped for this long. Null = no cooldown.
+  cooldownMs Int?
+
+  cooldowns AutomationCooldown[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([siteId, label])
+  // Hot path on engine.reload(): "list enabled automations for this event type."
+  @@index([enabled, event])
+  @@index([siteId])
+}

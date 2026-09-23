@@ -1,0 +1,27 @@
+/// Assignment: links a Product (and optional Tool/ToolCavity) to a Job (versioned via JobProductVersion)
+model JobProduct {
+  id               String  @id @default(uuid()) @db.Uuid
+  currentVersionId String? @unique @db.Uuid
+
+  jobId        String  @db.Uuid
+  productId    String  @db.Uuid
+  toolId       String? @db.Uuid
+  toolCavityId String? @db.Uuid
+
+  job        Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  product    Product     @relation(fields: [productId], references: [id])
+  tool       Tool?       @relation(fields: [toolId], references: [id])
+  toolCavity ToolCavity? @relation(fields: [toolCavityId], references: [id])
+
+  currentVersion JobProductVersion?  @relation("JobProductCurrent", fields: [currentVersionId], references: [id])
+  versions       JobProductVersion[] @relation("JobProductVersions")
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([jobId])
+  @@index([productId])
+  @@index([toolId])
+  @@index([toolCavityId])
+}

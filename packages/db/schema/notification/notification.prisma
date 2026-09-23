@@ -1,0 +1,29 @@
+/// One send request: what was asked, by whom, to which groups and/or people.
+/// Who received it and whether the provider accepted it is the deliveries.
+model Notification {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  /// First group targeted (null for a direct-to-people send); groupName snapshots every group name.
+  groupId   String?            @db.Uuid
+  group     NotificationGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  groupName String?
+
+  subject String
+  body    String
+
+  source     ActionSource @default(SYSTEM)
+  sourceType String? // programmatic origin discriminator, e.g. "automation"
+  sourceRef  String? // free-form correlation id (automation id, ...)
+  /// Caller-supplied idempotency key (e.g. automation eventId + action index); a repeat returns the original.
+  dedupeKey  String?      @unique
+
+  deliveries NotificationDelivery[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([siteId, createdAt(sort: Desc)])
+  @@index([groupId])
+}

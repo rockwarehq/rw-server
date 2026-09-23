@@ -1,0 +1,16 @@
+/// Assignment: links a Datasource to a Station
+model StationDatasource {
+  id String @id @default(uuid()) @db.Uuid
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  datasourceId String     @db.Uuid
+  datasource   Datasource @relation(fields: [datasourceId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([stationId, datasourceId])
+  @@index([stationId])
+  @@index([datasourceId])
+}

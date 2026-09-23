@@ -1,0 +1,30 @@
+model Product {
+  id               String  @id @default(uuid()) @db.Uuid
+  currentVersionId String? @unique @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  currentVersion ProductVersion?  @relation("ProductCurrent", fields: [currentVersionId], references: [id])
+  versions       ProductVersion[] @relation("ProductVersions")
+
+  materials           ProductMaterial[]
+  materialAltGroups   ProductMaterialAltGroup[]
+  labels              Label[]
+  materialShiftUsage  MaterialShiftUsage[]
+  jobProducts         JobProduct[]
+  pictures            ProductPicture[]
+  orderLineItems      OrderLineItem[]
+  stock               ProductStock[]
+  consumptions        OrderConsumption[]
+  stockAdjustments    ProductStockAdjustment[]
+  inventoryItems      InventoryItem[]
+  itemDispositionLogs ItemDispositionLog[]
+  calls               Call[]
+  modeLogs            StationModeLog[]
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+}

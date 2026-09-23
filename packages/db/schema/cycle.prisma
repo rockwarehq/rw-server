@@ -5,9 +5,8 @@ enum CycleStatus {
 }
 
 model Cycle {
-  id           String      @id @default(uuid()) @db.Uuid
-  rejectNumber Int         @default(0)
-  cycleStatus  CycleStatus
+  id          String      @id @default(uuid()) @db.Uuid
+  cycleStatus CycleStatus
 
   // Timing
   start          DateTime  @db.Timestamptz(3)
@@ -50,13 +49,10 @@ model Cycle {
   shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
   /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
   /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
-  isScheduled Boolean @default(true)
+  isScheduled     Boolean        @default(true)
 
   /// Business date of that shift.
   businessDate DateTime? @db.Date
-
-  orderId String?    @db.Uuid
-  order   WorkOrder? @relation(fields: [orderId], references: [id])
 
   // Snapshot: version IDs at point in time
   stationVersionId String?         @db.Uuid
@@ -89,7 +85,6 @@ model Cycle {
   @@index([siteId, deletedAt, end])
   @@index([stationId, deletedAt, end])
   @@index([jobVersionId])
-  @@index([orderId])
   @@index([modeId])
   @@index([amendmentId])
   // Star stamps: [siteId, businessDate] serves BI date slicing; shiftInstanceId

@@ -232,7 +232,6 @@ async function bootstrap() {
     name: "Default",
     slug: "default",
     description: "Default workspace",
-    isDefault: true,
   });
   console.log(`  Workspace: ${workspace.name} (${workspace.id})`);
 

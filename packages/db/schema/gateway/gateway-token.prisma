@@ -1,0 +1,13 @@
+model GatewayToken {
+  id        String  @id @default(uuid()) @db.Uuid
+  name      String?
+  tokenHash String  @unique
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt DateTime? @db.Timestamptz(3)
+  revokedAt DateTime? @db.Timestamptz(3)
+  lastUsed  DateTime? @db.Timestamptz(3)
+
+  gatewayId String  @db.Uuid
+  gateway   Gateway @relation(fields: [gatewayId], references: [id], onDelete: Cascade)
+}

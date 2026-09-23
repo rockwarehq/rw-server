@@ -6,8 +6,8 @@
  * update the functions here to match.
  *
  * SQL source:
- *   rw-server/prisma/schema/metric.prisma (generated column comments)
- *   rw-server/prisma/migrations/20260325000000_oee_zero_not_null/migration.sql
+ *   packages/db/schema/metric-bucket/metric-bucket.prisma (generated column comments)
+ *   packages/db/migrations/20260325000000_oee_zero_not_null/migration.sql
  */
 
 // ── Types ────────────────────────────────────────────────────────

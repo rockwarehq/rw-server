@@ -1,0 +1,21 @@
+model EmployeeSiteAccess {
+  id String @id @default(uuid()) @db.Uuid
+
+  employeeId String   @db.Uuid
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  roleId String       @db.Uuid
+  role   EmployeeRole @relation(fields: [roleId], references: [id])
+
+  status EmployeeStatus @default(ACTIVE)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([employeeId, siteId])
+  @@index([siteId, status])
+  @@index([roleId])
+}

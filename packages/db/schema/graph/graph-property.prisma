@@ -1,0 +1,24 @@
+model GraphProperty {
+  id           String  @id @default(uuid()) @db.Uuid
+  nodeId       String  @db.Uuid
+  typeFieldKey String?
+  name         String
+  resolverType String
+  resolver     Json
+  sampleRateMs Int?
+  isDeleted    Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  node     GraphNode   @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  edgesIn  GraphEdge[] @relation("ToProperty")
+  edgesOut GraphEdge[] @relation("FromProperty")
+
+  @@unique([nodeId, name])
+  @@index([nodeId, typeFieldKey])
+  @@index([resolverType])
+  @@index([isDeleted])
+  // Livestore's 30s definition reconcile filters on updatedAt.
+  @@index([updatedAt])
+}

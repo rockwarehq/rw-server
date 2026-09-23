@@ -1,0 +1,45 @@
+enum DataSourceType {
+  DEVICE
+  KIOSK
+  SERVICE
+  VIRTUAL
+}
+
+enum DatasourceStatus {
+  DRAFT
+  ACTIVE
+}
+
+model Datasource {
+  id     String           @id @default(uuid()) @db.Uuid
+  name   String
+  type   DataSourceType   @default(DEVICE)
+  status DatasourceStatus @default(DRAFT)
+  attrs  Json             @default("{}")
+
+  // Driver info (denormalized - snapshot at creation)
+  driver        String // Driver name, e.g., "modbus-tcp"
+  driverVersion String // Driver version when created, e.g., "1.0.0"
+
+  // Driver-defined configuration (validated against driver.connectionSchema)
+  // Optional at creation (DRAFT status), validated on publish
+  connection Json @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  points      Point[]
+  pointGroups PointGroup[]
+
+  gateway   Gateway? @relation(fields: [gatewayId], references: [id], onDelete: SetNull)
+  gatewayId String?  @db.Uuid
+
+  // Site
+  siteId String? @db.Uuid
+  site   Site?   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  // Many-to-many with Station
+  stationDatasources StationDatasource[]
+
+  @@index([siteId])
+}

@@ -1,0 +1,21 @@
+enum BucketLevel {
+  VIEW // Plant: read the shared things. Workcenter: watch the floor.
+  MANAGE // Plant: "member", change the shared things. Workcenter: run the cell.
+  ADMIN // Plant only: shop-floor setup, people, access, settings; reaches every workcenter.
+}
+
+model BucketAccess {
+  id       String      @id @default(uuid()) @db.Uuid
+  bucketId String      @db.Uuid
+  userId   String      @db.Uuid
+  level    BucketLevel
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  bucket Bucket @relation(fields: [bucketId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([bucketId, userId])
+  @@index([userId])
+}

@@ -1,0 +1,42 @@
+/// Binds a LiveStore hook event to an integration action — the layer that keeps hooks
+/// terminal (spec.md §4.8) and leaves the integration reusable by automations and manual runs.
+model IntegrationTrigger {
+  id      String  @id @default(uuid()) @db.Uuid
+  siteId  String  @db.Uuid
+  name    String
+  enabled Boolean @default(true)
+
+  /// Matches the emitted subject livestore.events.<site>.<namespace>.<name>.v<version>.
+  eventNamespace String
+  eventName      String
+  eventVersion   String @default("1")
+
+  /// Narrows to one hook; null means every hook at this site emitting that event.
+  hookId String?    @db.Uuid
+  hook   GraphHook? @relation(fields: [hookId], references: [id], onDelete: Cascade)
+
+  integrationId String      @db.Uuid
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  actionKey     String
+  actionVersion String @default("1")
+
+  /// Literal JSON with { "$from": "field" } nodes pulling values off the event payload
+  /// (packages/integrations/src/template.ts). Resolved before the action's schema validates it.
+  input Json @default("{}")
+
+  isDeleted Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // No IntegrationRun relation: runs record origin in triggerType/triggerId so history survives deletion.
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, name])
+  // The consumer's hot path: match an inbound event to its triggers.
+  @@index([siteId, eventNamespace, eventName, eventVersion, enabled])
+  @@index([integrationId])
+  @@index([hookId])
+  @@index([isDeleted])
+}

@@ -1,0 +1,78 @@
+model Site {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  timezone    String  @default("UTC")
+  attrs       Json    @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  // Workspace ownership (required)
+  workspaceId String    @db.Uuid
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Children
+  workcenters             Workcenter[]
+  gateways                Gateway[]
+  datasources             Datasource[]
+  stations                Station[]
+  cycles                  Cycle[]
+  products                Product[]
+  materials               Material[]
+  tools                   Tool[]
+  jobs                    Job[]
+  shiftPattern            ShiftPattern[]
+  shiftAssignment         ShiftAssignment[]
+  shiftInstances          ShiftInstance[]
+  shiftOverrides          ShiftOverride[]
+  shiftAmendments         ShiftAmendment[]
+  labels                  Label[]
+  statusReasons           StatusReason[]
+  metricBuckets           MetricBucket[]
+  metricBucketLogs        MetricBucketLog[]
+  dashboards              Dashboard[]
+  displays                Display[]
+  documents               Document[]
+  andonRules              SiteAndonRule[]
+  statusCategories        StatusCategory[]
+  itemDispositions        ItemDisposition[]
+  itemDispositionReason   ItemDispositionReason[]
+  itemDispositionLogs     ItemDispositionLog[]
+  employeeRoles           EmployeeRole[]
+  employeeSiteAccess      EmployeeSiteAccess[]
+  customers               Customer[]
+  fulfillmentOrders       Order[]                  @relation("SiteFulfillmentOrders")
+  productStocks           ProductStock[]
+  orderConsumptions       OrderConsumption[]
+  productStockAdjustments ProductStockAdjustment[]
+  shiftComments           ShiftComment[]
+  shiftSignoffs           ShiftSignoff[]
+  buckets                 Bucket[]
+  materialLedgerEntries   MaterialLedgerEntry[]
+  materialShiftUsage      MaterialShiftUsage[]
+  graphNodes              GraphNode[]
+  graphNodeTypes          GraphNodeType[]
+  graphHooks              GraphHook[]
+  objectSchemas           ObjectSchema[]
+  objectInstances         ObjectInstance[]
+  apiTokens               ApiToken[]
+  savedViews              SavedView[]
+  integrations            Integration[]
+  integrationTriggers     IntegrationTrigger[]
+  callDefinitions         CallDefinition[]
+  calls                   Call[]
+  productionModes         ProductionMode[]
+  automations             Automation[]
+  notificationGroups      NotificationGroup[]
+  notifications           Notification[]
+  stationModeLogs         StationModeLog[]
+  inventoryItems          InventoryItem[]
+  stationStateLogs        StationStateLog[]
+  stationJobLogs          StationJobLog[]
+  jobHistoryAmendments    JobHistoryAmendment[]
+  stationLogonSessions    StationLogonSession[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}

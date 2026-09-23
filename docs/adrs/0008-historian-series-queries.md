@@ -172,7 +172,7 @@ Verified facts the scheme rests on:
 - **Trap:** `archive.ts` copies the live row's `updatedAt` verbatim into
   `MetricBucketLog`, so freshly archived rows carry a *past* `updatedAt`. The
   log table's change timestamp is therefore **`archivedAt`**
-  (`@default(now())`, `packages/db/schema/metric.prisma`); live tables use
+  (`@default(now())`, `packages/db/schema/metric-bucket/metric-bucket.prisma`); live tables use
   `updatedAt`.
 - Watermarks are computed from the **database clock inside the delta query**
   (`select now() − ε`), never an app clock — writers span Postgres `NOW()` and

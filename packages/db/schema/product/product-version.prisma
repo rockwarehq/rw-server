@@ -1,0 +1,25 @@
+model ProductVersion {
+  id          String      @id @default(uuid()) @db.Uuid
+  version     Int
+  sku         String
+  name        String?
+  description String?
+  externalSku String?
+  weight      Decimal?    @db.Decimal(14, 4)
+  weightUnits WeightUnit?
+  itemCost    Decimal?    @db.Decimal(14, 4)
+  attrs       Json        @default("{}")
+
+  productId String  @db.Uuid
+  product   Product @relation("ProductVersions", fields: [productId], references: [id])
+
+  currentOfProduct        Product?                 @relation("ProductCurrent")
+  inventoryItems          InventoryItem[]
+  itemDispositionLogs     ItemDispositionLog[]
+  productMaterialVersions ProductMaterialVersion[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([productId, version])
+  @@index([productId])
+}

@@ -1,0 +1,39 @@
+/// Used by Employee and EmployeeSiteAccess.
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model Employee {
+  id          String         @id @default(uuid()) @db.Uuid
+  workspaceId String         @db.Uuid
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  status      EmployeeStatus @default(ACTIVE)
+
+  // Versioned profile/security snapshot.
+  versionId String?           @unique @db.Uuid
+  version   EmployeeVersion?  @relation("EmployeeCurrentVersion", fields: [versionId], references: [id])
+  versions  EmployeeVersion[] @relation("EmployeeVersions")
+
+  siteAccess EmployeeSiteAccess[]
+  user       User?
+
+  // Login lockout
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  logonSessions StationLogonSession[]
+  openedCalls   Call[]                @relation("CallOpenedBy")
+  closedCalls   Call[]                @relation("CallClosedBy")
+
+  startedModeLogs StationModeLog[] @relation("ModeLogStartedBy")
+  endedModeLogs   StationModeLog[] @relation("ModeLogEndedBy")
+
+  notificationGroups     NotificationGroup[]    @relation("NotificationGroupMembers")
+  notificationDeliveries NotificationDelivery[]
+
+  @@index([workspaceId, status])
+}

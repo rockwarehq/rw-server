@@ -6,8 +6,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js",
-    "./client": "./dist/client.js"
+    ".": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc -b",
@@ -21,9 +20,6 @@
     "dotenv": "^17.2.3",
     "pg": "^8.16.3",
     "prisma": "^7.5.0"
-  },
-  "peerDependencies": {
-    "prisma-json-types-generator": "^4.1.1"
   },
   "devDependencies": {
     "@types/node": "^24.10.8",

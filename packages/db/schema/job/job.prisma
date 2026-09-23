@@ -1,0 +1,30 @@
+model Job {
+  id               String  @id @default(uuid()) @db.Uuid
+  currentVersionId String? @unique @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  currentVersion JobVersion?  @relation("JobCurrent", fields: [currentVersionId], references: [id])
+  versions       JobVersion[] @relation("JobVersions")
+
+  tools       JobTool[]
+  jobProducts JobProduct[]
+  labels      Label[]
+
+  currentOfStations    Station[]             @relation("StationCurrentJob")
+  stationJobLogs       StationJobLog[]
+  materialShiftUsage   MaterialShiftUsage[]
+  calls                Call[]
+  modeLogs             StationModeLog[]
+  cycles               Cycle[]
+  inventoryItems       InventoryItem[]
+  itemDispositionLogs  ItemDispositionLog[]
+  stateLogs            StationStateLog[]
+  jobHistoryAmendments JobHistoryAmendment[]
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+}

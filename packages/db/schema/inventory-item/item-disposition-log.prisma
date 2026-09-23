@@ -1,0 +1,76 @@
+model ItemDispositionLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  /// Matches InventoryItem.quantity so continuous-mode fractional quantities
+  /// scrap exactly; the Int badItems bucket aggregate rounds at that boundary.
+  quantity Decimal @default(1) @db.Decimal(18, 4)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id])
+
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id])
+
+  cycleId String? @db.Uuid
+  cycle   Cycle?  @relation(fields: [cycleId], references: [id])
+
+  shiftInstanceId String?        @db.Uuid // In the case there is an entry for a previous date/shift.
+  shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id])
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled     Boolean        @default(true)
+
+  /// Business date of the shift above (star pattern for BI).
+  businessDate DateTime? @db.Date
+
+  // ── Dimension snapshots (star pattern for BI): stable ids paired with the
+  // version snapshots below ──
+  jobId String? @db.Uuid
+  job   Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  productId String?  @db.Uuid
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  toolId String? @db.Uuid
+  tool   Tool?   @relation(fields: [toolId], references: [id], onDelete: SetNull)
+
+  itemDispositionId String?          @db.Uuid
+  itemDisposition   ItemDisposition? @relation(fields: [itemDispositionId], references: [id])
+
+  dispositionReasonId String?                @db.Uuid
+  dispositionReason   ItemDispositionReason? @relation(fields: [dispositionReasonId], references: [id])
+
+  // Snapshot: version IDs at point in time
+  stationVersionId String?         @db.Uuid
+  stationVersion   StationVersion? @relation(fields: [stationVersionId], references: [id])
+
+  jobProductVersionId String?            @db.Uuid
+  jobProductVersion   JobProductVersion? @relation(fields: [jobProductVersionId], references: [id])
+
+  productVersionId String         @db.Uuid
+  productVersion   ProductVersion @relation(fields: [productVersionId], references: [id])
+
+  toolVersionId String?      @db.Uuid
+  toolVersion   ToolVersion? @relation(fields: [toolVersionId], references: [id])
+
+  toolCavityVersionId String?            @db.Uuid
+  toolCavityVersion   ToolCavityVersion? @relation(fields: [toolCavityVersionId], references: [id])
+
+  productMaterialVersions ProductMaterialVersion[]
+
+  /// Production mode the station was in when the disposition was logged.
+  modeId String?         @db.Uuid
+  mode   ProductionMode? @relation(fields: [modeId], references: [id], onDelete: SetNull)
+
+  @@index([stationId, createdAt])
+  @@index([siteId, productVersionId])
+  @@index([modeId])
+  @@index([siteId, businessDate])
+}

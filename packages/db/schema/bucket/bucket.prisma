@@ -1,0 +1,42 @@
+// Bucket-based access control for users.
+//
+// Rows live in containers; access is membership in the container:
+// - PLANT bucket (one per site): everyone at the plant can read it.
+//   VIEW = read the plant's shared things. MANAGE ("member") = also change
+//   them (jobs, orders, products…). ADMIN = also shop-floor setup, people,
+//   access and settings, and MANAGE on every workcenter at the site.
+// - WORKCENTER bucket (one per workcenter): the crew.
+//   VIEW = watch the cell's floor. MANAGE = run the cell.
+// Account admins (User.isAccountAdmin) and Rockware staff skip buckets.
+// Checked in code: packages/auth/src/iam/access.ts.
+
+enum BucketKind {
+  PLANT // one per site: everyone at the plant is a member
+  WORKCENTER // one per workcenter: the crew's bucket
+}
+
+/// One PLANT bucket per site: partial unique index "Bucket_one_plant_per_site",
+/// hand-written in the bucket_integrity migration (Prisma cannot express it).
+model Bucket {
+  id           String     @id @default(uuid()) @db.Uuid
+  workspaceId  String     @db.Uuid
+  /// Every bucket belongs to a site today; kept nullable so a future
+  /// workspace-level container needs no migration.
+  siteId       String?    @db.Uuid
+  kind         BucketKind
+  /// Set exactly when kind = WORKCENTER (CHECK "Bucket_kind_workcenter_check").
+  workcenterId String?    @unique @db.Uuid
+  /// Follows the site/workcenter name; the facility services keep it in step.
+  name         String
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  workspace  Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  site       Site?          @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  workcenter Workcenter?    @relation(fields: [workcenterId], references: [id], onDelete: Cascade)
+  accesses   BucketAccess[]
+
+  @@index([siteId, kind])
+  @@index([workspaceId])
+}

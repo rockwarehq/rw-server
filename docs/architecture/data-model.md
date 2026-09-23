@@ -7,7 +7,7 @@ The Prisma schema is split across ~24 domain files in `packages/db/schema/`. Thi
 ```mermaid
 graph TD
   ws[Workspace] --> site[Site]
-  ws --> user[User + WorkspaceMembership]
+  ws --> user[User + BucketAccess]
   site --> wc["Workcenter (self-nesting)"]
   wc --> st[Station]
   site --> gw[Gateway] --> ds[Datasource] --> pt[Point / Group]
@@ -40,7 +40,7 @@ Other domains: `iam` (roles/assignments), `api-token`, `audit`, `automation`, `d
 
 ## Metric buckets
 
-`MetricBucket` (`packages/db/schema/metric.prisma`) is the time-sliced aggregate that powers every KPI:
+`MetricBucket` (`packages/db/schema/metric-bucket/metric-bucket.prisma`) is the time-sliced aggregate that powers every KPI:
 
 - **Keyed by** `(entityType, entityId, granularity, startTime)` — entity is STATION, WORKCENTER, SITE, or JOB; granularity is MINUTE, HOUR, SHIFT, or DAY.
 - **Shift-aware**: HOUR/SHIFT buckets link a `ShiftInstance` and carry `businessDate`/`businessShift`, so "yesterday's night shift" is an indexed query, not timezone math.

@@ -1,0 +1,18 @@
+model ToolCavity {
+  id               String  @id @default(uuid()) @db.Uuid
+  currentVersionId String? @unique @db.Uuid
+
+  toolId String @db.Uuid
+  tool   Tool   @relation(fields: [toolId], references: [id], onDelete: Cascade)
+
+  currentVersion ToolCavityVersion?  @relation("ToolCavityCurrent", fields: [currentVersionId], references: [id])
+  versions       ToolCavityVersion[] @relation("ToolCavityVersions")
+
+  jobProducts JobProduct[]
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([toolId])
+}

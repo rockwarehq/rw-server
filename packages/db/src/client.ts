@@ -5,26 +5,16 @@
 // max_connections budget. DB_POOL_SIZE env var overrides if set.
 //
 // Total per tenant baseline:
-//   api(5) + rollups(10) + processor(5) + processor-consumer(10) + livestore(5) + imm-events(15) = 50
+//   api(5) + rollups(10) + livestore(5) + imm-events(15) + integration-events(5) + hub-events(2) = 42
 
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "./generated/client.js";
 
-export type DbRole =
-  | "api"
-  | "rollups"
-  | "processor"
-  | "processor-consumer"
-  | "livestore"
-  | "imm-events"
-  | "integration-events"
-  | "hub-events";
+export type DbRole = "api" | "rollups" | "livestore" | "imm-events" | "integration-events" | "hub-events";
 
 const DEFAULT_POOL: Record<DbRole, number> = {
   api: 5,
   rollups: 10,
-  processor: 5,
-  "processor-consumer": 10,
   livestore: 5,
   // Sized for IMM_EVENTS_CONCURRENCY (10) parallel completes + headroom.
   "imm-events": 15,

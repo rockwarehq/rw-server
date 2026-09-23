@@ -1,0 +1,18 @@
+model ToolCavityVersion {
+  id       String @id @default(uuid()) @db.Uuid
+  version  Int
+  name     String
+  position Int?
+
+  toolCavityId String     @db.Uuid
+  toolCavity   ToolCavity @relation("ToolCavityVersions", fields: [toolCavityId], references: [id])
+
+  currentOfToolCavity ToolCavity?          @relation("ToolCavityCurrent")
+  inventoryItems      InventoryItem[]
+  itemDispositionLogs ItemDispositionLog[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([toolCavityId, version])
+  @@index([toolCavityId])
+}
