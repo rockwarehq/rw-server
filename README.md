@@ -77,6 +77,9 @@ live at `apps/api/fly/tenants/<tenant>.toml` and
 existing DNS / secrets during cutover). Rename to `rw-dev-workers` when
 convenient.
 
+Test sign-ins for each kind of access on dev are listed in
+[docs/guides/dev-test-accounts.md](docs/guides/dev-test-accounts.md).
+
 ### Migrations run inside fly
 
 Both apps' `base.toml` declares:
