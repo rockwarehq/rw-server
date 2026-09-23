@@ -98,13 +98,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("system-role user authentication
   });
 
   it("staff bypasses stop where they should: SUPPORT at MANAGE, ENGINEER at ownership", async () => {
-    const supportDelete = await rpcCall(
+    const supportCreate = await rpcCall(
       server,
-      "integration/delete",
-      { id: "00000000-0000-4000-8000-000000000042", siteId: siteA.id },
+      "workcenter/create",
+      { siteId: siteA.id, name: "support-cannot-create" },
       supportToken,
     );
-    expect(supportDelete.statusCode).toBe(403);
+    expect(supportCreate.statusCode).toBe(403);
 
     // Ownership-only actions (workspace create/delete, ownership transfer)
     // reject even ENGINEER.

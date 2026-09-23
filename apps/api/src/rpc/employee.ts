@@ -1,4 +1,5 @@
 import { z } from "zod";
+import prisma from "@rw/db";
 import { userRequired } from "./middleware.js";
 import { crud, smsConsent } from "../services/employee/index.js";
 import { throwServiceError, unwrap } from "./errors.js";
@@ -57,6 +58,15 @@ const setSmsConsentInputSchema = z.object({
 // Procedures
 // ============================================================================
 
+/**
+ * The plants an employee works at. Changing an employee needs ADMIN at one
+ * of them; an employee at no plant is left to the owner.
+ */
+async function employeeSites(employeeId: string): Promise<string[]> {
+  const rows = await prisma.employeeSiteAccess.findMany({ where: { employeeId }, select: { siteId: true } });
+  return rows.map((row) => row.siteId);
+}
+
 export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
   await context.access.require("ADMIN", { site: input.siteId });
 
@@ -71,13 +81,15 @@ export const list = userRequired.input(listInputSchema).handler(async ({ input, 
 });
 
 export const get = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  context.access.requireSomewhere("ADMIN");
+  const sites = await employeeSites(input.id);
+  if (!sites.some((site) => context.access.can("ADMIN", { site }))) context.access.requireOwner();
 
   return unwrap(await crud.getById(input.id), { notFoundMessage: "Employee not found" });
 });
 
 export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  context.access.requireSomewhere("ADMIN");
+  const sites = await employeeSites(input.id);
+  if (!sites.some((site) => context.access.can("ADMIN", { site }))) context.access.requireOwner();
 
   const { id, ...updateData } = input;
   const result = await crud.update(id, updateData);
@@ -86,7 +98,8 @@ export const update = userRequired.input(updateInputSchema).handler(async ({ inp
 });
 
 export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  context.access.requireSomewhere("ADMIN");
+  const sites = await employeeSites(input.id);
+  if (!sites.some((site) => context.access.can("ADMIN", { site }))) context.access.requireOwner();
 
   const result = await crud.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
@@ -94,13 +107,15 @@ export const remove = userRequired.input(idInputSchema).handler(async ({ input, 
 });
 
 export const setSmsConsent = userRequired.input(setSmsConsentInputSchema).handler(async ({ input, context }) => {
-  context.access.requireSomewhere("ADMIN");
+  const sites = await employeeSites(input.employeeId);
+  if (!sites.some((site) => context.access.can("ADMIN", { site }))) context.access.requireOwner();
   return unwrap(await smsConsent.set({ ...input, actorUserId: context.current.user.id }));
 });
 
 export const smsConsentHistory = userRequired
   .input(z.object({ employeeId: z.uuid() }))
   .handler(async ({ input, context }) => {
-    context.access.requireSomewhere("ADMIN");
+    const sites = await employeeSites(input.employeeId);
+    if (!sites.some((site) => context.access.can("ADMIN", { site }))) context.access.requireOwner();
     return unwrap(await smsConsent.history(input.employeeId));
   });

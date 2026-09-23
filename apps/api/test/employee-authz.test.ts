@@ -10,14 +10,15 @@ const NOROLE_EMAIL = "emp-authz-norole@test.local";
 const PASSWORD = "emp-authz-password-1";
 
 // Tier 2: people-domain enforcement. Employees are the ADMIN shelf now —
-// roster reads AND writes require plant ADMIN. Employees have no site
-// column, so get/update/delete grant when ADMIN is held at ANY site, while
-// list/create enforce the literal site.
+// roster reads AND writes require plant ADMIN. An employee belongs to the
+// plants in their site access rows: get/update/delete need ADMIN at one of
+// those plants, while list/create enforce the literal site.
 describe.skipIf(!process.env.TEST_DATABASE_URL)("employee domain authorization (Tier 2)", () => {
   let server: TestServer;
   let siteA: { id: string };
   let siteB: { id: string };
   let employee: { id: string };
+  let employeeB: { id: string };
   let scopedToken: string;
   let managerToken: string;
   let noroleToken: string;
@@ -41,7 +42,21 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("employee domain authorization (
     await ensurePlantBucket(workspaceId, siteB.id, "EmpAuthZ Site B");
 
     // Employee is a versioned model — the base row only needs a workspaceId.
-    employee = await prisma.employee.create({ data: { workspaceId }, select: { id: true } });
+    // Each works at one plant through a site access row.
+    const works = async (siteId: string) => {
+      const role = await prisma.employeeRole.upsert({
+        where: { siteId_name: { siteId, name: "emp-authz-role" } },
+        update: {},
+        create: { siteId, name: "emp-authz-role" },
+        select: { id: true },
+      });
+      return prisma.employee.create({
+        data: { workspaceId, siteAccess: { create: { siteId, roleId: role.id } } },
+        select: { id: true },
+      });
+    };
+    employee = await works(siteA.id);
+    employeeB = await works(siteB.id);
 
     // Bucket-era fixtures. Employee CRUD actors need plant ADMIN (the
     // scoped user was "Plant Admin" at site A); the manager holds plant
@@ -57,17 +72,22 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("employee domain authorization (
 
   afterAll(async () => {
     await prisma.user.deleteMany({ where: { email: { in: [SCOPED_EMAIL, MANAGER_EMAIL, NOROLE_EMAIL] } } });
-    await prisma.employee.deleteMany({ where: { id: employee.id } });
+    await prisma.employee.deleteMany({ where: { id: { in: [employee.id, employeeB.id] } } });
+    await prisma.employeeRole.deleteMany({ where: { name: "emp-authz-role" } });
     await prisma.site.deleteMany({ where: { name: "EmpAuthZ Site B" } });
     await server.close();
   });
 
-  it("anySite: plant ADMIN at one site allows employee.get", async () => {
+  it("plant ADMIN reaches employees at their own plant only", async () => {
     const res = await rpcCall(server, "employee/get", { id: employee.id }, scopedToken);
     expect(res.statusCode).toBe(200);
+    const other = await rpcCall(server, "employee/get", { id: employeeB.id }, scopedToken);
+    expect(other.statusCode).toBe(403);
+    const update = await rpcCall(server, "employee/update", { id: employeeB.id, firstName: "X" }, scopedToken);
+    expect(update.statusCode).toBe(403);
   });
 
-  it("anySite: zero-access members are denied on employee.get/update/delete", async () => {
+  it("zero-access members are denied on employee.get/update/delete", async () => {
     const get = await rpcCall(server, "employee/get", { id: employee.id }, noroleToken);
     expect(get.statusCode).toBe(403);
     const update = await rpcCall(server, "employee/update", { id: employee.id, firstName: "X" }, noroleToken);

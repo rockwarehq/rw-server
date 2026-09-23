@@ -248,6 +248,9 @@ export default async function stations(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       await request.access.require("ADMIN", { station: request.params.id });
+      // The destination is checked too, so a station can't be pushed into a
+      // workcenter at another plant.
+      if (request.body.workcenterId) await request.access.require("ADMIN", { workcenter: request.body.workcenterId });
 
       const result = await station.move(request.params.id, request.body.workcenterId);
       if ("error" in result && typeof result.error === "string") {
