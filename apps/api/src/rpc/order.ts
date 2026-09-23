@@ -89,7 +89,7 @@ const nextNumberInputSchema = z.object({
 // ============================================================================
 
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "planning:write", scope: { kind: "site", siteId: input.siteId } }));
 
   // DUPLICATE_PRODUCT here means duplicate products within the create payload
   // and historically fell through to BAD_REQUEST (unlike addLineItem, where the
@@ -101,25 +101,25 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
 });
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "job:read", requestedSiteId: input.siteId }));
+  const scope = grant(await authorizeList(context.iam, { permission: "planning:read", requestedSiteId: input.siteId }));
   return orderService.list({ ...input, ...scopeFilter(scope) });
 });
 
 export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "order", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "planning:read", scope: { kind: "order", id: input.id } }));
 
   return unwrap(await orderService.get(input.id));
 });
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "order", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "planning:write", scope: { kind: "order", id: input.id } }));
 
   const { id, ...updateData } = input;
   return unwrap(await orderService.update(id, updateData));
 });
 
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:admin", scope: { kind: "order", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "planning:write", scope: { kind: "order", id: input.id } }));
 
   const result = await orderService.remove(input.id);
   if (result.error) throwServiceError(result);
@@ -127,7 +127,7 @@ export const remove = authRequired.input(idInputSchema).handler(async ({ input, 
 });
 
 export const transitionStatus = authRequired.input(transitionStatusInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "order", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "planning:write", scope: { kind: "order", id: input.id } }));
 
   return unwrap(
     await orderService.transitionStatus(input.id, input.status, {
@@ -139,7 +139,7 @@ export const transitionStatus = authRequired.input(transitionStatusInputSchema).
 });
 
 export const addLineItem = authRequired.input(addLineItemInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "order", id: input.orderId } }));
+  grant(await authorize(context.iam, { permission: "planning:write", scope: { kind: "order", id: input.orderId } }));
 
   const result = await orderService.addLineItem(input.orderId, {
     productId: input.productId,
@@ -149,14 +149,14 @@ export const addLineItem = authRequired.input(addLineItemInputSchema).handler(as
 });
 
 export const updateLineItem = authRequired.input(updateLineItemInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "orderLineItem", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "planning:write", scope: { kind: "orderLineItem", id: input.id } }));
 
   const { id, ...updateData } = input;
   return unwrap(await orderService.updateLineItem(id, updateData));
 });
 
 export const removeLineItem = authRequired.input(removeLineItemInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "orderLineItem", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "planning:write", scope: { kind: "orderLineItem", id: input.id } }));
 
   const result = await orderService.removeLineItem(input.id);
   if (result.error) throwServiceError(result);
@@ -164,7 +164,7 @@ export const removeLineItem = authRequired.input(removeLineItemInputSchema).hand
 });
 
 export const reorder = authRequired.input(reorderInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:write", scope: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "planning:write", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await orderService.reorder(input.siteId, input.orderedIds);
   if ("error" in result && result.error) throwServiceError(result);
@@ -172,7 +172,7 @@ export const reorder = authRequired.input(reorderInputSchema).handler(async ({ i
 });
 
 export const nextNumber = authRequired.input(nextNumberInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { permission: "planning:read", scope: { kind: "site", siteId: input.siteId } }));
 
   return orderService.getNextOrderNumber(input.siteId);
 });
