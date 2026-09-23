@@ -59,11 +59,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("permission enforcement (Tier 2)
   });
 });
 
-// Tier 2: during the vocabulary transition, seeded role rows carry BOTH key
-// sets, so both old and new permission checks pass against real data through
-// the fresh-DB-load path (loadPermissionSnapshot → hasPermission) that
-// requirePermission and /users/me use.
-describe.skipIf(!process.env.TEST_DATABASE_URL)("dual-vocabulary role data (Tier 2)", () => {
+// Tier 2: the eight-key catalog evaluated against real seeded role rows
+// through the fresh-DB-load path (loadPermissionSnapshot → hasPermission)
+// that requirePermission and /users/me use.
+describe.skipIf(!process.env.TEST_DATABASE_URL)("eight-key role data (Tier 2)", () => {
   let workspaceId: string;
   let siteId: string;
   let memberId: string;
@@ -100,8 +99,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("dual-vocabulary role data (Tier
     await prisma.site.deleteMany({ where: { id: siteId } });
   });
 
-  it("Plant Member satisfies old reads AND planning:read, but not production:read", async () => {
-    expect(await hasPermission(memberId, "status:read", { workspaceId, siteId })).toBe(true);
+  it("Plant Member holds planning:read only — production visibility is grant-based", async () => {
     expect(await hasPermission(memberId, "planning:read", { workspaceId, siteId })).toBe(true);
     // Target model: member production visibility comes from workcenter
     // grants, so the base tier deliberately lacks production:read.

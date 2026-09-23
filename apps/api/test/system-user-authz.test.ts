@@ -70,7 +70,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("system-role user authentication
     };
     expect(body.workspace).not.toBeNull();
     expect(body.sites.length).toBeGreaterThan(0);
-    expect(body.access.permissions).toContain("facility:read");
+    expect(body.access.permissions).toContain("production:read");
     expect(body.access.roles[0]?.name).toContain("ENGINEER");
   });
 

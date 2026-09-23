@@ -1,9 +1,9 @@
 // IAM — role-based access control for the User principal tier.
 //
-// Permissions are `resource:action` strings defined in code (permissions.ts).
-// Roles are DB rows owned by a Workspace, carrying an array of those strings.
-// A RoleAssignment links a WorkspaceMembership to a Role, optionally narrowed
-// to one Site.
+// Permissions are the eight responsibility keys defined in code
+// (permissions.ts), plus reserved owner:all. Roles are DB rows owned by a
+// Workspace, carrying an array of those strings. A RoleAssignment links a
+// WorkspaceMembership to a Role, optionally narrowed to one Site.
 //
 // See /Users/michaellindenau/.claude/plans/user-invites-are-not-parallel-abelson.md
 // for the full RFC.
@@ -44,7 +44,6 @@ export {
   type ReservedPermission,
   type Permission,
   type CustomerPermission,
-  type LegacyPermission,
   type PermissionDefinition,
   type PermissionContext,
   type AccessibleSites,

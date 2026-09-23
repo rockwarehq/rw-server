@@ -2,10 +2,12 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ALL_PERMISSIONS, CUSTOMER_PERMISSIONS, LEGACY_PERMISSION_RULES, isPermission } from "./permissions.js";
+import { CUSTOMER_PERMISSIONS, LEGACY_PERMISSION_CATALOG, LEGACY_PERMISSION_RULES } from "./permissions.js";
 
-// The expand migration embeds LEGACY_PERMISSION_RULES verbatim as JSON. These
-// tests keep the two copies identical and pin the semantics of the rules.
+// The (historical) expand migration embeds LEGACY_PERMISSION_RULES verbatim
+// as JSON. These tests keep the two copies identical and pin the semantics
+// the migration applied. The legacy vocabulary itself is retired — it
+// survives only as data inside the rules module.
 
 const MIGRATION_SQL = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -13,7 +15,8 @@ const MIGRATION_SQL = resolve(
 );
 
 const CUSTOMER_SET = new Set<string>(CUSTOMER_PERMISSIONS);
-const LEGACY_KEYS = ALL_PERMISSIONS.filter((p) => !CUSTOMER_SET.has(p) && p !== "owner:all");
+const LEGACY_KEYS = [...LEGACY_PERMISSION_CATALOG];
+const LEGACY_SET = new Set(LEGACY_KEYS);
 
 function rulesFromSql(): Array<{ permission: string; required: string[] }> {
   const sql = readFileSync(MIGRATION_SQL, "utf8");
@@ -47,10 +50,10 @@ describe("rule invariants", () => {
     expect(LEGACY_PERMISSION_RULES.map((r) => r.permission).sort()).toEqual([...CUSTOMER_PERMISSIONS].sort());
   });
 
-  it("required bundles contain only valid LEGACY keys, no duplicates", () => {
+  it("required bundles contain only retired LEGACY keys, no duplicates", () => {
     for (const rule of LEGACY_PERMISSION_RULES) {
       for (const p of rule.requiredPermissions) {
-        expect(isPermission(p), `${p} in ${rule.permission}`).toBe(true);
+        expect(LEGACY_SET.has(p), `${p} in ${rule.permission}`).toBe(true);
         expect(CUSTOMER_SET.has(p), `${p} must be legacy`).toBe(false);
         expect(p).not.toBe("owner:all");
       }

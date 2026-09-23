@@ -6,13 +6,13 @@ import { hasPermission } from "@rw/auth/iam/index";
  * Fastify preHandler that enforces a single RBAC permission.
  *
  * Usage — implicit workspace from the auth token:
- *   preHandler: [fastify.verifyAccessToken, requirePermission("user:read")]
+ *   preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin")]
  *
  * Usage — route URL carries `:workspaceId` or another param name:
- *   preHandler: [fastify.verifyAccessToken, requirePermission("settings:write", { workspaceParam: "id" })]
+ *   preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { workspaceParam: "id" })]
  *
  * Usage — workspace-level check that must ignore token site context:
- *   preHandler: [fastify.verifyAccessToken, requirePermission("user:read", { scope: "workspace" })]
+ *   preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { scope: "workspace" })]
  *
  * Returns:
  *   - 401 if the request is unauthenticated or has no workspace context.

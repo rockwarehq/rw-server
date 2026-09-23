@@ -79,14 +79,23 @@ export const list = authRequired.input(listInputSchema).handler(async ({ input, 
 The one sanctioned multi-site shape is `authorizeAccessibleSites` (site picker / directory surfaces). REST handlers use `replyPolicyDenial()` (`apps/api/src/api/authz.ts`) instead of `grant()`:
 
 ```ts
-const scope = await authorizeAccessibleSites(request.iam, { permission: "facility:read" });
+const scope = await authorizeAccessibleSites(request.iam, {}); // membership visibility
 if (!scope.ok) return replyPolicyDenial(reply, scope);
 return site.list({ ...request.query, workspaceId: scope.workspaceId, siteIds: scope.siteIds });
 ```
 
 ## Permission model
 
-Permissions are `resource:action` over 13 resources (`facility`, `schedule`, `job`, `status`, `tool`, `product`, `dashboard`, `entity`, `graph`, `user`, `employee`, `billing`, `settings`) × three actions (`read`, `write`, `admin`), plus the reserved `owner:all`.
+The catalog is eight responsibility-based keys plus one reserved marker:
+
+| Responsibility | Keys |
+| --- | --- |
+| Production (live floor work, inventory, shared references) | `production:read`, `production:write`, `production:admin` |
+| Planning (orders, customers, scheduling) | `planning:read`, `planning:write` |
+| Technical setup (equipment, data models, integrations) | `configuration:read`, `configuration:write` |
+| People/access and plant administration | `plant:admin` |
+
+Write implies read, and `production:admin` implies write (closed over by `expandPermissions`). `plant:admin` and the reserved `owner:all` are independent capabilities, not wildcards. Workcenter grants confer `production:read`/`production:write` at their own workcenter only.
 
 The **catalog is hardcoded** — it is the type-safe contract the whole codebase compiles against. **Roles and assignments live in the DB** (workspace-owned bundles of permissions, assignable workspace-wide or per site). Rockware-staff permissions (`SUPPORT`, `ENGINEER`) live in `SYSTEM_ROLE_PERMISSIONS` in code, so customer data can never influence them.
 

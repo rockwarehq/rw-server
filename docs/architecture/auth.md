@@ -43,7 +43,7 @@ Opaque `rw_app_`-prefixed tokens for customer integrations: SHA-256 hash lookup 
 
 ## RBAC
 
-- Permissions are `resource:action` strings (e.g. `facility:write`, `cycle:create`); the catalog lives in code (`packages/auth/src/iam/`), not the database.
+- Permissions are eight responsibility keys (`production:read|write|admin`, `planning:read|write`, `configuration:read|write`, `plant:admin`) plus reserved `owner:all`; the catalog lives in code (`packages/auth/src/iam/`), not the database. Write implies read; `production:admin` implies write.
 - `Role` rows (schema: `packages/db/schema/iam.prisma`) are WORKSPACE- or SITE-scoped with a `permissions: String[]`; `RoleAssignment` links a `WorkspaceMembership` to a role, optionally narrowed to one site.
 - `SystemRole` (SUPPORT, ENGINEER) marks internal staff without workspace membership.
 - Enforcement is two-tier: oRPC middleware asserts a valid principal type; handlers call `hasPermission(userId, permission, { workspaceId, siteId? })` before mutating.
