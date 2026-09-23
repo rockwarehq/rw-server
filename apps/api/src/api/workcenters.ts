@@ -2,8 +2,6 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { workcenter } from "@rw/services/facility/index";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
-import { replyPolicyDenial } from "./authz.js";
 
 // ============================================================================
 // Schemas
@@ -184,11 +182,7 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        permission: "configuration:write",
-        scope: { kind: "site", siteId: request.body.siteId },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("ADMIN", { site: request.body.siteId });
 
       const result = await workcenter.create(request.body);
       if ("error" in result && typeof result.error === "string") {
@@ -214,18 +208,11 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
         403: errorSchema,
       },
     },
-    handler: async (request, reply) => {
-      const production = await authorizeList(request.iam, {
-        permission: "production:read",
-        requestedSiteId: request.query.siteId,
-      });
-      // Shared reference read: production OR planning visibility both qualify.
-      const scope = production.ok
-        ? production
-        : await authorizeList(request.iam, { permission: "planning:read", requestedSiteId: request.query.siteId });
-      if (!scope.ok) return replyPolicyDenial(reply, scope);
+    handler: async (request, _reply) => {
+      // The workcenter directory is a plant thing: every member may read it.
+      const scope = request.access.list("VIEW", request.query.siteId);
 
-      return workcenter.list({ ...request.query, ...scopeFilter(scope) });
+      return workcenter.list({ ...request.query, ...scope });
     },
   });
 
@@ -246,21 +233,10 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const production = await authorize(request.iam, {
-        permission: "production:read",
-        scope: { kind: "workcenter", id: request.params.id },
-      });
-      // Shared reference read: production OR planning visibility both qualify.
-      const auth = production.ok
-        ? production
-        : await authorize(request.iam, {
-            permission: "planning:read",
-            scope: { kind: "workcenter", id: request.params.id },
-          });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("VIEW", { workcenter: request.params.id });
 
-      const result = await workcenter.getById(request.params.id, auth.workspaceId);
-      if (!result || "error" in result) {
+      const result = await workcenter.getById(request.params.id);
+      if (!result) {
         return reply.status(404).send({ error: "Workcenter not found" });
       }
       return result.data;
@@ -287,13 +263,9 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        permission: "configuration:write",
-        scope: { kind: "workcenter", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("ADMIN", { workcenter: request.params.id });
 
-      const result = await workcenter.update(request.params.id, request.body, auth.workspaceId);
+      const result = await workcenter.update(request.params.id, request.body);
       if ("error" in result && typeof result.error === "string") {
         const status = getStatusForCode(result.code ?? "UNKNOWN");
         return reply.status(status).send({ error: result.error });
@@ -322,13 +294,9 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        permission: "configuration:write",
-        scope: { kind: "workcenter", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("ADMIN", { workcenter: request.params.id });
 
-      const result = await workcenter.move(request.params.id, request.body.parentId, auth.workspaceId);
+      const result = await workcenter.move(request.params.id, request.body.parentId);
       if ("error" in result && typeof result.error === "string") {
         const status = getStatusForCode(result.code ?? "UNKNOWN");
         return reply.status(status).send({ error: result.error });
@@ -356,13 +324,9 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        permission: "configuration:write",
-        scope: { kind: "workcenter", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("ADMIN", { workcenter: request.params.id });
 
-      const result = await workcenter.remove(request.params.id, auth.workspaceId);
+      const result = await workcenter.remove(request.params.id);
       if ("error" in result && typeof result.error === "string") {
         const status = getStatusForCode(result.code ?? "UNKNOWN");
         return reply.status(status).send({ error: result.error });

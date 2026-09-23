@@ -1,4 +1,5 @@
-import type { AppIAMContext, DisplayIAMContext, IAMContext, UserIAMContext } from "@rw/auth/context";
+import type { Access } from "@rw/auth/iam/access";
+import type { Current } from "@rw/auth/context";
 
 export interface RPCRequest {
   headers: {
@@ -9,26 +10,14 @@ export interface RPCRequest {
 // Base context provided to all procedures
 export interface RPCContext {
   request: RPCRequest;
-  iam?: IAMContext;
+  /** Who is calling; null when anonymous. */
+  current: Current | null;
+  /** May the caller do this? Throws AccessDenied when not. */
+  access: Access;
 }
 
-// Context after user auth middleware runs
-export interface UserAuthenticatedRPCContext extends RPCContext {
-  iam: UserIAMContext;
-}
-
-// Context after display auth middleware runs
-export interface DisplayAuthenticatedRPCContext extends RPCContext {
-  iam: DisplayIAMContext;
-}
-
-// Context after any principal auth middleware runs
-export interface PrincipalAuthenticatedRPCContext extends RPCContext {
-  iam: UserIAMContext | DisplayIAMContext;
-}
-
-// Context after graph-read auth middleware runs: the only surface that also
-// admits APP (customer API token) principals, read-only and site-scoped.
-export interface GraphReadRPCContext extends RPCContext {
-  iam: UserIAMContext | DisplayIAMContext | AppIAMContext;
-}
+/** Context once a middleware has admitted only these kinds of caller. */
+export type CallerContext<K extends Current["kind"]> = RPCContext & {
+  current: Extract<Current, { kind: K }>;
+  access: Extract<Current, { kind: K }>["access"];
+};

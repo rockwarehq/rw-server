@@ -1,9 +1,8 @@
 import type { JSONSchema } from "json-schema-to-ts";
+import { currentUser } from "./authz.js";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { site } from "@rw/services/facility/index";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
-import { authorize, authorizeAccessibleSites } from "@rw/auth/iam/policy";
-import { replyPolicyDenial } from "./authz.js";
 
 // ============================================================================
 // Schemas
@@ -204,10 +203,9 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { permission: "configuration:write", scope: { kind: "workspace" } });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      request.access.requireAccountAdmin();
 
-      const result = await site.create({ ...request.body, workspaceId: auth.workspaceId });
+      const result = await site.create({ ...request.body, workspaceId: currentUser(request).workspaceId });
       if ("error" in result && typeof result.error === "string") {
         return reply.status(400).send({ error: result.error });
       }
@@ -229,11 +227,13 @@ export default async function sites(fastify: FastifyTypedInstance) {
         401: errorSchema,
       },
     },
-    handler: async (request, reply) => {
-      const scope = await authorizeAccessibleSites(request.iam, {});
-      if (!scope.ok) return replyPolicyDenial(reply, scope);
-
-      return site.list({ ...request.query, workspaceId: scope.workspaceId, siteIds: scope.siteIds });
+    handler: async (request, _reply) => {
+      const sites = request.access.sites();
+      return site.list({
+        ...request.query,
+        workspaceId: currentUser(request).workspaceId,
+        siteIds: sites === "all" ? undefined : sites,
+      });
     },
   });
 
@@ -250,11 +250,9 @@ export default async function sites(fastify: FastifyTypedInstance) {
         401: errorSchema,
       },
     },
-    handler: async (request, reply) => {
-      const scope = await authorizeAccessibleSites(request.iam, {});
-      if (!scope.ok) return replyPolicyDenial(reply, scope);
-
-      return site.getTree(scope.workspaceId, scope.siteIds);
+    handler: async (request, _reply) => {
+      const sites = request.access.sites();
+      return site.getTree(currentUser(request).workspaceId, sites === "all" ? undefined : sites);
     },
   });
 
@@ -275,21 +273,10 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const production = await authorize(request.iam, {
-        permission: "production:read",
-        scope: { kind: "site", siteId: request.params.id },
-      });
-      // Shared reference read: production OR planning visibility both qualify.
-      const auth = production.ok
-        ? production
-        : await authorize(request.iam, {
-            permission: "planning:read",
-            scope: { kind: "site", siteId: request.params.id },
-          });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("VIEW", { site: request.params.id });
 
-      const result = await site.getById(request.params.id, auth.workspaceId);
-      if (!result || "error" in result) {
+      const result = await site.getById(request.params.id);
+      if (!result) {
         return reply.status(404).send({ error: "Site not found" });
       }
       return result.data;
@@ -316,13 +303,9 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        permission: "configuration:write",
-        scope: { kind: "site", siteId: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("ADMIN", { site: request.params.id });
 
-      const result = await site.update(request.params.id, request.body, auth.workspaceId);
+      const result = await site.update(request.params.id, request.body);
       if ("error" in result) {
         const status = getStatusForCode(result.code ?? "UNKNOWN");
         return reply.status(status).send({ error: result.error });
@@ -350,13 +333,10 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        permission: "configuration:write",
-        scope: { kind: "site", siteId: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      // Sites are account-level: only the owner adds or removes them.
+      request.access.requireAccountAdmin();
 
-      const result = await site.remove(request.params.id, auth.workspaceId);
+      const result = await site.remove(request.params.id);
       if ("error" in result) {
         const status = getStatusForCode(result.code ?? "UNKNOWN");
         return reply.status(status).send({ error: result.error });

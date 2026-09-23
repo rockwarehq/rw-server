@@ -1,28 +1,27 @@
 import prisma from "@rw/db";
 import { securityConfig } from "../../../config.js";
-import { hasOwnerPermission, hasPermission, OWNER_PERMISSION } from "@rw/auth/iam/index";
+import type { Level as BucketLevel, UserAccess } from "@rw/auth/iam/access";
 import { hashPassword } from "@rw/auth/password";
 import { sendInviteEmail } from "@rw/services/email/index";
 import { logEvent } from "@rw/services/audit/index";
 import { generateStrongPassword } from "./password.js";
+import { adminAt, checkBuckets, writeAccesses } from "../workspace/members.js";
 
 export interface CreateInviteInput {
   email: string;
   inviterId: string;
+  /** The inviter's access: ADMIN at each granted plant, account admin to invite account admins. */
+  actor: UserAccess;
   workspaceId: string;
   context?: InviteContext;
   /**
-   * Role id to assign to new invitees. New invites (and adoptions of
-   * orphaned pending users) need a roleId, workcenterGrants, or both;
-   * resending an existing pending invite needs neither. Workspace roles
-   * assign at workspace scope; site roles assign to `siteId` or the
-   * caller's site fallback.
+   * Bucket accesses for new invitees (and adoptions of orphaned pending
+   * users, and re-invites of removed ones). New invites need bucketAccesses
+   * or asAccountAdmin; resending an existing pending invite needs neither.
    */
-  roleId?: string;
-  siteId?: string;
-  fallbackSiteId?: string;
-  /** Workcenter grants to create for the invitee (GitHub-collaborator style). */
-  workcenterGrants?: Array<{ workcenterId: string; access: "READ" | "WRITE" }>;
+  bucketAccesses?: Array<{ bucketId: string; level: BucketLevel }>;
+  /** Invite as an account admin — only an account admin may do this. */
+  asAccountAdmin?: boolean;
   firstName?: string;
   lastName?: string;
   /** Validated http(s) origin of the inviting client, used in the email link. */
@@ -50,161 +49,48 @@ export interface InviteContext {
   userAgent?: string;
 }
 
-interface InviteAssignment {
-  roleId: string;
-  siteId: string | null;
-  scope: "WORKSPACE" | "SITE";
-  isOwner: boolean;
+interface ResolvedInviteAccess {
+  accesses: Array<{ bucketId: string; level: BucketLevel; siteId: string | null }>;
+  asAccountAdmin: boolean;
 }
 
-interface InviteGrant {
-  workcenterId: string;
-  siteId: string;
-  access: "READ" | "WRITE";
-}
-
-interface InviteAccess {
-  assignment: InviteAssignment | null;
-  grants: InviteGrant[];
-}
-
-/** Resolve and validate the invite's access: a role, workcenter grants, or both. */
+/** Resolve and validate the invite's access: bucket accesses, account admin, or both. */
 async function resolveInviteAccess(input: {
-  workspaceId: string;
-  roleId?: string;
-  siteId?: string;
-  fallbackSiteId?: string;
-  workcenterGrants?: Array<{ workcenterId: string; access: "READ" | "WRITE" }>;
-}): Promise<{ ok: true; access: InviteAccess } | { ok: false; error: string }> {
-  const grantInputs = input.workcenterGrants ?? [];
-  if (!input.roleId && grantInputs.length === 0) {
-    return { ok: false, error: "roleId or workcenterGrants is required" };
+  bucketAccesses?: Array<{ bucketId: string; level: BucketLevel }>;
+  asAccountAdmin?: boolean;
+}): Promise<{ ok: true; access: ResolvedInviteAccess } | { ok: false; error: string }> {
+  const wanted = input.bucketAccesses ?? [];
+  if (wanted.length === 0 && !input.asAccountAdmin) {
+    return { ok: false, error: "bucketAccesses or asAccountAdmin is required" };
   }
-
-  let assignment: InviteAssignment | null = null;
-  if (input.roleId) {
-    const resolved = await resolveInviteAssignment(input);
-    if (!resolved.ok) return resolved;
-    assignment = resolved.assignment;
-  }
-
-  const grants: InviteGrant[] = [];
-  for (const grantInput of grantInputs) {
-    const workcenter = await prisma.workcenter.findUnique({
-      where: { id: grantInput.workcenterId },
-      select: { id: true, site: { select: { id: true, workspaceId: true } } },
-    });
-    if (!workcenter) return { ok: false, error: "Workcenter not found" };
-    if (workcenter.site.workspaceId !== input.workspaceId) {
-      return { ok: false, error: "Workcenter does not belong to this workspace" };
-    }
-    grants.push({ workcenterId: workcenter.id, siteId: workcenter.site.id, access: grantInput.access });
-  }
-
-  return { ok: true, access: { assignment, grants } };
+  const check = await checkBuckets(
+    wanted.map((a) => a.bucketId),
+    wanted,
+  );
+  if (!check.ok) return { ok: false, error: check.error };
+  const accesses = wanted.map((a) => ({ ...a, siteId: check.buckets.get(a.bucketId)?.siteId ?? null }));
+  return { ok: true, access: { accesses, asAccountAdmin: input.asAccountAdmin === true } };
 }
 
-async function resolveInviteAssignment(input: {
-  workspaceId: string;
-  roleId?: string;
-  siteId?: string;
-  fallbackSiteId?: string;
-}): Promise<{ ok: true; assignment: InviteAssignment } | { ok: false; error: string }> {
-  if (!input.roleId) {
-    return { ok: false, error: "roleId is required" };
-  }
-
-  const role = await prisma.role.findUnique({
-    where: { id: input.roleId },
-    select: { id: true, name: true, scope: true, workspaceId: true, isSystem: true, permissions: true },
-  });
-  if (!role) return { ok: false, error: "Role not found" };
-  if (role.workspaceId !== input.workspaceId) {
-    return { ok: false, error: "Role does not belong to this workspace" };
-  }
-
-  const isOwner = hasOwnerPermission(role.permissions);
-  if (isOwner && (!role.isSystem || role.scope !== "WORKSPACE")) {
-    return { ok: false, error: `${OWNER_PERMISSION} is reserved for workspace system roles` };
-  }
-
-  if (role.scope === "WORKSPACE") {
-    if (input.siteId) {
-      return { ok: false, error: "siteId cannot be used with a workspace-scoped role" };
-    }
-    return { ok: true, assignment: { roleId: role.id, siteId: null, scope: "WORKSPACE", isOwner } };
-  }
-
-  const siteId = input.siteId ?? input.fallbackSiteId;
-  if (!siteId) {
-    return { ok: false, error: "siteId is required for site-scoped invite roles" };
-  }
-
-  const site = await prisma.site.findUnique({
-    where: { id: siteId },
-    select: { workspaceId: true },
-  });
-  if (!site) return { ok: false, error: "Site not found" };
-  if (site.workspaceId !== input.workspaceId) {
-    return { ok: false, error: "Site does not belong to this workspace" };
-  }
-
-  return { ok: true, assignment: { roleId: role.id, siteId, scope: "SITE", isOwner: false } };
+/** Making account admins is an account admin's alone; buckets need ADMIN at their plant. */
+function canInviteAccess(actor: UserAccess, access: ResolvedInviteAccess): boolean {
+  if (access.asAccountAdmin && !actor.person.accountAdmin) return false;
+  return access.accesses.every((a) => adminAt(actor, a.siteId));
 }
 
-async function canInviteAssignment(inviterId: string, workspaceId: string, assignment: InviteAssignment) {
-  if (assignment.isOwner) {
-    return hasPermission(inviterId, OWNER_PERMISSION, { workspaceId });
-  }
-
-  return hasPermission(inviterId, "plant:admin", {
-    workspaceId,
-    ...(assignment.siteId ? { siteId: assignment.siteId } : {}),
-  });
-}
-
-async function canInviteAccess(inviterId: string, workspaceId: string, access: InviteAccess): Promise<boolean> {
-  if (access.assignment && !(await canInviteAssignment(inviterId, workspaceId, access.assignment))) {
-    return false;
-  }
-  // Every granted workcenter's site needs the inviter to hold user:write.
-  for (const grantRow of access.grants) {
-    const ok = await hasPermission(inviterId, "plant:admin", { workspaceId, siteId: grantRow.siteId });
-    if (!ok) return false;
-  }
-  return true;
-}
-
-type ExistingAssignment = { siteId: string | null; role: { permissions: string[] } };
-
-async function canManagePendingInvite(
-  actorId: string,
-  workspaceId: string,
-  assignments: ExistingAssignment[],
-  grantSiteIds: string[] = [],
-): Promise<boolean> {
-  if (assignments.length === 0 && grantSiteIds.length === 0) {
-    // Orphaned invite with no role context - require workspace-level rights
-    return hasPermission(actorId, "plant:admin", { workspaceId });
-  }
-
-  if (assignments.some((assignment) => hasOwnerPermission(assignment.role.permissions))) {
-    return hasPermission(actorId, OWNER_PERMISSION, { workspaceId });
-  }
-
-  for (const assignment of assignments) {
-    const ok = await hasPermission(actorId, "plant:admin", {
-      workspaceId,
-      ...(assignment.siteId ? { siteId: assignment.siteId } : {}),
-    });
-    if (ok) return true;
-  }
-  for (const siteId of grantSiteIds) {
-    const ok = await hasPermission(actorId, "plant:admin", { workspaceId, siteId });
-    if (ok) return true;
-  }
-
-  return false;
+/**
+ * Resend/revoke authority: ADMIN at any site the pending member has access
+ * at; pending account admins are managed by account admins only.
+ */
+function canManagePendingInvite(
+  actor: UserAccess,
+  target: { isAccountAdmin: boolean; accessSiteIds: Array<string | null> },
+): boolean {
+  if (target.isAccountAdmin) return actor.person.accountAdmin;
+  const siteIds = target.accessSiteIds.filter((s): s is string => s !== null);
+  // Orphaned invite with no access context — plant admins may clean up.
+  if (siteIds.length === 0) return actor.canSomewhere("ADMIN");
+  return siteIds.some((siteId) => adminAt(actor, siteId));
 }
 
 async function inviteEmailContext(inviterId: string, workspaceId: string) {
@@ -212,7 +98,6 @@ async function inviteEmailContext(inviterId: string, workspaceId: string) {
     prisma.user.findUnique({ where: { id: inviterId }, select: { firstName: true, lastName: true } }),
     prisma.workspace.findUnique({ where: { id: workspaceId }, select: { name: true } }),
   ]);
-
   return {
     inviterName: inviter ? [inviter.firstName, inviter.lastName].filter(Boolean).join(" ") || undefined : undefined,
     workspaceName: workspace?.name,
@@ -236,9 +121,6 @@ export async function createInvite(
   if (existingUser?.status === "ACTIVE") {
     return { success: false, error: "User with this email already exists" };
   }
-  if (existingUser?.status === "DISABLED") {
-    return { success: false, error: "User is disabled" };
-  }
 
   const temporaryPassword = generateStrongPassword();
   const passwordHash = await hashPassword(temporaryPassword);
@@ -259,46 +141,35 @@ export async function createInvite(
 
   let user: { id: string; email: string; status: string; firstName: string | null; lastName: string | null };
   let mode: "resent" | "adopted" | "new";
-  let auditAssignment: {
-    roleId?: string;
-    siteId?: string | null;
-    workcenterGrants?: Array<{ workcenterId: string; access: string }>;
+  let auditAccess: {
+    asAccountAdmin?: boolean;
+    bucketAccesses?: Array<{ bucketId: string; level: string }>;
   } = {};
 
-  const auditFromAccess = (access: InviteAccess): typeof auditAssignment => ({
-    ...(access.assignment ? { roleId: access.assignment.roleId, siteId: access.assignment.siteId } : {}),
-    ...(access.grants.length
-      ? { workcenterGrants: access.grants.map((g) => ({ workcenterId: g.workcenterId, access: g.access })) }
+  const auditFromAccess = (access: ResolvedInviteAccess): typeof auditAccess => ({
+    ...(access.asAccountAdmin ? { asAccountAdmin: true } : {}),
+    ...(access.accesses.length
+      ? { bucketAccesses: access.accesses.map((a) => ({ bucketId: a.bucketId, level: a.level })) }
       : {}),
   });
 
   if (existingUser) {
-    // PENDING user - either a straight resend or adoption of an orphan
-    // (missing membership, or zero role assignments AND zero workcenter
-    // grants - the states the old flow left permanently uninvitable).
-    const membership = await prisma.workspaceMembership.findUnique({
-      where: { userId_workspaceId: { userId: existingUser.id, workspaceId } },
-      select: {
-        id: true,
-        roleAssignments: {
-          select: { siteId: true, role: { select: { permissions: true } } },
-        },
-        workcenterGrants: {
-          select: { workcenter: { select: { siteId: true } } },
-        },
-      },
+    // PENDING or removed (DISABLED) user — either a straight resend, or an
+    // adoption: a removed person coming back, or a pending one with no
+    // access at all (the states the old flow left uninvitable).
+    const held = await prisma.bucketAccess.findMany({
+      where: { userId: existingUser.id },
+      select: { bucket: { select: { siteId: true } } },
     });
 
-    if (membership && (membership.roleAssignments.length > 0 || membership.workcenterGrants.length > 0)) {
+    if (existingUser.status === "PENDING" && (held.length > 0 || existingUser.isAccountAdmin)) {
       mode = "resent";
-      // Resend refreshes invite delivery only. Role/membership changes are
-      // explicit member-management actions and are not hidden in resend.
-      const canResend = await canManagePendingInvite(
-        inviterId,
-        workspaceId,
-        membership.roleAssignments,
-        membership.workcenterGrants.map((g) => g.workcenter.siteId),
-      );
+      // Resend refreshes invite delivery only. Access changes are explicit
+      // member-management actions and are not hidden in resend.
+      const canResend = canManagePendingInvite(input.actor, {
+        isAccountAdmin: existingUser.isAccountAdmin,
+        accessSiteIds: held.map((a) => a.bucket.siteId),
+      });
       if (!canResend) {
         return { success: false, error: "Forbidden" };
       }
@@ -321,51 +192,25 @@ export async function createInvite(
       }
       const access = resolveResult.access;
 
-      if (!(await canInviteAccess(inviterId, workspaceId, access))) {
+      if (!canInviteAccess(input.actor, access)) {
         return { success: false, error: "Forbidden" };
       }
-      auditAssignment = auditFromAccess(access);
+      auditAccess = auditFromAccess(access);
 
       try {
         user = await prisma.$transaction(async (tx) => {
+          // A removed person comes back as a fresh invitee.
           const updated = await tx.user.update({
             where: { id: existingUser.id },
-            data: inviteCredentialData,
+            data: {
+              ...inviteCredentialData,
+              status: "PENDING",
+              ...(access.asAccountAdmin ? { isAccountAdmin: true } : {}),
+            },
             select: { id: true, email: true, status: true, firstName: true, lastName: true },
           });
 
-          const adoptedMembership = await tx.workspaceMembership.upsert({
-            where: { userId_workspaceId: { userId: existingUser.id, workspaceId } },
-            update: {},
-            create: { workspaceId, userId: existingUser.id },
-            select: { id: true },
-          });
-
-          if (access.assignment) {
-            await tx.roleAssignment.create({
-              data: {
-                membershipId: adoptedMembership.id,
-                roleId: access.assignment.roleId,
-                siteId: access.assignment.siteId,
-              },
-            });
-          }
-          for (const grantRow of access.grants) {
-            await tx.workcenterGrant.upsert({
-              where: {
-                membershipId_workcenterId: {
-                  membershipId: adoptedMembership.id,
-                  workcenterId: grantRow.workcenterId,
-                },
-              },
-              update: { access: grantRow.access },
-              create: {
-                membershipId: adoptedMembership.id,
-                workcenterId: grantRow.workcenterId,
-                access: grantRow.access,
-              },
-            });
-          }
+          await writeAccesses(tx, existingUser.id, access.accesses);
 
           return updated;
         });
@@ -382,10 +227,10 @@ export async function createInvite(
     }
     const access = resolveResult.access;
 
-    if (!(await canInviteAccess(inviterId, workspaceId, access))) {
+    if (!canInviteAccess(input.actor, access)) {
       return { success: false, error: "Forbidden" };
     }
-    auditAssignment = auditFromAccess(access);
+    auditAccess = auditFromAccess(access);
 
     try {
       user = await prisma.$transaction(async (tx) => {
@@ -393,30 +238,13 @@ export async function createInvite(
           data: {
             email: normalizedEmail,
             status: "PENDING",
+            isAccountAdmin: access.asAccountAdmin,
             ...inviteCredentialData,
           },
           select: { id: true, email: true, status: true, firstName: true, lastName: true },
         });
 
-        const membership = await tx.workspaceMembership.create({
-          data: { workspaceId, userId: createdUser.id },
-          select: { id: true },
-        });
-
-        if (access.assignment) {
-          await tx.roleAssignment.create({
-            data: { membershipId: membership.id, roleId: access.assignment.roleId, siteId: access.assignment.siteId },
-          });
-        }
-        if (access.grants.length) {
-          await tx.workcenterGrant.createMany({
-            data: access.grants.map((grantRow) => ({
-              membershipId: membership.id,
-              workcenterId: grantRow.workcenterId,
-              access: grantRow.access,
-            })),
-          });
-        }
+        await writeAccesses(tx, createdUser.id, access.accesses);
 
         return createdUser;
       });
@@ -447,7 +275,7 @@ export async function createInvite(
     metadata: {
       mode,
       emailSent: emailResult.success,
-      ...auditAssignment,
+      ...auditAccess,
     },
   });
 
@@ -467,6 +295,7 @@ export type RevokeInviteError = "USER_NOT_FOUND" | "NOT_PENDING" | "SELF_REVOKE"
 export async function revokeInvite(input: {
   targetUserId: string;
   actorId: string;
+  actor: UserAccess;
   workspaceId: string;
   context?: InviteContext;
 }): Promise<{ success: true } | { success: false; error: RevokeInviteError }> {
@@ -483,24 +312,12 @@ export async function revokeInvite(input: {
       email: true,
       status: true,
       systemRole: true,
-      memberships: {
-        where: { workspaceId },
-        select: {
-          id: true,
-          roleAssignments: {
-            select: { siteId: true, role: { select: { permissions: true } } },
-          },
-          workcenterGrants: {
-            select: { workcenter: { select: { siteId: true } } },
-          },
-        },
-      },
+      isAccountAdmin: true,
+      bucketAccesses: { select: { bucket: { select: { siteId: true } } } },
     },
   });
 
-  // Unknown user and no-membership-here look the same, so one workspace
-  // cannot enumerate or delete another workspace's invites.
-  if (!target || target.memberships.length === 0) {
+  if (!target) {
     return { success: false, error: "USER_NOT_FOUND" };
   }
 
@@ -512,17 +329,15 @@ export async function revokeInvite(input: {
     return { success: false, error: "NOT_PENDING" };
   }
 
-  const canRevoke = await canManagePendingInvite(
-    actorId,
-    workspaceId,
-    target.memberships[0].roleAssignments,
-    target.memberships[0].workcenterGrants.map((g) => g.workcenter.siteId),
-  );
+  const canRevoke = canManagePendingInvite(input.actor, {
+    isAccountAdmin: target.isAccountAdmin,
+    accessSiteIds: target.bucketAccesses.map((a) => a.bucket.siteId),
+  });
   if (!canRevoke) {
     return { success: false, error: "FORBIDDEN" };
   }
 
-  // Memberships, role assignments, and refresh tokens all cascade
+  // Bucket accesses and refresh tokens cascade
   await prisma.user.delete({ where: { id: target.id } });
 
   await logEvent({

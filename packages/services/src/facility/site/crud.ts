@@ -37,6 +37,8 @@ export async function create(input: CreateSiteInput) {
       description,
       attrs: attrs ?? {},
       workspaceId,
+      // The plant's access container is born with the plant.
+      buckets: { create: { workspaceId, kind: "PLANT", name } },
     },
     include: {
       _count: {
@@ -109,7 +111,7 @@ export async function list(filter: ListSitesFilter = {}) {
 /**
  * Get site by ID with related entities
  */
-export async function getById(id: string, workspaceId?: string) {
+export async function getById(id: string) {
   const site = await prisma.site.findUnique({
     where: { id },
     include: {
@@ -151,33 +153,23 @@ export async function getById(id: string, workspaceId?: string) {
     return null;
   }
 
-  // Validate workspace access
-  if (workspaceId && site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
-  }
-
   return { data: site };
 }
 
 /**
  * Update site
  */
-export async function update(id: string, input: UpdateSiteInput, workspaceId?: string) {
+export async function update(id: string, input: UpdateSiteInput) {
   const { name, description, timezone, attrs } = input;
 
   // Get current site
   const current = await prisma.site.findUnique({
     where: { id },
-    select: { id: true, workspaceId: true, attrs: true },
+    select: { id: true, attrs: true },
   });
 
   if (!current) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
-  }
-
-  // Validate workspace access
-  if (workspaceId && current.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   const updateData: Record<string, unknown> = {};
@@ -197,7 +189,11 @@ export async function update(id: string, input: UpdateSiteInput, workspaceId?: s
 
   const site = await prisma.site.update({
     where: { id },
-    data: updateData,
+    data: {
+      ...updateData,
+      // The plant bucket carries the site's name.
+      ...(name !== undefined ? { buckets: { updateMany: { where: { kind: "PLANT" }, data: { name } } } } : {}),
+    },
     include: {
       _count: {
         select: { workcenters: true, gateways: true, datasources: true },
@@ -220,7 +216,7 @@ export async function update(id: string, input: UpdateSiteInput, workspaceId?: s
 /**
  * Delete site (fails if has workcenters, gateways, or datasources)
  */
-export async function remove(id: string, workspaceId?: string) {
+export async function remove(id: string) {
   const site = await prisma.site.findUnique({
     where: { id },
     include: {
@@ -230,11 +226,6 @@ export async function remove(id: string, workspaceId?: string) {
 
   if (!site) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
-  }
-
-  // Validate workspace access
-  if (workspaceId && site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   if (site._count.workcenters > 0) {
@@ -334,8 +325,7 @@ async function buildSiteWorkcenterTree(siteId: string) {
 /**
  * Get tree for a single site (Site -> Workcenter -> Station)
  */
-export async function getSiteTree(siteId: string, workspaceId?: string) {
-  // Get site and validate access
+export async function getSiteTree(siteId: string) {
   const site = await prisma.site.findUnique({
     where: { id: siteId },
     select: {
@@ -343,7 +333,6 @@ export async function getSiteTree(siteId: string, workspaceId?: string) {
       name: true,
       description: true,
       attrs: true,
-      workspaceId: true,
       createdAt: true,
       updatedAt: true,
     },
@@ -351,11 +340,6 @@ export async function getSiteTree(siteId: string, workspaceId?: string) {
 
   if (!site) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
-  }
-
-  // Validate workspace access
-  if (workspaceId && site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   const workcenters = await buildSiteWorkcenterTree(siteId);
@@ -438,20 +422,14 @@ export async function getTree(workspaceId: string, siteIds?: string[]) {
  * Get device tree for a site (Gateway -> Datasources)
  * Returns all gateways with their assigned datasources (all statuses)
  */
-export async function getDeviceTree(siteId: string, workspaceId?: string) {
-  // Get site and validate access
+export async function getDeviceTree(siteId: string) {
   const site = await prisma.site.findUnique({
     where: { id: siteId },
-    select: { id: true, workspaceId: true },
+    select: { id: true },
   });
 
   if (!site) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
-  }
-
-  // Validate workspace access
-  if (workspaceId && site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   // Get all gateways for this site with their datasources

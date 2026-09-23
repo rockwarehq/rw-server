@@ -1,7 +1,5 @@
 import { z } from "zod";
-import { authRequired, userOrDisplayRequired } from "./middleware.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { userRequired, userOrDisplayRequired } from "./middleware.js";
 import {
   material,
   inventory,
@@ -103,21 +101,17 @@ const materialListInputSchema = z.object({
 /**
  * List inventory items with optional filters
  */
-export const inventoryList = authRequired.input(inventoryListInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
-  );
+export const inventoryList = userRequired.input(inventoryListInputSchema).handler(async ({ input, context }) => {
+  const scope = context.access.list("VIEW", input.siteId, "WORKCENTER");
 
-  return inventory.list({ ...input, ...scopeFilter(scope) });
+  return inventory.list({ ...input, ...scope });
 });
 
 /**
  * Get inventory item by ID
  */
-export const inventoryGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:read", scope: { kind: "inventoryItem", id: input.id } }),
-  );
+export const inventoryGet = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { inventoryItem: input.id });
 
   return unwrap(await inventory.getById(input.id), { notFoundMessage: "Inventory item not found" });
 });
@@ -125,8 +119,8 @@ export const inventoryGet = authRequired.input(idInputSchema).handler(async ({ i
 /**
  * Get all inventory items from a specific cycle
  */
-export const inventoryGetByCycle = authRequired.input(cycleIdInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "cycle", id: input.cycleId } }));
+export const inventoryGetByCycle = userRequired.input(cycleIdInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { cycle: input.cycleId });
 
   return unwrap(await inventory.getByCycle(input.cycleId));
 });
@@ -135,8 +129,8 @@ export const inventoryGetByCycle = authRequired.input(cycleIdInputSchema).handle
  * Per-product on-hand stock summary (produced/scrapped/consumed/available)
  * plus open-order demand and covered demand.
  */
-export const productStock = authRequired.input(productStockInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "site", siteId: input.siteId } }));
+export const productStock = userRequired.input(productStockInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { site: input.siteId });
 
   return getProductStockSummary(input.siteId, input.productIds);
 });
@@ -148,10 +142,8 @@ export const productStock = authRequired.input(productStockInputSchema).handler(
 /**
  * Create a new material
  */
-export const materialCreate = authRequired.input(materialCreateInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:write", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const materialCreate = userRequired.input(materialCreateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { site: input.siteId });
 
   return unwrap(await material.create(input));
 });
@@ -159,19 +151,17 @@ export const materialCreate = authRequired.input(materialCreateInputSchema).hand
 /**
  * List materials with optional filters
  */
-export const materialList = authRequired.input(materialListInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
-  );
+export const materialList = userRequired.input(materialListInputSchema).handler(async ({ input, context }) => {
+  const scope = context.access.list("VIEW", input.siteId);
 
-  return material.list({ ...input, ...scopeFilter(scope) });
+  return material.list({ ...input, ...scope });
 });
 
 /**
  * Get material by ID
  */
-export const materialGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "material", id: input.id } }));
+export const materialGet = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { material: input.id });
 
   return unwrap(await material.getById(input.id), {
     notFoundMessage: "Material not found",
@@ -182,8 +172,8 @@ export const materialGet = authRequired.input(idInputSchema).handler(async ({ in
 /**
  * Update material (creates new version version)
  */
-export const materialUpdate = authRequired.input(materialUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:write", scope: { kind: "material", id: input.id } }));
+export const materialUpdate = userRequired.input(materialUpdateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { material: input.id });
 
   const { id, ...updateData } = input;
   return unwrap(await material.update(id, updateData), { overrides: inventoryOverrides });
@@ -192,8 +182,8 @@ export const materialUpdate = authRequired.input(materialUpdateInputSchema).hand
 /**
  * Delete material (soft delete)
  */
-export const materialRemove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:admin", scope: { kind: "material", id: input.id } }));
+export const materialRemove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { material: input.id });
 
   const result = await material.remove(input.id);
   if (result.error) throwServiceError(result, inventoryOverrides);
@@ -313,10 +303,8 @@ const productSetPrimaryPictureInputSchema = z.object({
 /**
  * Create a new product
  */
-export const productCreate = authRequired.input(productCreateInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:write", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const productCreate = userRequired.input(productCreateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { site: input.siteId });
 
   return unwrap(await product.create(input));
 });
@@ -324,19 +312,17 @@ export const productCreate = authRequired.input(productCreateInputSchema).handle
 /**
  * List products with optional filters
  */
-export const productList = authRequired.input(productListInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
-  );
+export const productList = userRequired.input(productListInputSchema).handler(async ({ input, context }) => {
+  const scope = context.access.list("VIEW", input.siteId);
 
-  return product.list({ ...input, ...scopeFilter(scope) });
+  return product.list({ ...input, ...scope });
 });
 
 /**
  * Get product by ID with materials, pictures, and primary picture URL
  */
-export const productGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "product", id: input.id } }));
+export const productGet = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { product: input.id });
 
   return unwrap(await product.getById(input.id), { notFoundMessage: "Product not found" });
 });
@@ -344,8 +330,8 @@ export const productGet = authRequired.input(idInputSchema).handler(async ({ inp
 /**
  * Update product (creates new version version)
  */
-export const productUpdate = authRequired.input(productUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:write", scope: { kind: "product", id: input.id } }));
+export const productUpdate = userRequired.input(productUpdateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { product: input.id });
 
   const { id, ...updateData } = input;
   return unwrap(await product.update(id, updateData), { overrides: inventoryOverrides });
@@ -354,8 +340,8 @@ export const productUpdate = authRequired.input(productUpdateInputSchema).handle
 /**
  * Delete product (soft delete)
  */
-export const productRemove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:admin", scope: { kind: "product", id: input.id } }));
+export const productRemove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { product: input.id });
 
   const result = await product.remove(input.id);
   if (result.error) throwServiceError(result);
@@ -369,8 +355,8 @@ export const productRemove = authRequired.input(idInputSchema).handler(async ({ 
 /**
  * Archive a product
  */
-export const productArchive = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:write", scope: { kind: "product", id: input.id } }));
+export const productArchive = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { product: input.id });
 
   return unwrap(await product.archive(input.id));
 });
@@ -378,8 +364,8 @@ export const productArchive = authRequired.input(idInputSchema).handler(async ({
 /**
  * Unarchive a product
  */
-export const productUnarchive = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:write", scope: { kind: "product", id: input.id } }));
+export const productUnarchive = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { product: input.id });
 
   return unwrap(await product.unarchive(input.id));
 });
@@ -387,8 +373,8 @@ export const productUnarchive = authRequired.input(idInputSchema).handler(async 
 /**
  * Duplicate a product with a new SKU
  */
-export const productDuplicate = authRequired.input(productDuplicateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:write", scope: { kind: "product", id: input.id } }));
+export const productDuplicate = userRequired.input(productDuplicateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { product: input.id });
 
   return unwrap(await product.duplicate(input), { overrides: inventoryOverrides });
 });
@@ -400,12 +386,10 @@ export const productDuplicate = authRequired.input(productDuplicateInputSchema).
 /**
  * Add a material to a product
  */
-export const productAddMaterial = authRequired
+export const productAddMaterial = userRequired
   .input(productAddMaterialInputSchema)
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, { permission: "production:write", scope: { kind: "product", id: input.productId } }),
-    );
+    await context.access.require("MANAGE", { product: input.productId });
 
     return unwrap(await product.addMaterial(input), { overrides: inventoryOverrides });
   });
@@ -413,12 +397,10 @@ export const productAddMaterial = authRequired
 /**
  * Update a product-material link
  */
-export const productUpdateMaterial = authRequired
+export const productUpdateMaterial = userRequired
   .input(productUpdateMaterialInputSchema)
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, { permission: "production:write", scope: { kind: "product", id: input.productId } }),
-    );
+    await context.access.require("MANAGE", { product: input.productId });
 
     return unwrap(await product.updateMaterial(input), { overrides: inventoryOverrides });
   });
@@ -426,12 +408,10 @@ export const productUpdateMaterial = authRequired
 /**
  * Remove a material from a product
  */
-export const productRemoveMaterial = authRequired
+export const productRemoveMaterial = userRequired
   .input(productRemoveMaterialInputSchema)
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, { permission: "production:write", scope: { kind: "product", id: input.productId } }),
-    );
+    await context.access.require("MANAGE", { product: input.productId });
 
     const result = await product.removeMaterial(
       input.productId,
@@ -445,10 +425,8 @@ export const productRemoveMaterial = authRequired
 /**
  * List materials for a product
  */
-export const productListMaterials = authRequired.input(productIdInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:read", scope: { kind: "product", id: input.productId } }),
-  );
+export const productListMaterials = userRequired.input(productIdInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { product: input.productId });
 
   return unwrap(await product.listMaterials(input.productId));
 });
@@ -460,12 +438,10 @@ export const productListMaterials = authRequired.input(productIdInputSchema).han
 /**
  * Add a picture to a product (returns presigned upload URL)
  */
-export const productAddPicture = authRequired
+export const productAddPicture = userRequired
   .input(productAddPictureInputSchema)
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, { permission: "production:write", scope: { kind: "product", id: input.productId } }),
-    );
+    await context.access.require("MANAGE", { product: input.productId });
 
     return unwrap(await product.addPicture(input));
   });
@@ -473,12 +449,10 @@ export const productAddPicture = authRequired
 /**
  * Remove a picture from a product
  */
-export const productRemovePicture = authRequired
+export const productRemovePicture = userRequired
   .input(productRemovePictureInputSchema)
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, { permission: "production:write", scope: { kind: "product", id: input.productId } }),
-    );
+    await context.access.require("MANAGE", { product: input.productId });
 
     const result = await product.removePicture(input.productId, input.pictureId);
     if (result.error) throwServiceError(result);
@@ -488,12 +462,10 @@ export const productRemovePicture = authRequired
 /**
  * Set a picture as the primary picture for a product
  */
-export const productSetPrimaryPicture = authRequired
+export const productSetPrimaryPicture = userRequired
   .input(productSetPrimaryPictureInputSchema)
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, { permission: "production:write", scope: { kind: "product", id: input.productId } }),
-    );
+    await context.access.require("MANAGE", { product: input.productId });
 
     const result = await product.setPrimaryPicture(input.productId, input.pictureId);
     if (result.error) throwServiceError(result);
@@ -503,10 +475,8 @@ export const productSetPrimaryPicture = authRequired
 /**
  * List pictures for a product with presigned download URLs
  */
-export const productListPictures = authRequired.input(productIdInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:read", scope: { kind: "product", id: input.productId } }),
-  );
+export const productListPictures = userRequired.input(productIdInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { product: input.productId });
 
   return unwrap(await product.listPictures(input.productId));
 });
@@ -552,15 +522,10 @@ const updateAltGroupLabelInputSchema = z.object({
  * Create a new unnamed alternate group around an existing ProductMaterial,
  * placing it as the first and active member.
  */
-export const productCreateAltGroup = authRequired
+export const productCreateAltGroup = userRequired
   .input(productMaterialIdInputSchema)
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, {
-        permission: "production:write",
-        scope: { kind: "productMaterial", id: input.productMaterialId },
-      }),
-    );
+    await context.access.require("MANAGE", { productMaterial: input.productMaterialId });
 
     return unwrap(await product.createAltGroup(input.productMaterialId));
   });
@@ -570,15 +535,10 @@ export const productCreateAltGroup = authRequired
  * moves the existing ProductMaterial into the group. Otherwise creates a new
  * ProductMaterial and places it in the group (not active).
  */
-export const productAddMaterialToAltGroup = authRequired
+export const productAddMaterialToAltGroup = userRequired
   .input(addMaterialToAltGroupInputSchema)
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, {
-        permission: "production:write",
-        scope: { kind: "productAltGroup", id: input.altGroupId },
-      }),
-    );
+    await context.access.require("MANAGE", { productAltGroup: input.altGroupId });
 
     return unwrap(await product.addMaterialToAltGroup(input.altGroupId, input.materialId), {
       overrides: inventoryOverrides,
@@ -588,15 +548,10 @@ export const productAddMaterialToAltGroup = authRequired
 /**
  * Rename (or clear) an alt group's label.
  */
-export const productUpdateAltGroupLabel = authRequired
+export const productUpdateAltGroupLabel = userRequired
   .input(updateAltGroupLabelInputSchema)
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, {
-        permission: "production:write",
-        scope: { kind: "productAltGroup", id: input.altGroupId },
-      }),
-    );
+    await context.access.require("MANAGE", { productAltGroup: input.altGroupId });
 
     return unwrap(await product.updateAltGroupLabel(input.altGroupId, input.label));
   });
@@ -613,12 +568,7 @@ export const productUpdateAltGroupLabel = authRequired
 export const productSetAltGroupActive = userOrDisplayRequired
   .input(setAltGroupActiveInputSchema)
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, {
-        permission: "production:write",
-        scope: { kind: "productAltGroup", id: input.altGroupId },
-      }),
-    );
+    await context.access.require("MANAGE", { productAltGroup: input.altGroupId });
 
     return unwrap(await product.setAltGroupActive(input.altGroupId, input.productMaterialId));
   });
@@ -630,15 +580,10 @@ export const productSetAltGroupActive = userOrDisplayRequired
  * must supply `replaceActiveWithProductMaterialId` — otherwise the server
  * returns `NEEDS_ACTIVE_SWAP` (HTTP 409). Last-member removal deletes the group.
  */
-export const productRemoveFromAltGroup = authRequired
+export const productRemoveFromAltGroup = userRequired
   .input(removeFromAltGroupInputSchema)
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, {
-        permission: "production:write",
-        scope: { kind: "productMaterial", id: input.productMaterialId },
-      }),
-    );
+    await context.access.require("MANAGE", { productMaterial: input.productMaterialId });
 
     return unwrap(await product.removeFromAltGroup(input.productMaterialId, input.replaceActiveWithProductMaterialId));
   });
@@ -647,13 +592,8 @@ export const productRemoveFromAltGroup = authRequired
  * Delete an alt group: all members revert to standalone, then the group row
  * is removed.
  */
-export const productDeleteAltGroup = authRequired.input(altGroupIdInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, {
-      permission: "production:write",
-      scope: { kind: "productAltGroup", id: input.altGroupId },
-    }),
-  );
+export const productDeleteAltGroup = userRequired.input(altGroupIdInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { productAltGroup: input.altGroupId });
 
   return unwrap(await product.deleteAltGroup(input.altGroupId));
 });
@@ -761,12 +701,10 @@ const materialBalanceInputSchema = z.object({
 // Procedures - Material Ledger
 // ============================================================================
 
-export const materialLedgerCreate = authRequired
+export const materialLedgerCreate = userRequired
   .input(materialLedgerCreateInputSchema)
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, { permission: "production:write", scope: { kind: "site", siteId: input.siteId } }),
-    );
+    await context.access.require("MANAGE", { site: input.siteId });
 
     const result = await materialLedger.create({
       siteId: input.siteId,
@@ -777,7 +715,7 @@ export const materialLedgerCreate = authRequired
       unitCost: input.unitCost,
       reference: input.reference,
       note: input.note,
-      performedByUserId: "id" in context.iam ? context.iam.id : null,
+      performedByUserId: context.current.kind === "user" ? context.current.user.id : null,
     });
     // Ledger adjustments validate the material/site pairing as part of the
     // request payload, so SITE_MISMATCH has always been BAD_REQUEST here
@@ -785,22 +723,18 @@ export const materialLedgerCreate = authRequired
     return unwrap(result, { overrides: { SITE_MISMATCH: "BAD_REQUEST" } });
   });
 
-export const materialLedgerList = authRequired
+export const materialLedgerList = userRequired
   .input(materialLedgerListInputSchema)
   .handler(async ({ input, context }) => {
-    const scope = grant(
-      await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
-    );
+    const scope = context.access.list("VIEW", input.siteId);
 
-    return materialLedger.list({ ...input, ...scopeFilter(scope) });
+    return materialLedger.list({ ...input, ...scope });
   });
 
-export const materialLedgerUsage = authRequired
+export const materialLedgerUsage = userRequired
   .input(materialLedgerUsageInputSchema)
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, { permission: "production:read", scope: { kind: "site", siteId: input.siteId } }),
-    );
+    await context.access.require("VIEW", { site: input.siteId });
     return materialLedger.usage(input);
   });
 
@@ -813,14 +747,12 @@ export const materialLedgerUsage = authRequired
  * immutable ProductStockAdjustment ledger row and updates the aggregate in
  * one transaction.
  */
-export const inventoryAdjustStock = authRequired.input(adjustStockInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:write", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const inventoryAdjustStock = userRequired.input(adjustStockInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { site: input.siteId });
 
   const result = await stockAdjustment.adjustStock({
     ...input,
-    performedByUserId: "id" in context.iam ? context.iam.id : null,
+    performedByUserId: context.current.kind === "user" ? context.current.user.id : null,
   });
   // Like the material ledger: the product/site pairing is validated from the
   // request payload, so SITE_MISMATCH is BAD_REQUEST here (not CONFLICT).
@@ -830,29 +762,25 @@ export const inventoryAdjustStock = authRequired.input(adjustStockInputSchema).h
 /**
  * Adjustment history (append-only, newest first).
  */
-export const inventoryStockAdjustments = authRequired
+export const inventoryStockAdjustments = userRequired
   .input(stockAdjustmentListInputSchema)
   .handler(async ({ input, context }) => {
-    const scope = grant(
-      await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
-    );
-    return stockAdjustment.list({ ...input, ...scopeFilter(scope) });
+    const scope = context.access.list("VIEW", input.siteId);
+    return stockAdjustment.list({ ...input, ...scope });
   });
 
 /**
  * Manually adjust or reconcile a material's on-hand balance. Appends an
  * immutable ADJUSTMENT ledger entry.
  */
-export const materialLedgerAdjust = authRequired
+export const materialLedgerAdjust = userRequired
   .input(adjustMaterialStockInputSchema)
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, { permission: "production:write", scope: { kind: "site", siteId: input.siteId } }),
-    );
+    await context.access.require("MANAGE", { site: input.siteId });
 
     const result = await materialLedger.adjust({
       ...input,
-      performedByUserId: "id" in context.iam ? context.iam.id : null,
+      performedByUserId: context.current.kind === "user" ? context.current.user.id : null,
     });
     // Same pin as materialLedgerCreate: the material/site pairing is validated
     // from the request payload, so SITE_MISMATCH is BAD_REQUEST here.
@@ -863,14 +791,9 @@ export const materialLedgerAdjust = authRequired
  * On-hand balance breakdown for a material (received / adjusted / consumed /
  * balance, including unflushed shift usage).
  */
-export const materialLedgerBalance = authRequired
+export const materialLedgerBalance = userRequired
   .input(materialBalanceInputSchema)
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, {
-        permission: "production:read",
-        scope: { kind: "material", id: input.materialId },
-      }),
-    );
+    await context.access.require("VIEW", { material: input.materialId });
     return materialBalance.balance(input.materialId);
   });

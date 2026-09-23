@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, test } from "vitest";
-import prisma from "@rw/db";
+import prisma, { ensureAccountWorkspace } from "@rw/db";
 import { metricBucketSeries } from "./metric-bucket.js";
 import { isHistorianError, type ResolvedRange } from "./types.js";
 
@@ -26,9 +26,7 @@ describe.skipIf(!process.env.DATABASE_URL)("historian metricBucket series", () =
 
   beforeAll(async () => {
     const suffix = randomUUID();
-    const workspace = await prisma.workspace.create({
-      data: { name: `Historian MB Test ${suffix}`, slug: `historian-mb-${suffix}` },
-    });
+    const workspace = await ensureAccountWorkspace({ name: "Test Account", slug: "test-account" });
     const site = await prisma.site.create({
       data: { name: `Historian MB Site ${suffix}`, workspaceId: workspace.id },
     });

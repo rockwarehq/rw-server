@@ -1,8 +1,8 @@
 import prisma from "@rw/db";
-import { hashPassword } from "@rw/auth/password";
 import type { NotificationEvent } from "@rw/runtime/notification-events";
 import * as notification from "@rw/services/notification/index";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { makeUser } from "./helpers/access.js";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
 import { rpcCall } from "./helpers/rpc-call.js";
 
@@ -44,41 +44,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("notifications", () => {
     siteA = rockware;
     workspaceId = rockware.workspaceId;
 
-    const roleFor = (name: string) =>
-      prisma.role.findUniqueOrThrow({ where: { workspaceId_name_scope: { workspaceId, name, scope: "SITE" } }, select: { id: true } });
-    // Sending and group configuration both live under configuration:write in
-    // the new catalog (the old send-vs-administer split collapsed).
-    const senderRole = await prisma.role.upsert({
-      where: { workspaceId_name_scope: { workspaceId, name: "notif-test-sender", scope: "SITE" } },
-      update: { permissions: ["configuration:write"] },
-      create: {
-        workspaceId,
-        name: "notif-test-sender",
-        scope: "SITE",
-        permissions: ["configuration:write"],
-      },
-      select: { id: true },
-    });
-    const passwordHash = await hashPassword(PASSWORD);
-    for (const { email, role } of [
-      { email: FA_EMAIL, role: "Plant Admin" },
-      { email: READER_EMAIL, role: "Plant Member" },
-      { email: OFFICE_EMAIL, role: null },
-    ]) {
-      const { id: roleId } = role ? await roleFor(role) : senderRole;
-      const u = await prisma.user.upsert({
-        where: { email },
-        update: {},
-        create: { email, passwordHash, firstName: "NotifTest", status: "ACTIVE" },
-      });
-      const membership = await prisma.workspaceMembership.upsert({
-        where: { userId_workspaceId: { userId: u.id, workspaceId } },
-        update: {},
-        create: { userId: u.id, workspaceId },
-      });
-      const existing = await prisma.roleAssignment.findFirst({ where: { membershipId: membership.id, roleId, siteId: siteA.id } });
-      if (!existing) await prisma.roleAssignment.create({ data: { membershipId: membership.id, roleId, siteId: siteA.id } });
-    }
+    // Bucket fixtures: FA administers the plant, the reader is a plain plant
+    // member, and "office" is a plant manager — sending and group
+    // configuration both sit at plant MANAGE (the old configuration:write).
+    await makeUser(FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
+    await makeUser(READER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "VIEW" }] });
+    await makeUser(OFFICE_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "MANAGE" }] });
 
     const employee = async (email: string | null, phone?: string) => {
       const e = await prisma.employee.create({ data: { workspaceId }, select: { id: true } });
@@ -118,7 +89,6 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("notifications", () => {
       where: { id: { in: [withEmailId, withoutEmailId, optedInId, neverAskedId, optedOutId] } },
     });
     await prisma.user.deleteMany({ where: { email: { in: [FA_EMAIL, READER_EMAIL, OFFICE_EMAIL] } } });
-    await prisma.role.deleteMany({ where: { name: "notif-test-sender", isSystem: false } });
     await server.close();
   });
 
@@ -145,10 +115,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("notifications", () => {
     expect(updated.statusCode).toBe(200);
     expect((updated.json as GroupJson).members.map((m) => m.id)).toEqual([withEmailId]);
 
-    // Notification groups are configuration: the base membership tier can no
-    // longer read them (was notifications:read for every member).
+    // EXPECTATION FLIP (403 → 200): under buckets, notification groups are a
+    // common plant thing again — plant VIEW members can read them (writes
+    // still need MANAGE, asserted above).
     const readerListed = await rpcCall(server, "notificationGroup/list", { siteId: siteA.id }, readerToken);
-    expect(readerListed.statusCode).toBe(403);
+    expect(readerListed.statusCode).toBe(200);
     const listed = await rpcCall(server, "notificationGroup/list", { siteId: siteA.id }, officeToken);
     expect(listed.statusCode).toBe(200);
     expect((listed.json as { data: GroupJson[] }).data.some((g) => g.id === group.id)).toBe(true);

@@ -1,3 +1,4 @@
+import { asUser } from "@rw/auth/context";
 import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import * as auth from "../auth/index.js";
@@ -73,14 +74,6 @@ const displaySchema = {
   },
 } as const satisfies JSONSchema;
 
-const switchWorkspaceBodySchema = {
-  type: "object",
-  properties: {
-    workspaceId: { type: "string", format: "uuid" },
-  },
-  required: ["workspaceId"],
-} as const satisfies JSONSchema;
-
 const switchSiteBodySchema = {
   type: "object",
   properties: {
@@ -109,7 +102,7 @@ const displayLoginResponseSchema = {
   },
 } as const satisfies JSONSchema;
 
-const switchWorkspaceResponseSchema = {
+const switchSiteResponseSchema = {
   type: "object",
   properties: {
     accessToken: { type: "string" },
@@ -276,39 +269,6 @@ export default async function authRoutes(fastify: FastifyTypedInstance) {
     },
   });
 
-  // Switch workspace (requires auth)
-  fastify.route({
-    method: "POST",
-    url: "/switch-workspace",
-    preHandler: [fastify.verifyAccessToken],
-    schema: {
-      tags: ["auth"],
-      security: [{ bearerAuth: [] }],
-      body: switchWorkspaceBodySchema,
-      response: {
-        200: switchWorkspaceResponseSchema,
-        401: errorSchema,
-        403: errorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      const { workspaceId } = request.body;
-      const userId = request.iam?.id;
-
-      if (!userId) {
-        return reply.status(401).send({ error: "Unauthorized" });
-      }
-
-      const result = await auth.switchWorkspace(userId, workspaceId);
-
-      if (result.success) {
-        return result.data;
-      }
-
-      return reply.status(403).send({ error: result.error });
-    },
-  });
-
   // Switch selected site (requires auth)
   fastify.route({
     method: "POST",
@@ -319,14 +279,14 @@ export default async function authRoutes(fastify: FastifyTypedInstance) {
       security: [{ bearerAuth: [] }],
       body: switchSiteBodySchema,
       response: {
-        200: switchWorkspaceResponseSchema,
+        200: switchSiteResponseSchema,
         401: errorSchema,
         403: errorSchema,
       },
     },
     handler: async (request, reply) => {
       const { siteId } = request.body;
-      const userId = request.iam?.id;
+      const userId = asUser(request.current)?.user.id;
 
       if (!userId) {
         return reply.status(401).send({ error: "Unauthorized" });

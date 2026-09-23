@@ -5,6 +5,7 @@ import { publishUiChange } from "../events/ui-changes.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { resolveShiftStamp, toDateString } from "../facility/work-context.js";
 import { applyScrapDelta } from "./stock.js";
+import { crewFilter } from "../lib/crew-filter.js";
 
 /** Post-commit refresh hint: dispositions change the product's on-hand stock. */
 function publishStockEvent(siteId: string, workspaceId: string, productId: string): void {
@@ -47,6 +48,8 @@ export interface UpdateDispositionLogInput {
 
 export interface ListDispositionLogsFilter {
   siteId?: string;
+  /** Crew-only callers: rows in these workcenters, or in no workcenter. */
+  workcenterIds?: string[];
   stationId?: string;
   shiftInstanceId?: string;
   dispositionReasonId?: string;
@@ -512,6 +515,7 @@ export async function autoScrapCycleItems(
 export async function list(filter: ListDispositionLogsFilter = {}) {
   const {
     siteId,
+    workcenterIds,
     stationId,
     shiftInstanceId,
     dispositionReasonId,
@@ -524,6 +528,7 @@ export async function list(filter: ListDispositionLogsFilter = {}) {
   const where: Record<string, unknown> = { deletedAt: null };
 
   if (siteId) where.siteId = siteId;
+  Object.assign(where, crewFilter(workcenterIds));
   if (stationId) where.stationId = stationId;
   if (shiftInstanceId) where.shiftInstanceId = shiftInstanceId;
   if (dispositionReasonId) where.dispositionReasonId = dispositionReasonId;

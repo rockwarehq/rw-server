@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, test } from "vitest";
-import prisma from "@rw/db";
+import prisma, { ensureAccountWorkspace } from "@rw/db";
 import { balance } from "./material-balance.js";
 import { adjust, create } from "./material-ledger.js";
 
@@ -29,9 +29,7 @@ describe.skipIf(!process.env.DATABASE_URL)("material stock adjustments", () => {
 
   beforeAll(async () => {
     const suffix = randomUUID();
-    const workspace = await prisma.workspace.create({
-      data: { name: `MatAdj Test ${suffix}`, slug: `mat-adj-${suffix}` },
-    });
+    const workspace = await ensureAccountWorkspace({ name: "Test Account", slug: "test-account" });
     siteId = (await prisma.site.create({ data: { name: `MatAdj Site ${suffix}`, workspaceId: workspace.id } })).id;
     otherSiteId = (await prisma.site.create({ data: { name: `MatAdj Other ${suffix}`, workspaceId: workspace.id } }))
       .id;

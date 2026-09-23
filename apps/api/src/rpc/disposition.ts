@@ -1,7 +1,5 @@
 import { z } from "zod";
-import { authRequired, userOrDisplayRequired } from "./middleware.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { userRequired, userOrDisplayRequired } from "./middleware.js";
 import * as dispositionService from "@rw/services/inventory/disposition";
 import * as dispositionReasonService from "@rw/services/inventory/disposition-reason";
 import * as dispositionLogService from "@rw/services/inventory/disposition-log";
@@ -126,15 +124,10 @@ const logListInputSchema = z.object({
 // ItemDisposition Procedures
 // ============================================================================
 
-export const dispositionCreate = authRequired
+export const dispositionCreate = userRequired
   .input(dispositionCreateInputSchema)
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, {
-        permission: "configuration:write",
-        scope: { kind: "site", siteId: input.siteId },
-      }),
-    );
+    await context.access.require("ADMIN", { site: input.siteId });
 
     return unwrap(await dispositionService.create(input));
   });
@@ -142,33 +135,27 @@ export const dispositionCreate = authRequired
 export const dispositionList = userOrDisplayRequired
   .input(dispositionListInputSchema)
   .handler(async ({ input, context }) => {
-    const scope = grant(
-      await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
-    );
-    return dispositionService.list({ ...input, ...scopeFilter(scope) });
+    const scope = context.access.list("VIEW", input.siteId);
+    return dispositionService.list({ ...input, ...scope });
   });
 
-export const dispositionGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "disposition", id: input.id } }));
+export const dispositionGet = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { disposition: input.id });
 
   return unwrap(await dispositionService.getById(input.id), { notFoundMessage: "Disposition not found" });
 });
 
-export const dispositionUpdate = authRequired
+export const dispositionUpdate = userRequired
   .input(dispositionUpdateInputSchema)
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, { permission: "configuration:write", scope: { kind: "disposition", id: input.id } }),
-    );
+    await context.access.require("ADMIN", { disposition: input.id });
 
     const { id, ...updateData } = input;
     return unwrap(await dispositionService.update(id, updateData));
   });
 
-export const dispositionDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "disposition", id: input.id } }),
-  );
+export const dispositionDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { disposition: input.id });
 
   const result = await dispositionService.remove(input.id);
   if (result.error) throwServiceError(result);
@@ -179,10 +166,8 @@ export const dispositionDelete = authRequired.input(idInputSchema).handler(async
 // ItemDispositionReason Procedures
 // ============================================================================
 
-export const reasonCreate = authRequired.input(reasonCreateInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const reasonCreate = userRequired.input(reasonCreateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await dispositionReasonService.create(input);
   if ("error" in result && result.error) throwServiceError(result);
@@ -190,29 +175,20 @@ export const reasonCreate = authRequired.input(reasonCreateInputSchema).handler(
 });
 
 export const reasonList = userOrDisplayRequired.input(reasonListInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
-  );
-  return dispositionReasonService.list({ ...input, ...scopeFilter(scope) });
+  const scope = context.access.list("VIEW", input.siteId);
+  return dispositionReasonService.list({ ...input, ...scope });
 });
 
-export const reasonGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:read", scope: { kind: "dispositionReason", id: input.id } }),
-  );
+export const reasonGet = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { dispositionReason: input.id });
 
   return unwrap(await dispositionReasonService.getById(input.id), {
     notFoundMessage: "Disposition reason not found",
   });
 });
 
-export const reasonUpdate = authRequired.input(reasonUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, {
-      permission: "configuration:write",
-      scope: { kind: "dispositionReason", id: input.id },
-    }),
-  );
+export const reasonUpdate = userRequired.input(reasonUpdateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { dispositionReason: input.id });
 
   const { id, ...updateData } = input;
   const result = await dispositionReasonService.update(id, updateData);
@@ -220,13 +196,8 @@ export const reasonUpdate = authRequired.input(reasonUpdateInputSchema).handler(
   return result.data;
 });
 
-export const reasonDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, {
-      permission: "configuration:write",
-      scope: { kind: "dispositionReason", id: input.id },
-    }),
-  );
+export const reasonDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { dispositionReason: input.id });
 
   const result = await dispositionReasonService.remove(input.id);
   if (result.error) throwServiceError(result);
@@ -238,19 +209,15 @@ export const reasonDelete = authRequired.input(idInputSchema).handler(async ({ i
 // ============================================================================
 
 export const logRecord = userOrDisplayRequired.input(logRecordInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:write", scope: { kind: "station", id: input.stationId } }),
-  );
+  await context.access.require("MANAGE", { station: input.stationId });
 
   const result = await dispositionLogService.record(input);
   if ("error" in result) throwServiceError(result, dispositionLogOverrides);
   return result.data;
 });
 
-export const logCreate = authRequired.input(logCreateInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:write", scope: { kind: "station", id: input.stationId } }),
-  );
+export const logCreate = userRequired.input(logCreateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { station: input.stationId });
 
   const result = await dispositionLogService.create(input);
   if ("error" in result) throwServiceError(result, dispositionLogOverrides);
@@ -258,24 +225,18 @@ export const logCreate = authRequired.input(logCreateInputSchema).handler(async 
 });
 
 export const logList = userOrDisplayRequired.input(logListInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
-  );
-  return dispositionLogService.list({ ...input, ...scopeFilter(scope) });
+  const scope = context.access.list("VIEW", input.siteId, "WORKCENTER");
+  return dispositionLogService.list({ ...input, ...scope });
 });
 
-export const logGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:read", scope: { kind: "dispositionLog", id: input.id } }),
-  );
+export const logGet = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { dispositionLog: input.id });
 
   return unwrap(await dispositionLogService.getById(input.id), { notFoundMessage: "Disposition log not found" });
 });
 
-export const logUpdate = authRequired.input(logUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:write", scope: { kind: "dispositionLog", id: input.id } }),
-  );
+export const logUpdate = userRequired.input(logUpdateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { dispositionLog: input.id });
 
   const { id, ...updateData } = input;
   const result = await dispositionLogService.update(id, updateData);
@@ -283,10 +244,8 @@ export const logUpdate = authRequired.input(logUpdateInputSchema).handler(async 
   return result.data;
 });
 
-export const logDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:admin", scope: { kind: "dispositionLog", id: input.id } }),
-  );
+export const logDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { dispositionLog: input.id });
 
   const result = await dispositionLogService.remove(input.id);
   if (result.error) throwServiceError(result);

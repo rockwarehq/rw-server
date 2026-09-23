@@ -1,6 +1,6 @@
 import prisma from "@rw/db";
-import { hashPassword } from "@rw/auth/password";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ensurePlantBucket, makeUser } from "./helpers/access.js";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
 import { rpcCall } from "./helpers/rpc-call.js";
 
@@ -35,6 +35,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production domain authorization
       create: { name: "ProdAuthZ Site B", workspaceId },
       select: { id: true },
     });
+    // Raw-prisma sites need their plant bucket created by hand.
+    await ensurePlantBucket(workspaceId, siteB.id, "ProdAuthZ Site B");
 
     orderB = await prisma.order.upsert({
       where: { siteId_orderNumber: { siteId: siteB.id, orderNumber: "prod-authz-order" } },
@@ -50,36 +52,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production domain authorization
       (await prisma.tool.findFirst({ where: { siteId: siteB.id }, select: { id: true } })) ??
       (await prisma.tool.create({ data: { siteId: siteB.id }, select: { id: true } }));
 
-    const faRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Plant Admin", scope: "SITE" } },
-      select: { id: true },
-    });
-    const readerRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Plant Member", scope: "SITE" } },
-      select: { id: true },
-    });
-    const passwordHash = await hashPassword(PASSWORD);
-    for (const { email, roleId } of [
-      { email: FA_EMAIL, roleId: faRole.id },
-      { email: READER_EMAIL, roleId: readerRole.id },
-    ]) {
-      const u = await prisma.user.upsert({
-        where: { email },
-        update: {},
-        create: { email, passwordHash, firstName: "ProdAuthZ", status: "ACTIVE" },
-      });
-      const membership = await prisma.workspaceMembership.upsert({
-        where: { userId_workspaceId: { userId: u.id, workspaceId } },
-        update: {},
-        create: { userId: u.id, workspaceId },
-      });
-      const existing = await prisma.roleAssignment.findFirst({
-        where: { membershipId: membership.id, roleId, siteId: rockware.id },
-      });
-      if (!existing) {
-        await prisma.roleAssignment.create({ data: { membershipId: membership.id, roleId, siteId: rockware.id } });
-      }
-    }
+    // Bucket fixtures: FA administers site A's plant; the reader is a plain
+    // plant member (VIEW). Neither holds anything at site B.
+    await makeUser(FA_EMAIL, PASSWORD, { plants: [{ siteId: rockware.id, level: "ADMIN" }] });
+    await makeUser(READER_EMAIL, PASSWORD, { plants: [{ siteId: rockware.id, level: "VIEW" }] });
 
     faToken = (await loginAs(server, FA_EMAIL, PASSWORD)).accessToken;
     readerToken = (await loginAs(server, READER_EMAIL, PASSWORD)).accessToken;
@@ -112,7 +88,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production domain authorization
     expect(update.statusCode).toBe(403);
   });
 
-  it("permission tiers apply within the granted site: reader cannot write", async () => {
+  it("access levels apply within the granted site: a VIEW member cannot write", async () => {
     const res = await rpcCall(server, "order/create", { siteId: siteB.id, orderNumber: "x" }, readerToken);
     expect(res.statusCode).toBe(403);
     const disposition = await rpcCall(server, "disposition/create", { siteId: siteB.id, name: "x" }, readerToken);
@@ -124,7 +100,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production domain authorization
     expect(res.statusCode).toBe(404);
   });
 
-  it("status catalog writes require status permissions at the target site", async () => {
+  it("status catalog writes require MANAGE at the target site", async () => {
     const res = await rpcCall(server, "statusReason/create", { siteId: siteB.id, name: "prod-authz-x" }, faToken);
     expect(res.statusCode).toBe(403);
   });

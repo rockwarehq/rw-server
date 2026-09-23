@@ -1,11 +1,9 @@
+import { asUser } from "@rw/auth/context";
 import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { workspace } from "../services/account/index.js";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
-import { requirePermission } from "../plugins/require-permission.js";
-import { hasPermission } from "@rw/auth/iam/index";
-import { authorize } from "@rw/auth/iam/policy";
-import { replyPolicyDenial } from "./authz.js";
+import { accountAdminRequired } from "../plugins/require-account-admin.js";
 
 const workspaceSchema = {
   type: "object",
@@ -27,12 +25,15 @@ const workspaceSchema = {
   },
 } as const satisfies JSONSchema;
 
-const roleRefSchema = {
+const bucketAccessSchema = {
   type: "object",
   properties: {
-    id: { type: "string", format: "uuid" },
+    bucketId: { type: "string", format: "uuid" },
+    kind: { type: "string", enum: ["PLANT", "WORKCENTER"] },
+    siteId: { type: ["string", "null"], format: "uuid" },
+    workcenterId: { type: ["string", "null"], format: "uuid" },
     name: { type: "string" },
-    isSystem: { type: "boolean" },
+    level: { type: "string", enum: ["VIEW", "MANAGE", "ADMIN"] },
   },
 } as const satisfies JSONSchema;
 
@@ -55,85 +56,21 @@ const employeeProfileSchema = {
   },
 } as const satisfies JSONSchema;
 
-const roleAssignmentSchema = {
-  type: "object",
-  properties: {
-    id: { type: "string", format: "uuid" },
-    siteId: { type: ["string", "null"], format: "uuid" },
-    site: {
-      type: ["object", "null"],
-      properties: {
-        id: { type: "string", format: "uuid" },
-        name: { type: "string" },
-      },
-    },
-    role: {
-      type: "object",
-      properties: {
-        id: { type: "string", format: "uuid" },
-        name: { type: "string" },
-        isSystem: { type: "boolean" },
-        scope: { type: "string", enum: ["WORKSPACE", "SITE"] },
-        permissions: { type: "array", items: { type: "string" } },
-      },
-    },
-  },
-} as const satisfies JSONSchema;
-
 const accessSchema = {
   type: "object",
   properties: {
-    workspacePermissions: { type: "array", items: { type: "string" } },
-    sitePermissions: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          siteId: { type: "string", format: "uuid" },
-          site: {
-            type: ["object", "null"],
-            properties: {
-              id: { type: "string", format: "uuid" },
-              name: { type: "string" },
-            },
-          },
-          permissions: { type: "array", items: { type: "string" } },
-        },
-      },
-    },
-    sites: {
-      type: "object",
-      properties: {
-        all: { type: "boolean" },
-        siteIds: { type: "array", items: { type: "string", format: "uuid" } },
-      },
-    },
-  },
-} as const satisfies JSONSchema;
-
-// Grant rows as the members/workspaces services return them (WorkcenterGrantRef).
-const workcenterGrantSchema = {
-  type: "object",
-  properties: {
-    id: { type: "string", format: "uuid" },
-    workcenterId: { type: "string", format: "uuid" },
-    access: { type: "string", enum: ["READ", "WRITE"] },
-    workcenter: {
-      type: "object",
-      properties: {
-        id: { type: "string", format: "uuid" },
-        name: { type: "string" },
-        siteId: { type: "string", format: "uuid" },
-      },
-    },
+    isAccountAdmin: { type: "boolean" },
+    buckets: { type: "array", items: bucketAccessSchema },
+    siteIds: { type: "array", items: { type: "string", format: "uuid" } },
   },
 } as const satisfies JSONSchema;
 
 const memberSchema = {
   type: "object",
   properties: {
-    id: { type: "string", format: "uuid" },
-    joinedAt: { type: "string", format: "date-time" },
+    userId: { type: "string", format: "uuid" },
+    createdAt: { type: "string", format: "date-time" },
+    employeeId: { type: ["string", "null"], format: "uuid" },
     user: {
       type: "object",
       properties: {
@@ -149,22 +86,8 @@ const memberSchema = {
         mustChangePassword: { type: "boolean" },
       },
     },
-    roles: { type: "array", items: roleRefSchema },
-    roleAssignments: { type: "array", items: roleAssignmentSchema },
-    workcenterGrants: { type: "array", items: workcenterGrantSchema },
+    access: accessSchema,
   },
-} as const satisfies JSONSchema;
-
-const createBodySchema = {
-  type: "object",
-  properties: {
-    name: { type: "string", minLength: 1 },
-    slug: { type: "string" },
-    description: { type: "string" },
-    isDefault: { type: "boolean" },
-    settings: { type: "object", additionalProperties: true },
-  },
-  required: ["name"],
 } as const satisfies JSONSchema;
 
 const updateBodySchema = {
@@ -177,15 +100,6 @@ const updateBodySchema = {
   },
 } as const satisfies JSONSchema;
 
-const addMemberBodySchema = {
-  type: "object",
-  properties: {
-    userId: { type: "string", format: "uuid" },
-    roleId: { type: "string", format: "uuid" },
-  },
-  required: ["userId", "roleId"],
-} as const satisfies JSONSchema;
-
 const memberParamsSchema = {
   type: "object",
   properties: {
@@ -195,14 +109,28 @@ const memberParamsSchema = {
   required: ["id", "userId"],
 } as const satisfies JSONSchema;
 
-const updateRoleBodySchema = {
+const updateAccessBodySchema = {
   type: "object",
   properties: {
-    roleId: { type: "string", format: "uuid" },
+    set: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          bucketId: { type: "string", format: "uuid" },
+          level: { type: "string", enum: ["VIEW", "MANAGE", "ADMIN"] },
+        },
+        required: ["bucketId", "level"],
+      },
+    },
+    remove: { type: "array", items: { type: "string", format: "uuid" } },
+    isAccountAdmin: { type: "boolean" },
   },
-  required: ["roleId"],
 } as const satisfies JSONSchema;
 
+// The account's workspace as a one-item list: the old membership-list shape,
+// kept because shipped console builds read it at boot. `workspaceRole`
+// mirrors isAccountAdmin for them.
 const listWorkspacesResponseSchema = {
   type: "array",
   items: {
@@ -214,10 +142,17 @@ const listWorkspacesResponseSchema = {
       description: { type: "string", nullable: true },
       joinedAt: { type: "string", format: "date-time" },
       employee: employeeProfileSchema,
-      roles: { type: "array", items: roleRefSchema },
-      roleAssignments: { type: "array", items: roleAssignmentSchema },
-      workcenterGrants: { type: "array", items: workcenterGrantSchema },
-      access: accessSchema,
+      isAccountAdmin: { type: "boolean" },
+      workspaceRole: { type: "string", enum: ["OWNER", "MEMBER"] },
+      workspace: {
+        type: "object",
+        properties: {
+          id: { type: "string", format: "uuid" },
+          name: { type: "string" },
+          slug: { type: "string" },
+          description: { type: "string", nullable: true },
+        },
+      },
     },
   },
 } as const satisfies JSONSchema;
@@ -228,7 +163,7 @@ const listMembersResponseSchema = {
 } as const satisfies JSONSchema;
 
 export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
-  // List user's workspaces
+  // The account's workspace, as a one-item list (see the schema note)
   fastify.route({
     method: "GET",
     url: "/",
@@ -242,58 +177,12 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const userId = (request.iam as { id?: string } | undefined)?.id;
+      const userId = asUser(request.current)?.user.id;
       if (!userId) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
 
-      return workspace.getUserWorkspaces(userId);
-    },
-  });
-
-  // Create workspace (admin only in current workspace)
-  fastify.route({
-    method: "POST",
-    url: "/",
-    preHandler: [fastify.verifyAccessToken],
-    schema: {
-      tags: ["workspaces"],
-      security: [{ bearerAuth: [] }],
-      body: createBodySchema,
-      response: {
-        201: workspaceSchema,
-        400: errorSchema,
-        401: errorSchema,
-        403: errorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      const workspaceId = (request.iam as { workspaceId?: string } | undefined)?.workspaceId;
-      const userId = (request.iam as { id?: string } | undefined)?.id;
-
-      if (!userId) {
-        return reply.status(401).send({ error: "Unauthorized" });
-      }
-
-      // Spinning up another workspace is an ownership-level privilege:
-      // reserved company ownership (owner:all) in the caller's workspace. A
-      // token without workspace context cannot prove it, so it is denied
-      // (fail-closed).
-      if (!workspaceId) {
-        return reply.status(401).send({ error: "No workspace context" });
-      }
-      const ok = await hasPermission(userId, "owner:all", { workspaceId });
-      if (!ok) {
-        return reply.status(403).send({ error: "forbidden", required: "owner:all" });
-      }
-
-      if (request.body.slug && (await workspace.slugExists(request.body.slug))) {
-        return reply.status(400).send({ error: "Workspace slug already exists" });
-      }
-
-      const newWorkspace = await workspace.create(request.body);
-
-      return reply.status(201).send(newWorkspace);
+      return workspace.listForUser(userId);
     },
   });
 
@@ -314,14 +203,12 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const userId = (request.iam as { id?: string } | undefined)?.id;
-      if (!userId) {
+      const me = asUser(request.current);
+      if (!me) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
-
-      const isMember = await workspace.isMember(request.params.id, userId);
-      if (!isMember) {
-        return reply.status(403).send({ error: "Not a member of this workspace" });
+      if (request.params.id !== me.workspaceId) {
+        return reply.status(404).send({ error: "Workspace not found" });
       }
 
       const result = await workspace.getById(request.params.id);
@@ -337,7 +224,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "PUT",
     url: "/:id",
-    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { workspaceParam: "id" })],
+    preHandler: [fastify.verifyAccessToken, accountAdminRequired({ workspaceParam: "id" })],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -358,31 +245,6 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
     },
   });
 
-  // Delete workspace (ownership-level destructive op)
-  fastify.route({
-    method: "DELETE",
-    url: "/:id",
-    preHandler: [fastify.verifyAccessToken, requirePermission("owner:all", { workspaceParam: "id" })],
-    schema: {
-      tags: ["workspaces"],
-      security: [{ bearerAuth: [] }],
-      params: idParamsSchema,
-      response: {
-        200: successResponseSchema,
-        401: errorSchema,
-        403: errorSchema,
-        404: errorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      if (!(await workspace.exists(request.params.id))) {
-        return reply.status(404).send({ error: "Workspace not found" });
-      }
-      await workspace.remove(request.params.id);
-      return { success: true };
-    },
-  });
-
   // List workspace members
   fastify.route({
     method: "GET",
@@ -400,57 +262,21 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const userId = (request.iam as { id?: string } | undefined)?.id;
-      if (!userId) {
+      const me = asUser(request.current);
+      if (!me) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
-
-      const isMember = await workspace.isMember(request.params.id, userId);
-      if (!isMember) {
+      if (request.params.id !== me.workspaceId) {
         return reply.status(403).send({ error: "Not a member of this workspace" });
       }
-      const auth = await authorize(request.iam, { permission: "plant:admin", scope: { kind: "anySite" } });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      request.access.requireSomewhere("ADMIN");
 
-      return workspace.listMembers(request.params.id);
+      return workspace.listMembers();
     },
   });
 
-  // Add workspace member (requires user:write)
-  fastify.route({
-    method: "POST",
-    url: "/:id/members",
-    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { workspaceParam: "id" })],
-    schema: {
-      tags: ["workspaces"],
-      security: [{ bearerAuth: [] }],
-      params: idParamsSchema,
-      body: addMemberBodySchema,
-      response: {
-        201: memberSchema,
-        400: errorSchema,
-        401: errorSchema,
-        403: errorSchema,
-        404: errorSchema,
-      },
-    },
-    handler: async (request, reply) => {
-      const existingMember = await workspace.getUserAccess(request.params.id, request.body.userId);
-      if (existingMember) {
-        return reply.status(400).send({ error: "User is already a member" });
-      }
-
-      try {
-        const member = await workspace.addMember(request.params.id, request.body.userId, request.body.roleId);
-        return reply.status(201).send(member);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Invalid role";
-        return reply.status(400).send({ error: message });
-      }
-    },
-  });
-
-  // Update member role (requires user:write or user:admin)
+  // Change a member's access: plant ADMIN at each touched plant; making or
+  // unmaking account admins needs an account admin.
   fastify.route({
     method: "PUT",
     url: "/:id/members/:userId",
@@ -459,7 +285,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
       params: memberParamsSchema,
-      body: updateRoleBodySchema,
+      body: updateAccessBodySchema,
       response: {
         200: memberSchema,
         400: errorSchema,
@@ -469,35 +295,30 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const currentUserId = request.iam?.id;
-      const workspaceId = request.iam?.workspaceId;
-      if (!currentUserId || !workspaceId) {
-        return reply.status(401).send({ error: "Unauthorized" });
-      }
+      const me = asUser(request.current);
+      if (!me) return reply.status(401).send({ error: "Unauthorized" });
 
-      if (request.params.id !== workspaceId) {
+      if (request.params.id !== me.workspaceId) {
         return reply.status(403).send({ error: "Not in requested workspace context" });
       }
 
-      const result = await workspace.updateRole({
-        actorUserId: currentUserId,
+      const result = await workspace.updateAccess({
+        actor: me.access,
         targetUserId: request.params.userId,
-        workspaceId,
-        siteId: request.iam?.siteId,
-        roleId: request.body.roleId,
+        set: request.body.set,
+        remove: request.body.remove,
+        isAccountAdmin: request.body.isAccountAdmin,
       });
 
       if (result.success) {
-        return result.data;
+        return result.access;
       }
 
       switch (result.code) {
         case "FORBIDDEN":
-        case "OWNER_PERMISSION_REQUIRED":
           return reply.status(403).send({ error: result.error });
         case "MEMBER_NOT_FOUND":
-        case "ROLE_NOT_FOUND":
-        case "SITE_NOT_FOUND":
+        case "BUCKET_NOT_FOUND":
           return reply.status(404).send({ error: result.error });
         default:
           return reply.status(400).send({ error: result.error });
@@ -505,15 +326,12 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
     },
   });
 
-  // Remove member (requires workspace-scoped user:admin — this deletes the
-  // whole membership across every site, so a site-scoped grant must not pass)
+  // Remove a member from the account (account admins): they are disabled
+  // and lose every access; their user row stays for history.
   fastify.route({
     method: "DELETE",
     url: "/:id/members/:userId",
-    preHandler: [
-      fastify.verifyAccessToken,
-      requirePermission("plant:admin", { workspaceParam: "id", scope: "workspace" }),
-    ],
+    preHandler: [fastify.verifyAccessToken, accountAdminRequired({ workspaceParam: "id" })],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -527,7 +345,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const currentUserId = (request.iam as { id?: string } | undefined)?.id;
+      const currentUserId = asUser(request.current)?.user.id;
       if (!currentUserId) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
@@ -536,11 +354,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
         return reply.status(400).send({ error: "Cannot remove yourself" });
       }
 
-      const result = await workspace.removeMember(request.params.id, request.params.userId, {
-        actorId: currentUserId,
-        ipAddress: request.ip,
-        userAgent: request.headers["user-agent"],
-      });
+      const result = await workspace.removeMember(request.params.userId);
 
       if (result.success) {
         return { success: true };
@@ -548,18 +362,17 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       if (result.error === "MEMBER_NOT_FOUND") {
         return reply.status(404).send({ error: "Member not found" });
       }
-      return reply.status(400).send({ error: "Cannot remove the last workspace owner" });
+      return reply.status(400).send({ error: "Cannot remove the last account admin" });
     },
   });
 
-  // Remove a member's access to the caller's current site only (site-scoped
-  // user:admin suffices — the blast radius is one site). The site comes from
-  // the token, mirroring PUT /:id/members/:userId. If no role assignments
-  // remain afterwards, the membership itself is removed (see removeSiteAccess).
+  // Remove a member's access to the caller's current site only (plant ADMIN
+  // there suffices — the blast radius is one site). The site comes from the
+  // token.
   fastify.route({
     method: "DELETE",
     url: "/:id/members/:userId/site-access",
-    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { scope: "site" })],
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -573,14 +386,18 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const iam = request.iam as { id?: string; workspaceId?: string; siteId?: string } | undefined;
-      const currentUserId = iam?.id;
-      const siteId = iam?.siteId;
-      if (!currentUserId || !iam?.workspaceId || !siteId) {
+      const me = asUser(request.current);
+      const siteId = me?.siteId;
+      if (!me || !siteId) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
+      // ADMIN at the token's site plant.
+      if (!me.access.can("ADMIN", { site: siteId })) {
+        return reply.status(403).send({ error: "forbidden", required: "ADMIN" });
+      }
+      const currentUserId = me.user.id;
 
-      if (request.params.id !== iam.workspaceId) {
+      if (request.params.id !== me.workspaceId) {
         return reply.status(403).send({ error: "Not in requested workspace context" });
       }
 
@@ -588,11 +405,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
         return reply.status(400).send({ error: "Cannot remove yourself" });
       }
 
-      const result = await workspace.removeSiteAccess(request.params.id, request.params.userId, siteId, {
-        actorId: currentUserId,
-        ipAddress: request.ip,
-        userAgent: request.headers["user-agent"],
-      });
+      const result = await workspace.removeSiteAccess(request.params.userId, siteId);
 
       if (result.success) {
         return { success: true };
@@ -600,10 +413,8 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       switch (result.error) {
         case "MEMBER_NOT_FOUND":
           return reply.status(404).send({ error: "Member not found" });
-        case "NO_SITE_ACCESS":
-          return reply.status(404).send({ error: "Member has no access to this site" });
-        case "LAST_OWNER":
-          return reply.status(400).send({ error: "Cannot remove the last workspace owner" });
+        case "LAST_PLANT_ADMIN":
+          return reply.status(400).send({ error: "Cannot remove the last plant admin" });
       }
     },
   });

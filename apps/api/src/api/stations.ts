@@ -2,8 +2,6 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { station } from "@rw/services/facility/index";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
-import { replyPolicyDenial } from "./authz.js";
 
 // ============================================================================
 // Schemas
@@ -138,11 +136,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        permission: "configuration:write",
-        scope: { kind: "site", siteId: request.body.siteId },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("ADMIN", { site: request.body.siteId });
 
       const result = await station.create(request.body);
       if ("error" in result && typeof result.error === "string") {
@@ -168,14 +162,10 @@ export default async function stations(fastify: FastifyTypedInstance) {
         403: errorSchema,
       },
     },
-    handler: async (request, reply) => {
-      const scope = await authorizeList(request.iam, {
-        permission: "production:read",
-        requestedSiteId: request.query.siteId,
-      });
-      if (!scope.ok) return replyPolicyDenial(reply, scope);
+    handler: async (request, _reply) => {
+      const scope = request.access.list("VIEW", request.query.siteId, "WORKCENTER");
 
-      return station.list({ ...request.query, ...scopeFilter(scope) });
+      return station.list({ ...request.query, ...scope });
     },
   });
 
@@ -196,14 +186,10 @@ export default async function stations(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        permission: "production:read",
-        scope: { kind: "station", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("VIEW", { station: request.params.id });
 
-      const result = await station.getById(request.params.id, auth.workspaceId);
-      if (!result || "error" in result) {
+      const result = await station.getById(request.params.id);
+      if (!result) {
         return reply.status(404).send({ error: "Station not found" });
       }
       return result.data;
@@ -230,13 +216,9 @@ export default async function stations(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        permission: "configuration:write",
-        scope: { kind: "station", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("ADMIN", { station: request.params.id });
 
-      const result = await station.update(request.params.id, request.body, auth.workspaceId);
+      const result = await station.update(request.params.id, request.body);
       if ("error" in result && typeof result.error === "string") {
         const status = getStatusForCode(result.code ?? "UNKNOWN");
         return reply.status(status).send({ error: result.error });
@@ -265,13 +247,12 @@ export default async function stations(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        permission: "configuration:write",
-        scope: { kind: "station", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("ADMIN", { station: request.params.id });
+      // The destination is checked too, so a station can't be pushed into a
+      // workcenter at another plant.
+      if (request.body.workcenterId) await request.access.require("ADMIN", { workcenter: request.body.workcenterId });
 
-      const result = await station.move(request.params.id, request.body.workcenterId, auth.workspaceId);
+      const result = await station.move(request.params.id, request.body.workcenterId);
       if ("error" in result && typeof result.error === "string") {
         const status = getStatusForCode(result.code ?? "UNKNOWN");
         return reply.status(status).send({ error: result.error });
@@ -299,13 +280,9 @@ export default async function stations(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        permission: "configuration:write",
-        scope: { kind: "station", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("ADMIN", { station: request.params.id });
 
-      const result = await station.remove(request.params.id, auth.workspaceId);
+      const result = await station.remove(request.params.id);
       if ("error" in result && typeof result.error === "string") {
         const status = getStatusForCode(result.code ?? "UNKNOWN");
         return reply.status(status).send({ error: result.error });

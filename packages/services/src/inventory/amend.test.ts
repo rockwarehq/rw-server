@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, test } from "vitest";
-import prisma from "@rw/db";
+import prisma, { ensureAccountWorkspace } from "@rw/db";
 import { reassignItems } from "./amend.js";
 import { createFromCycle } from "./inventory.js";
 import { flushShiftUsage } from "./material-shift-flush.js";
@@ -49,7 +49,7 @@ describe.skipIf(!process.env.DATABASE_URL)("reassignItems ledger adjustment", ()
 
   beforeAll(async () => {
     const suffix = randomUUID();
-    const workspace = await prisma.workspace.create({ data: { name: `Ledger ${suffix}`, slug: `ledger-${suffix}` } });
+    const workspace = await ensureAccountWorkspace({ name: "Test Account", slug: "test-account" });
     siteId = (await prisma.site.create({ data: { name: `Ledger Site ${suffix}`, workspaceId: workspace.id } })).id;
     const pattern = await prisma.shiftPattern.create({ data: { siteId, name: "P" } });
     const definition = await prisma.shiftDefinition.create({

@@ -34,17 +34,27 @@ model User {
   // blocks everything except password change and session endpoints.
   mustChangePassword Boolean @default(false)
 
-  // Internal Rockware staff marker. When set, permissions resolve from code
-  // (SYSTEM_ROLE_PERMISSIONS) and the user must not hold WorkspaceMembership
-  // rows — enforced in the service layer.
+  // Internal Rockware staff marker. When set, access resolves from code
+  // (SUPPORT reads everywhere, ENGINEER manages everywhere) and the user
+  // holds no bucket access and is not an account admin.
   systemRole SystemRole?
+
+  // Account admin: skips buckets and runs the account (sites, people,
+  // settings). Only an account admin can make another one.
+  isAccountAdmin Boolean @default(false)
+
+  // The employee profile this login belongs to (a supervisor who also
+  // works the floor). One user per employee.
+  employeeId String?   @unique @db.Uuid
+  employee   Employee? @relation(fields: [employeeId], references: [id], onDelete: SetNull)
 
   lastLoginAt DateTime? @db.Timestamptz(3)
   createdAt   DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
 
   // Relations
-  memberships                WorkspaceMembership[]
+  bucketAccesses             BucketAccess[]
+  memberships                WorkspaceMembership[] // ARCHIVED
   refreshTokens              RefreshToken[]
   shiftComments              ShiftComment[]
   shiftSignoffsPosted   ShiftSignoff[]      @relation("ShiftSignoffPostedBy")

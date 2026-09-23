@@ -1,7 +1,7 @@
 import prisma from "@rw/db";
-import { hashPassword } from "@rw/auth/password";
 import { call as callService } from "@rw/services/facility/index";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ensurePlantBucket, ensureWorkcenterBucket, makeUser } from "./helpers/access.js";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
 import { rpcCall } from "./helpers/rpc-call.js";
 
@@ -59,6 +59,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
       create: { name: "Calls Site B", workspaceId },
       select: { id: true },
     });
+    // Raw-prisma sites need their plant bucket created by hand.
+    await ensurePlantBucket(workspaceId, siteB.id, "Calls Site B");
 
     stationA = await prisma.station.upsert({
       where: { siteId_name: { siteId: siteA.id, name: "calls-test-station" } },
@@ -73,54 +75,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
       select: { id: true },
     });
 
-    const faRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Plant Admin", scope: "SITE" } },
-      select: { id: true },
-    });
-    const readerRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Plant Member", scope: "SITE" } },
-      select: { id: true },
-    });
-    // Custom role: production:write without production:admin, so definition
-    // role gates apply (Plant Admin holds production:admin and would bypass
-    // answer gates).
-    const officeRole = await prisma.role.upsert({
-      where: { workspaceId_name_scope: { workspaceId, name: "calls-test-caller", scope: "SITE" } },
-      update: { permissions: ["production:read", "production:write"] },
-      create: {
-        workspaceId,
-        name: "calls-test-caller",
-        scope: "SITE",
-        permissions: ["production:read", "production:write"],
-      },
-      select: { id: true },
-    });
-    const passwordHash = await hashPassword(PASSWORD);
-    for (const { email, roleId } of [
-      { email: FA_EMAIL, roleId: faRole.id },
-      { email: READER_EMAIL, roleId: readerRole.id },
-      { email: OFFICE_EMAIL, roleId: officeRole.id },
-    ]) {
-      const u = await prisma.user.upsert({
-        where: { email },
-        update: {},
-        create: { email, passwordHash, firstName: "CallsTest", status: "ACTIVE" },
-      });
-      const membership = await prisma.workspaceMembership.upsert({
-        where: { userId_workspaceId: { userId: u.id, workspaceId } },
-        update: {},
-        create: { userId: u.id, workspaceId },
-      });
-      const existing = await prisma.roleAssignment.findFirst({
-        where: { membershipId: membership.id, roleId, siteId: siteA.id },
-      });
-      if (!existing) {
-        await prisma.roleAssignment.create({ data: { membershipId: membership.id, roleId, siteId: siteA.id } });
-      }
-    }
+    // Bucket fixtures: FA administers site A's plant; the reader is a plain
+    // plant member (VIEW — reads catalogs, no floor writes); "office" is a
+    // plant manager, the bucket analogue of the old production:write role
+    // (opening/closing calls sits at MANAGE now).
+    const fa = await makeUser(FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
+    await makeUser(READER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "VIEW" }] });
+    const office = await makeUser(OFFICE_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "MANAGE" }] });
 
     // Link the FA user's membership to an employee so USER-initiated calls
-    // resolve attribution through WorkspaceMembership.employeeId.
+    // resolve attribution through User.employeeId.
     const employee = await prisma.employee.create({ data: { workspaceId }, select: { id: true } });
     employeeId = employee.id;
     const employeeVersion = await prisma.employeeVersion.create({
@@ -129,11 +93,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
     });
     employeeVersionId = employeeVersion.id;
     await prisma.employee.update({ where: { id: employeeId }, data: { versionId: employeeVersionId } });
-    const faUser = await prisma.user.findUniqueOrThrow({ where: { email: FA_EMAIL }, select: { id: true } });
-    await prisma.workspaceMembership.update({
-      where: { userId_workspaceId: { userId: faUser.id, workspaceId } },
-      data: { employeeId },
-    });
+    await prisma.user.update({ where: { id: fa.userId }, data: { employeeId } });
 
     // Employee roles for the definition-level role gates: both employees hold
     // "ops" at siteA; "maint" has no members; the siteB role tests cross-site
@@ -157,17 +117,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
     });
 
     // The caller user gets its own employee (one membership per employee),
-    // also in the ops role — calls:write without calls:admin, so no bypass.
+    // also in the ops role — its employee role is never in the definitions'
+    // restricted lists, so it exercises the gates.
     const officeEmployee = await prisma.employee.create({ data: { workspaceId }, select: { id: true } });
     officeEmployeeId = officeEmployee.id;
     await prisma.employeeSiteAccess.create({
       data: { employeeId: officeEmployeeId, siteId: siteA.id, roleId: roleOpsId },
     });
-    const officeUser = await prisma.user.findUniqueOrThrow({ where: { email: OFFICE_EMAIL }, select: { id: true } });
-    await prisma.workspaceMembership.update({
-      where: { userId_workspaceId: { userId: officeUser.id, workspaceId } },
-      data: { employeeId: officeEmployeeId },
-    });
+    await prisma.user.update({ where: { id: office.userId }, data: { employeeId: officeEmployeeId } });
 
     faToken = (await loginAs(server, FA_EMAIL, PASSWORD)).accessToken;
     readerToken = (await loginAs(server, READER_EMAIL, PASSWORD)).accessToken;
@@ -193,14 +150,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
       await prisma.product.delete({ where: { id: dimIds.product2Id } });
       await prisma.workcenter.delete({ where: { id: dimIds.wcId } });
     }
-    await prisma.workspaceMembership.updateMany({
-      where: { employeeId: { in: [employeeId, officeEmployeeId] } },
-      data: { employeeId: null },
-    });
     await prisma.employee.deleteMany({ where: { id: { in: [employeeId, officeEmployeeId] } } });
     await prisma.employeeRole.deleteMany({ where: { id: { in: [roleOpsId, roleMaintId, roleSiteBId] } } });
     await prisma.user.deleteMany({ where: { email: { in: [FA_EMAIL, READER_EMAIL, OFFICE_EMAIL] } } });
-    await prisma.role.deleteMany({ where: { name: "calls-test-caller", isSystem: false } });
     await prisma.station.deleteMany({ where: { id: { in: [stationA.id, stationA2.id] } } });
     await prisma.site.deleteMany({ where: { name: "Calls Site B" } });
     await server.close();
@@ -352,6 +304,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
       data: { siteId: siteA.id, name: "calls-test-wc" },
       select: { id: true },
     });
+    // Raw-prisma workcenters need their bucket so the plant-MANAGE cascade
+    // can resolve access at the cell's stations.
+    await ensureWorkcenterBucket(workspaceId, siteA.id, wc.id, "calls-test-wc");
     const station = await prisma.station.create({
       data: { siteId: siteA.id, name: "calls-test-dim-station", workcenterId: wc.id },
       select: { id: true },
@@ -509,7 +464,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
     const def = await createDefinition({ name: "calls-test-open-gate", openRoleIds: [roleMaintId] });
 
     // Both test employees hold the ops role, so manual opens are denied —
-    // production:admin does NOT bypass the open gate.
+    // neither plant MANAGE nor plant ADMIN bypasses the open gate.
     const denied = await rpcCall(server, "call/open", { stationId: stationA.id, definitionId: def.id }, officeToken);
     expect(denied.statusCode).toBe(403);
     const deniedFa = await rpcCall(server, "call/open", { stationId: stationA.id, definitionId: def.id }, faToken);
@@ -528,23 +483,23 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
     expect(allowed.statusCode).toBe(200);
   });
 
-  it("answerRoles gates closing; production:admin bypasses; unattributed actors are denied", async () => {
+  it("answerRoles gates unattributed closes; MANAGE bypasses the gate", async () => {
     const def = await createDefinition({ name: "calls-test-answer-gate", answerRoleIds: [roleMaintId] });
 
     const open = await rpcCall(server, "call/open", { stationId: stationA.id, definitionId: def.id }, officeToken);
     expect(open.statusCode).toBe(200);
     const callId = (open.json as CallJson).id;
 
-    // Office user holds the ops role, not maint → denied.
-    const denied = await rpcCall(server, "call/close", { id: callId }, officeToken);
-    expect(denied.statusCode).toBe(403);
-
-    // No resolvable employee at all is denied the same way.
+    // The gate still binds callers without the bypass: no resolvable
+    // employee (programmatic close without SYSTEM attribution) is denied.
     const unattributed = await callService.close({ id: callId });
     expect("error" in unattributed && unattributed.code).toBe("ANSWER_ROLE_RESTRICTED");
 
-    // FA also holds only the ops role, but production:admin bypasses the gate.
-    const bypass = await rpcCall(server, "call/close", { id: callId }, faToken);
+    // EXPECTATION FLIP (was 403): closing via the API requires MANAGE at the
+    // call's cell/plant, and MANAGE now bypasses answer-role restrictions
+    // (the old production:admin bypass widened to MANAGE) — the office
+    // manager holds only the ops employee role, not maint, yet closes.
+    const bypass = await rpcCall(server, "call/close", { id: callId }, officeToken);
     expect(bypass.statusCode).toBe(200);
   });
 });

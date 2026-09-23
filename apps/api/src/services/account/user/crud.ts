@@ -1,14 +1,8 @@
 import prisma from "@rw/db";
 import type { UserStatus } from "@rw/db";
-import {
-  getEffectivePermissions,
-  listAccessibleSites,
-  loadPermissionSnapshot,
-  snapshotEffectivePermissions,
-  type Permission,
-} from "@rw/auth/iam/index";
+import type { UserCurrent } from "@rw/auth/context";
+import { describeAccess, staffLabel, visibleSites } from "@rw/auth/iam/access";
 import { logEvent } from "@rw/services/audit/index";
-import { getWorkspaceAccessSummaries } from "../workspace/members.js";
 import { resolveAvatarUrl } from "./avatar.js";
 
 export interface CreateUserInput {
@@ -39,10 +33,6 @@ export interface ListUsersFilter {
   offset?: number;
 }
 
-function sortPermissions(permissions: Iterable<Permission>): Permission[] {
-  return [...permissions].sort();
-}
-
 export async function create(input: CreateUserInput) {
   const { email, firstName, lastName, status, passwordHash } = input;
 
@@ -60,9 +50,7 @@ export async function create(input: CreateUserInput) {
 export async function list(filter: ListUsersFilter = {}) {
   const { status, search, limit = 50, offset = 0 } = filter;
 
-  // Customer-facing listings never include internal Rockware staff. The
-  // RBAC invariant keeps them out of WorkspaceMembership rows;
-  // this filter is defense in depth against bypass paths.
+  // Customer-facing listings never include internal Rockware staff.
   const where: Record<string, unknown> = { systemRole: null };
 
   if (status) {
@@ -100,7 +88,11 @@ export async function list(filter: ListUsersFilter = {}) {
   return { users, total, limit, offset };
 }
 
-export async function getMe(userId: string, workspaceId?: string, siteId?: string) {
+export async function getMe(me: UserCurrent) {
+  const userId = me.user.id;
+  const { workspaceId } = me;
+  const siteId = me.siteId;
+  const person = me.access.person;
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: {
@@ -112,6 +104,13 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
       firstName: true,
       lastName: true,
       avatarKey: true,
+      employee: {
+        select: {
+          id: true,
+          status: true,
+          version: { select: { firstName: true, lastName: true, employeeNumber: true, badgeNumber: true } },
+        },
+      },
     },
   });
   if (!user) return null;
@@ -126,123 +125,48 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
     avatarUrl: await resolveAvatarUrl(user.avatarKey),
   };
 
-  // Rockware-staff users hold no memberships: build the view from the token's
-  // workspace context and the code-resolved permission bundle.
-  if (user.systemRole && workspaceId) {
-    const workspace = await prisma.workspace.findUnique({
-      where: { id: workspaceId },
-      select: { id: true, name: true, slug: true },
-    });
-    const sites = workspace ? await listAccessibleSites(userId, workspaceId) : [];
-    const site = siteId ? (sites.find((item) => item.id === siteId) ?? null) : null;
-    const permissions = await getEffectivePermissions(userId, {
-      workspaceId,
-      ...(site ? { siteId: site.id } : {}),
-    });
-    return {
-      user: userView,
-      employee: null,
-      workspace,
-      site,
-      sites,
-      access: {
-        roles: [{ id: `system:${user.systemRole}`, name: `System ${user.systemRole}`, scope: "WORKSPACE" as const }],
-        permissions: sortPermissions(permissions),
-        workcenterGrants: [],
-      },
-    };
-  }
-
-  const membership = await prisma.workspaceMembership.findFirst({
-    where: { userId, ...(workspaceId ? { workspaceId } : {}) },
-    include: {
-      workspace: { select: { id: true, name: true, slug: true } },
-      employee: {
-        select: {
-          id: true,
-          status: true,
-          version: {
-            select: {
-              firstName: true,
-              lastName: true,
-              employeeNumber: true,
-              badgeNumber: true,
-            },
-          },
-        },
-      },
-      roleAssignments: {
-        include: {
-          role: { select: { id: true, name: true, scope: true, permissions: true } },
-        },
-        orderBy: { createdAt: "asc" },
-      },
-    },
-    orderBy: { joinedAt: "asc" },
+  const workspace = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
+    select: { id: true, name: true, slug: true },
   });
 
-  if (!membership) {
-    return {
-      user: userView,
-      employee: null,
-      workspace: null,
-      site: null,
-      sites: [],
-      access: { roles: [], permissions: [], workcenterGrants: [] },
-    };
-  }
-
-  const sites = await listAccessibleSites(userId, membership.workspaceId);
+  // The request's person serves the whole access view: site visibility and
+  // the member's buckets (labelled by `via` for the UI).
+  const visible = visibleSites(person);
+  const sites = await prisma.site.findMany({
+    where: { workspaceId, ...(visible === "all" ? {} : { id: { in: visible } }) },
+    select: { id: true, name: true },
+    orderBy: { name: "asc" },
+  });
   const site = siteId ? (sites.find((item) => item.id === siteId) ?? null) : null;
-  // One snapshot serves both the flat site-context permission list and the
-  // per-grant permission sets. The flat list intentionally EXCLUDES
-  // workcenter-scoped grant permissions (no workcenterId passed) — clients
-  // gate site-level chrome on it; per-workcenter abilities ride on each
-  // grant's own `permissions` below.
-  const snapshot = await loadPermissionSnapshot(userId, membership.workspaceId);
-  const permissions = snapshot ? snapshotEffectivePermissions(snapshot, site?.id) : new Set<Permission>();
-  const workcenterGrants = snapshot
-    ? (snapshot.workcenterGrants ?? []).map((grant) => ({
-        workcenterId: grant.workcenterId,
-        siteId: grant.siteId,
-        access: grant.access,
-        permissions: sortPermissions(snapshotEffectivePermissions(snapshot, grant.siteId, grant.workcenterId)),
-      }))
-    : [];
-
-  const roles = membership.roleAssignments
-    .filter((assignment) => assignment.siteId === null || (site !== null && assignment.siteId === site.id))
-    .map((assignment) => ({
-      id: assignment.role.id,
-      name: assignment.role.name,
-      scope: assignment.role.scope,
-    }));
+  const buckets = user.systemRole ? [] : await describeAccess(person);
+  const employee = user.employee?.version
+    ? {
+        id: user.employee.id,
+        status: user.employee.status,
+        firstName: user.employee.version.firstName,
+        lastName: user.employee.version.lastName,
+        employeeNumber: user.employee.version.employeeNumber,
+        badgeNumber: user.employee.version.badgeNumber,
+      }
+    : null;
 
   return {
     user: userView,
-    employee: membership.employee?.version
-      ? {
-          id: membership.employee.id,
-          status: membership.employee.status,
-          firstName: membership.employee.version.firstName,
-          lastName: membership.employee.version.lastName,
-          employeeNumber: membership.employee.version.employeeNumber,
-          badgeNumber: membership.employee.version.badgeNumber,
-        }
-      : null,
-    workspace: membership.workspace,
+    employee,
+    workspace,
     site,
     sites,
     access: {
-      roles,
-      permissions: sortPermissions(permissions),
-      workcenterGrants,
+      isAccountAdmin: person.accountAdmin,
+      staff: staffLabel(person),
+      buckets,
     },
   };
 }
 
 export async function getById(id: string) {
-  const record = await prisma.user.findUnique({
+  return prisma.user.findUnique({
     where: { id },
     select: {
       id: true,
@@ -250,55 +174,12 @@ export async function getById(id: string) {
       firstName: true,
       lastName: true,
       status: true,
+      isAccountAdmin: true,
       lastLoginAt: true,
       createdAt: true,
       updatedAt: true,
-      memberships: {
-        include: {
-          workspace: {
-            select: { id: true, name: true, slug: true },
-          },
-          employee: {
-            select: {
-              id: true,
-              status: true,
-              version: {
-                select: {
-                  id: true,
-                  version: true,
-                  firstName: true,
-                  lastName: true,
-                  employeeNumber: true,
-                  badgeNumber: true,
-                },
-              },
-            },
-          },
-        },
-      },
     },
   });
-  if (!record) return null;
-
-  const workspaceIds = record.memberships.map((m) => m.workspaceId);
-  const accessByWorkspace = await getWorkspaceAccessSummaries(id, workspaceIds);
-  const emptyAccess = {
-    roles: [],
-    roleAssignments: [],
-    access: {
-      workspacePermissions: [],
-      sitePermissions: [],
-      sites: { all: false, siteIds: [] },
-    },
-  };
-
-  return {
-    ...record,
-    memberships: record.memberships.map((m) => ({
-      ...m,
-      ...(accessByWorkspace.get(m.workspaceId) ?? emptyAccess),
-    })),
-  };
 }
 
 export async function getByEmail(email: string) {

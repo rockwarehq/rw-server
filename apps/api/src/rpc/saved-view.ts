@@ -1,8 +1,5 @@
 import { z } from "zod";
-import { ORPCError } from "@orpc/server";
-import { authRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { userRequired } from "./middleware.js";
 import { savedView } from "@rw/services/saved-view/index";
 import { throwServiceError } from "./errors.js";
 
@@ -115,81 +112,60 @@ const idInputSchema = z.object({ id: z.uuid() });
 // Procedures
 // ============================================================================
 
-function requireUserContext(iam: { id?: string; workspaceId?: string }) {
-  if (!iam.workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
-  if (!iam.id) {
-    throw new ORPCError("BAD_REQUEST", { message: "User context required" });
-  }
-  return { userId: iam.id, workspaceId: iam.workspaceId };
-}
+export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
+  const userId = context.current.user.id;
+  await context.access.require("MANAGE", { site: input.siteId });
 
-export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  const { userId, workspaceId } = requireUserContext(context.iam);
-  grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
-  );
-
-  const result = await savedView.create(
-    {
-      siteId: input.siteId,
-      page: input.page,
-      scopeId: input.scopeId ?? null,
-      name: input.name,
-      description: input.description ?? null,
-      visibility: input.visibility,
-      config: input.config,
-      createdById: userId,
-    },
-    workspaceId,
-  );
+  const result = await savedView.create({
+    siteId: input.siteId,
+    page: input.page,
+    scopeId: input.scopeId ?? null,
+    name: input.name,
+    description: input.description ?? null,
+    visibility: input.visibility,
+    config: input.config,
+    createdById: userId,
+  });
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
-export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const { userId, workspaceId } = requireUserContext(context.iam);
-  grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "site", siteId: input.siteId } }));
+export const list = userRequired.input(listInputSchema).handler(async ({ input, context }) => {
+  const userId = context.current.user.id;
+  await context.access.require("VIEW", { site: input.siteId });
 
-  const result = await savedView.list(
-    { siteId: input.siteId, page: input.page, scopeId: input.scopeId ?? null, userId },
-    workspaceId,
-  );
+  const result = await savedView.list({
+    siteId: input.siteId,
+    page: input.page,
+    scopeId: input.scopeId ?? null,
+    userId,
+  });
   if (result.error !== undefined) throwServiceError(result);
   return { data: result.data };
 });
 
-export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  const { userId, workspaceId } = requireUserContext(context.iam);
-  grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "savedView", id: input.id } }),
-  );
+export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+  const userId = context.current.user.id;
+  await context.access.require("MANAGE", { savedView: input.id });
 
-  const result = await savedView.update(
-    input.id,
-    {
-      actorId: userId,
-      name: input.name,
-      description: input.description === undefined ? undefined : (input.description ?? null),
-      visibility: input.visibility,
-      config: input.config,
-    },
-    workspaceId,
-  );
+  const result = await savedView.update(input.id, {
+    actorId: userId,
+    name: input.name,
+    description: input.description === undefined ? undefined : (input.description ?? null),
+    visibility: input.visibility,
+    config: input.config,
+  });
   if (result.error !== undefined) {
     throwServiceError({ error: result.error, code: result.code ?? "BAD_REQUEST" });
   }
   return result.data;
 });
 
-export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const { userId, workspaceId } = requireUserContext(context.iam);
-  grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "savedView", id: input.id } }),
-  );
+export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  const userId = context.current.user.id;
+  await context.access.require("MANAGE", { savedView: input.id });
 
-  const result = await savedView.remove(input.id, { actorId: userId }, workspaceId);
+  const result = await savedView.remove(input.id, { actorId: userId });
   if (result.error !== undefined) {
     throwServiceError({ error: result.error, code: result.code ?? "BAD_REQUEST" });
   }

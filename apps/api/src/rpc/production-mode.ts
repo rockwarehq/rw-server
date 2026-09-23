@@ -1,8 +1,5 @@
 import { z } from "zod";
-import { authRequired, userOrDisplayRequired } from "./middleware.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
-import { Principal } from "../auth/index.js";
-import { grant } from "./authz.js";
+import { userRequired, userOrDisplayRequired } from "./middleware.js";
 import { productionMode } from "@rw/services/facility/index";
 import { throwServiceError, unwrap } from "./errors.js";
 
@@ -70,10 +67,8 @@ const listLogsInputSchema = z.object({
 // Catalog Procedures
 // ============================================================================
 
-export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await productionMode.create(input);
   if ("error" in result) throwServiceError(result);
@@ -81,28 +76,19 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
 });
 
 export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
-  );
-  return productionMode.list({ ...input, ...scopeFilter(scope) });
+  const scope = context.access.list("VIEW", input.siteId);
+  return productionMode.list({ ...input, ...scope });
 });
 
-export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:read", scope: { kind: "productionMode", id: input.id } }),
-  );
+export const get = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { productionMode: input.id });
 
   const result = await productionMode.getById(input.id);
   return unwrap(result, { notFoundMessage: "Production mode not found" });
 });
 
-export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, {
-      permission: "configuration:write",
-      scope: { kind: "productionMode", id: input.id },
-    }),
-  );
+export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { productionMode: input.id });
 
   const { id, ...updateData } = input;
   const result = await productionMode.update(id, updateData);
@@ -110,13 +96,8 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
   return result.data;
 });
 
-export const archive = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, {
-      permission: "configuration:write",
-      scope: { kind: "productionMode", id: input.id },
-    }),
-  );
+export const archive = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { productionMode: input.id });
 
   const result = await productionMode.archive(input.id);
   if ("error" in result) throwServiceError(result);
@@ -128,51 +109,39 @@ export const archive = authRequired.input(idInputSchema).handler(async ({ input,
 // ============================================================================
 
 export const force = userOrDisplayRequired.input(forceInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:write", scope: { kind: "station", id: input.stationId } }),
-  );
+  await context.access.require("MANAGE", { station: input.stationId });
 
-  // production:admin bypasses mode role restrictions so an office supervisor can
-  // always change a station's mode (quiet check — no throw).
-  const admin = await authorize(context.iam, {
-    permission: "production:admin",
-    scope: { kind: "station", id: input.stationId },
-  });
+  // Everyone past this gate may skip the mode's role limits: users here
+  // hold MANAGE, and displays always could (unchanged from before buckets).
 
   const result = await productionMode.force({
     stationId: input.stationId,
     modeId: input.modeId,
     employeeId: input.employeeId,
-    userId: context.iam.principal === Principal.USER ? context.iam.id : undefined,
-    bypassRoles: admin.ok,
+    userId: context.current.kind === "user" ? context.current.user.id : undefined,
+    bypassRoles: true,
   });
   if ("error" in result) throwServiceError(result);
   return result.data;
 });
 
 export const clear = userOrDisplayRequired.input(clearInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:write", scope: { kind: "station", id: input.stationId } }),
-  );
+  await context.access.require("MANAGE", { station: input.stationId });
 
-  const admin = await authorize(context.iam, {
-    permission: "production:admin",
-    scope: { kind: "station", id: input.stationId },
-  });
+  // Everyone past this gate may skip the mode's role limits: users here
+  // hold MANAGE, and displays always could (unchanged from before buckets).
 
   const result = await productionMode.clear({
     stationId: input.stationId,
     employeeId: input.employeeId,
-    userId: context.iam.principal === Principal.USER ? context.iam.id : undefined,
-    bypassRoles: admin.ok,
+    userId: context.current.kind === "user" ? context.current.user.id : undefined,
+    bypassRoles: true,
   });
   if ("error" in result) throwServiceError(result);
   return result.data;
 });
 
 export const listLogs = userOrDisplayRequired.input(listLogsInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:read", scope: { kind: "station", id: input.stationId } }),
-  );
+  await context.access.require("VIEW", { station: input.stationId });
   return productionMode.listLogs(input);
 });

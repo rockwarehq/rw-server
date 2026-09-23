@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import prisma from "@rw/db";
-import { hashPassword } from "@rw/auth/password";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ensurePlantBucket, makeUser } from "./helpers/access.js";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
 import { rpcCall } from "./helpers/rpc-call.js";
 
@@ -21,8 +21,8 @@ const listRows = (res: { json: unknown }) => (res.json as { data: Row[] }).data;
 // least one of the filter's labels are eligible — enforced on assignment
 // (changeJob, downtime reason, scrap reason). Pickers narrow client-side:
 // station reads carry the filters, the client passes the filter's labels as
-// labelIds. Managing the label list needs settings:write; tagging a record
-// only needs permission to edit that record.
+// labelIds. Managing the label list and tagging records both sit at plant
+// MANAGE in the bucket model (the old settings-vs-writer split collapsed).
 describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tier 2)", () => {
   let server: TestServer;
   let adminToken: string;
@@ -74,38 +74,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tie
       select: { id: true },
     });
 
-    // Custom role: job:write without settings:write — a Plant Member can't tag
-    // (no writes at all) and a Plant Admin could also create labels.
-    const officeRole = await prisma.role.upsert({
-      where: { workspaceId_name_scope: { workspaceId, name: `${PREFIX}-job-writer`, scope: "SITE" } },
-      update: { permissions: ["production:read", "production:write"] },
-      create: {
-        workspaceId,
-        name: `${PREFIX}-job-writer`,
-        scope: "SITE",
-        permissions: ["production:read", "production:write"],
-      },
-      select: { id: true },
-    });
-    const passwordHash = await hashPassword(PASSWORD);
-    const officeUser = await prisma.user.upsert({
-      where: { email: OFFICE_EMAIL },
-      update: { passwordHash, status: "ACTIVE" },
-      create: { email: OFFICE_EMAIL, passwordHash, firstName: "LblTest", status: "ACTIVE" },
-    });
-    const membership = await prisma.workspaceMembership.upsert({
-      where: { userId_workspaceId: { userId: officeUser.id, workspaceId } },
-      update: {},
-      create: { userId: officeUser.id, workspaceId },
-    });
-    const existingAssignment = await prisma.roleAssignment.findFirst({
-      where: { membershipId: membership.id, roleId: officeRole.id, siteId: site.id },
-    });
-    if (!existingAssignment) {
-      await prisma.roleAssignment.create({
-        data: { membershipId: membership.id, roleId: officeRole.id, siteId: site.id },
-      });
-    }
+    // Raw-prisma sites need their plant bucket created by hand.
+    await ensurePlantBucket(workspaceId, siteB.id, `${PREFIX} Site B`);
+
+    // Bucket fixtures: "office" is a plant manager — job writes (create/tag)
+    // sit at plant MANAGE, and the same level now covers the label catalog
+    // (the old job:write-without-settings:write role has no bucket analogue).
+    await makeUser(OFFICE_EMAIL, PASSWORD, { plants: [{ siteId: site.id, level: "MANAGE" }] });
 
     adminToken = (
       await loginAs(
@@ -134,15 +109,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tie
     await prisma.itemDisposition.deleteMany({ where: { name: { startsWith: PREFIX } } });
     await prisma.station.deleteMany({ where: { id: { in: stationIds } } });
     await prisma.label.deleteMany({ where: { name: { startsWith: PREFIX } } });
-    await prisma.roleAssignment.deleteMany({ where: { membership: { user: { email: OFFICE_EMAIL } } } });
-    await prisma.role.deleteMany({ where: { name: { startsWith: PREFIX }, isSystem: false } });
-    await prisma.workspaceMembership.deleteMany({ where: { user: { email: OFFICE_EMAIL } } });
     await prisma.user.deleteMany({ where: { email: OFFICE_EMAIL } });
     await prisma.site.deleteMany({ where: { id: siteB.id } });
     await server.close();
   });
 
-  it("admin creates labels; duplicates rejected; job writer cannot create but can tag", async () => {
+  it("admin creates labels; duplicates rejected; a plant manager can create and tag", async () => {
     const m = await rpcCall(server, "label/create", { siteId: site.id, name: `${PREFIX}-molding` }, adminToken);
     expect(m.statusCode).toBe(200);
     molding = lbl(m);
@@ -152,8 +124,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tie
     const dup = await rpcCall(server, "label/create", { siteId: site.id, name: `${PREFIX}-molding` }, adminToken);
     expect(dup.statusCode).toBe(409);
 
-    const denied = await rpcCall(server, "label/create", { siteId: site.id, name: `${PREFIX}-rogue` }, officeToken);
-    expect(denied.statusCode).toBe(403);
+    // EXPECTATION FLIP (was 403): the label catalog sits at plant MANAGE
+    // now — the same level that writes jobs — so the old writer-without-
+    // settings denial no longer exists; the plant manager creates labels.
+    const managerCreate = await rpcCall(server, "label/create", { siteId: site.id, name: `${PREFIX}-rogue` }, officeToken);
+    expect(managerCreate.statusCode).toBe(200);
 
     const tagged = await rpcCall(
       server,

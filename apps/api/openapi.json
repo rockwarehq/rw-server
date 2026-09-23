@@ -703,84 +703,6 @@
         }
       }
     },
-    "/auth/switch-workspace": {
-      "post": {
-        "tags": [
-          "auth"
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "workspaceId": {
-                    "type": "string",
-                    "format": "uuid"
-                  }
-                },
-                "required": [
-                  "workspaceId"
-                ]
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "accessToken": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/auth/switch-site": {
       "post": {
         "tags": [
@@ -995,59 +917,61 @@
                     "access": {
                       "type": "object",
                       "properties": {
-                        "roles": {
+                        "isAccountAdmin": {
+                          "type": "boolean"
+                        },
+                        "staff": {
+                          "type": "string",
+                          "enum": [
+                            "NONE",
+                            "READ",
+                            "FULL"
+                          ]
+                        },
+                        "buckets": {
                           "type": "array",
                           "items": {
                             "type": "object",
                             "properties": {
-                              "id": {
+                              "bucketId": {
                                 "type": "string",
                                 "format": "uuid"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "PLANT",
+                                  "WORKCENTER"
+                                ]
+                              },
+                              "siteId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "nullable": true
+                              },
+                              "workcenterId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "nullable": true
                               },
                               "name": {
                                 "type": "string"
                               },
-                              "scope": {
+                              "level": {
                                 "type": "string",
                                 "enum": [
-                                  "WORKSPACE",
-                                  "SITE"
+                                  "VIEW",
+                                  "MANAGE",
+                                  "ADMIN"
                                 ]
-                              }
-                            }
-                          }
-                        },
-                        "permissions": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        },
-                        "workcenterGrants": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "workcenterId": {
-                                "type": "string",
-                                "format": "uuid"
                               },
-                              "siteId": {
-                                "type": "string",
-                                "format": "uuid"
-                              },
-                              "access": {
+                              "via": {
                                 "type": "string",
                                 "enum": [
-                                  "READ",
-                                  "WRITE"
+                                  "direct",
+                                  "member",
+                                  "cascade"
                                 ]
-                              },
-                              "permissions": {
-                                "type": "array",
-                                "items": {
-                                  "type": "string"
-                                }
                               }
                             }
                           }
@@ -1134,6 +1058,9 @@
                         "ACTIVE",
                         "DISABLED"
                       ]
+                    },
+                    "isAccountAdmin": {
+                      "type": "boolean"
                     },
                     "lastLoginAt": {
                       "type": "string",
@@ -1496,6 +1423,9 @@
                               "DISABLED"
                             ]
                           },
+                          "isAccountAdmin": {
+                            "type": "boolean"
+                          },
                           "lastLoginAt": {
                             "type": "string",
                             "format": "date-time",
@@ -1575,36 +1505,32 @@
                     "type": "string",
                     "format": "email"
                   },
-                  "roleId": {
-                    "type": "string",
-                    "format": "uuid"
-                  },
-                  "siteId": {
-                    "type": "string",
-                    "format": "uuid"
-                  },
-                  "workcenterGrants": {
+                  "bucketAccesses": {
                     "type": "array",
                     "items": {
                       "type": "object",
                       "properties": {
-                        "workcenterId": {
+                        "bucketId": {
                           "type": "string",
                           "format": "uuid"
                         },
-                        "access": {
+                        "level": {
                           "type": "string",
                           "enum": [
-                            "READ",
-                            "WRITE"
+                            "VIEW",
+                            "MANAGE",
+                            "ADMIN"
                           ]
                         }
                       },
                       "required": [
-                        "workcenterId",
-                        "access"
+                        "bucketId",
+                        "level"
                       ]
                     }
+                  },
+                  "asAccountAdmin": {
+                    "type": "boolean"
                   },
                   "firstName": {
                     "type": "string"
@@ -2056,6 +1982,9 @@
                         "DISABLED"
                       ]
                     },
+                    "isAccountAdmin": {
+                      "type": "boolean"
+                    },
                     "lastLoginAt": {
                       "type": "string",
                       "format": "date-time",
@@ -2194,6 +2123,9 @@
                         "ACTIVE",
                         "DISABLED"
                       ]
+                    },
+                    "isAccountAdmin": {
+                      "type": "boolean"
                     },
                     "lastLoginAt": {
                       "type": "string",
@@ -2865,181 +2797,32 @@
                           }
                         }
                       },
-                      "roles": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "id": {
-                              "type": "string",
-                              "format": "uuid"
-                            },
-                            "name": {
-                              "type": "string"
-                            },
-                            "isSystem": {
-                              "type": "boolean"
-                            }
-                          }
-                        }
+                      "isAccountAdmin": {
+                        "type": "boolean"
                       },
-                      "roleAssignments": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "id": {
-                              "type": "string",
-                              "format": "uuid"
-                            },
-                            "siteId": {
-                              "type": [
-                                "null",
-                                "string"
-                              ],
-                              "format": "uuid"
-                            },
-                            "site": {
-                              "type": [
-                                "null",
-                                "object"
-                              ],
-                              "properties": {
-                                "id": {
-                                  "type": "string",
-                                  "format": "uuid"
-                                },
-                                "name": {
-                                  "type": "string"
-                                }
-                              }
-                            },
-                            "role": {
-                              "type": "object",
-                              "properties": {
-                                "id": {
-                                  "type": "string",
-                                  "format": "uuid"
-                                },
-                                "name": {
-                                  "type": "string"
-                                },
-                                "isSystem": {
-                                  "type": "boolean"
-                                },
-                                "scope": {
-                                  "type": "string",
-                                  "enum": [
-                                    "WORKSPACE",
-                                    "SITE"
-                                  ]
-                                },
-                                "permissions": {
-                                  "type": "array",
-                                  "items": {
-                                    "type": "string"
-                                  }
-                                }
-                              }
-                            }
-                          }
-                        }
+                      "workspaceRole": {
+                        "type": "string",
+                        "enum": [
+                          "OWNER",
+                          "MEMBER"
+                        ]
                       },
-                      "workcenterGrants": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "id": {
-                              "type": "string",
-                              "format": "uuid"
-                            },
-                            "workcenterId": {
-                              "type": "string",
-                              "format": "uuid"
-                            },
-                            "access": {
-                              "type": "string",
-                              "enum": [
-                                "READ",
-                                "WRITE"
-                              ]
-                            },
-                            "workcenter": {
-                              "type": "object",
-                              "properties": {
-                                "id": {
-                                  "type": "string",
-                                  "format": "uuid"
-                                },
-                                "name": {
-                                  "type": "string"
-                                },
-                                "siteId": {
-                                  "type": "string",
-                                  "format": "uuid"
-                                }
-                              }
-                            }
-                          }
-                        }
-                      },
-                      "access": {
+                      "workspace": {
                         "type": "object",
                         "properties": {
-                          "workspacePermissions": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
                           },
-                          "sitePermissions": {
-                            "type": "array",
-                            "items": {
-                              "type": "object",
-                              "properties": {
-                                "siteId": {
-                                  "type": "string",
-                                  "format": "uuid"
-                                },
-                                "site": {
-                                  "type": [
-                                    "null",
-                                    "object"
-                                  ],
-                                  "properties": {
-                                    "id": {
-                                      "type": "string",
-                                      "format": "uuid"
-                                    },
-                                    "name": {
-                                      "type": "string"
-                                    }
-                                  }
-                                },
-                                "permissions": {
-                                  "type": "array",
-                                  "items": {
-                                    "type": "string"
-                                  }
-                                }
-                              }
-                            }
+                          "name": {
+                            "type": "string"
                           },
-                          "sites": {
-                            "type": "object",
-                            "properties": {
-                              "all": {
-                                "type": "boolean"
-                              },
-                              "siteIds": {
-                                "type": "array",
-                                "items": {
-                                  "type": "string",
-                                  "format": "uuid"
-                                }
-                              }
-                            }
+                          "slug": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string",
+                            "nullable": true
                           }
                         }
                       }
@@ -3050,144 +2833,6 @@
             }
           },
           "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "workspaces"
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "slug": {
-                    "type": "string"
-                  },
-                  "description": {
-                    "type": "string"
-                  },
-                  "isDefault": {
-                    "type": "boolean"
-                  },
-                  "settings": {
-                    "type": "object",
-                    "additionalProperties": true
-                  }
-                },
-                "required": [
-                  "name"
-                ]
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "201": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "format": "uuid"
-                    },
-                    "name": {
-                      "type": "string"
-                    },
-                    "slug": {
-                      "type": "string"
-                    },
-                    "description": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "isDefault": {
-                      "type": "boolean"
-                    },
-                    "settings": {
-                      "type": "object",
-                      "additionalProperties": true
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time"
-                    },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time"
-                    },
-                    "_count": {
-                      "type": "object",
-                      "properties": {
-                        "members": {
-                          "type": "number"
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "403": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -3464,89 +3109,6 @@
             }
           }
         }
-      },
-      "delete": {
-        "tags": [
-          "workspaces"
-        ],
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "in": "path",
-            "name": "id",
-            "required": true
-          }
-        ],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
       }
     },
     "/workspaces/{id}/members": {
@@ -3580,13 +3142,20 @@
                   "items": {
                     "type": "object",
                     "properties": {
-                      "id": {
+                      "userId": {
                         "type": "string",
                         "format": "uuid"
                       },
-                      "joinedAt": {
+                      "createdAt": {
                         "type": "string",
                         "format": "date-time"
+                      },
+                      "employeeId": {
+                        "type": [
+                          "null",
+                          "string"
+                        ],
+                        "format": "uuid"
                       },
                       "user": {
                         "type": "object",
@@ -3647,430 +3216,65 @@
                           }
                         }
                       },
-                      "roles": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "id": {
-                              "type": "string",
-                              "format": "uuid"
-                            },
-                            "name": {
-                              "type": "string"
-                            },
-                            "isSystem": {
-                              "type": "boolean"
-                            }
-                          }
-                        }
-                      },
-                      "roleAssignments": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "id": {
-                              "type": "string",
-                              "format": "uuid"
-                            },
-                            "siteId": {
-                              "type": [
-                                "null",
-                                "string"
-                              ],
-                              "format": "uuid"
-                            },
-                            "site": {
-                              "type": [
-                                "null",
-                                "object"
-                              ],
-                              "properties": {
-                                "id": {
-                                  "type": "string",
-                                  "format": "uuid"
-                                },
-                                "name": {
-                                  "type": "string"
-                                }
-                              }
-                            },
-                            "role": {
+                      "access": {
+                        "type": "object",
+                        "properties": {
+                          "isAccountAdmin": {
+                            "type": "boolean"
+                          },
+                          "buckets": {
+                            "type": "array",
+                            "items": {
                               "type": "object",
                               "properties": {
-                                "id": {
+                                "bucketId": {
                                   "type": "string",
                                   "format": "uuid"
                                 },
-                                "name": {
-                                  "type": "string"
-                                },
-                                "isSystem": {
-                                  "type": "boolean"
-                                },
-                                "scope": {
+                                "kind": {
                                   "type": "string",
                                   "enum": [
-                                    "WORKSPACE",
-                                    "SITE"
+                                    "PLANT",
+                                    "WORKCENTER"
                                   ]
                                 },
-                                "permissions": {
-                                  "type": "array",
-                                  "items": {
-                                    "type": "string"
-                                  }
-                                }
-                              }
-                            }
-                          }
-                        }
-                      },
-                      "workcenterGrants": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "id": {
-                              "type": "string",
-                              "format": "uuid"
-                            },
-                            "workcenterId": {
-                              "type": "string",
-                              "format": "uuid"
-                            },
-                            "access": {
-                              "type": "string",
-                              "enum": [
-                                "READ",
-                                "WRITE"
-                              ]
-                            },
-                            "workcenter": {
-                              "type": "object",
-                              "properties": {
-                                "id": {
-                                  "type": "string",
+                                "siteId": {
+                                  "type": [
+                                    "null",
+                                    "string"
+                                  ],
+                                  "format": "uuid"
+                                },
+                                "workcenterId": {
+                                  "type": [
+                                    "null",
+                                    "string"
+                                  ],
                                   "format": "uuid"
                                 },
                                 "name": {
                                   "type": "string"
                                 },
-                                "siteId": {
+                                "level": {
                                   "type": "string",
-                                  "format": "uuid"
+                                  "enum": [
+                                    "VIEW",
+                                    "MANAGE",
+                                    "ADMIN"
+                                  ]
                                 }
                               }
                             }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "workspaces"
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "userId": {
-                    "type": "string",
-                    "format": "uuid"
-                  },
-                  "roleId": {
-                    "type": "string",
-                    "format": "uuid"
-                  }
-                },
-                "required": [
-                  "userId",
-                  "roleId"
-                ]
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "in": "path",
-            "name": "id",
-            "required": true
-          }
-        ],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "201": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "format": "uuid"
-                    },
-                    "joinedAt": {
-                      "type": "string",
-                      "format": "date-time"
-                    },
-                    "user": {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "type": "string",
-                          "format": "uuid"
-                        },
-                        "email": {
-                          "type": "string"
-                        },
-                        "firstName": {
-                          "type": "string",
-                          "nullable": true
-                        },
-                        "lastName": {
-                          "type": "string",
-                          "nullable": true
-                        },
-                        "status": {
-                          "type": "string",
-                          "enum": [
-                            "PENDING",
-                            "ACTIVE",
-                            "DISABLED"
-                          ]
-                        },
-                        "lastLoginAt": {
-                          "type": [
-                            "null",
-                            "string"
-                          ],
-                          "format": "date-time"
-                        },
-                        "invitedBy": {
-                          "type": [
-                            "null",
-                            "string"
-                          ],
-                          "format": "uuid"
-                        },
-                        "invitedAt": {
-                          "type": [
-                            "null",
-                            "string"
-                          ],
-                          "format": "date-time"
-                        },
-                        "inviteExpiry": {
-                          "type": [
-                            "null",
-                            "string"
-                          ],
-                          "format": "date-time"
-                        },
-                        "mustChangePassword": {
-                          "type": "boolean"
-                        }
-                      }
-                    },
-                    "roles": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string",
-                            "format": "uuid"
                           },
-                          "name": {
-                            "type": "string"
-                          },
-                          "isSystem": {
-                            "type": "boolean"
-                          }
-                        }
-                      }
-                    },
-                    "roleAssignments": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string",
-                            "format": "uuid"
-                          },
-                          "siteId": {
-                            "type": [
-                              "null",
-                              "string"
-                            ],
-                            "format": "uuid"
-                          },
-                          "site": {
-                            "type": [
-                              "null",
-                              "object"
-                            ],
-                            "properties": {
-                              "id": {
-                                "type": "string",
-                                "format": "uuid"
-                              },
-                              "name": {
-                                "type": "string"
-                              }
-                            }
-                          },
-                          "role": {
-                            "type": "object",
-                            "properties": {
-                              "id": {
-                                "type": "string",
-                                "format": "uuid"
-                              },
-                              "name": {
-                                "type": "string"
-                              },
-                              "isSystem": {
-                                "type": "boolean"
-                              },
-                              "scope": {
-                                "type": "string",
-                                "enum": [
-                                  "WORKSPACE",
-                                  "SITE"
-                                ]
-                              },
-                              "permissions": {
-                                "type": "array",
-                                "items": {
-                                  "type": "string"
-                                }
-                              }
+                          "siteIds": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "format": "uuid"
                             }
                           }
                         }
                       }
-                    },
-                    "workcenterGrants": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string",
-                            "format": "uuid"
-                          },
-                          "workcenterId": {
-                            "type": "string",
-                            "format": "uuid"
-                          },
-                          "access": {
-                            "type": "string",
-                            "enum": [
-                              "READ",
-                              "WRITE"
-                            ]
-                          },
-                          "workcenter": {
-                            "type": "object",
-                            "properties": {
-                              "id": {
-                                "type": "string",
-                                "format": "uuid"
-                              },
-                              "name": {
-                                "type": "string"
-                              },
-                              "siteId": {
-                                "type": "string",
-                                "format": "uuid"
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
                     }
                   }
                 }
@@ -4137,14 +3341,41 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "roleId": {
-                    "type": "string",
-                    "format": "uuid"
+                  "set": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "bucketId": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "level": {
+                          "type": "string",
+                          "enum": [
+                            "VIEW",
+                            "MANAGE",
+                            "ADMIN"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "bucketId",
+                        "level"
+                      ]
+                    }
+                  },
+                  "remove": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  },
+                  "isAccountAdmin": {
+                    "type": "boolean"
                   }
-                },
-                "required": [
-                  "roleId"
-                ]
+                }
               }
             }
           }
@@ -4182,13 +3413,20 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "id": {
+                    "userId": {
                       "type": "string",
                       "format": "uuid"
                     },
-                    "joinedAt": {
+                    "createdAt": {
                       "type": "string",
                       "format": "date-time"
+                    },
+                    "employeeId": {
+                      "type": [
+                        "null",
+                        "string"
+                      ],
+                      "format": "uuid"
                     },
                     "user": {
                       "type": "object",
@@ -4249,121 +3487,61 @@
                         }
                       }
                     },
-                    "roles": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string",
-                            "format": "uuid"
-                          },
-                          "name": {
-                            "type": "string"
-                          },
-                          "isSystem": {
-                            "type": "boolean"
-                          }
-                        }
-                      }
-                    },
-                    "roleAssignments": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string",
-                            "format": "uuid"
-                          },
-                          "siteId": {
-                            "type": [
-                              "null",
-                              "string"
-                            ],
-                            "format": "uuid"
-                          },
-                          "site": {
-                            "type": [
-                              "null",
-                              "object"
-                            ],
-                            "properties": {
-                              "id": {
-                                "type": "string",
-                                "format": "uuid"
-                              },
-                              "name": {
-                                "type": "string"
-                              }
-                            }
-                          },
-                          "role": {
+                    "access": {
+                      "type": "object",
+                      "properties": {
+                        "isAccountAdmin": {
+                          "type": "boolean"
+                        },
+                        "buckets": {
+                          "type": "array",
+                          "items": {
                             "type": "object",
                             "properties": {
-                              "id": {
+                              "bucketId": {
                                 "type": "string",
                                 "format": "uuid"
                               },
-                              "name": {
-                                "type": "string"
-                              },
-                              "isSystem": {
-                                "type": "boolean"
-                              },
-                              "scope": {
+                              "kind": {
                                 "type": "string",
                                 "enum": [
-                                  "WORKSPACE",
-                                  "SITE"
+                                  "PLANT",
+                                  "WORKCENTER"
                                 ]
                               },
-                              "permissions": {
-                                "type": "array",
-                                "items": {
-                                  "type": "string"
-                                }
-                              }
-                            }
-                          }
-                        }
-                      }
-                    },
-                    "workcenterGrants": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string",
-                            "format": "uuid"
-                          },
-                          "workcenterId": {
-                            "type": "string",
-                            "format": "uuid"
-                          },
-                          "access": {
-                            "type": "string",
-                            "enum": [
-                              "READ",
-                              "WRITE"
-                            ]
-                          },
-                          "workcenter": {
-                            "type": "object",
-                            "properties": {
-                              "id": {
-                                "type": "string",
+                              "siteId": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ],
+                                "format": "uuid"
+                              },
+                              "workcenterId": {
+                                "type": [
+                                  "null",
+                                  "string"
+                                ],
                                 "format": "uuid"
                               },
                               "name": {
                                 "type": "string"
                               },
-                              "siteId": {
+                              "level": {
                                 "type": "string",
-                                "format": "uuid"
+                                "enum": [
+                                  "VIEW",
+                                  "MANAGE",
+                                  "ADMIN"
+                                ]
                               }
                             }
+                          }
+                        },
+                        "siteIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "format": "uuid"
                           }
                         }
                       }

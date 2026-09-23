@@ -1,10 +1,10 @@
 import prisma from "@rw/db";
-import { hashPassword } from "@rw/auth/password";
 import { complete as completeCycle } from "@rw/services/cycle/cycle";
 import { productionMode } from "@rw/services/facility/index";
 import { transitionToDown } from "@rw/services/facility/station/state";
 import type { ModeEvent } from "@rw/runtime/mode-events";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ensureWorkcenterBucket, makeUser } from "./helpers/access.js";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
 import { rpcCall } from "./helpers/rpc-call.js";
 
@@ -35,6 +35,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
   let server: TestServer;
   let workspaceId: string;
   let siteA: { id: string };
+  let wcCell: { id: string };
   let stationA: { id: string };
   let stationState: { id: string };
   let scrapDispositionId: string;
@@ -73,10 +74,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
     });
     reasonId = reason.id;
 
+    // The office user's station lives in a cell so a crew MANAGE member can
+    // operate it without holding anything plant-wide.
+    wcCell =
+      (await prisma.workcenter.findFirst({ where: { siteId: siteA.id, name: "pm-test-wc-cell" }, select: { id: true } })) ??
+      (await prisma.workcenter.create({ data: { siteId: siteA.id, name: "pm-test-wc-cell" }, select: { id: true } }));
+    await ensureWorkcenterBucket(workspaceId, siteA.id, wcCell.id, "pm-test-wc-cell");
     stationA = await prisma.station.upsert({
       where: { siteId_name: { siteId: siteA.id, name: "pm-test-station" } },
-      update: {},
-      create: { siteId: siteA.id, name: "pm-test-station" },
+      update: { workcenterId: wcCell.id },
+      create: { siteId: siteA.id, name: "pm-test-station", workcenterId: wcCell.id },
       select: { id: true },
     });
     stationState = await prisma.station.upsert({
@@ -86,51 +93,15 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
       select: { id: true },
     });
 
-    const faRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Plant Admin", scope: "SITE" } },
-      select: { id: true },
+    // Bucket fixtures: FA administers the plant; the reader is a plain plant
+    // member (VIEW); "office" is crew MANAGE of stationA's cell only — it
+    // can operate the cell (force/clear) but holds nothing plant-wide, the
+    // bucket analogue of the old production:write-without-admin role.
+    const fa = await makeUser(FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
+    await makeUser(READER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "VIEW" }] });
+    const office = await makeUser(OFFICE_EMAIL, PASSWORD, {
+      workcenters: [{ workcenterId: wcCell.id, level: "MANAGE" }],
     });
-    const readerRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Plant Member", scope: "SITE" } },
-      select: { id: true },
-    });
-    // Custom role: production:write without production:admin — Plant Member
-    // has no writes and Plant Admin's production:admin would pass the
-    // create/gate checks.
-    const officeRole = await prisma.role.upsert({
-      where: { workspaceId_name_scope: { workspaceId, name: "pm-test-operator", scope: "SITE" } },
-      update: { permissions: ["production:read", "production:write"] },
-      create: {
-        workspaceId,
-        name: "pm-test-operator",
-        scope: "SITE",
-        permissions: ["production:read", "production:write"],
-      },
-      select: { id: true },
-    });
-    const passwordHash = await hashPassword(PASSWORD);
-    for (const { email, roleId } of [
-      { email: FA_EMAIL, roleId: faRole.id },
-      { email: READER_EMAIL, roleId: readerRole.id },
-      { email: OFFICE_EMAIL, roleId: officeRole.id },
-    ]) {
-      const u = await prisma.user.upsert({
-        where: { email },
-        update: {},
-        create: { email, passwordHash, firstName: "PmTest", status: "ACTIVE" },
-      });
-      const membership = await prisma.workspaceMembership.upsert({
-        where: { userId_workspaceId: { userId: u.id, workspaceId } },
-        update: {},
-        create: { userId: u.id, workspaceId },
-      });
-      const existing = await prisma.roleAssignment.findFirst({
-        where: { membershipId: membership.id, roleId, siteId: siteA.id },
-      });
-      if (!existing) {
-        await prisma.roleAssignment.create({ data: { membershipId: membership.id, roleId, siteId: siteA.id } });
-      }
-    }
 
     // Employee-role gates: FA and Office both hold "ops"; "maint" has no members.
     const roleFor = async (name: string) =>
@@ -145,20 +116,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
     roleOpsId = await roleFor("pm-test-role-ops");
     roleMaintId = await roleFor("pm-test-role-maint");
 
-    const employeeFor = async (email: string) => {
+    const employeeFor = async (userId: string) => {
       const employee = await prisma.employee.create({ data: { workspaceId }, select: { id: true } });
       await prisma.employeeSiteAccess.create({
         data: { employeeId: employee.id, siteId: siteA.id, roleId: roleOpsId },
       });
-      const user = await prisma.user.findUniqueOrThrow({ where: { email }, select: { id: true } });
-      await prisma.workspaceMembership.update({
-        where: { userId_workspaceId: { userId: user.id, workspaceId } },
-        data: { employeeId: employee.id },
-      });
+      await prisma.user.update({ where: { id: userId }, data: { employeeId: employee.id } });
       return employee.id;
     };
-    faEmployeeId = await employeeFor(FA_EMAIL);
-    officeEmployeeId = await employeeFor(OFFICE_EMAIL);
+    faEmployeeId = await employeeFor(fa.userId);
+    officeEmployeeId = await employeeFor(office.userId);
 
     faToken = (await loginAs(server, FA_EMAIL, PASSWORD)).accessToken;
     readerToken = (await loginAs(server, READER_EMAIL, PASSWORD)).accessToken;
@@ -187,14 +154,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
     await prisma.station.deleteMany({ where: { id: { in: [stationA.id, stationState.id] } } });
     await prisma.itemDispositionReason.deleteMany({ where: { siteId: siteA.id, name: "pm-test-reason" } });
     await prisma.statusReason.deleteMany({ where: { siteId: siteA.id, name: "pm-test-downtime-reason" } });
-    await prisma.workspaceMembership.updateMany({
-      where: { employeeId: { in: [faEmployeeId, officeEmployeeId] } },
-      data: { employeeId: null },
-    });
     await prisma.employee.deleteMany({ where: { id: { in: [faEmployeeId, officeEmployeeId] } } });
     await prisma.employeeRole.deleteMany({ where: { id: { in: [roleOpsId, roleMaintId] } } });
     await prisma.user.deleteMany({ where: { email: { in: [FA_EMAIL, READER_EMAIL, OFFICE_EMAIL] } } });
-    await prisma.role.deleteMany({ where: { name: "pm-test-operator", isSystem: false } });
+    await prisma.workcenter.deleteMany({ where: { id: wcCell.id } });
     await server.close();
   });
 
@@ -219,7 +182,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
     expect(get.statusCode).toBe(404);
   });
 
-  it("permissions: reader cannot create or force; office (production:write, no admin) cannot create", async () => {
+  it("permissions: reader cannot create or force; office (cell crew MANAGE) cannot create site catalogs", async () => {
     const create = await rpcCall(server, "productionMode/create", { siteId: siteA.id, name: "pm-x" }, readerToken);
     expect(create.statusCode).toBe(403);
     const officeCreate = await rpcCall(server, "productionMode/create", { siteId: siteA.id, name: "pm-x" }, officeToken);
@@ -336,30 +299,34 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
     expect(body.data.map((l) => l.id)).toContain(opened.id);
   });
 
-  it("mode roles gate force AND clear; production:admin bypasses both", async () => {
+  it("mode roles gate ungated actors; MANAGE bypasses force AND clear", async () => {
     const restricted = await createMode({ name: "pm-test-gate", roleIds: [roleMaintId] });
 
-    // Office holds ops, not maint → denied.
-    const denied = await rpcCall(
+    // The gate still binds actors without the bypass: a direct service call
+    // by the office employee — ops, not maint — is denied.
+    const denied = await productionMode.force({
+      stationId: stationA.id,
+      modeId: restricted.id,
+      employeeId: officeEmployeeId,
+    });
+    expect("error" in denied && denied.code).toBe("MODE_ROLE_RESTRICTED");
+
+    // EXPECTATION FLIP (was 403): forcing via the API requires MANAGE at the
+    // station's cell/plant, and MANAGE now bypasses mode role restrictions
+    // (the old production:admin bypass widened to MANAGE) — the office cell
+    // manager forces the restricted mode despite holding only the ops role.
+    const bypass = await rpcCall(
       server,
       "productionMode/force",
       { stationId: stationA.id, modeId: restricted.id },
       officeToken,
     );
-    expect(denied.statusCode).toBe(403);
-
-    // FA also holds only ops, but production:admin bypasses.
-    const bypass = await rpcCall(
-      server,
-      "productionMode/force",
-      { stationId: stationA.id, modeId: restricted.id },
-      faToken,
-    );
     expect(bypass.statusCode).toBe(200);
 
-    // Same list gates exiting: office denied, FA clears.
-    const clearDenied = await rpcCall(server, "productionMode/clear", { stationId: stationA.id }, officeToken);
-    expect(clearDenied.statusCode).toBe(403);
+    // Same list gates exiting: the ungated service path is denied, the FA
+    // plant admin clears through the same MANAGE bypass.
+    const clearDenied = await productionMode.clear({ stationId: stationA.id, employeeId: officeEmployeeId });
+    expect("error" in clearDenied && clearDenied.code).toBe("MODE_ROLE_RESTRICTED");
     const cleared = await rpcCall(server, "productionMode/clear", { stationId: stationA.id }, faToken);
     expect(cleared.statusCode).toBe(200);
   });

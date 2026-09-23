@@ -12,7 +12,7 @@ import {
   REFRESH_REUSE_GRACE_MS,
   type AccessTokenPayload,
 } from "@rw/auth/tokens";
-import { listAccessibleSites } from "@rw/auth/iam/index";
+import { loadPerson, visibleSites } from "@rw/auth/iam/access";
 
 export interface LoginResult {
   [x: string]: unknown;
@@ -44,64 +44,19 @@ export interface AuthContext {
 interface TokenUser {
   id: string;
   email: string;
-  /** Rockware-staff tier (SUPPORT/ENGINEER): permissions resolve from code
-   * and no WorkspaceMembership exists — workspace context comes from the
-   * deployment's workspace instead. */
-  systemRole?: string | null;
 }
 
 /**
- * System users hold no memberships by design: resolve their workspace
- * context directly (requested workspace when valid, else the deployment's
- * default/oldest workspace).
+ * Sign an access token for the account (the one workspace this deployment
+ * serves), on `siteId` when given, else the first site the user can see.
  */
-async function resolveSystemUserWorkspaceId(requestedWorkspaceId?: string): Promise<string | null> {
-  if (requestedWorkspaceId) {
-    const workspace = await prisma.workspace.findUnique({
-      where: { id: requestedWorkspaceId },
-      select: { id: true },
-    });
-    return workspace?.id ?? null;
-  }
-  const workspace = await prisma.workspace.findFirst({
-    orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
-    select: { id: true },
-  });
-  return workspace?.id ?? null;
-}
-
 async function createUserAccessTokenForContext(
   user: TokenUser,
-  options: { workspaceId?: string; siteId?: string } = {},
+  options: { siteId?: string } = {},
 ): Promise<{ success: true; accessToken: string; workspaceId: string } | { success: false; error: string }> {
-  let workspaceId: string | null;
-  if (user.systemRole) {
-    workspaceId = await resolveSystemUserWorkspaceId(options.workspaceId);
-    if (!workspaceId) {
-      return { success: false, error: "Workspace not found" };
-    }
-  } else {
-    const membership = options.workspaceId
-      ? await prisma.workspaceMembership.findUnique({
-          where: {
-            userId_workspaceId: {
-              userId: user.id,
-              workspaceId: options.workspaceId,
-            },
-          },
-          select: { workspaceId: true },
-        })
-      : await prisma.workspaceMembership.findFirst({
-          where: { userId: user.id },
-          select: { workspaceId: true },
-          orderBy: { joinedAt: "asc" },
-        });
-
-    if (!membership) {
-      return { success: false, error: "User is not assigned to a workspace" };
-    }
-    workspaceId = membership.workspaceId;
-  }
+  const workspace = await prisma.workspace.findFirst({ select: { id: true } });
+  if (!workspace) return { success: false, error: "Workspace not found" };
+  const workspaceId = workspace.id;
 
   const tokenPayload: AccessTokenPayload = {
     id: user.id,
@@ -110,7 +65,14 @@ async function createUserAccessTokenForContext(
 
   tokenPayload.workspaceId = workspaceId;
 
-  const sites = await listAccessibleSites(user.id, workspaceId);
+  // Visibility: the sites where the user holds any bucket.
+  const person = await loadPerson(user.id);
+  const visible = person ? visibleSites(person) : [];
+  const sites = await prisma.site.findMany({
+    where: { workspaceId, ...(visible === "all" ? {} : { id: { in: visible } }) },
+    select: { id: true, name: true },
+    orderBy: { name: "asc" },
+  });
   if (options.siteId) {
     const site = sites.find((item) => item.id === options.siteId);
     if (!site) {
@@ -384,51 +346,6 @@ export async function refreshSession(
   };
 }
 
-export async function switchWorkspace(
-  userId: string,
-  workspaceId: string,
-): Promise<{ success: true; data: { accessToken: string } } | { success: false; error: string }> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-  });
-
-  if (!user || user.status !== "ACTIVE") {
-    return { success: false, error: "User account is not active" };
-  }
-
-  // Check if account is locked
-  if (user.lockedUntil && user.lockedUntil > new Date()) {
-    return { success: false, error: "Account is temporarily locked" };
-  }
-
-  // System users hold no memberships: any existing workspace is switchable
-  // (the token helper validates existence).
-  if (!user.systemRole) {
-    const membership = await prisma.workspaceMembership.findUnique({
-      where: {
-        userId_workspaceId: {
-          userId,
-          workspaceId,
-        },
-      },
-    });
-
-    if (!membership) {
-      return { success: false, error: "Not a member of this workspace" };
-    }
-  }
-
-  const tokenResult = await createUserAccessTokenForContext(user, {
-    workspaceId,
-  });
-  if (!tokenResult.success) return { success: false, error: tokenResult.error };
-
-  return {
-    success: true,
-    data: { accessToken: tokenResult.accessToken },
-  };
-}
-
 export async function switchSite(
   userId: string,
   siteId: string,
@@ -443,16 +360,10 @@ export async function switchSite(
     return { success: false, error: "Account is temporarily locked" };
   }
 
-  const site = await prisma.site.findUnique({
-    where: { id: siteId },
-    select: { workspaceId: true },
-  });
+  const site = await prisma.site.findUnique({ where: { id: siteId }, select: { id: true } });
   if (!site) return { success: false, error: "Site not found" };
 
-  const tokenResult = await createUserAccessTokenForContext(user, {
-    workspaceId: site.workspaceId,
-    siteId,
-  });
+  const tokenResult = await createUserAccessTokenForContext(user, { siteId });
   if (!tokenResult.success) return { success: false, error: tokenResult.error };
 
   return { success: true, data: { accessToken: tokenResult.accessToken } };

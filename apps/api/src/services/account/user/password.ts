@@ -2,7 +2,6 @@ import { randomInt } from "node:crypto";
 import prisma from "@rw/db";
 import { hashToken, safeEqual } from "@rw/auth/secrets";
 import { hashPassword, comparePassword } from "@rw/auth/password";
-import { hasPermission, OWNER_PERMISSION } from "@rw/auth/iam/index";
 import { securityConfig } from "../../../config.js";
 import { sendPasswordResetEmail } from "@rw/services/email/index";
 import { logEvent } from "@rw/services/audit/index";
@@ -403,7 +402,7 @@ export type AdminSetPasswordError =
   | "USER_NOT_FOUND"
   | "SELF_RESET"
   | "SYSTEM_USER"
-  | "OWNER_PERMISSION_REQUIRED"
+  | "ACCOUNT_ADMIN_REQUIRED"
   | "WEAK_PASSWORD"
   | "PERMANENT_REQUIRES_PASSWORD";
 
@@ -425,7 +424,7 @@ export async function adminSetPassword(
 
   const target = await prisma.user.findUnique({
     where: { id: input.targetUserId },
-    select: { id: true, status: true, systemRole: true },
+    select: { id: true, status: true, systemRole: true, isAccountAdmin: true },
   });
 
   if (!target) {
@@ -436,32 +435,12 @@ export async function adminSetPassword(
     return { success: false, error: "SYSTEM_USER" };
   }
 
-  // Resetting an owner's password is a takeover vector, so it needs the
-  // owner permission — same rule as changing an owner's role.
-  const targetIsOwner = await prisma.workspaceMembership.findFirst({
-    where: {
-      workspaceId: input.workspaceId,
-      userId: input.targetUserId,
-      roleAssignments: {
-        some: {
-          siteId: null,
-          role: {
-            isSystem: true,
-            scope: "WORKSPACE",
-            permissions: { has: OWNER_PERMISSION },
-          },
-        },
-      },
-    },
-    select: { id: true },
-  });
-
-  if (targetIsOwner) {
-    const actorIsOwner = await hasPermission(input.actorId, OWNER_PERMISSION, {
-      workspaceId: input.workspaceId,
-    });
-    if (!actorIsOwner) {
-      return { success: false, error: "OWNER_PERMISSION_REQUIRED" };
+  // Resetting an account admin's password is a takeover vector, so it needs
+  // an account admin — same rule as changing who is an account admin.
+  if (target.isAccountAdmin) {
+    const actor = await prisma.user.findUnique({ where: { id: input.actorId }, select: { isAccountAdmin: true } });
+    if (!actor?.isAccountAdmin) {
+      return { success: false, error: "ACCOUNT_ADMIN_REQUIRED" };
     }
   }
 

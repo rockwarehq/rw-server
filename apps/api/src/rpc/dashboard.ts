@@ -1,8 +1,6 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
-import { authRequired, userOrDisplayRequired } from "./middleware.js";
-import { authorize, authorizeList } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { userRequired, userOrDisplayRequired } from "./middleware.js";
 import { dashboard } from "@rw/services/dashboard/index";
 import { throwServiceError } from "./errors.js";
 
@@ -46,12 +44,10 @@ const listInputSchema = z.object({
 /**
  * Create a new dashboard
  */
-export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { site: input.siteId });
 
-  const result = await dashboard.create(input, workspaceId);
+  const result = await dashboard.create(input);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -60,22 +56,18 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
  * List dashboards
  */
 export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
-  );
+  const scope = context.access.list("VIEW", input.siteId);
 
-  return dashboard.list({ ...input, siteId: scope.siteId }, scope.workspaceId);
+  return dashboard.list({ ...input, ...scope });
 });
 
 /**
  * Get dashboard by ID
  */
 export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "production:read", scope: { kind: "dashboard", id: input.id } }),
-  );
+  await context.access.require("VIEW", { dashboard: input.id });
 
-  const result = await dashboard.getById(input.id, workspaceId);
+  const result = await dashboard.getById(input.id);
   if (!result) {
     throw new ORPCError("NOT_FOUND", { message: "Dashboard not found" });
   }
@@ -86,13 +78,11 @@ export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ i
 /**
  * Update dashboard
  */
-export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "dashboard", id: input.id } }),
-  );
+export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { dashboard: input.id });
 
   const { id, ...updateData } = input;
-  const result = await dashboard.update(id, updateData, workspaceId);
+  const result = await dashboard.update(id, updateData);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -100,12 +90,10 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 /**
  * Delete dashboard (soft delete)
  */
-export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "dashboard", id: input.id } }),
-  );
+export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { dashboard: input.id });
 
-  const result = await dashboard.remove(input.id, workspaceId);
+  const result = await dashboard.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });

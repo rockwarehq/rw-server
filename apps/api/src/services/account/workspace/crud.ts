@@ -1,12 +1,8 @@
 import prisma from "@rw/db";
+import { countMembers } from "./members.js";
 
-export interface CreateWorkspaceInput {
-  name: string;
-  slug?: string;
-  description?: string;
-  isDefault?: boolean;
-  settings?: Record<string, unknown>;
-}
+// The account's workspace. There is exactly one per deployment (see the
+// singleton guard on Workspace), so there is no create, list or delete.
 
 export interface UpdateWorkspaceInput {
   name?: string;
@@ -15,78 +11,9 @@ export interface UpdateWorkspaceInput {
   settings?: Record<string, unknown>;
 }
 
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-}
-
-function exposeMemberCount<T extends { _count: { memberships: number } }>(workspace: T) {
-  return {
-    ...workspace,
-    _count: { members: workspace._count.memberships },
-  };
-}
-
-export async function create(input: CreateWorkspaceInput) {
-  const { name, slug, description, isDefault, settings } = input;
-
-  const finalSlug = slug || slugify(name);
-
-  // If this is set as default, unset any existing default
-  if (isDefault) {
-    await prisma.workspace.updateMany({
-      where: { isDefault: true },
-      data: { isDefault: false },
-    });
-  }
-
-  return prisma.workspace.create({
-    data: {
-      name,
-      slug: finalSlug,
-      description,
-      isDefault: isDefault || false,
-      settings: (settings ?? {}) as any,
-    },
-  });
-}
-
-export async function list() {
-  const workspaces = await prisma.workspace.findMany({
-    orderBy: { createdAt: "desc" },
-    include: {
-      _count: {
-        select: { memberships: true },
-      },
-    },
-  });
-  return workspaces.map(exposeMemberCount);
-}
-
 export async function getById(id: string) {
-  const workspace = await prisma.workspace.findUnique({
-    where: { id },
-    include: {
-      _count: {
-        select: { memberships: true },
-      },
-    },
-  });
-  return workspace ? exposeMemberCount(workspace) : null;
-}
-
-export async function getBySlug(slug: string) {
-  const workspace = await prisma.workspace.findUnique({
-    where: { slug },
-    include: {
-      _count: {
-        select: { memberships: true },
-      },
-    },
-  });
-  return workspace ? exposeMemberCount(workspace) : null;
+  const workspace = await prisma.workspace.findUnique({ where: { id } });
+  return workspace ? { ...workspace, _count: { members: await countMembers() } } : null;
 }
 
 export async function update(id: string, input: UpdateWorkspaceInput) {
@@ -104,10 +31,6 @@ export async function update(id: string, input: UpdateWorkspaceInput) {
   });
 }
 
-export async function remove(id: string) {
-  await prisma.workspace.delete({ where: { id } });
-}
-
 export async function exists(id: string): Promise<boolean> {
   const workspace = await prisma.workspace.findUnique({
     where: { id },
@@ -116,10 +39,47 @@ export async function exists(id: string): Promise<boolean> {
   return !!workspace;
 }
 
-export async function slugExists(slug: string): Promise<boolean> {
-  const workspace = await prisma.workspace.findUnique({
-    where: { slug },
-    select: { id: true },
-  });
-  return !!workspace;
+/**
+ * GET /workspaces: the account's workspace, as a one-item list in the shape
+ * the membership list used to have. Shipped console builds read this at
+ * boot, so the shape stays.
+ */
+export async function listForUser(userId: string) {
+  const [workspace, user] = await Promise.all([
+    prisma.workspace.findFirst({ select: { id: true, name: true, slug: true, description: true } }),
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        createdAt: true,
+        isAccountAdmin: true,
+        employee: {
+          select: {
+            id: true,
+            status: true,
+            version: {
+              select: {
+                id: true,
+                version: true,
+                firstName: true,
+                lastName: true,
+                employeeNumber: true,
+                badgeNumber: true,
+              },
+            },
+          },
+        },
+      },
+    }),
+  ]);
+  if (!workspace || !user) return [];
+  return [
+    {
+      ...workspace,
+      workspace,
+      joinedAt: user.createdAt,
+      employee: user.employee,
+      isAccountAdmin: user.isAccountAdmin,
+      workspaceRole: user.isAccountAdmin ? ("OWNER" as const) : ("MEMBER" as const),
+    },
+  ];
 }

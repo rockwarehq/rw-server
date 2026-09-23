@@ -21,7 +21,6 @@ export interface MetricCatalogItem {
 
 export interface ListMetricsInput {
   siteId: string;
-  workspaceId: string;
   entityType?: MetricCatalogEntityType;
 }
 
@@ -32,7 +31,7 @@ export type ListMetricsResult =
     }
   | {
       success: false;
-      code: "SITE_NOT_FOUND" | "WORKSPACE_MISMATCH";
+      code: "SITE_NOT_FOUND";
       error: string;
     };
 
@@ -67,7 +66,7 @@ export function filterMetricCatalog(
 export async function listMetrics(input: ListMetricsInput): Promise<ListMetricsResult> {
   const site = await prisma.site.findUnique({
     where: { id: input.siteId },
-    select: { workspaceId: true },
+    select: { id: true },
   });
 
   if (!site) {
@@ -75,14 +74,6 @@ export async function listMetrics(input: ListMetricsInput): Promise<ListMetricsR
       success: false,
       code: "SITE_NOT_FOUND",
       error: "Site not found",
-    };
-  }
-
-  if (site.workspaceId !== input.workspaceId) {
-    return {
-      success: false,
-      code: "WORKSPACE_MISMATCH",
-      error: "Site does not belong to this workspace",
     };
   }
 

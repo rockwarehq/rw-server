@@ -17,7 +17,6 @@ export interface CreateGatewayInput {
   hosting?: "SELF" | "ROCKWARE";
   metadata?: Record<string, unknown>;
   siteId: string;
-  workspaceId: string;
 }
 
 export interface UpdateGatewayInput {
@@ -26,7 +25,6 @@ export interface UpdateGatewayInput {
   hosting?: "SELF" | "ROCKWARE";
   metadata?: Record<string, unknown>;
   siteId?: string;
-  workspaceId?: string;
 }
 
 export interface ListGatewaysFilter {
@@ -37,20 +35,15 @@ export interface ListGatewaysFilter {
 }
 
 export async function create(input: CreateGatewayInput) {
-  const { name, description, hosting, metadata, siteId, workspaceId } = input;
+  const { name, description, hosting, metadata, siteId } = input;
 
-  // Validate site exists and belongs to workspace
   const site = await prisma.site.findUnique({
     where: { id: siteId },
-    select: { id: true, workspaceId: true },
+    select: { id: true },
   });
 
   if (!site) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
-  }
-
-  if (site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   // Generate unique serial number
@@ -122,7 +115,7 @@ export async function list(filter?: ListGatewaysFilter) {
   });
 }
 
-export async function getById(id: string, workspaceId?: string) {
+export async function getById(id: string) {
   const gateway = await prisma.gateway.findUnique({
     where: { id },
     include: {
@@ -145,11 +138,6 @@ export async function getById(id: string, workspaceId?: string) {
 
   if (!gateway) return null;
 
-  // Validate workspace access via site
-  if (workspaceId && gateway.site?.workspaceId && gateway.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
-  }
-
   return { data: gateway };
 }
 
@@ -160,41 +148,26 @@ export async function getBySerialNumber(serialNumber: string) {
 }
 
 export async function update(id: string, input: UpdateGatewayInput) {
-  const { name, description, hosting, metadata, siteId, workspaceId } = input;
+  const { name, description, hosting, metadata, siteId } = input;
 
-  // Get current gateway with site info
   const current = await prisma.gateway.findUnique({
     where: { id },
-    include: {
-      site: {
-        select: { id: true, workspaceId: true },
-      },
-    },
+    select: { id: true, siteId: true },
   });
 
   if (!current) {
     return { error: "Gateway not found", code: "GATEWAY_NOT_FOUND" };
   }
 
-  // Validate workspace access via site
-  if (workspaceId && current.site?.workspaceId && current.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
-  }
-
   // If changing site, validate new site
   if (siteId && siteId !== current.siteId) {
     const newSite = await prisma.site.findUnique({
       where: { id: siteId },
-      select: { id: true, workspaceId: true },
+      select: { id: true },
     });
 
     if (!newSite) {
       return { error: "Site not found", code: "SITE_NOT_FOUND" };
-    }
-
-    // New site must be in same workspace
-    if (workspaceId && newSite.workspaceId !== workspaceId) {
-      return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
     }
   }
 
@@ -218,23 +191,14 @@ export async function update(id: string, input: UpdateGatewayInput) {
   return { data: gateway };
 }
 
-export async function remove(id: string, workspaceId?: string) {
+export async function remove(id: string) {
   const gateway = await prisma.gateway.findUnique({
     where: { id },
-    include: {
-      site: {
-        select: { workspaceId: true },
-      },
-    },
+    select: { id: true },
   });
 
   if (!gateway) {
     return { error: "Gateway not found", code: "GATEWAY_NOT_FOUND" };
-  }
-
-  // Validate workspace access via site
-  if (workspaceId && gateway.site?.workspaceId && gateway.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   await prisma.gateway.delete({ where: { id } });

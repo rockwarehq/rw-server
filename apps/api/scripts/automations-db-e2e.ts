@@ -18,7 +18,7 @@ import {
   createAutomationFramework,
   statelessContextBuilder,
 } from "@rw/automations";
-import prisma from "@rw/db";
+import prisma, { ensureAccountWorkspace } from "@rw/db";
 import { createDbAutomationStore } from "@rw/services/automation/store";
 import { createAppAutomationFramework } from "../src/automations/index.js";
 
@@ -89,13 +89,9 @@ async function captureAlerts<T>(fn: () => Promise<T>): Promise<{ result: T; aler
   }
 }
 
-/** Seed (idempotently) the dedicated test workspace + the rows the framework reads. */
+/** Seed (idempotently) the test sites in the account's workspace + the rows the framework reads. */
 async function setup(): Promise<{ workspaceId: string }> {
-  const workspace = await prisma.workspace.upsert({
-    where: { slug: WORKSPACE_SLUG },
-    create: { name: WORKSPACE_NAME, slug: WORKSPACE_SLUG },
-    update: {},
-  });
+  const workspace = await ensureAccountWorkspace({ name: WORKSPACE_NAME, slug: WORKSPACE_SLUG });
   const workspaceId = workspace.id;
 
   await prisma.site.upsert({
@@ -163,10 +159,9 @@ async function teardown(workspaceId: string): Promise<void> {
   await prisma.job.updateMany({ where: { id: JOB_ID }, data: { currentVersionId: null } });
   await prisma.jobVersion.deleteMany({ where: { id: JOBVERSION_ID } });
   await prisma.job.deleteMany({ where: { id: JOB_ID } });
-  // Workspace delete cascades site (→ station, workcenter). Users are global (no workspace FK), so
-  // drop the seeded ones explicitly.
+  // The account's workspace is shared: delete this script's sites (→ station, workcenter) only.
   await prisma.user.deleteMany({ where: { id: { in: USR.map((u) => u.id) } } });
-  await prisma.workspace.deleteMany({ where: { id: workspaceId } });
+  await prisma.site.deleteMany({ where: { id: { in: [SITE_ID, OTHER_SITE_ID] }, workspaceId } });
 }
 
 async function main(): Promise<void> {

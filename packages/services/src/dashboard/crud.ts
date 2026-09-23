@@ -35,20 +35,16 @@ export interface ListDashboardsFilter {
 /**
  * Create a new dashboard
  */
-export async function create(input: CreateDashboardInput, workspaceId: string) {
+export async function create(input: CreateDashboardInput) {
   const { siteId, name, description, spec, state, attrs } = input;
 
   const site = await prisma.site.findUnique({
     where: { id: siteId },
-    select: { id: true, workspaceId: true },
+    select: { id: true },
   });
 
   if (!site) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
-  }
-
-  if (site.workspaceId !== workspaceId) {
-    return { error: "Site does not belong to this workspace", code: "WORKSPACE_MISMATCH" };
   }
 
   const dashboard = await prisma.dashboard.create({
@@ -118,11 +114,11 @@ export async function list(filter: ListDashboardsFilter = {}, workspaceId?: stri
 /**
  * Get dashboard by ID
  */
-export async function getById(id: string, workspaceId?: string) {
+export async function getById(id: string) {
   const dashboard = await prisma.dashboard.findUnique({
     where: { id },
     include: {
-      site: { select: { id: true, name: true, workspaceId: true } },
+      site: { select: { id: true, name: true } },
       _count: { select: { displays: true } },
     },
   });
@@ -135,30 +131,18 @@ export async function getById(id: string, workspaceId?: string) {
     return { error: "Dashboard has been deleted", code: "DASHBOARD_DELETED" };
   }
 
-  if (workspaceId && dashboard.site.workspaceId !== workspaceId) {
-    return { error: "Dashboard does not belong to this workspace", code: "WORKSPACE_MISMATCH" };
-  }
-
-  return {
-    data: {
-      ...dashboard,
-      site: {
-        id: dashboard.site.id,
-        name: dashboard.site.name,
-      },
-    },
-  };
+  return { data: dashboard };
 }
 
 /**
  * Update dashboard
  */
-export async function update(id: string, input: UpdateDashboardInput, workspaceId: string) {
+export async function update(id: string, input: UpdateDashboardInput) {
   const { name, description, spec, state, attrs } = input;
 
   const current = await prisma.dashboard.findUnique({
     where: { id },
-    select: { id: true, deletedAt: true, siteId: true },
+    select: { id: true, deletedAt: true },
   });
 
   if (!current) {
@@ -167,15 +151,6 @@ export async function update(id: string, input: UpdateDashboardInput, workspaceI
 
   if (current.deletedAt) {
     return { error: "Dashboard has been deleted", code: "DASHBOARD_DELETED" };
-  }
-
-  const site = await prisma.site.findUnique({
-    where: { id: current.siteId },
-    select: { id: true, workspaceId: true },
-  });
-
-  if (!site || site.workspaceId !== workspaceId) {
-    return { error: "Dashboard does not belong to this workspace", code: "WORKSPACE_MISMATCH" };
   }
 
   const updateData: Record<string, unknown> = {};
@@ -200,11 +175,10 @@ export async function update(id: string, input: UpdateDashboardInput, workspaceI
 /**
  * Soft delete dashboard
  */
-export async function remove(id: string, workspaceId: string) {
+export async function remove(id: string) {
   const dashboard = await prisma.dashboard.findUnique({
     where: { id },
     include: {
-      site: { select: { workspaceId: true } },
       _count: { select: { displays: true } },
     },
   });
@@ -215,10 +189,6 @@ export async function remove(id: string, workspaceId: string) {
 
   if (dashboard.deletedAt) {
     return { error: "Dashboard already deleted", code: "DASHBOARD_DELETED" };
-  }
-
-  if (dashboard.site.workspaceId !== workspaceId) {
-    return { error: "Dashboard does not belong to this workspace", code: "WORKSPACE_MISMATCH" };
   }
 
   // Unassign any displays using this dashboard before deleting

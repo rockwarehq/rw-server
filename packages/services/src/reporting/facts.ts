@@ -125,7 +125,6 @@ function kpiFact(
     description:
       `Aggregated KPI buckets per ${entityType.toLowerCase()} and time window. ` +
       "Defaults to SHIFT-granularity buckets; filter granularity = HOUR (with hourly date bucketing) or DAY to change grain.",
-    permission: "production:read",
     source: kpiSource(entityType),
     dateColumn: "businessDate",
     timeColumn: "startTime",
@@ -213,7 +212,6 @@ export const FACTS: Record<string, FactDef> = {
   cycles: {
     label: "Cycles",
     description: "One row per completed machine cycle recorded at a station.",
-    permission: "production:read",
     table: "Cycle",
     baseFilter: `f."deletedAt" IS NULL`,
     // Cycles count when they END: in-progress rows (open/close stations keep
@@ -292,7 +290,6 @@ export const FACTS: Record<string, FactDef> = {
   items: {
     label: "Produced items",
     description: "One row per product produced by a cycle; quantity is the produced amount.",
-    permission: "production:read",
     table: "InventoryItem",
     baseFilter: `f."deletedAt" IS NULL`,
     dateColumn: "businessDate",
@@ -327,7 +324,6 @@ export const FACTS: Record<string, FactDef> = {
   dispositions: {
     label: "Scrap & dispositions",
     description: "One row per item disposition (scrap) entry.",
-    permission: "production:read",
     table: "ItemDispositionLog",
     baseFilter: `f."deletedAt" IS NULL`,
     dateColumn: "businessDate",
@@ -365,7 +361,6 @@ export const FACTS: Record<string, FactDef> = {
     description:
       "One row per station status stretch per shift (period model). A stretch that crosses a shift boundary is cut there; blocks count each stretch once.",
     // Parity with logs.downtimeSearch, which gates the same data.
-    permission: "production:read",
     table: "StationStateLog",
     baseFilter: `f."deletedAt" IS NULL`,
     dateColumn: "businessDate",
@@ -447,7 +442,6 @@ export const FACTS: Record<string, FactDef> = {
     description:
       "One row per stretch a station spent in a production mode. " +
       "Not yet cut at shift boundaries: a stretch crossing one counts in the shift it started in.",
-    permission: "production:read",
     table: "StationModeLog",
     dateColumn: "businessDate",
     timeColumn: "startTime",
@@ -485,7 +479,6 @@ export const FACTS: Record<string, FactDef> = {
   jobRuns: {
     label: "Job runs",
     description: "One row per job assignment per shift on a station; runs count each assignment once.",
-    permission: "production:read",
     table: "StationJobLog",
     dateColumn: "businessDate",
     timeColumn: "startTime",
@@ -534,7 +527,6 @@ export const FACTS: Record<string, FactDef> = {
   logonSessions: {
     label: "Operator logons",
     description: "One row per operator logon session at a station.",
-    permission: "production:read",
     table: "StationLogonSession",
     dateColumn: "businessDate",
     timeColumn: "logonTime",
@@ -580,7 +572,6 @@ export const FACTS: Record<string, FactDef> = {
   calls: {
     label: "Calls",
     description: "One row per raised shop-floor call.",
-    permission: "production:read",
     table: "Call",
     baseFilter: `f."deletedAt" IS NULL`,
     dateColumn: "businessDate",
@@ -628,7 +619,6 @@ export const FACTS: Record<string, FactDef> = {
   materialLedger: {
     label: "Material ledger",
     description: "One row per material quantity change (signed; PRODUCTION rows are negative).",
-    permission: "production:read",
     table: "MaterialLedgerEntry",
     dateColumn: "businessDate",
     timeColumn: "createdAt",
@@ -667,7 +657,6 @@ export const FACTS: Record<string, FactDef> = {
   materialUsage: {
     label: "Material usage",
     description: "One row per (shift, station, job, product, material) production consumption scope.",
-    permission: "production:read",
     table: "MaterialShiftUsage",
     dateColumn: "businessDate",
     workcenterColumn: "workcenterId",
@@ -697,7 +686,6 @@ export const FACTS: Record<string, FactDef> = {
   orderConsumptions: {
     label: "Order fulfillment",
     description: "One row per line item consumed when an order completes.",
-    permission: "production:read",
     table: "OrderConsumption",
     dateColumn: "businessDate",
     timeColumn: "createdAt",
@@ -725,7 +713,6 @@ export const FACTS: Record<string, FactDef> = {
   stockAdjustments: {
     label: "Stock adjustments",
     description: "One row per manual product on-hand correction (signed delta).",
-    permission: "production:read",
     table: "ProductStockAdjustment",
     dateColumn: "businessDate",
     timeColumn: "createdAt",
@@ -756,7 +743,6 @@ export const FACTS: Record<string, FactDef> = {
       "Produced items (+) unioned with scrap dispositions (−); netQuantity nets them per slice. " +
       "Netting is per bucket, not per physical item — scrap logged against an earlier period stays " +
       "on the shift it was recorded for, so a bucket's net can go negative.",
-    permission: "production:read",
     source: PRODUCTION_SOURCE,
     dateColumn: "businessDate",
     timeColumn: "createdAt",

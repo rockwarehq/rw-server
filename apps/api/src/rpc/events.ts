@@ -1,9 +1,7 @@
 import { ORPCError, eventIterator } from "@orpc/server";
 import * as z from "zod";
 import prisma from "@rw/db";
-import { authRequired, processorRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { userRequired, processorRequired } from "./middleware.js";
 import { publishStreamEvent, subscribeStreamEvents } from "@rw/runtime/events-bus";
 
 const pointValueQualitySchema = z.enum(["GOOD", "BAD", "UNKNOWN"]);
@@ -184,15 +182,15 @@ export const ingest = processorRequired
     return { accepted: input.events.length };
   });
 
-export const stream = authRequired
+export const stream = userRequired
   .input(streamInputSchema)
   .output(eventIterator(streamEventSchema))
   .handler(async function* ({ context, input, signal }) {
     // The event envelope carries no siteId, so the stream is gated on
-    // holding facility:read somewhere; authorization happens at subscribe
+    // holding VIEW somewhere; authorization happens at subscribe
     // time only (no mid-stream re-check — known limitation).
-    const scope = grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "anySite" } }));
-    const workspaceId = scope.workspaceId;
+    context.access.requireSomewhere("VIEW");
+    const workspaceId = context.current.workspaceId;
 
     const requestedTypes = new Set(input.types ?? STREAM_EVENT_TYPES);
 

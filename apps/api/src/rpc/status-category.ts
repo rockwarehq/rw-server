@@ -1,7 +1,5 @@
 import { z } from "zod";
-import { authRequired, userOrDisplayRequired } from "./middleware.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { userRequired, userOrDisplayRequired } from "./middleware.js";
 import { statusCategory } from "@rw/services/facility/index";
 import { throwServiceError, unwrap } from "./errors.js";
 
@@ -34,10 +32,8 @@ const listInputSchema = z.object({
 // Procedures
 // ============================================================================
 
-export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await statusCategory.create(input);
   if (result.error !== undefined) throwServiceError(result);
@@ -45,28 +41,19 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
 });
 
 export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
-  );
-  return statusCategory.list({ ...input, ...scopeFilter(scope) });
+  const scope = context.access.list("VIEW", input.siteId);
+  return statusCategory.list({ ...input, ...scope });
 });
 
-export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:read", scope: { kind: "statusCategory", id: input.id } }),
-  );
+export const get = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { statusCategory: input.id });
 
   const result = await statusCategory.getById(input.id);
   return unwrap(result, { notFoundMessage: "Status category not found" });
 });
 
-export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, {
-      permission: "configuration:write",
-      scope: { kind: "statusCategory", id: input.id },
-    }),
-  );
+export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { statusCategory: input.id });
 
   const { id, ...updateData } = input;
   const result = await statusCategory.update(id, updateData);
@@ -74,13 +61,8 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
   return result.data;
 });
 
-export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, {
-      permission: "configuration:write",
-      scope: { kind: "statusCategory", id: input.id },
-    }),
-  );
+export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { statusCategory: input.id });
 
   const result = await statusCategory.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);

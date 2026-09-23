@@ -1,6 +1,6 @@
 import prisma from "@rw/db";
-import { hashPassword } from "@rw/auth/password";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ensurePlantBucket, makeUser } from "./helpers/access.js";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
 import { rpcCall } from "./helpers/rpc-call.js";
 
@@ -33,42 +33,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("graph/entity/integration author
       create: { name: "GraphAuthZ Site B", workspaceId },
       select: { id: true },
     });
+    await ensurePlantBucket(workspaceId, siteB.id, "GraphAuthZ Site B");
 
-    const faRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Plant Admin", scope: "SITE" } },
-      select: { id: true },
-    });
-    // Graph data is production-visible, graph authoring is configuration:
-    // the read tier is a custom production:read role (Plant Member's base
-    // tier no longer includes production visibility).
-    const officeRole = await prisma.role.upsert({
-      where: { workspaceId_name_scope: { workspaceId, name: "graph-authz-viewer", scope: "SITE" } },
-      update: { permissions: ["production:read"] },
-      create: { workspaceId, name: "graph-authz-viewer", scope: "SITE", permissions: ["production:read"] },
-      select: { id: true },
-    });
-    const passwordHash = await hashPassword(PASSWORD);
-    for (const { email, roleId } of [
-      { email: FA_EMAIL, roleId: faRole.id },
-      { email: OFFICE_EMAIL, roleId: officeRole.id },
-    ]) {
-      const u = await prisma.user.upsert({
-        where: { email },
-        update: {},
-        create: { email, passwordHash, firstName: "GraphAuthZ", status: "ACTIVE" },
-      });
-      const membership = await prisma.workspaceMembership.upsert({
-        where: { userId_workspaceId: { userId: u.id, workspaceId } },
-        update: {},
-        create: { userId: u.id, workspaceId },
-      });
-      const existing = await prisma.roleAssignment.findFirst({
-        where: { membershipId: membership.id, roleId, siteId: siteA.id },
-      });
-      if (!existing) {
-        await prisma.roleAssignment.create({ data: { membershipId: membership.id, roleId, siteId: siteA.id } });
-      }
-    }
+    // Bucket-era fixtures. The author is plant ADMIN at site A (was the
+    // "Plant Admin" role). FLIP: graph reads are member reads now (node
+    // list was production:read) — the office viewer needs only plant VIEW
+    // at site A, where the key model required a custom production:read role.
+    await makeUser(FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
+    await makeUser(OFFICE_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "VIEW" }] });
 
     officeToken = (await loginAs(server, OFFICE_EMAIL, PASSWORD)).accessToken;
     workspaceToken = (await loginAs(server, FA_EMAIL, PASSWORD)).accessToken;
@@ -101,12 +73,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("graph/entity/integration author
   });
 
   it("graph refs resolve unknown ids to NOT_FOUND before permission checks", async () => {
-    const res = await rpcCall(
-      server,
-      "graph/node/get",
-      { id: "00000000-0000-4000-8000-000000000002" },
-      workspaceToken,
-    );
+    const res = await rpcCall(server, "graph/node/get", { id: "00000000-0000-4000-8000-000000000002" }, workspaceToken);
     expect(res.statusCode).toBe(404);
   });
 
@@ -115,11 +82,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("graph/entity/integration author
     expect(res.statusCode).toBe(200);
   });
 
-  it("integration reads and destructive ops are open to Plant Admin (site superuser incl. settings:admin)", async () => {
+  it("integration reads and destructive ops are open to plant ADMIN (MANAGE and up)", async () => {
     const list = await rpcCall(server, "integration/list", { siteId: siteA.id }, workspaceToken);
     expect(list.statusCode).toBe(200);
-    // Plant Admin now holds settings:admin — the permission gate passes and
-    // the nonexistent id falls through to NOT_FOUND instead of FORBIDDEN.
+    // Plant ADMIN outranks the MANAGE level the delete demands — the gate
+    // passes and the nonexistent id falls through to NOT_FOUND instead of
+    // FORBIDDEN.
     const del = await rpcCall(
       server,
       "integration/delete",
@@ -129,7 +97,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("graph/entity/integration author
     expect(del.statusCode).toBe(404);
   });
 
-  it("production viewers can read but not configure the graph", async () => {
+  it("plant members (VIEW) can read but not author the graph", async () => {
+    // FLIP: graph reads for plant VIEW members now succeed as plain member
+    // reads; authoring stays MANAGE.
     const list = await rpcCall(server, "graph/node/list", { siteId: siteA.id }, officeToken);
     expect(list.statusCode).toBe(200);
     const create = await rpcCall(server, "graph/node/create", { siteId: siteA.id, name: "office-nope" }, officeToken);
