@@ -83,3 +83,55 @@ model RoleAssignment {
   @@index([membershipId])
   @@index([siteId])
 }
+
+// ─── SPIKE: Basecamp-bucket access model (throwaway exploration) ─────────
+// Every row belongs to exactly one bucket; a person's access is the set of
+// buckets they are in, each with a small tier. No permission vocabulary.
+// Scalar columns only (FKs live in the spike migration) to keep the spike
+// diff small. See SPIKE.md on this branch.
+
+enum BucketKind {
+  WORKCENTER // one per workcenter: the floor "project"
+  PLANT_OFFICE // one per site: orders, customers, scheduling, stock
+  PLANT_LIBRARY // one per site: shared catalogs, readable by any site member
+  PLANT_CONFIG // one per site: equipment, data models, integrations
+}
+
+enum BucketTier {
+  VIEW // see everything in the bucket
+  WORK // operate: create/edit the bucket's day-to-day rows
+  MANAGE // configure the bucket and its contents; admin actions
+}
+
+model Bucket {
+  id          String     @id @default(uuid()) @db.Uuid
+  workspaceId String     @db.Uuid
+  siteId      String?    @db.Uuid
+  kind        BucketKind
+  /// Set only for kind = WORKCENTER.
+  workcenterId String?   @unique @db.Uuid
+  name        String
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  accesses BucketAccess[]
+
+  @@index([siteId, kind])
+  @@index([workspaceId])
+}
+
+model BucketAccess {
+  id           String     @id @default(uuid()) @db.Uuid
+  bucketId     String     @db.Uuid
+  membershipId String     @db.Uuid
+  tier         BucketTier
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  bucket Bucket @relation(fields: [bucketId], references: [id], onDelete: Cascade)
+
+  @@unique([bucketId, membershipId])
+  @@index([membershipId])
+}

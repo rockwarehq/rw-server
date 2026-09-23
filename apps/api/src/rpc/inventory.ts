@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { authorizeBucketTier } from "@rw/auth/iam/buckets"; // SPIKE
+import { ORPCError } from "@orpc/server"; // SPIKE
 import { grant } from "./authz.js";
 import {
   material,
@@ -325,11 +327,19 @@ export const productCreate = authRequired.input(productCreateInputSchema).handle
  * List products with optional filters
  */
 export const productList = authRequired.input(productListInputSchema).handler(async ({ input, context }) => {
+  // SPIKE: catalogs live in the site's Library bucket; membership in ANY
+  // bucket at the site confers VIEW on the Library (the auto-membership hook).
+  const librarySiteId = input.siteId ?? context.iam.siteId;
+  if (!librarySiteId) throw new ORPCError("BAD_REQUEST", { message: "Site context required" });
   const scope = grant(
-    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+    await authorizeBucketTier(context.iam, {
+      ref: { kind: "site", siteId: librarySiteId, area: "PLANT_LIBRARY" },
+      tier: "VIEW",
+    }),
   );
 
-  return product.list({ ...input, ...scopeFilter(scope) });
+  void scope;
+  return product.list({ ...input, siteId: librarySiteId });
 });
 
 /**

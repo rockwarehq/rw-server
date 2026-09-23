@@ -4,6 +4,7 @@ import * as workcenter from "./workcenter.js";
 import * as workcenterGrant from "./workcenter-grant.js";
 import * as label from "./label.js";
 import * as station from "./station.js";
+import * as bucket from "./bucket.js"; // SPIKE
 import * as events from "./events.js";
 import * as metrics from "./metrics.js";
 import * as metricCatalog from "./metric-catalog.js";
@@ -201,6 +202,11 @@ export const router = {
     list: workcenterGrant.list,
     upsert: workcenterGrant.upsert,
     remove: workcenterGrant.remove,
+  },
+  // SPIKE: Basecamp-bucket access model exploration.
+  bucket: {
+    list: bucket.list,
+    members: bucket.members,
   },
   label: {
     create: label.create,

@@ -5,6 +5,7 @@ import { station } from "@rw/services/facility/index";
 import { Principal } from "../auth/index.js";
 import { amendJobHistory as amendJobHistoryService, listAmendments, retryRebuild } from "@rw/services/history/index";
 import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { authorizeBucketTier } from "@rw/auth/iam/buckets"; // SPIKE
 import { grant } from "./authz.js";
 import { type CodeOverrides, throwServiceError } from "./errors.js";
 
@@ -220,7 +221,8 @@ export const list = userOrDisplayRequired.input(listInputSchema).handler(async (
  */
 export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "production:read", scope: { kind: "station", id: input.id } }),
+    // SPIKE: bucket gate — the row's workcenter bucket, tier VIEW.
+    await authorizeBucketTier(context.iam, { ref: { kind: "station", stationId: input.id }, tier: "VIEW" }),
   );
 
   const result = await station.getById(input.id, scope.workspaceId);
@@ -237,7 +239,8 @@ export const get = authRequired.input(idInputSchema).handler(async ({ input, con
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
   const scope = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "station", id: id } }),
+    // SPIKE: bucket gate — configuring the station needs MANAGE in its bucket.
+    await authorizeBucketTier(context.iam, { ref: { kind: "station", stationId: id }, tier: "MANAGE" }),
   );
 
   const result = await station.update(id, updateData, scope.workspaceId);
@@ -598,12 +601,8 @@ export const assignDowntimeReason = userOrDisplayRequired
  * Change the current job assigned to a station
  */
 export const changeJob = userOrDisplayRequired.input(changeJobInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, {
-      permission: "production:write",
-      scope: { kind: "station", id: input.stationId },
-    }),
-  );
+  // SPIKE: bucket gate — operating the station needs WORK in its bucket.
+  grant(await authorizeBucketTier(context.iam, { ref: { kind: "station", stationId: input.stationId }, tier: "WORK" }));
 
   const result = await station.changeJob(input.stationId, input.jobId);
   if ("error" in result) throwServiceError(result);

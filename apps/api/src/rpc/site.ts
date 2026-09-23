@@ -4,6 +4,7 @@ import { authRequired, userOrDisplayRequired } from "./middleware.js";
 import { site } from "@rw/services/facility/index";
 import { Principal } from "../auth/index.js";
 import { authorize, authorizeAccessibleSites } from "@rw/auth/iam/policy";
+import { bucketVisibleSiteIds } from "@rw/auth/iam/buckets"; // SPIKE
 import { grant } from "./authz.js";
 import { throwServiceError, unwrap } from "./errors.js";
 import { storageConfig } from "../config.js";
@@ -150,9 +151,14 @@ export const tree = userOrDisplayRequired.input(treeInputSchema).handler(async (
     return result.data;
   }
 
-  // No siteId, return the visible-site tree (site directory surface)
-  const scope = grant(await authorizeAccessibleSites(context.iam, {}));
-  return site.getTree(scope.workspaceId, scope.siteIds);
+  // No siteId, return the visible-site tree (site directory surface).
+  // SPIKE: visibility = the union of my buckets' sites — Basecamp's
+  // "projects I'm on" is the directory.
+  if (!context.iam.workspaceId || !context.iam.id) {
+    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
+  }
+  const visible = await bucketVisibleSiteIds(context.iam.id, context.iam.workspaceId);
+  return site.getTree(context.iam.workspaceId, visible === "all" ? undefined : visible);
 });
 
 /**

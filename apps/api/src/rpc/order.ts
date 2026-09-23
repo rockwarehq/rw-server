@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { authRequired } from "./middleware.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { authorize } from "@rw/auth/iam/policy";
+import { authorizeBucketTier } from "@rw/auth/iam/buckets"; // SPIKE
+import { ORPCError } from "@orpc/server"; // SPIKE
 import { grant } from "./authz.js";
 import * as orderService from "@rw/services/order/order";
 import { throwServiceError, unwrap } from "./errors.js";
@@ -89,7 +91,13 @@ const nextNumberInputSchema = z.object({
 // ============================================================================
 
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "planning:write", scope: { kind: "site", siteId: input.siteId } }));
+  // SPIKE: orders live in the site's Office bucket; creating one is WORK.
+  grant(
+    await authorizeBucketTier(context.iam, {
+      ref: { kind: "site", siteId: input.siteId, area: "PLANT_OFFICE" },
+      tier: "WORK",
+    }),
+  );
 
   // DUPLICATE_PRODUCT here means duplicate products within the create payload
   // and historically fell through to BAD_REQUEST (unlike addLineItem, where the
@@ -101,8 +109,15 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
 });
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "planning:read", requestedSiteId: input.siteId }));
-  return orderService.list({ ...input, ...scopeFilter(scope) });
+  // SPIKE: you either see the Office bucket (all site orders) or you don't —
+  // no per-row narrowing exists inside a bucket.
+  const siteId = input.siteId ?? context.iam.siteId;
+  if (!siteId) throw new ORPCError("BAD_REQUEST", { message: "Site context required" });
+  const scope = grant(
+    await authorizeBucketTier(context.iam, { ref: { kind: "site", siteId, area: "PLANT_OFFICE" }, tier: "VIEW" }),
+  );
+  void scope;
+  return orderService.list({ ...input, siteId });
 });
 
 export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {

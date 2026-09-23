@@ -10,6 +10,18 @@
 // (ADR-0002 amendment, 2026-08-18).
 
 export const EXCLUDED_PROCEDURES: ReadonlySet<string> = new Set([
+  // ── SPIKE: Basecamp-bucket exploration — these procedures gate through
+  // authorizeBucketTier (one bucket-membership check) instead of the
+  // permission policy. Throwaway; see SPIKE.md.
+  "bucket.list",
+  "bucket.members",
+  "station.get",
+  "station.update",
+  "station.changeJob",
+  "order.list",
+  "order.create",
+  "product.list",
+  "gateway.update",
   // ── operator.* — display-identity-bound shop-floor flows. The principal is
   // a DISPLAY whose identity is verified against the display row itself
   // (assertDisplayIdentity + resolveDisplayContext), which is stricter than

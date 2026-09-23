@@ -2,6 +2,8 @@ import { z } from "zod";
 import { ORPCError } from "@orpc/server";
 import { authRequired } from "./middleware.js";
 import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { authorizeBucketTier } from "@rw/auth/iam/buckets"; // SPIKE
+import prisma from "@rw/db"; // SPIKE
 import { grant } from "./authz.js";
 import { gateway, datasource } from "../services/device/index.js";
 import { throwServiceError } from "./errors.js";
@@ -133,8 +135,17 @@ export const gatewayGet = authRequired.input(gatewayIdInputSchema).handler(async
  */
 export const gatewayUpdate = authRequired.input(gatewayUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
+  // SPIKE: equipment lives in the site's Config bucket; configuring it is
+  // MANAGE. A gateway with no site (the unassigned pool) has NO bucket and
+  // is invisible here — the old "null site" escape hatch, felt directly.
+  const gatewayRow = await prisma.gateway.findUnique({ where: { id }, select: { siteId: true } });
+  if (!gatewayRow) throw new ORPCError("NOT_FOUND", { message: "Gateway not found" });
+  if (!gatewayRow.siteId) throw new ORPCError("FORBIDDEN", { message: "Unbucketed gateway (spike)" });
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "gateway", id } }),
+    await authorizeBucketTier(context.iam, {
+      ref: { kind: "site", siteId: gatewayRow.siteId, area: "PLANT_CONFIG" },
+      tier: "MANAGE",
+    }),
   );
   if (input.siteId) {
     // Moving a gateway requires configuration:write at the TARGET site too.
