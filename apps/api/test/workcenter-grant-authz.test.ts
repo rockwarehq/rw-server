@@ -163,34 +163,34 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("workcenter grant authorization 
       expect(station.statusCode).toBe(403);
     });
 
-    it("WRITE grant configures stations only inside its workcenter", async () => {
+    it("WRITE grant no longer configures stations anywhere — station setup is technical configuration", async () => {
+      // Grants confer production access only; station setup now requires
+      // configuration:write, which no grant carries — own workcenter included.
       const own = await rpcCall(
         server,
         "station/update",
         { id: stationGranted.id, description: `${PREFIX} updated` },
         writeToken,
       );
-      expect(own.statusCode).toBe(200);
+      expect(own.statusCode).toBe(403);
 
       const other = await rpcCall(server, "station/update", { id: stationOther.id, description: "no" }, writeToken);
       expect(other.statusCode).toBe(403);
 
-      // A station directly under the site evaluates site-level: plant roles only.
       const noWc = await rpcCall(server, "station/update", { id: stationNoWc.id, description: "no" }, writeToken);
       expect(noWc.statusCode).toBe(403);
     });
 
-    it("WRITE grant updates its own workcenter config but not others", async () => {
+    it("WRITE grant no longer updates workcenter config — grants confer production access only", async () => {
       const own = await rpcCall(
         server,
         "workcenter/update",
         { id: wcGranted.id, description: `${PREFIX} mine` },
         writeToken,
       );
-      expect(own.statusCode).toBe(200);
+      expect(own.statusCode).toBe(403);
       const other = await rpcCall(server, "workcenter/update", { id: wcOther.id, description: "no" }, writeToken);
       expect(other.statusCode).toBe(403);
-      // Creating a NEW workcenter is a site-level facility write.
       const create = await rpcCall(server, "workcenter/create", { siteId: siteA.id, name: `${PREFIX}-nope` }, writeToken);
       expect(create.statusCode).toBe(403);
     });
@@ -350,8 +350,18 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("workcenter grant authorization 
     };
 
     beforeAll(async () => {
-      const plantMemberRole = await prisma.role.findUniqueOrThrow({
-        where: { workspaceId_name_scope: { workspaceId, name: "Plant Member", scope: "SITE" } },
+      // The floor policy modulates read-tier PRODUCTION visibility. Plant
+      // Member no longer carries it, so the policy subject is a custom
+      // read-tier role holding both floor vocabularies.
+      const plantMemberRole = await prisma.role.upsert({
+        where: { workspaceId_name_scope: { workspaceId, name: "wcgrant-policy-floor", scope: "SITE" } },
+        update: { permissions: ["facility:read", "job:read", "status:read", "calls:read", "modes:read", "production:read"] },
+        create: {
+          workspaceId,
+          name: "wcgrant-policy-floor",
+          scope: "SITE",
+          permissions: ["facility:read", "job:read", "status:read", "calls:read", "modes:read", "production:read"],
+        },
         select: { id: true },
       });
       const passwordHash = await hashPassword(PASSWORD);

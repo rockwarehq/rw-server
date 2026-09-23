@@ -232,7 +232,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:write",
+        permission: "configuration:write",
         scope: { kind: "site", siteId: request.body.siteId },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -268,13 +268,13 @@ export default async function gateways(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       if (request.query.unassigned) {
         // Workspace pool: claimed hardware awaiting site assignment.
-        const pool = await authorize(request.iam, { permission: "facility:write", scope: { kind: "anySite" } });
+        const pool = await authorize(request.iam, { permission: "configuration:write", scope: { kind: "anySite" } });
         if (!pool.ok) return replyPolicyDenial(reply, pool);
         return gateway.list({ workspaceId: pool.workspaceId, unassigned: true });
       }
 
       const scope = await authorizeList(request.iam, {
-        permission: "facility:read",
+        permission: "configuration:read",
         requestedSiteId: request.query.siteId,
       });
       if (!scope.ok) return replyPolicyDenial(reply, scope);
@@ -300,7 +300,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:read",
+        permission: "configuration:read",
         scope: { kind: "gateway", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -333,7 +333,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:read",
+        permission: "configuration:read",
         scope: { kind: "gateway", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -366,14 +366,14 @@ export default async function gateways(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:write",
+        permission: "configuration:write",
         scope: { kind: "gateway", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
       if (request.body.siteId) {
-        // Moving a gateway requires facility:write at the TARGET site too.
+        // Moving a gateway requires configuration:write at the TARGET site too.
         const target = await authorize(request.iam, {
-          permission: "facility:write",
+          permission: "configuration:write",
           scope: { kind: "site", siteId: request.body.siteId },
         });
         if (!target.ok) return replyPolicyDenial(reply, target);
@@ -406,7 +406,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:admin",
+        permission: "configuration:write",
         scope: { kind: "gateway", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -439,7 +439,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:admin",
+        permission: "configuration:write",
         scope: { kind: "gateway", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -469,7 +469,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:admin",
+        permission: "configuration:write",
         scope: { kind: "gateway", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -503,7 +503,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:write",
+        permission: "configuration:write",
         scope: { kind: "gateway", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -535,7 +535,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:read",
+        permission: "configuration:read",
         scope: { kind: "gateway", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -560,7 +560,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:read",
+        permission: "configuration:read",
         scope: { kind: "gateway", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -591,7 +591,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:write",
+        permission: "configuration:write",
         scope: { kind: "gateway", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);

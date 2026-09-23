@@ -45,7 +45,9 @@ const listInputSchema = z.object({
 // ============================================================================
 
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "status:write", scope: { kind: "site", siteId: input.siteId } }));
+  grant(
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
+  );
 
   const result = await statusReason.create(input);
   if (result.error !== undefined) throwServiceError(result);
@@ -53,19 +55,23 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
 });
 
 export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "status:read", requestedSiteId: input.siteId }));
+  const scope = grant(
+    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+  );
   return statusReason.list({ ...input, ...scopeFilter(scope) });
 });
 
 export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "status:read", scope: { kind: "statusReason", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "statusReason", id: input.id } }));
 
   const result = await statusReason.getById(input.id);
   return unwrap(result, { notFoundMessage: "Status reason not found" });
 });
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "status:write", scope: { kind: "statusReason", id: input.id } }));
+  grant(
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "statusReason", id: input.id } }),
+  );
 
   const { id, ...updateData } = input;
   const result = await statusReason.update(id, updateData);
@@ -74,7 +80,9 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 });
 
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "status:admin", scope: { kind: "statusReason", id: input.id } }));
+  grant(
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "statusReason", id: input.id } }),
+  );
 
   const result = await statusReason.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);

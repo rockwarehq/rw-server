@@ -84,8 +84,17 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
       where: { workspaceId_name_scope: { workspaceId: workspace.id, name: "Plant Admin", scope: "SITE" } },
       select: { id: true },
     });
-    const readerRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId: workspace.id, name: "Plant Member", scope: "SITE" } },
+    // Station visibility is production data now: the read tier is a custom
+    // production:read role (Plant Member's base tier no longer includes it).
+    const readerRole = await prisma.role.upsert({
+      where: { workspaceId_name_scope: { workspaceId: workspace.id, name: "facility-authz-viewer", scope: "SITE" } },
+      update: { permissions: ["production:read"] },
+      create: {
+        workspaceId: workspace.id,
+        name: "facility-authz-viewer",
+        scope: "SITE",
+        permissions: ["production:read"],
+      },
       select: { id: true },
     });
     const adminRole = await prisma.role.findUniqueOrThrow({

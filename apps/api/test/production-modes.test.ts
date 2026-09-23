@@ -94,16 +94,17 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
       where: { workspaceId_name_scope: { workspaceId, name: "Plant Member", scope: "SITE" } },
       select: { id: true },
     });
-    // Custom role: modes:write without modes:admin — Plant Member has no
-    // writes and Plant Admin's modes:admin would pass the create/gate checks.
+    // Custom role: production:write without production:admin — Plant Member
+    // has no writes and Plant Admin's production:admin would pass the
+    // create/gate checks.
     const officeRole = await prisma.role.upsert({
       where: { workspaceId_name_scope: { workspaceId, name: "pm-test-operator", scope: "SITE" } },
-      update: { permissions: ["facility:read", "modes:read", "modes:write"] },
+      update: { permissions: ["production:read", "production:write"] },
       create: {
         workspaceId,
         name: "pm-test-operator",
         scope: "SITE",
-        permissions: ["facility:read", "modes:read", "modes:write"],
+        permissions: ["production:read", "production:write"],
       },
       select: { id: true },
     });
@@ -218,7 +219,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
     expect(get.statusCode).toBe(404);
   });
 
-  it("permissions: reader cannot create or force; office (modes:write, no admin) cannot create", async () => {
+  it("permissions: reader cannot create or force; office (production:write, no admin) cannot create", async () => {
     const create = await rpcCall(server, "productionMode/create", { siteId: siteA.id, name: "pm-x" }, readerToken);
     expect(create.statusCode).toBe(403);
     const officeCreate = await rpcCall(server, "productionMode/create", { siteId: siteA.id, name: "pm-x" }, officeToken);
@@ -335,7 +336,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
     expect(body.data.map((l) => l.id)).toContain(opened.id);
   });
 
-  it("mode roles gate force AND clear; modes:admin bypasses both", async () => {
+  it("mode roles gate force AND clear; production:admin bypasses both", async () => {
     const restricted = await createMode({ name: "pm-test-gate", roleIds: [roleMaintId] });
 
     // Office holds ops, not maint → denied.
@@ -347,7 +348,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
     );
     expect(denied.statusCode).toBe(403);
 
-    // FA also holds only ops, but modes:admin bypasses.
+    // FA also holds only ops, but production:admin bypasses.
     const bypass = await rpcCall(
       server,
       "productionMode/force",

@@ -139,7 +139,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:write",
+        permission: "configuration:write",
         scope: { kind: "site", siteId: request.body.siteId },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -170,7 +170,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const scope = await authorizeList(request.iam, {
-        permission: "facility:read",
+        permission: "production:read",
         requestedSiteId: request.query.siteId,
       });
       if (!scope.ok) return replyPolicyDenial(reply, scope);
@@ -197,7 +197,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:read",
+        permission: "production:read",
         scope: { kind: "station", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -231,7 +231,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:write",
+        permission: "configuration:write",
         scope: { kind: "station", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -266,7 +266,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:write",
+        permission: "configuration:write",
         scope: { kind: "station", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -300,7 +300,7 @@ export default async function stations(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "facility:admin",
+        permission: "configuration:write",
         scope: { kind: "station", id: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);

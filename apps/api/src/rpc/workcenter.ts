@@ -50,7 +50,9 @@ const listInputSchema = z.object({
  * Create a new workcenter
  */
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }));
+  grant(
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
+  );
 
   const result = await workcenter.create(input);
   if (result.error !== undefined) throwServiceError(result);
@@ -61,7 +63,15 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
  * List workcenters
  */
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "facility:read", requestedSiteId: input.siteId }));
+  const scope = grant(
+    // Shared reference read: production OR planning visibility both qualify.
+    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }).then(
+      async (production) =>
+        production.ok
+          ? production
+          : await authorizeList(context.iam, { permission: "planning:read", requestedSiteId: input.siteId }),
+    ),
+  );
   return workcenter.list({ ...input, ...scopeFilter(scope) });
 });
 
@@ -70,7 +80,13 @@ export const list = authRequired.input(listInputSchema).handler(async ({ input, 
  */
 export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "facility:read", scope: { kind: "workcenter", id: input.id } }),
+    // Shared reference read: production OR planning visibility both qualify.
+    await authorize(context.iam, { permission: "production:read", scope: { kind: "workcenter", id: input.id } }).then(
+      async (production) =>
+        production.ok
+          ? production
+          : await authorize(context.iam, { permission: "planning:read", scope: { kind: "workcenter", id: input.id } }),
+    ),
   );
 
   const result = await workcenter.getById(input.id, scope.workspaceId);
@@ -83,7 +99,7 @@ export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ i
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
   const scope = grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "workcenter", id: id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "workcenter", id: id } }),
   );
 
   const result = await workcenter.update(id, updateData, scope.workspaceId);
@@ -97,7 +113,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 export const move = authRequired.input(moveInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
     await authorize(context.iam, {
-      permission: "facility:write",
+      permission: "configuration:write",
       scope: { kind: "workcenter", id: input.id },
     }),
   );
@@ -113,7 +129,7 @@ export const move = authRequired.input(moveInputSchema).handler(async ({ input, 
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
     await authorize(context.iam, {
-      permission: "facility:admin",
+      permission: "configuration:write",
       scope: { kind: "workcenter", id: input.id },
     }),
   );

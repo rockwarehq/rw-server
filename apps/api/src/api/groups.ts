@@ -93,7 +93,10 @@ export default async function groups(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { id } = request.params;
-      const auth = await authorize(request.iam, { permission: "facility:read", scope: { kind: "pointGroup", id } });
+      const auth = await authorize(request.iam, {
+        permission: "configuration:read",
+        scope: { kind: "pointGroup", id },
+      });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const group = await datasource.groups.getById(id);
@@ -124,7 +127,10 @@ export default async function groups(fastify: FastifyTypedInstance) {
       const { id } = request.params;
       const body = request.body;
 
-      const auth = await authorize(request.iam, { permission: "facility:write", scope: { kind: "pointGroup", id } });
+      const auth = await authorize(request.iam, {
+        permission: "configuration:write",
+        scope: { kind: "pointGroup", id },
+      });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await datasource.groups.update(id, body);
@@ -152,7 +158,10 @@ export default async function groups(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { id } = request.params;
-      const auth = await authorize(request.iam, { permission: "facility:write", scope: { kind: "pointGroup", id } });
+      const auth = await authorize(request.iam, {
+        permission: "configuration:write",
+        scope: { kind: "pointGroup", id },
+      });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await datasource.groups.remove(id);
