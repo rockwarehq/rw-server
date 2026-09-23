@@ -36,7 +36,7 @@ model Employee {
   versions  EmployeeVersion[] @relation("EmployeeVersions")
 
   siteAccess  EmployeeSiteAccess[]
-  memberships WorkspaceMembership[]
+  user        User?
 
   // Login lockout
   failedLoginAttempts Int       @default(0)

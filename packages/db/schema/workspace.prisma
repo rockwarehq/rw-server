@@ -1,5 +1,11 @@
+/// The account. Each deployment has exactly one: `singletonGuard` is
+/// always 0 and unique, so a second row cannot be inserted (the same guard
+/// Basecamp's single-tenant Campfire puts on its accounts table). Users
+/// carry no workspace column; the one workspace is implied.
 model Workspace {
   id          String  @id @default(uuid()) @db.Uuid
+  /// Always 0. Unique, so the table holds one row.
+  singletonGuard Int  @default(0) @unique
   name        String  @unique
   slug        String  @unique
   description String?
@@ -9,7 +15,7 @@ model Workspace {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  // Relations
+  // ARCHIVED (pre-account-admin model)
   memberships WorkspaceMembership[]
 
   // Root SITE locations owned by this workspace (deprecated - use sites)
@@ -37,15 +43,16 @@ model Workspace {
   smsConsents SmsConsent[]
 }
 
-/// The workspace-level standing of a member. OWNER is the reserved
-/// Basecamp-account-owner analog: bypasses buckets, holds ownership-only
-/// operations (workspace create/delete, ownership transfer).
+/// ARCHIVED — was the membership's standing; now User.isAccountAdmin.
 enum WorkspaceRole {
   OWNER
   MEMBER
 }
 
-/// Membership: links a User to a Workspace and owns that user's bucket accesses.
+/// ARCHIVED — one workspace per deployment made memberships redundant.
+/// Their data moved to User (isAccountAdmin, employeeId) and
+/// BucketAccess.userId. Kept as a frozen archive with RoleAssignment and
+/// WorkcenterGrant, which still point here. NO code reads or writes it.
 model WorkspaceMembership {
   id String @id @default(uuid()) @db.Uuid
 
@@ -58,12 +65,9 @@ model WorkspaceMembership {
   workspaceId String    @db.Uuid
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
-  employeeId String?   @db.Uuid
-  employee   Employee? @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  employeeId String? @db.Uuid
 
   workspaceRole WorkspaceRole @default(MEMBER)
-
-  bucketAccesses BucketAccess[]
 
   // ARCHIVED relations (pre-bucket model; no code paths).
   roleAssignments  RoleAssignment[]

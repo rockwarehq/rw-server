@@ -3,3 +3,4 @@ export { default } from "./client.js";
 export { classifyDbTimeout, type DbTimeoutKind } from "./timeouts.js";
 export * from "./generated/client.js";
 export * from "./generated/enums.js";
+export { accountWorkspace, ensureAccountWorkspace } from "./account.js";
