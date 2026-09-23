@@ -11,7 +11,6 @@ export interface CreateDatasourceInput {
   connection?: Record<string, unknown>;
   gatewayId?: string;
   siteId: string;
-  workspaceId: string;
 }
 
 export interface UpdateDatasourceInput {
@@ -49,20 +48,16 @@ export interface ValidationResult {
  * Create a new datasource (always creates as DRAFT)
  */
 export async function create(input: CreateDatasourceInput) {
-  const { name, type, attrs, driver, driverVersion, connection, gatewayId, siteId, workspaceId } = input;
+  const { name, type, attrs, driver, driverVersion, connection, gatewayId, siteId } = input;
 
-  // Verify site exists and belongs to workspace
+  // Verify site exists
   const site = await prisma.site.findUnique({
     where: { id: siteId },
-    select: { id: true, workspaceId: true },
+    select: { id: true },
   });
 
   if (!site) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
-  }
-
-  if (site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   // Get driver info from registry (returns latest if no version specified)
@@ -218,25 +213,13 @@ export async function getById(id: string) {
  * - DRAFT: No connection validation (free editing)
  * - ACTIVE: Validates connection changes against driver schema
  */
-export async function update(id: string, input: UpdateDatasourceInput, workspaceId?: string) {
+export async function update(id: string, input: UpdateDatasourceInput) {
   const { name, type, attrs, connection } = input;
 
-  const existing = await prisma.datasource.findUnique({
-    where: { id },
-    include: {
-      site: {
-        select: { workspaceId: true },
-      },
-    },
-  });
+  const existing = await prisma.datasource.findUnique({ where: { id } });
 
   if (!existing) {
     return { error: "Datasource not found", code: "NOT_FOUND" };
-  }
-
-  // Validate workspace access if workspaceId provided
-  if (workspaceId && existing.site?.workspaceId && existing.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   // If datasource is ACTIVE and connection is being updated, validate against driver schema
@@ -280,23 +263,11 @@ export async function update(id: string, input: UpdateDatasourceInput, workspace
 /**
  * Delete datasource
  */
-export async function remove(id: string, workspaceId?: string) {
-  const existing = await prisma.datasource.findUnique({
-    where: { id },
-    include: {
-      site: {
-        select: { workspaceId: true },
-      },
-    },
-  });
+export async function remove(id: string) {
+  const existing = await prisma.datasource.findUnique({ where: { id } });
 
   if (!existing) {
     return { error: "Datasource not found", code: "NOT_FOUND" };
-  }
-
-  // Validate workspace access if workspaceId provided
-  if (workspaceId && existing.site?.workspaceId && existing.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   const gatewayId = existing.gatewayId;
@@ -316,23 +287,11 @@ export async function remove(id: string, workspaceId?: string) {
  * Publish datasource (DRAFT -> ACTIVE)
  * Validates connection info exists and is valid against driver schema
  */
-export async function publish(id: string, workspaceId?: string) {
-  const existing = await prisma.datasource.findUnique({
-    where: { id },
-    include: {
-      site: {
-        select: { workspaceId: true },
-      },
-    },
-  });
+export async function publish(id: string) {
+  const existing = await prisma.datasource.findUnique({ where: { id } });
 
   if (!existing) {
     return { error: "Datasource not found", code: "NOT_FOUND" };
-  }
-
-  // Validate workspace access if workspaceId provided
-  if (workspaceId && existing.site?.workspaceId && existing.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   if (existing.status !== "DRAFT") {
@@ -386,23 +345,11 @@ export async function publish(id: string, workspaceId?: string) {
  * Unpublish datasource (ACTIVE -> DRAFT)
  * Removes datasource from gateway sync
  */
-export async function unpublish(id: string, workspaceId?: string) {
-  const existing = await prisma.datasource.findUnique({
-    where: { id },
-    include: {
-      site: {
-        select: { workspaceId: true },
-      },
-    },
-  });
+export async function unpublish(id: string) {
+  const existing = await prisma.datasource.findUnique({ where: { id } });
 
   if (!existing) {
     return { error: "Datasource not found", code: "NOT_FOUND" };
-  }
-
-  // Validate workspace access if workspaceId provided
-  if (workspaceId && existing.site?.workspaceId && existing.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   if (existing.status !== "ACTIVE") {

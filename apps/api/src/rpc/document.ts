@@ -3,10 +3,8 @@ import { ORPCError } from "@orpc/server";
 import type { DocumentTargetType } from "@rw/db";
 import * as documents from "@rw/services/document/index";
 import { storageConfig } from "../config.js";
-import { Principal } from "../auth/index.js";
-import { authRequired, displayRequired, userOrDisplayRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import type { DisplayCurrent } from "@rw/auth/context";
+import { userRequired, displayRequired, userOrDisplayRequired } from "./middleware.js";
 import { throwServiceError } from "./errors.js";
 
 const documentTargetTypeSchema = z.enum(["SITE", "WORKCENTER", "STATION", "JOB", "TOOL", "PRODUCT", "MATERIAL"]);
@@ -96,89 +94,64 @@ function getLabelFilter(input?: { labelsAny?: string[]; labelsAll?: string[] }) 
   };
 }
 
-function getDisplayDocumentContext(context: {
-  iam: { siteId?: string; display?: { workcenterId: string | null; stationId: string | null } };
-}) {
-  if (!context.iam.siteId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Display site context required" });
-  }
-
+function getDisplayDocumentContext(display: DisplayCurrent) {
   return {
-    siteId: context.iam.siteId,
-    workcenterId: context.iam.display?.workcenterId ?? null,
-    stationId: context.iam.display?.stationId ?? null,
+    siteId: display.siteId,
+    workcenterId: display.display.workcenterId,
+    stationId: display.display.stationId,
   };
 }
 
-async function assertDisplayCanAccessDocument(
-  context: { iam: { siteId?: string; display?: { workcenterId: string | null; stationId: string | null } } },
-  documentId: string,
-) {
-  const result = await documents.listForDisplayContext(getDisplayDocumentContext(context));
+async function assertDisplayCanAccessDocument(display: DisplayCurrent, documentId: string) {
+  const result = await documents.listForDisplayContext(getDisplayDocumentContext(display));
   if (!result.data.some((document) => document.id === documentId)) {
     throw new ORPCError("NOT_FOUND", { message: "Document not found" });
   }
 }
 
-export const createFolder = authRequired.input(createFolderInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, {
-      permission: "facility:write",
-      scope: input.siteId ? { kind: "site", siteId: input.siteId } : { kind: "anySite" },
-    }),
-  );
+export const createFolder = userRequired.input(createFolderInputSchema).handler(async ({ input, context }) => {
+  if (input.siteId) await context.access.require("MANAGE", { site: input.siteId });
+  else context.access.requireSomewhere("MANAGE");
 
-  const result = await documents.createFolder({ ...input, workspaceId });
+  const result = await documents.createFolder({ ...input, workspaceId: context.current.workspaceId });
   if ("error" in result) throwServiceError(result);
   return result.data;
 });
 
-export const createUpload = authRequired.input(createUploadInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, {
-      permission: "facility:write",
-      scope: input.siteId ? { kind: "site", siteId: input.siteId } : { kind: "anySite" },
-    }),
-  );
+export const createUpload = userRequired.input(createUploadInputSchema).handler(async ({ input, context }) => {
+  if (input.siteId) await context.access.require("MANAGE", { site: input.siteId });
+  else context.access.requireSomewhere("MANAGE");
 
-  const result = await documents.createUpload({ ...input, workspaceId });
+  const result = await documents.createUpload({ ...input, workspaceId: context.current.workspaceId });
   if ("error" in result) throwServiceError(result);
   return result.data;
 });
 
-export const completeUpload = authRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "document", id: input.documentId } }),
-  );
+export const completeUpload = userRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { document: input.documentId });
 
   const result = await documents.completeUpload(input.documentId);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
-export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, {
-      permission: "facility:read",
-      scope: input.siteId ? { kind: "site", siteId: input.siteId } : { kind: "anySite" },
-    }),
-  );
+export const list = userRequired.input(listInputSchema).handler(async ({ input, context }) => {
+  if (input.siteId) await context.access.require("VIEW", { site: input.siteId });
+  else context.access.requireSomewhere("VIEW");
 
   return documents.list(input);
 });
 
 export const get = userOrDisplayRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
-  if (context.iam.principal === Principal.DISPLAY) {
-    await assertDisplayCanAccessDocument(context, input.documentId);
+  if (context.current.kind === "display") {
+    await assertDisplayCanAccessDocument(context.current, input.documentId);
     const result = await documents.getById(input.documentId);
     if (!result) throw new ORPCError("NOT_FOUND", { message: "Document not found" });
     if (result.error !== undefined) throwServiceError(result);
     return result.data;
   }
 
-  grant(
-    await authorize(context.iam, { permission: "facility:read", scope: { kind: "document", id: input.documentId } }),
-  );
+  await context.access.require("VIEW", { document: input.documentId });
 
   const result = await documents.getById(input.documentId, { includePending: true });
   if (!result) throw new ORPCError("NOT_FOUND", { message: "Document not found" });
@@ -187,12 +160,10 @@ export const get = userOrDisplayRequired.input(documentIdInputSchema).handler(as
 });
 
 export const download = userOrDisplayRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
-  if (context.iam.principal === Principal.DISPLAY) {
-    await assertDisplayCanAccessDocument(context, input.documentId);
+  if (context.current.kind === "display") {
+    await assertDisplayCanAccessDocument(context.current, input.documentId);
   } else {
-    grant(
-      await authorize(context.iam, { permission: "facility:read", scope: { kind: "document", id: input.documentId } }),
-    );
+    await context.access.require("VIEW", { document: input.documentId });
   }
 
   const result = await documents.getDownloadUrl(input.documentId);
@@ -201,12 +172,10 @@ export const download = userOrDisplayRequired.input(documentIdInputSchema).handl
 });
 
 export const open = userOrDisplayRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
-  if (context.iam.principal === Principal.DISPLAY) {
-    await assertDisplayCanAccessDocument(context, input.documentId);
+  if (context.current.kind === "display") {
+    await assertDisplayCanAccessDocument(context.current, input.documentId);
   } else {
-    grant(
-      await authorize(context.iam, { permission: "facility:read", scope: { kind: "document", id: input.documentId } }),
-    );
+    await context.access.require("VIEW", { document: input.documentId });
   }
 
   const result = await documents.getOpenUrl(input.documentId);
@@ -214,10 +183,8 @@ export const open = userOrDisplayRequired.input(documentIdInputSchema).handler(a
   return result.data;
 });
 
-export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "document", id: input.documentId } }),
-  );
+export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { document: input.documentId });
 
   const { documentId, ...updateData } = input;
   const result = await documents.update(documentId, updateData);
@@ -225,36 +192,30 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
   return result.data;
 });
 
-export const remove = authRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "facility:admin", scope: { kind: "document", id: input.documentId } }),
-  );
+export const remove = userRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { document: input.documentId });
 
   const result = await documents.remove(input.documentId);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
 
-export const link = authRequired.input(documentLinkInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "document", id: input.documentId } }),
-  );
+export const link = userRequired.input(documentLinkInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { document: input.documentId });
 
   const result = await documents.link(input.documentId, input.targetType as DocumentTargetType, input.targetId);
   if ("error" in result) throwServiceError(result);
   return result.data;
 });
 
-export const unlink = authRequired.input(documentLinkInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "document", id: input.documentId } }),
-  );
+export const unlink = userRequired.input(documentLinkInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { document: input.documentId });
 
   return documents.unlink(input.documentId, input.targetType as DocumentTargetType, input.targetId);
 });
 
-export const listForTarget = authRequired.input(targetInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "facility:read", scope: { kind: "anySite" } }));
+export const listForTarget = userRequired.input(targetInputSchema).handler(async ({ input, context }) => {
+  context.access.requireSomewhere("VIEW");
 
   return documents.listForTarget(input.targetType as DocumentTargetType, input.targetId, getLabelFilter(input));
 });
@@ -262,5 +223,5 @@ export const listForTarget = authRequired.input(targetInputSchema).handler(async
 export const listForDisplayContext = displayRequired
   .input(displayContextInputSchema)
   .handler(async ({ input, context }) => {
-    return documents.listForDisplayContext(getDisplayDocumentContext(context), getLabelFilter(input));
+    return documents.listForDisplayContext(getDisplayDocumentContext(context.current), getLabelFilter(input));
   });

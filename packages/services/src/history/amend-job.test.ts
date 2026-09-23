@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, test } from "vitest";
-import prisma from "@rw/db";
+import prisma, { ensureAccountWorkspace } from "@rw/db";
 import { createFromCycle } from "../inventory/inventory.js";
 import { amendJobHistory } from "./amend-job.js";
 
@@ -59,7 +59,7 @@ describe.skipIf(!process.env.DATABASE_URL)("amendJobHistory", () => {
 
   beforeAll(async () => {
     const suffix = randomUUID();
-    const workspace = await prisma.workspace.create({ data: { name: `Amend ${suffix}`, slug: `amend-${suffix}` } });
+    const workspace = await ensureAccountWorkspace({ name: "Test Account", slug: "test-account" });
     siteId = (await prisma.site.create({ data: { name: `Amend Site ${suffix}`, workspaceId: workspace.id } })).id;
     j1 = await makeJob("J1");
     j2 = await makeJob("J2");

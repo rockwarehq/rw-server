@@ -1,8 +1,6 @@
 import { z } from "zod";
 import { site } from "@rw/services/facility/index";
-import { authRequired, userOrDisplayRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { userRequired, userOrDisplayRequired } from "./middleware.js";
 import { throwServiceError } from "./errors.js";
 
 const andonRuleInputSchema = z.object({
@@ -48,11 +46,9 @@ function hasAndonRuleError(result: unknown): result is { error: string; code: st
 }
 
 export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.siteId } }),
-  );
+  await context.access.require("VIEW", { site: input.siteId });
 
-  const result = await site.andonRules.list(input, workspaceId);
+  const result = await site.andonRules.list(input);
   if (hasAndonRuleError(result)) {
     throwServiceError(result);
   }
@@ -60,12 +56,10 @@ export const list = userOrDisplayRequired.input(listInputSchema).handler(async (
   return result.data;
 });
 
-export const create = authRequired.input(andonRuleInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const create = userRequired.input(andonRuleInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { site: input.siteId });
 
-  const result = await site.andonRules.create(input, workspaceId);
+  const result = await site.andonRules.create(input);
   if (hasAndonRuleError(result)) {
     throwServiceError(result);
   }
@@ -73,12 +67,10 @@ export const create = authRequired.input(andonRuleInputSchema).handler(async ({ 
   return result.data;
 });
 
-export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "siteAndonRule", id: input.id } }),
-  );
+export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { siteAndonRule: input.id });
 
-  const result = await site.andonRules.update(input, workspaceId);
+  const result = await site.andonRules.update(input);
   if (hasAndonRuleError(result)) {
     throwServiceError(result);
   }
@@ -86,12 +78,10 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
   return result.data;
 });
 
-export const remove = authRequired.input(deleteInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "siteAndonRule", id: input.id } }),
-  );
+export const remove = userRequired.input(deleteInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { siteAndonRule: input.id });
 
-  const result = await site.andonRules.remove(input.id, workspaceId);
+  const result = await site.andonRules.remove(input.id);
   if (hasAndonRuleError(result)) {
     throwServiceError(result);
   }
@@ -99,12 +89,10 @@ export const remove = authRequired.input(deleteInputSchema).handler(async ({ inp
   return { success: true };
 });
 
-export const reorder = authRequired.input(reorderInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const reorder = userRequired.input(reorderInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { site: input.siteId });
 
-  const result = await site.andonRules.reorder(input, workspaceId);
+  const result = await site.andonRules.reorder(input);
   if (hasAndonRuleError(result)) {
     throwServiceError(result);
   }

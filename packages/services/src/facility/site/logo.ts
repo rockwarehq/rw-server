@@ -49,7 +49,7 @@ async function deleteObjectBestEffort(key: string) {
  * best-effort). If the client's PUT fails it should call removeLogo to
  * roll back.
  */
-export async function createLogoUpload(siteId: string, input: CreateLogoUploadInput, workspaceId?: string) {
+export async function createLogoUpload(siteId: string, input: CreateLogoUploadInput) {
   const { filename, contentType, size } = input;
 
   if (!storage.isStorageEnabled()) {
@@ -64,9 +64,6 @@ export async function createLogoUpload(siteId: string, input: CreateLogoUploadIn
   const site = await getSiteForLogo(siteId);
   if (!site) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
-  }
-  if (workspaceId && site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   const previousLogo = parseLogoAttr(site.attrs);
@@ -99,13 +96,10 @@ export async function createLogoUpload(siteId: string, input: CreateLogoUploadIn
  * Remove the site logo (idempotent): clears attrs.logo and deletes the S3
  * object best-effort.
  */
-export async function removeLogo(siteId: string, workspaceId?: string) {
+export async function removeLogo(siteId: string) {
   const site = await getSiteForLogo(siteId);
   if (!site) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
-  }
-  if (workspaceId && site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   const logo = parseLogoAttr(site.attrs);

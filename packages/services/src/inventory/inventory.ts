@@ -2,6 +2,7 @@ import prisma from "@rw/db";
 import { Prisma, type WeightUnit } from "@rw/db";
 import { type StampDims, toDateString } from "../facility/work-context.js";
 import { convertWeight } from "../lib/units/index.js";
+import { crewFilter } from "../lib/crew-filter.js";
 
 type TransactionClient = Prisma.TransactionClient;
 
@@ -11,6 +12,8 @@ type TransactionClient = Prisma.TransactionClient;
 
 export interface ListInventoryFilter {
   siteId?: string;
+  /** Crew-only callers: rows in these workcenters, or in no workcenter. */
+  workcenterIds?: string[];
   cycleId?: string;
   productVersionId?: string;
   jobProductVersionId?: string;
@@ -314,7 +317,17 @@ export async function applyShiftUsage(
  * List inventory items with optional filtering
  */
 export async function list(filter: ListInventoryFilter = {}) {
-  const { siteId, cycleId, productVersionId, jobProductVersionId, dateFrom, dateTo, limit = 50, offset = 0 } = filter;
+  const {
+    siteId,
+    workcenterIds,
+    cycleId,
+    productVersionId,
+    jobProductVersionId,
+    dateFrom,
+    dateTo,
+    limit = 50,
+    offset = 0,
+  } = filter;
 
   const where: Prisma.InventoryItemWhereInput = {
     deletedAt: null,
@@ -338,6 +351,8 @@ export async function list(filter: ListInventoryFilter = {}) {
       siteId,
     };
   }
+
+  Object.assign(where, crewFilter(workcenterIds));
 
   // Date range filter
   if (dateFrom || dateTo) {

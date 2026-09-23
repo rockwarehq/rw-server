@@ -16,23 +16,23 @@ import {
 import { ORPCError } from "@orpc/server";
 import { type CodeOverrides, throwServiceError as throwServiceErrorShared, unwrap as unwrapService } from "./errors.js";
 import * as entity from "@rw/services/entity/index";
-import { authorize } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import type { EntityScope } from "@rw/services/entity/index";
+import type { Level } from "@rw/auth/iam/access";
+import type { CallerContext } from "./context.js";
 
-import { authRequired } from "./middleware.js";
+import { userRequired } from "./middleware.js";
 
 /**
  * entity.* keeps the token-site model: the active site comes from the
  * caller's switch-site token, never from input. Site presence is checked
- * before the permission so a missing site context does not leak whether
- * the caller holds the permission.
+ * before access so a missing site context does not leak whether the
+ * caller holds the level.
  */
-function tokenSiteRef(iam: { siteId?: string | null }): { kind: "site"; siteId: string } {
-  if (!iam.siteId)
-    throw new ORPCError("BAD_REQUEST", {
-      message: "Site context required",
-    });
-  return { kind: "site", siteId: iam.siteId };
+async function tokenSite(context: CallerContext<"user">, level: Level): Promise<EntityScope> {
+  const siteId = context.current.siteId;
+  if (!siteId) throw new ORPCError("BAD_REQUEST", { message: "Site context required" });
+  await context.access.require(level, { site: siteId });
+  return { workspaceId: context.current.workspaceId, siteId };
 }
 
 // Historical mapping in this router: scope mismatches are FORBIDDEN (the
@@ -50,90 +50,90 @@ function throwServiceError(result: { error: string; code: string }): never {
   throwServiceErrorShared(result, ENTITY_OVERRIDES);
 }
 
-export const modelCreate = authRequired.input(modelCreateInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorize(context.iam, { permission: "entity:write", scope: tokenSiteRef(context.iam) }));
+export const modelCreate = userRequired.input(modelCreateInputSchema).handler(async ({ input, context }) => {
+  const scope = await tokenSite(context, "ADMIN");
   return unwrap(await entity.models.create(input, scope));
 });
 
-export const catalogList = authRequired.input(catalogListInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorize(context.iam, { permission: "entity:read", scope: tokenSiteRef(context.iam) }));
+export const catalogList = userRequired.input(catalogListInputSchema).handler(async ({ input, context }) => {
+  const scope = await tokenSite(context, "VIEW");
   return entity.catalog.list(input, scope);
 });
 
-export const catalogGet = authRequired.input(catalogGetInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorize(context.iam, { permission: "entity:read", scope: tokenSiteRef(context.iam) }));
+export const catalogGet = userRequired.input(catalogGetInputSchema).handler(async ({ input, context }) => {
+  const scope = await tokenSite(context, "VIEW");
   return unwrap(await entity.catalog.get(input, scope));
 });
 
-export const modelList = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorize(context.iam, { permission: "entity:read", scope: tokenSiteRef(context.iam) }));
+export const modelList = userRequired.input(listInputSchema).handler(async ({ input, context }) => {
+  const scope = await tokenSite(context, "VIEW");
   return entity.models.list(input, scope);
 });
 
-export const modelGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorize(context.iam, { permission: "entity:read", scope: tokenSiteRef(context.iam) }));
+export const modelGet = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  const scope = await tokenSite(context, "VIEW");
   return unwrap(await entity.models.getById(input.id, scope));
 });
 
-export const modelUpdate = authRequired.input(modelUpdateInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorize(context.iam, { permission: "entity:write", scope: tokenSiteRef(context.iam) }));
+export const modelUpdate = userRequired.input(modelUpdateInputSchema).handler(async ({ input, context }) => {
+  const scope = await tokenSite(context, "ADMIN");
   const { id, ...updates } = input;
   return unwrap(await entity.models.update(id, updates, scope));
 });
 
-export const modelDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorize(context.iam, { permission: "entity:write", scope: tokenSiteRef(context.iam) }));
+export const modelDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  const scope = await tokenSite(context, "ADMIN");
   return unwrap(await entity.models.remove(input.id, scope));
 });
 
-export const modelFieldCreate = authRequired.input(modelFieldCreateInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorize(context.iam, { permission: "entity:write", scope: tokenSiteRef(context.iam) }));
+export const modelFieldCreate = userRequired.input(modelFieldCreateInputSchema).handler(async ({ input, context }) => {
+  const scope = await tokenSite(context, "ADMIN");
   return unwrap(await entity.models.createField(input, scope));
 });
 
-export const modelFieldUpdate = authRequired.input(modelFieldUpdateInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorize(context.iam, { permission: "entity:write", scope: tokenSiteRef(context.iam) }));
+export const modelFieldUpdate = userRequired.input(modelFieldUpdateInputSchema).handler(async ({ input, context }) => {
+  const scope = await tokenSite(context, "ADMIN");
   const { id, ...updates } = input;
   return unwrap(await entity.models.updateField(id, updates, scope));
 });
 
-export const modelFieldDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorize(context.iam, { permission: "entity:write", scope: tokenSiteRef(context.iam) }));
+export const modelFieldDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  const scope = await tokenSite(context, "ADMIN");
   return unwrap(await entity.models.removeField(input.id, scope));
 });
 
-export const modelFieldReorder = authRequired
+export const modelFieldReorder = userRequired
   .input(modelFieldReorderInputSchema)
   .handler(async ({ input, context }) => {
-    const scope = grant(await authorize(context.iam, { permission: "entity:write", scope: tokenSiteRef(context.iam) }));
+    const scope = await tokenSite(context, "ADMIN");
     return unwrap(await entity.models.reorderFields(input.schemaId, input.fieldIds, scope));
   });
 
-export const instanceCreate = authRequired.input(instanceCreateInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorize(context.iam, { permission: "entity:write", scope: tokenSiteRef(context.iam) }));
+export const instanceCreate = userRequired.input(instanceCreateInputSchema).handler(async ({ input, context }) => {
+  const scope = await tokenSite(context, "MANAGE");
   const { name: _legacyName, ...instanceInput } = input;
   return unwrap(await entity.instances.create(instanceInput, scope));
 });
 
-export const instanceList = authRequired.input(instanceListInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorize(context.iam, { permission: "entity:read", scope: tokenSiteRef(context.iam) }));
+export const instanceList = userRequired.input(instanceListInputSchema).handler(async ({ input, context }) => {
+  const scope = await tokenSite(context, "VIEW");
   const result = await entity.instances.list(input, scope);
   if ("error" in result) throwServiceError(result);
   return result;
 });
 
-export const instanceGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorize(context.iam, { permission: "entity:read", scope: tokenSiteRef(context.iam) }));
+export const instanceGet = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  const scope = await tokenSite(context, "VIEW");
   return unwrap(await entity.instances.getById(input.id, scope));
 });
 
-export const instanceUpdate = authRequired.input(instanceUpdateInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorize(context.iam, { permission: "entity:write", scope: tokenSiteRef(context.iam) }));
+export const instanceUpdate = userRequired.input(instanceUpdateInputSchema).handler(async ({ input, context }) => {
+  const scope = await tokenSite(context, "MANAGE");
   const { id, name: _legacyName, ...updates } = input;
   return unwrap(await entity.instances.update(id, updates, scope));
 });
 
-export const instanceDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorize(context.iam, { permission: "entity:write", scope: tokenSiteRef(context.iam) }));
+export const instanceDelete = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  const scope = await tokenSite(context, "MANAGE");
   return unwrap(await entity.instances.remove(input.id, scope));
 });

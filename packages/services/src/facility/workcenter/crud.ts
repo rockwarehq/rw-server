@@ -56,6 +56,8 @@ export async function create(input: CreateWorkcenterInput) {
       description,
       attrs: attrs ?? {},
       siteId,
+      // The cell's access container is born with the cell.
+      bucket: { create: { workspaceId: site.workspaceId, siteId, kind: "WORKCENTER", name } },
     },
     include: {
       site: {
@@ -136,7 +138,7 @@ export async function list(filter: ListWorkcentersFilter = {}) {
 /**
  * Get workcenter by ID with related entities
  */
-export async function getById(id: string, workspaceId?: string) {
+export async function getById(id: string) {
   const workcenter = await prisma.workcenter.findUnique({
     where: { id },
     include: {
@@ -173,37 +175,22 @@ export async function getById(id: string, workspaceId?: string) {
     return null;
   }
 
-  // Validate workspace access
-  if (workspaceId && workcenter.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
-  }
-
   return { data: workcenter };
 }
 
 /**
  * Update workcenter
  */
-export async function update(id: string, input: UpdateWorkcenterInput, workspaceId?: string) {
+export async function update(id: string, input: UpdateWorkcenterInput) {
   const { name, description, attrs } = input;
 
-  // Get current workcenter with site info
   const current = await prisma.workcenter.findUnique({
     where: { id },
-    include: {
-      site: {
-        select: { workspaceId: true },
-      },
-    },
+    select: { id: true },
   });
 
   if (!current) {
     return { error: "Workcenter not found", code: "WORKCENTER_NOT_FOUND" };
-  }
-
-  // Validate workspace access
-  if (workspaceId && current.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   const updateData: Record<string, unknown> = {};
@@ -226,6 +213,8 @@ export async function update(id: string, input: UpdateWorkcenterInput, workspace
       },
     },
   });
+  // The workcenter's bucket carries its name.
+  if (name !== undefined) await prisma.bucket.updateMany({ where: { workcenterId: id }, data: { name } });
 
   publishEntityEvent({
     action: "updated",
@@ -244,7 +233,7 @@ export async function update(id: string, input: UpdateWorkcenterInput, workspace
  * allowed move is parentId -> null, kept so admins can flatten trees that
  * predate the flat-workcenter rule.
  */
-export async function move(id: string, newParentId: string | null, workspaceId?: string) {
+export async function move(id: string, newParentId: string | null) {
   if (newParentId !== null) {
     return {
       error: "Workcenters cannot be nested under another workcenter",
@@ -254,20 +243,11 @@ export async function move(id: string, newParentId: string | null, workspaceId?:
 
   const current = await prisma.workcenter.findUnique({
     where: { id },
-    include: {
-      site: {
-        select: { id: true, workspaceId: true },
-      },
-    },
+    select: { id: true },
   });
 
   if (!current) {
     return { error: "Workcenter not found", code: "WORKCENTER_NOT_FOUND" };
-  }
-
-  // Validate workspace access
-  if (workspaceId && current.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   const workcenter = await prisma.workcenter.update({
@@ -301,7 +281,7 @@ export async function move(id: string, newParentId: string | null, workspaceId?:
 /**
  * Delete workcenter (fails if has children or stations due to onDelete: Restrict)
  */
-export async function remove(id: string, workspaceId?: string) {
+export async function remove(id: string) {
   const workcenter = await prisma.workcenter.findUnique({
     where: { id },
     include: {
@@ -314,11 +294,6 @@ export async function remove(id: string, workspaceId?: string) {
 
   if (!workcenter) {
     return { error: "Workcenter not found", code: "WORKCENTER_NOT_FOUND" };
-  }
-
-  // Validate workspace access
-  if (workspaceId && workcenter.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   if (workcenter._count.children > 0) {

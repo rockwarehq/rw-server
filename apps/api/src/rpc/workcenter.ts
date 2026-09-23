@@ -1,8 +1,6 @@
 import { z } from "zod";
-import { authRequired, userOrDisplayRequired } from "./middleware.js";
+import { userRequired, userOrDisplayRequired } from "./middleware.js";
 import { workcenter } from "@rw/services/facility/index";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
 import { throwServiceError, unwrap } from "./errors.js";
 
 // ============================================================================
@@ -49,8 +47,8 @@ const listInputSchema = z.object({
 /**
  * Create a new workcenter
  */
-export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.siteId } }));
+export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await workcenter.create(input);
   if (result.error !== undefined) throwServiceError(result);
@@ -60,33 +58,30 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
 /**
  * List workcenters
  */
-export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "facility:read", requestedSiteId: input.siteId }));
-  return workcenter.list({ ...input, ...scopeFilter(scope) });
+export const list = userRequired.input(listInputSchema).handler(async ({ input, context }) => {
+  // The workcenter directory is a plant thing: every member may read it.
+  const scope = context.access.list("VIEW", input.siteId);
+  return workcenter.list({ ...input, ...scope });
 });
 
 /**
  * Get workcenter by ID
  */
 export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "facility:read", scope: { kind: "workcenter", id: input.id } }),
-  );
+  await context.access.require("VIEW", { workcenter: input.id });
 
-  const result = await workcenter.getById(input.id, scope.workspaceId);
+  const result = await workcenter.getById(input.id);
   return unwrap(result, { notFoundMessage: "Workcenter not found" });
 });
 
 /**
  * Update workcenter
  */
-export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
-  const scope = grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "workcenter", id: id } }),
-  );
+  await context.access.require("ADMIN", { workcenter: id });
 
-  const result = await workcenter.update(id, updateData, scope.workspaceId);
+  const result = await workcenter.update(id, updateData);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -94,15 +89,10 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 /**
  * Move workcenter to a new parent (within same site)
  */
-export const move = authRequired.input(moveInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, {
-      permission: "facility:write",
-      scope: { kind: "workcenter", id: input.id },
-    }),
-  );
+export const move = userRequired.input(moveInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { workcenter: input.id });
 
-  const result = await workcenter.move(input.id, input.parentId, scope.workspaceId);
+  const result = await workcenter.move(input.id, input.parentId);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -110,15 +100,10 @@ export const move = authRequired.input(moveInputSchema).handler(async ({ input, 
 /**
  * Delete workcenter
  */
-export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, {
-      permission: "facility:admin",
-      scope: { kind: "workcenter", id: input.id },
-    }),
-  );
+export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { workcenter: input.id });
 
-  const result = await workcenter.remove(input.id, scope.workspaceId);
+  const result = await workcenter.remove(input.id);
   // HAS_CHILDREN / HAS_STATIONS map to CONFLICT via the shared table
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };

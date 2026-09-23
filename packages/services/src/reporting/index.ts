@@ -41,9 +41,7 @@ const measureFormat = (measure: MeasureDef): ValueFormat =>
 function isRowLocal(fact: FactDef, measure: MeasureDef): boolean {
   if (measure.kind === "count") return false;
   if (measure.kind !== "ratio") return true;
-  const components = [measure.numerator, measure.denominator].flatMap((side) =>
-    Array.isArray(side) ? side : [side],
-  );
+  const components = [measure.numerator, measure.denominator].flatMap((side) => (Array.isArray(side) ? side : [side]));
   return components.every((key) => {
     const component = fact.measures[key];
     return component !== undefined && component.kind !== "count" && component.kind !== "ratio";
@@ -95,41 +93,38 @@ export interface FactSchema {
 
 /**
  * The catalog as plain data for the report-builder UI: fact/measure/dimension
- * pickers render straight from this. No SQL crosses the wire. Pass the set of
- * permissions the caller holds to list only the facts they may query.
+ * pickers render straight from this. No SQL crosses the wire.
  */
-export function reportSchema(grantedPermissions?: ReadonlySet<string>): FactSchema[] {
-  return Object.entries(FACTS)
-    .filter(([, fact]) => grantedPermissions === undefined || grantedPermissions.has(fact.permission))
-    .map(([key, fact]) => ({
-      key,
-      label: fact.label,
-      description: fact.description,
-      supportsHourly: fact.timeColumn !== undefined,
-      supportsDetail: fact.rowKey !== undefined,
-      defaultFilters: fact.defaultFilters ?? [],
-      measures: Object.entries(fact.measures).map(([mKey, m]) => ({
-        key: mKey,
-        label: m.label,
-        kind: m.kind,
-        description: m.description,
-        rowLocal: isRowLocal(fact, m),
-        format: measureFormat(m),
-      })),
-      dimensions: Object.entries(fact.dimensions).map(([dKey, d]) => ({
-        key: dKey,
-        label: d.label,
-        type: d.type,
-        enumValues: d.enumValues,
-        hasName: d.lookup !== undefined || d.nameColumn !== undefined,
-        hasLabels: d.labelJoin !== undefined,
-      })),
-      fields: Object.entries(fact.fields ?? {}).map(([fKey, f]) => ({
-        key: fKey,
-        label: f.label,
-        type: f.type,
-        description: f.description,
-        format: f.format ?? (f.type === "decimal" || f.type === "number" ? "quantity" : "text"),
-      })),
-    }));
+export function reportSchema(): FactSchema[] {
+  return Object.entries(FACTS).map(([key, fact]) => ({
+    key,
+    label: fact.label,
+    description: fact.description,
+    supportsHourly: fact.timeColumn !== undefined,
+    supportsDetail: fact.rowKey !== undefined,
+    defaultFilters: fact.defaultFilters ?? [],
+    measures: Object.entries(fact.measures).map(([mKey, m]) => ({
+      key: mKey,
+      label: m.label,
+      kind: m.kind,
+      description: m.description,
+      rowLocal: isRowLocal(fact, m),
+      format: measureFormat(m),
+    })),
+    dimensions: Object.entries(fact.dimensions).map(([dKey, d]) => ({
+      key: dKey,
+      label: d.label,
+      type: d.type,
+      enumValues: d.enumValues,
+      hasName: d.lookup !== undefined || d.nameColumn !== undefined,
+      hasLabels: d.labelJoin !== undefined,
+    })),
+    fields: Object.entries(fact.fields ?? {}).map(([fKey, f]) => ({
+      key: fKey,
+      label: f.label,
+      type: f.type,
+      description: f.description,
+      format: f.format ?? (f.type === "decimal" || f.type === "number" ? "quantity" : "text"),
+    })),
+  }));
 }

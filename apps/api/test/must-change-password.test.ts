@@ -1,13 +1,12 @@
 import prisma from "@rw/db";
-import { hashPassword } from "@rw/auth/password";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { makeUser } from "./helpers/access.js";
 import { buildServer, type TestServer } from "./helpers/build-server.js";
 import { rpcCall } from "./helpers/rpc-call.js";
 
 const FLAGGED_EMAIL = "must-change@test.local";
 const TEMP_PASSWORD = "TempPassword123!";
 const FINAL_PASSWORD = "FinalPassword456!";
-const ROLE_NAME = "Test User Admin (must change)";
 
 let ipTail = 1;
 function nextIp(): string {
@@ -23,34 +22,17 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("mustChangePassword enforcement 
     server = buildServer();
     await server.ready();
 
-    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { slug: "default" } });
-    // Role with enough permissions that a blocked request can only be
-    // explained by the must-change gate, not by missing permissions.
-    const role = await prisma.role.create({
-      data: {
-        workspaceId: workspace.id,
-        name: ROLE_NAME,
-        scope: "WORKSPACE",
-        permissions: ["user:read", "user:write", "user:admin"],
-        isSystem: false,
-      },
-    });
-
-    const passwordHash = await hashPassword(TEMP_PASSWORD);
-    const user = await prisma.user.create({
-      data: { email: FLAGGED_EMAIL, passwordHash, status: "ACTIVE", mustChangePassword: true },
-    });
-    const membership = await prisma.workspaceMembership.create({
-      data: { userId: user.id, workspaceId: workspace.id },
-    });
-    await prisma.roleAssignment.create({
-      data: { membershipId: membership.id, roleId: role.id, siteId: null },
+    // Workspace owner: enough standing that a blocked request can only be
+    // explained by the must-change gate, not by missing access.
+    await makeUser(FLAGGED_EMAIL, TEMP_PASSWORD, { accountAdmin: true });
+    await prisma.user.update({
+      where: { email: FLAGGED_EMAIL },
+      data: { mustChangePassword: true },
     });
   });
 
   afterAll(async () => {
     await prisma.user.deleteMany({ where: { email: FLAGGED_EMAIL } });
-    await prisma.role.deleteMany({ where: { name: ROLE_NAME } });
     await server.close();
   });
 

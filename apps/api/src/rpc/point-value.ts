@@ -5,8 +5,6 @@ import {
   validatePointSiteAccess,
   type ValidatePointSiteAccessResult,
 } from "../services/point-value.js";
-import { authorizeList } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
 import { subscribeStreamEvents, type PointValueEvent, type StreamEvent } from "@rw/runtime/events-bus";
 import { throwServiceError, type CodeOverrides } from "./errors.js";
 import { userOrDisplayRequired } from "./middleware.js";
@@ -89,7 +87,7 @@ export const getSnapshots = userOrDisplayRequired
     // Displays are pinned to their own site by the policy; site-scoped users
     // must have every point inside an accessible site; all-sites users keep
     // the existence/workspace validation.
-    const scope = grant(await authorizeList(context.iam, { permission: "facility:read" }));
+    const scope = context.access.list("VIEW");
     const accessValidationResult: ValidatePointSiteAccessResult = await validatePointSiteAccess(pointIds, scope.siteId);
 
     if (!accessValidationResult.success) {
@@ -109,14 +107,14 @@ export const stream = userOrDisplayRequired
     // Displays are pinned to their own site by the policy; site-scoped users
     // must have every point inside an accessible site; all-sites users keep
     // the existence/workspace validation.
-    const scope = grant(await authorizeList(context.iam, { permission: "facility:read" }));
+    const scope = context.access.list("VIEW");
     const accessValidationResult: ValidatePointSiteAccessResult = await validatePointSiteAccess(pointIds, scope.siteId);
 
     if (!accessValidationResult.success) {
       throwServiceError(accessValidationResult, POINT_ACCESS_OVERRIDES);
     }
 
-    const workspaceId = context.iam.workspaceId;
+    const workspaceId = context.current.workspaceId;
     if (!workspaceId) {
       throw new ORPCError("UNAUTHORIZED", { message: "Workspace context required" });
     }

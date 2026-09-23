@@ -34,18 +34,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("password reset codes (Tier 2)",
     server = buildServer();
     await server.ready();
 
-    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { slug: "default" } });
     const passwordHash = await hashPassword(ORIGINAL_PASSWORD);
-    const user = await prisma.user.upsert({
+    await prisma.user.upsert({
       where: { email: RESET_EMAIL },
       update: { passwordHash, status: "ACTIVE" },
       create: { email: RESET_EMAIL, passwordHash, status: "ACTIVE" },
-    });
-    // Login requires a workspace membership
-    await prisma.workspaceMembership.upsert({
-      where: { userId_workspaceId: { userId: user.id, workspaceId: workspace.id } },
-      update: {},
-      create: { userId: user.id, workspaceId: workspace.id },
     });
   });
 

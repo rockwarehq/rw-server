@@ -13,8 +13,7 @@ import {
   type ShiftWindow,
 } from "@rw/historian";
 import { userOrDisplayRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { requireFloorEntities } from "./scope.js";
 import { throwServiceError } from "./errors.js";
 
 // Historian series queries (ADR 0008): `query` returns a range snapshot plus
@@ -139,14 +138,19 @@ async function dbNowMs(): Promise<number> {
   return now.getTime();
 }
 
+/** The floor row a series reads from: a station, or the bucket's entity. */
+function seriesEntity(series: SeriesSelector): { entityType: string; entityId: string } {
+  return series.seriesType === "stationState"
+    ? { entityType: "STATION", entityId: series.stationId }
+    : { entityType: series.entityType, entityId: series.entityId };
+}
+
 // ============================================================================
 // Verbs
 // ============================================================================
 
 export const query = userOrDisplayRequired.input(queryInputSchema).handler(async ({ context, input }) => {
-  grant(
-    await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.series.siteId } }),
-  );
+  await requireFloorEntities(context, input.series.siteId, [seriesEntity(input.series)]);
   const definition = await authorizeSeries(input.series);
 
   const window = await resolveSnapshotPage(input.series.seriesType, input.series, input.pageToken, () =>
@@ -190,9 +194,7 @@ export const query = userOrDisplayRequired.input(queryInputSchema).handler(async
 });
 
 export const changes = userOrDisplayRequired.input(changesInputSchema).handler(async ({ context, input }) => {
-  grant(
-    await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.series.siteId } }),
-  );
+  await requireFloorEntities(context, input.series.siteId, [seriesEntity(input.series)]);
   const definition = await authorizeSeries(input.series);
 
   const decoded = decodeCursor(input.cursor, input.series.seriesType, input.series, Date.now());

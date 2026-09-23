@@ -3,15 +3,20 @@ import { hashPassword } from "@rw/auth/password";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { validatePasswordStrength } from "../src/services/validation.js";
 import { TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD } from "./global-setup.js";
+import { makeUser } from "./helpers/access.js";
 import { buildServer, type TestServer } from "./helpers/build-server.js";
 
-const USER_ADMIN_EMAIL = "user-admin@test.local";
-const USER_ADMIN_PASSWORD = "UserAdminPass123!";
+// The reset route is workspace-scoped ADMIN: owners and Rockware ENGINEERs
+// pass; a site plant ADMIN does not. The ENGINEER is the acting admin here
+// so the owner-only service check stays observable (an owner would pass it).
+const ENGINEER_EMAIL = "reset-engineer@test.local";
+const ENGINEER_PASSWORD = "ResetEngineer123!";
+const PLANT_ADMIN_EMAIL = "reset-plant-admin@test.local";
+const PLANT_ADMIN_PASSWORD = "PlantAdminPass123!";
 const TARGET_EMAIL = "reset-target@test.local";
 const TARGET_PASSWORD = "TargetPass123!";
 const SECOND_OWNER_EMAIL = "second-owner@test.local";
 const SYSTEM_USER_EMAIL = "system-reset@test.local";
-const ROLE_NAME = "Test User Admin (password reset)";
 
 let ipTail = 1;
 function nextIp(): string {
@@ -31,54 +36,50 @@ async function login(server: TestServer, email: string, password: string) {
   return res.json() as { accessToken: string; refreshToken: string };
 }
 
-async function createMember(workspaceId: string, email: string, password: string, roleId?: string) {
-  const passwordHash = await hashPassword(password);
-  const user = await prisma.user.create({
-    data: { email, passwordHash, status: "ACTIVE" },
-  });
-  const membership = await prisma.workspaceMembership.create({
-    data: { userId: user.id, workspaceId },
-  });
-  if (roleId) {
-    await prisma.roleAssignment.create({
-      data: { membershipId: membership.id, roleId, siteId: null },
-    });
-  }
-  return user;
-}
-
 // Tier 2: needs a migrated + seeded Postgres (TEST_DATABASE_URL).
 describe.skipIf(!process.env.TEST_DATABASE_URL)("admin password reset (Tier 2)", () => {
   let server: TestServer;
   let target: { id: string };
   let systemUser: { id: string };
   let secondOwner: { id: string };
+  let engineer: { id: string };
   let adminToken: string;
 
   beforeAll(async () => {
     server = buildServer();
     await server.ready();
 
-    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { slug: "default" } });
+    const workspace = await prisma.workspace.findFirstOrThrow();
+    const site = await prisma.site.findFirstOrThrow({
+      where: { workspaceId: workspace.id, name: "Rockware" },
+      select: { id: true },
+    });
 
-    // Workspace-scoped user:admin role that is NOT an owner role
-    const role = await prisma.role.create({
-      data: {
-        workspaceId: workspace.id,
-        name: ROLE_NAME,
-        scope: "WORKSPACE",
-        permissions: ["user:read", "user:write", "user:admin"],
-        isSystem: false,
+    // Rockware ENGINEER: passes the workspace-scope route gate without
+    // being a workspace owner.
+    engineer = await prisma.user.upsert({
+      where: { email: ENGINEER_EMAIL },
+      update: { systemRole: "ENGINEER", passwordHash: await hashPassword(ENGINEER_PASSWORD), status: "ACTIVE" },
+      create: {
+        email: ENGINEER_EMAIL,
+        passwordHash: await hashPassword(ENGINEER_PASSWORD),
+        systemRole: "ENGINEER",
+        status: "ACTIVE",
       },
+      select: { id: true },
     });
 
-    await createMember(workspace.id, USER_ADMIN_EMAIL, USER_ADMIN_PASSWORD, role.id);
-    target = await createMember(workspace.id, TARGET_EMAIL, TARGET_PASSWORD);
-
-    const ownerRole = await prisma.role.findFirstOrThrow({
-      where: { workspaceId: workspace.id, name: "Company Administrator", scope: "WORKSPACE", isSystem: true },
+    // Site plant ADMIN — the old plant:admin. Workspace-scope routes still
+    // exclude site admins, same as before.
+    await makeUser(PLANT_ADMIN_EMAIL, PLANT_ADMIN_PASSWORD, {
+      plants: [{ siteId: site.id, level: "ADMIN" }],
     });
-    secondOwner = await createMember(workspace.id, SECOND_OWNER_EMAIL, "SecondOwner123!", ownerRole.id);
+
+    const targetIds = await makeUser(TARGET_EMAIL, TARGET_PASSWORD);
+    target = { id: targetIds.userId };
+
+    const ownerIds = await makeUser(SECOND_OWNER_EMAIL, "SecondOwner123!", { accountAdmin: true });
+    secondOwner = { id: ownerIds.userId };
 
     systemUser = await prisma.user.create({
       data: {
@@ -89,14 +90,15 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("admin password reset (Tier 2)",
       },
     });
 
-    adminToken = (await login(server, USER_ADMIN_EMAIL, USER_ADMIN_PASSWORD)).accessToken;
+    adminToken = (await login(server, ENGINEER_EMAIL, ENGINEER_PASSWORD)).accessToken;
   });
 
   afterAll(async () => {
     await prisma.user.deleteMany({
-      where: { email: { in: [USER_ADMIN_EMAIL, TARGET_EMAIL, SECOND_OWNER_EMAIL, SYSTEM_USER_EMAIL] } },
+      where: {
+        email: { in: [ENGINEER_EMAIL, PLANT_ADMIN_EMAIL, TARGET_EMAIL, SECOND_OWNER_EMAIL, SYSTEM_USER_EMAIL] },
+      },
     });
-    await prisma.role.deleteMany({ where: { name: ROLE_NAME } });
     await server.close();
   });
 
@@ -184,11 +186,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("admin password reset (Tier 2)",
   });
 
   it("blocks self-reset, unknown targets, and system users", async () => {
-    const admin = await prisma.user.findUniqueOrThrow({ where: { email: USER_ADMIN_EMAIL } });
-
     const self = await server.inject({
       method: "POST",
-      url: `/users/${admin.id}/password`,
+      url: `/users/${engineer.id}/password`,
       headers: { authorization: `Bearer ${adminToken}` },
       payload: {},
     });
@@ -211,20 +211,33 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("admin password reset (Tier 2)",
     expect(system.statusCode).toBe(403);
   });
 
-  it("denies a caller without user:admin", async () => {
+  it("denies callers without workspace-scope admin standing", async () => {
+    // Plain member: the route gate rejects it. (The target also carries a
+    // must-change temp password, so the enforcement hook may fire first —
+    // either way it's a 403.)
     const targetTokens = await login(server, TARGET_EMAIL, "ExplicitTemp123!");
-    const res = await server.inject({
+    const asMember = await server.inject({
       method: "POST",
       url: `/users/${secondOwner.id}/password`,
       headers: { authorization: `Bearer ${targetTokens.accessToken}` },
       payload: {},
     });
-    // The target has a must-change temp password, so the enforcement hook
-    // fires before the permission check — either way it's a 403.
-    expect(res.statusCode).toBe(403);
+    expect(asMember.statusCode).toBe(403);
+
+    // A site plant ADMIN is not workspace-scope: still 403, same as the old
+    // rule that workspace routes excluded site admins.
+    const plantAdminTokens = await login(server, PLANT_ADMIN_EMAIL, PLANT_ADMIN_PASSWORD);
+    const asPlantAdmin = await server.inject({
+      method: "POST",
+      url: `/users/${target.id}/password`,
+      headers: { authorization: `Bearer ${plantAdminTokens.accessToken}` },
+      payload: {},
+    });
+    expect(asPlantAdmin.statusCode).toBe(403);
   });
 
-  it("requires owner:all to reset an owner's password", async () => {
+  it("requires ownership to reset an owner's password", async () => {
+    // ENGINEER passes the route but is not an owner: the service refuses.
     const denied = await server.inject({
       method: "POST",
       url: `/users/${secondOwner.id}/password`,

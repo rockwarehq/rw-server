@@ -1,6 +1,6 @@
 import prisma from "@rw/db";
-import { hashPassword } from "@rw/auth/password";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ensurePlantBucket, makeUser } from "./helpers/access.js";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
 
 const FA_EMAIL = "dev-authz-fa@test.local";
@@ -36,6 +36,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("device REST authorization (Tier
       create: { name: "DevAuthZ Site B", workspaceId },
       select: { id: true },
     });
+    // Sites created via raw prisma bypass the service hook that creates
+    // the plant bucket — heal it so the container exists.
+    await ensurePlantBucket(workspaceId, siteB.id, "DevAuthZ Site B");
 
     const findOrCreateGateway = async (siteId: string, name: string) => {
       const existing = await prisma.gateway.findFirst({ where: { siteId, name }, select: { id: true } });
@@ -46,36 +49,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("device REST authorization (Tier
     gatewayA = await findOrCreateGateway(siteA.id, "dev-authz-gw-a");
     gatewayB = await findOrCreateGateway(siteB.id, "dev-authz-gw-b");
 
-    const faRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Plant Admin", scope: "SITE" } },
-      select: { id: true },
-    });
-    const readerRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Plant Member", scope: "SITE" } },
-      select: { id: true },
-    });
-    const passwordHash = await hashPassword(PASSWORD);
-    for (const { email, roleId } of [
-      { email: FA_EMAIL, roleId: faRole.id },
-      { email: READER_EMAIL, roleId: readerRole.id },
-    ]) {
-      const u = await prisma.user.upsert({
-        where: { email },
-        update: {},
-        create: { email, passwordHash, firstName: "DevAuthZ", status: "ACTIVE" },
-      });
-      const membership = await prisma.workspaceMembership.upsert({
-        where: { userId_workspaceId: { userId: u.id, workspaceId } },
-        update: {},
-        create: { userId: u.id, workspaceId },
-      });
-      const existing = await prisma.roleAssignment.findFirst({
-        where: { membershipId: membership.id, roleId, siteId: siteA.id },
-      });
-      if (!existing) {
-        await prisma.roleAssignment.create({ data: { membershipId: membership.id, roleId, siteId: siteA.id } });
-      }
-    }
+    // Bucket-era fixtures. The manager is plant ADMIN at site A (was the
+    // "Plant Admin" role). FLIP: gateway/datasource READS are member reads
+    // now — the reader needs only plant VIEW at site A, where the key model
+    // required a custom configuration:read role.
+    await makeUser(FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
+    await makeUser(READER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "VIEW" }] });
 
     faToken = (await loginAs(server, FA_EMAIL, PASSWORD)).accessToken;
     readerToken = (await loginAs(server, READER_EMAIL, PASSWORD)).accessToken;
@@ -88,7 +67,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("device REST authorization (Tier
     await server.close();
   });
 
-  it("readers can GET gateways but cannot modify them", async () => {
+  it("plant members (VIEW) can GET gateways but cannot modify them", async () => {
     const get = await call("GET", `/gateways/${gatewayA.id}`, readerToken);
     expect(get.statusCode).toBe(200);
     const put = await call("PUT", `/gateways/${gatewayA.id}`, readerToken, { name: "nope" });
@@ -96,32 +75,33 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("device REST authorization (Tier
   });
 
   it("cross-site gateway access is denied, including the previously unchecked spec route", async () => {
+    // The manager holds plant ADMIN at site A only — no access at site B.
     const get = await call("GET", `/gateways/${gatewayB.id}`, faToken);
     expect(get.statusCode).toBe(403);
     const spec = await call("GET", `/gateways/${gatewayB.id}/spec`, faToken);
     expect(spec.statusCode).toBe(403);
   });
 
-  it("gateway credential minting requires facility:admin at the gateway's site", async () => {
+  it("gateway credential minting requires plant MANAGE at the gateway's site", async () => {
     const denied = await call("POST", `/gateways/${gatewayB.id}/tokens`, faToken, { name: "x" });
     expect(denied.statusCode).toBe(403);
     const reader = await call("POST", `/gateways/${gatewayA.id}/tokens`, readerToken, { name: "x" });
     expect(reader.statusCode).toBe(403);
   });
 
-  it("moving a gateway requires facility:write at the target site (two-sided)", async () => {
+  it("moving a gateway requires plant MANAGE at the target site (two-sided)", async () => {
     const res = await call("PUT", `/gateways/${gatewayA.id}`, faToken, { siteId: siteB.id });
     expect(res.statusCode).toBe(403);
   });
 
-  it("remote commands are permission-gated", async () => {
+  it("remote commands are level-gated: MANAGE queues, members read", async () => {
     const queue = await call("POST", `/gateways/${gatewayA.id}/commands`, readerToken, { command: "restart" });
     expect(queue.statusCode).toBe(403);
     const list = await call("GET", `/gateways/${gatewayA.id}/commands`, readerToken);
     expect(list.statusCode).toBe(200);
   });
 
-  it("the unassigned-gateway pool is an explicit view for hardware assigners", async () => {
+  it("the unassigned-gateway pool is an explicit view for plant managers", async () => {
     const pool = await prisma.gateway.create({
       data: { name: "dev-authz-gw-pool", serialNumber: "sn-dev-authz-gw-pool" },
       select: { id: true },
@@ -131,11 +111,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("device REST authorization (Tier
       const siteList = await call("GET", `/gateways/?siteId=${siteA.id}`, faToken);
       expect(siteList.statusCode).toBe(200);
       expect((siteList.json() as Array<{ id: string }>).map((g) => g.id)).not.toContain(pool.id);
-      // …visible via the explicit pool view for facility:write holders…
+      // …visible via the explicit pool view for MANAGE held at any plant
+      // (ADMIN qualifies)…
       const poolList = await call("GET", "/gateways/?unassigned=true", faToken);
       expect(poolList.statusCode).toBe(200);
       expect((poolList.json() as Array<{ id: string }>).map((g) => g.id)).toContain(pool.id);
-      // …and denied for read-only users.
+      // …and denied for VIEW-only members.
       const readerPool = await call("GET", "/gateways/?unassigned=true", readerToken);
       expect(readerPool.statusCode).toBe(403);
     } finally {
@@ -143,11 +124,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("device REST authorization (Tier
     }
   });
 
-  it("datasource listing is scope-filtered and drivers require facility:read", async () => {
+  it("datasource listing is scope-filtered and drivers require any plant membership", async () => {
     const list = await call("GET", `/datasources/?siteId=${siteB.id}`, faToken);
     expect(list.statusCode).toBe(403);
-    // The driver catalog is global vendor metadata: any facility:read grant
-    // (at any site) suffices.
+    // The driver catalog is global vendor metadata: membership at any site
+    // (VIEW anywhere) suffices.
     const drivers = await call("GET", "/drivers/", faToken);
     expect(drivers.statusCode).toBe(200);
   });

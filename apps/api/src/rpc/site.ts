@@ -1,10 +1,7 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
-import { authRequired, userOrDisplayRequired } from "./middleware.js";
+import { userRequired, userOrDisplayRequired } from "./middleware.js";
 import { site } from "@rw/services/facility/index";
-import { Principal } from "../auth/index.js";
-import { authorize, authorizeAccessibleSites } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
 import { throwServiceError, unwrap } from "./errors.js";
 import { storageConfig } from "../config.js";
 
@@ -34,12 +31,6 @@ const updateSettingsInputSchema = z.object({
   id: z.uuid(),
   settings: z.object({
     orderAutoComplete: z.boolean().optional(),
-    // Gated (like the rest of settings) on facility:write — gating this one
-    // key on settings:write would be theater while the generic site.update
-    // writes arbitrary attrs under facility:write. WRITE workcenter grants
-    // confer facility:write only workcenter-scoped, so grant holders cannot
-    // flip it.
-    baseWorkcenterAccess: z.enum(["ALL", "GRANTS_REQUIRED"]).optional(),
   }),
 });
 
@@ -56,20 +47,25 @@ const listInputSchema = z.object({
 /**
  * Create a new site
  */
-export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorize(context.iam, { permission: "facility:write", scope: { kind: "workspace" } }));
+export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
+  context.access.requireAccountAdmin();
 
-  const result = await site.create({ ...input, workspaceId: scope.workspaceId });
+  const result = await site.create({ ...input, workspaceId: context.current.workspaceId });
   return unwrap(result);
 });
 
 /**
  * List sites in workspace
  */
-export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
+export const list = userRequired.input(listInputSchema).handler(async ({ input, context }) => {
   // Site directory: the sanctioned cross-site surface (site picker/admin).
-  const scope = grant(await authorizeAccessibleSites(context.iam, { permission: "facility:read" }));
-  const result = await site.list({ ...input, workspaceId: scope.workspaceId, siteIds: scope.siteIds });
+  // Membership visibility — any assignment or grant at a site lists it.
+  const sites = context.access.sites();
+  const result = await site.list({
+    ...input,
+    workspaceId: context.current.workspaceId,
+    siteIds: sites === "all" ? undefined : sites,
+  });
   return {
     ...result,
     data: await Promise.all(result.data.map(async (s) => ({ ...s, logoUrl: await site.resolveLogoUrl(s.attrs) }))),
@@ -80,15 +76,12 @@ export const list = authRequired.input(listInputSchema).handler(async ({ input, 
  * Get site by ID
  */
 export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.id } }),
-  );
+  await context.access.require("VIEW", { site: input.id });
 
-  const result = await site.getById(input.id, scope.workspaceId);
+  const result = await site.getById(input.id);
   if (!result) {
     throw new ORPCError("NOT_FOUND", { message: "Site not found" });
   }
-  if (result.error !== undefined) throwServiceError(result);
   return { ...result.data, logoUrl: await site.resolveLogoUrl(result.data.attrs) };
 });
 
@@ -102,20 +95,10 @@ const treeInputSchema = z.object({
  * If siteId is omitted, returns all sites in workspace
  */
 export const tree = userOrDisplayRequired.input(treeInputSchema).handler(async ({ input, context }) => {
-  if (context.iam.principal === Principal.DISPLAY) {
-    const ownSiteId = context.iam.siteId;
-    if (!ownSiteId) {
-      throw new ORPCError("BAD_REQUEST", { message: "Display site context required" });
-    }
+  if (context.current.kind === "display") {
+    const scope = await context.access.require("VIEW", { site: input.siteId ?? context.current.siteId });
 
-    const scope = grant(
-      await authorize(context.iam, {
-        permission: "facility:read",
-        scope: { kind: "site", siteId: input.siteId ?? ownSiteId },
-      }),
-    );
-
-    const result = await site.getSiteTree(scope.siteId, scope.workspaceId);
+    const result = await site.getSiteTree(scope.siteId);
     if (result.error !== undefined) throwServiceError(result);
 
     // Explicit siteId returns a single tree; the bare call keeps the
@@ -125,24 +108,22 @@ export const tree = userOrDisplayRequired.input(treeInputSchema).handler(async (
 
   // If siteId provided, return single site tree
   if (input.siteId) {
-    const scope = grant(
-      await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.siteId } }),
-    );
-    const result = await site.getSiteTree(input.siteId, scope.workspaceId);
+    await context.access.require("VIEW", { site: input.siteId });
+    const result = await site.getSiteTree(input.siteId);
     if (result.error !== undefined) throwServiceError(result);
     return result.data;
   }
 
-  // No siteId, return the accessible-site tree (site directory surface)
-  const scope = grant(await authorizeAccessibleSites(context.iam, { permission: "facility:read" }));
-  return site.getTree(scope.workspaceId, scope.siteIds);
+  // No siteId, return the visible-site tree (site directory surface)
+  const sites = context.access.sites();
+  return site.getTree(context.current.workspaceId, sites === "all" ? undefined : sites);
 });
 
 /**
  * Read the typed site settings (fulfillment automation, …).
  */
-export const getSettings = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.id } }));
+export const getSettings = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { site: input.id });
 
   return unwrap(await site.getSiteSettings(input.id));
 });
@@ -150,8 +131,8 @@ export const getSettings = authRequired.input(idInputSchema).handler(async ({ in
 /**
  * Update typed site settings — merges only known keys into Site.attrs.
  */
-export const updateSettings = authRequired.input(updateSettingsInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.id } }));
+export const updateSettings = userRequired.input(updateSettingsInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { site: input.id });
 
   return unwrap(await site.updateSiteSettings(input.id, input.settings));
 });
@@ -159,13 +140,11 @@ export const updateSettings = authRequired.input(updateSettingsInputSchema).hand
 /**
  * Update site
  */
-export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
-  const scope = grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: id } }),
-  );
+  await context.access.require("ADMIN", { site: id });
 
-  const result = await site.update(id, updateData, scope.workspaceId);
+  const result = await site.update(id, updateData);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
@@ -173,12 +152,11 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 /**
  * Delete site
  */
-export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "facility:admin", scope: { kind: "site", siteId: input.id } }),
-  );
+export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  // Sites are account-level: only the owner adds or removes them.
+  context.access.requireAccountAdmin();
 
-  const result = await site.remove(input.id, scope.workspaceId);
+  const result = await site.remove(input.id);
   // HAS_WORKCENTERS / HAS_GATEWAYS / HAS_DATASOURCES map to CONFLICT via the shared table
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
@@ -204,24 +182,20 @@ const uploadLogoInputSchema = z.object({
  * URL. Replaces any existing logo; callers roll back a failed PUT via
  * removeLogo.
  */
-export const uploadLogo = authRequired.input(uploadLogoInputSchema).handler(async ({ input, context }) => {
+export const uploadLogo = userRequired.input(uploadLogoInputSchema).handler(async ({ input, context }) => {
   const { id, ...upload } = input;
-  const scope = grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: id } }),
-  );
+  await context.access.require("ADMIN", { site: id });
 
-  return unwrap(await site.createLogoUpload(id, upload, scope.workspaceId));
+  return unwrap(await site.createLogoUpload(id, upload));
 });
 
 /**
  * Remove the site logo (idempotent)
  */
-export const removeLogo = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "site", siteId: input.id } }),
-  );
+export const removeLogo = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { site: input.id });
 
-  return unwrap(await site.removeLogo(input.id, scope.workspaceId));
+  return unwrap(await site.removeLogo(input.id));
 });
 
 const siteIdInputSchema = z.object({
@@ -232,12 +206,10 @@ const siteIdInputSchema = z.object({
  * Get device tree for a site (Gateway -> Datasources)
  * Returns all gateways with their assigned datasources (all statuses)
  */
-export const deviceTree = authRequired.input(siteIdInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const deviceTree = userRequired.input(siteIdInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { site: input.siteId });
 
-  const result = await site.getDeviceTree(input.siteId, scope.workspaceId);
+  const result = await site.getDeviceTree(input.siteId);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });

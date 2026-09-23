@@ -46,9 +46,7 @@ export interface ReorderAndonRulesInput {
   orderedIds: string[];
 }
 
-type AuthorizedSiteResult =
-  | { success: true }
-  | { success: false; error: string; code: "SITE_NOT_FOUND" | "WORKSPACE_MISMATCH" };
+type SiteExistsResult = { success: true } | { success: false; error: string; code: "SITE_NOT_FOUND" };
 
 function normalizeRuleName(name: string | null | undefined) {
   if (name === undefined || name === null) {
@@ -143,10 +141,10 @@ function validateOrderedIds(orderedIds: readonly string[]) {
   return null;
 }
 
-async function validateSiteAccess(siteId: string, workspaceId: string): Promise<AuthorizedSiteResult> {
+async function validateSiteExists(siteId: string): Promise<SiteExistsResult> {
   const site = await prisma.site.findUnique({
     where: { id: siteId },
-    select: { workspaceId: true },
+    select: { id: true },
   });
 
   if (!site) {
@@ -154,14 +152,6 @@ async function validateSiteAccess(siteId: string, workspaceId: string): Promise<
       success: false,
       code: "SITE_NOT_FOUND",
       error: "Site not found",
-    };
-  }
-
-  if (site.workspaceId !== workspaceId) {
-    return {
-      success: false,
-      code: "WORKSPACE_MISMATCH",
-      error: "Site does not belong to this workspace",
     };
   }
 
@@ -185,8 +175,8 @@ async function compactSortOrder(tx: TransactionClient, siteId: string) {
   );
 }
 
-export async function list(input: ListAndonRulesInput, workspaceId: string) {
-  const siteAccess = await validateSiteAccess(input.siteId, workspaceId);
+export async function list(input: ListAndonRulesInput) {
+  const siteAccess = await validateSiteExists(input.siteId);
   if (!siteAccess.success) {
     return siteAccess;
   }
@@ -201,8 +191,8 @@ export async function list(input: ListAndonRulesInput, workspaceId: string) {
   };
 }
 
-export async function create(input: CreateAndonRuleInput, workspaceId: string) {
-  const siteAccess = await validateSiteAccess(input.siteId, workspaceId);
+export async function create(input: CreateAndonRuleInput) {
+  const siteAccess = await validateSiteExists(input.siteId);
   if (!siteAccess.success) {
     return siteAccess;
   }
@@ -239,22 +229,13 @@ export async function create(input: CreateAndonRuleInput, workspaceId: string) {
   return { data: mapAndonRule(rule) };
 }
 
-export async function update(input: UpdateAndonRuleInput, workspaceId: string) {
+export async function update(input: UpdateAndonRuleInput) {
   const current = await prisma.siteAndonRule.findUnique({
     where: { id: input.id },
-    include: {
-      site: {
-        select: { workspaceId: true },
-      },
-    },
   });
 
   if (!current) {
     return { error: "Andon rule not found", code: "RULE_NOT_FOUND" as const };
-  }
-
-  if (current.site.workspaceId !== workspaceId) {
-    return { error: "Andon rule does not belong to this workspace", code: "WORKSPACE_MISMATCH" as const };
   }
 
   const updateData: {
@@ -308,22 +289,14 @@ export async function update(input: UpdateAndonRuleInput, workspaceId: string) {
   return { data: mapAndonRule(rule) };
 }
 
-export async function remove(id: string, workspaceId: string) {
+export async function remove(id: string) {
   const current = await prisma.siteAndonRule.findUnique({
     where: { id },
-    include: {
-      site: {
-        select: { workspaceId: true },
-      },
-    },
+    select: { siteId: true },
   });
 
   if (!current) {
     return { error: "Andon rule not found", code: "RULE_NOT_FOUND" as const };
-  }
-
-  if (current.site.workspaceId !== workspaceId) {
-    return { error: "Andon rule does not belong to this workspace", code: "WORKSPACE_MISMATCH" as const };
   }
 
   await prisma.$transaction(async (tx) => {
@@ -334,8 +307,8 @@ export async function remove(id: string, workspaceId: string) {
   return { success: true };
 }
 
-export async function reorder(input: ReorderAndonRulesInput, workspaceId: string) {
-  const siteAccess = await validateSiteAccess(input.siteId, workspaceId);
+export async function reorder(input: ReorderAndonRulesInput) {
+  const siteAccess = await validateSiteExists(input.siteId);
   if (!siteAccess.success) {
     return siteAccess;
   }

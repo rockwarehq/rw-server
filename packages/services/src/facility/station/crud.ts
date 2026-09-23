@@ -1,6 +1,7 @@
 import prisma from "@rw/db";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { publishEntityEvent } from "../../entity/events.js";
+import { crewFilter } from "../../lib/crew-filter.js";
 
 export interface CreateStationInput {
   name: string;
@@ -52,6 +53,12 @@ export interface ListStationsFilter {
   workspaceId?: string;
   siteId?: string;
   workcenterId?: string;
+  /**
+   * Crew narrowing from the access policy: rows must belong to one of
+   * these workcenters — or carry none at all (site-level rows are plant
+   * things, and every crew member is a plant member).
+   */
+  workcenterIds?: string[];
   /** Only return stations that have at least one of these labels. */
   labelIds?: string[];
   name?: string;
@@ -269,7 +276,7 @@ export async function create(input: CreateStationInput) {
  * List stations with optional filtering
  */
 export async function list(filter: ListStationsFilter = {}) {
-  const { workspaceId, siteId, workcenterId, labelIds, name, limit = 50, offset = 0 } = filter;
+  const { workspaceId, siteId, workcenterId, workcenterIds, labelIds, name, limit = 50, offset = 0 } = filter;
 
   const where: Record<string, unknown> = {};
 
@@ -280,6 +287,8 @@ export async function list(filter: ListStationsFilter = {}) {
   if (siteId) {
     where.siteId = siteId;
   }
+
+  if (workcenterIds) where.AND = [crewFilter(workcenterIds)];
 
   if (workcenterId) {
     where.workcenterId = workcenterId;
@@ -315,7 +324,7 @@ export async function list(filter: ListStationsFilter = {}) {
 /**
  * Get station by ID with related entities
  */
-export async function getById(id: string, workspaceId?: string) {
+export async function getById(id: string) {
   const station = await prisma.station.findUnique({
     where: { id },
     include: stationInclude,
@@ -325,18 +334,13 @@ export async function getById(id: string, workspaceId?: string) {
     return null;
   }
 
-  // Validate workspace access
-  if (workspaceId && station.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
-  }
-
   return { data: station };
 }
 
 /**
  * Update station (creates new version version if config fields change)
  */
-export async function update(id: string, input: UpdateStationInput, workspaceId?: string) {
+export async function update(id: string, input: UpdateStationInput) {
   const {
     name,
     description,
@@ -357,7 +361,7 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
     inStationCalculations,
   } = input;
 
-  // Get current station with workspace info and current version
+  // Get current station with workspace info (for events) and current version
   const current = await prisma.station.findUnique({
     where: { id },
     include: {
@@ -368,11 +372,6 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
 
   if (!current) {
     return { error: "Station not found", code: "STATION_NOT_FOUND" };
-  }
-
-  // Validate workspace access
-  if (workspaceId && current.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   if (labelIds && labelIds.length > 0) {
@@ -497,7 +496,7 @@ export async function update(id: string, input: UpdateStationInput, workspaceId?
  * Move station to a different workcenter or directly under the site
  * @param newWorkcenterId - The target workcenter ID, or null to move directly under the site
  */
-export async function move(id: string, newWorkcenterId: string | null, workspaceId?: string) {
+export async function move(id: string, newWorkcenterId: string | null) {
   const current = await prisma.station.findUnique({
     where: { id },
     include: {
@@ -509,11 +508,6 @@ export async function move(id: string, newWorkcenterId: string | null, workspace
 
   if (!current) {
     return { error: "Station not found", code: "STATION_NOT_FOUND" };
-  }
-
-  // Validate workspace access
-  if (workspaceId && current.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   // If moving to a workcenter, validate it exists and is in the same site
@@ -559,7 +553,7 @@ export async function move(id: string, newWorkcenterId: string | null, workspace
 /**
  * Delete station (cascades statusLogs and stationDatasources)
  */
-export async function remove(id: string, workspaceId?: string) {
+export async function remove(id: string) {
   const station = await prisma.station.findUnique({
     where: { id },
     include: {
@@ -571,11 +565,6 @@ export async function remove(id: string, workspaceId?: string) {
 
   if (!station) {
     return { error: "Station not found", code: "STATION_NOT_FOUND" };
-  }
-
-  // Validate workspace access
-  if (workspaceId && station.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   await prisma.station.delete({ where: { id } });
@@ -606,7 +595,7 @@ export async function exists(id: string) {
  * Validates all belong to the same site
  * Uses transaction for all-or-nothing behavior
  */
-export async function addDatasource(stationId: string, datasourceIds: string | string[], workspaceId?: string) {
+export async function addDatasource(stationId: string, datasourceIds: string | string[]) {
   // Normalize to array
   const ids = Array.isArray(datasourceIds) ? datasourceIds : [datasourceIds];
 
@@ -614,23 +603,13 @@ export async function addDatasource(stationId: string, datasourceIds: string | s
     return { error: "At least one datasource ID is required", code: "INVALID_INPUT" };
   }
 
-  // Get station with site info
   const station = await prisma.station.findUnique({
     where: { id: stationId },
-    include: {
-      site: {
-        select: { id: true, workspaceId: true },
-      },
-    },
+    select: { id: true, siteId: true },
   });
 
   if (!station) {
     return { error: "Station not found", code: "STATION_NOT_FOUND" };
-  }
-
-  // Validate workspace access
-  if (workspaceId && station.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   // Get all datasources with site info
@@ -713,24 +692,14 @@ export async function addDatasource(stationId: string, datasourceIds: string | s
 /**
  * Remove a datasource from a station
  */
-export async function removeDatasource(stationId: string, datasourceId: string, workspaceId?: string) {
-  // Get station with workspace info
+export async function removeDatasource(stationId: string, datasourceId: string) {
   const station = await prisma.station.findUnique({
     where: { id: stationId },
-    include: {
-      site: {
-        select: { workspaceId: true },
-      },
-    },
+    select: { id: true },
   });
 
   if (!station) {
     return { error: "Station not found", code: "STATION_NOT_FOUND" };
-  }
-
-  // Validate workspace access
-  if (workspaceId && station.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   // Find the link
@@ -758,24 +727,14 @@ export async function removeDatasource(stationId: string, datasourceId: string, 
 /**
  * List all datasources linked to a station
  */
-export async function listDatasources(stationId: string, workspaceId?: string) {
-  // Get station with workspace info
+export async function listDatasources(stationId: string) {
   const station = await prisma.station.findUnique({
     where: { id: stationId },
-    include: {
-      site: {
-        select: { workspaceId: true },
-      },
-    },
+    select: { id: true },
   });
 
   if (!station) {
     return { error: "Station not found", code: "STATION_NOT_FOUND" };
-  }
-
-  // Validate workspace access
-  if (workspaceId && station.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
   }
 
   // Get all linked datasources

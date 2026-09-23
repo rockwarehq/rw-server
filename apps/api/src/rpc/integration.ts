@@ -4,9 +4,8 @@ import { integrationRuns, integrations } from "@rw/services/integration/index";
 import * as graph from "@rw/livestore/graph/index";
 
 import { unwrap as unwrapService } from "./errors.js";
-import { authRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { workspaceSiteScope } from "./scope.js";
+import { userRequired } from "./middleware.js";
 
 // Integrations hold credentials and a trigger decides when those credentials get
 
@@ -51,42 +50,39 @@ const listInputSchema = z.object({
   offset: z.number().int().min(0).optional(),
 });
 
+// siteId is still accepted for older clients; the row decides where it lives.
 const scopedIdInputSchema = idInputSchema.extend({ siteId: z.uuid() });
 
-export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
+export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...rest } = input;
-  const scope = grant(await authorize(context.iam, { permission: "settings:write", scope: { kind: "site", siteId } }));
+  const scope = await workspaceSiteScope(context, "ADMIN", { site: siteId });
   return unwrap(await integrations.create(rest, scope));
 });
 
-export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
+export const list = userRequired.input(listInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...filter } = input;
-  const scope = grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "site", siteId } }));
+  const scope = await workspaceSiteScope(context, "VIEW", { site: siteId });
   return integrations.list(filter, scope);
 });
 
-export const get = authRequired.input(scopedIdInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "settings:read", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const get = userRequired.input(scopedIdInputSchema).handler(async ({ input, context }) => {
+  const scope = await workspaceSiteScope(context, "VIEW", { integration: input.id });
   return unwrap(await integrations.getById(input.id, scope));
 });
 
-export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  const { id, siteId, ...updates } = input;
-  const scope = grant(await authorize(context.iam, { permission: "settings:write", scope: { kind: "site", siteId } }));
+export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+  const { id, siteId: _siteId, ...updates } = input;
+  const scope = await workspaceSiteScope(context, "ADMIN", { integration: id });
   return unwrap(await integrations.update(id, updates, scope));
 });
 
-export const remove = authRequired.input(scopedIdInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "settings:admin", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const remove = userRequired.input(scopedIdInputSchema).handler(async ({ input, context }) => {
+  const scope = await workspaceSiteScope(context, "ADMIN", { integration: input.id });
   return unwrap(await integrations.remove(input.id, scope));
 });
 
 /** Static per deploy: type list, config/secret JSON Schemas, action inputs. */
-export const typeCatalog = authRequired.handler(async () => ({ data: catalog }));
+export const typeCatalog = userRequired.handler(async () => ({ data: catalog }));
 
 // ============================================================================
 // Runs + manual execution
@@ -101,9 +97,9 @@ const runListInputSchema = z.object({
   offset: z.number().int().min(0).optional(),
 });
 
-export const runList = authRequired.input(runListInputSchema).handler(async ({ input, context }) => {
+export const runList = userRequired.input(runListInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...filter } = input;
-  const scope = grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "site", siteId } }));
+  const scope = await workspaceSiteScope(context, "VIEW", { site: siteId });
   return integrationRuns.list(filter, scope);
 });
 
@@ -117,10 +113,8 @@ const executeInputSchema = z.object({
 
 // Manual run — doubles as "test connection". The action outcome rides the run
 // row (SUCCEEDED/FAILED); only scope/config problems become transport errors.
-export const execute = authRequired.input(executeInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "settings:admin", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const execute = userRequired.input(executeInputSchema).handler(async ({ input, context }) => {
+  const scope = await workspaceSiteScope(context, "MANAGE", { site: input.siteId });
   unwrap(await integrations.getById(input.id, scope));
   const record = unwrap(await integrations.loadForExecution(input.id));
 
@@ -133,7 +127,7 @@ export const execute = authRequired.input(executeInputSchema).handler(async ({ i
       actionKey: input.actionKey,
       actionVersion: input.actionVersion ?? "1",
       triggerType: "manual",
-      triggerId: context.iam.id ?? null,
+      triggerId: context.current.user.id ?? null,
       input: input.input,
     }),
   );
@@ -191,34 +185,30 @@ const triggerListInputSchema = z.object({
   offset: z.number().int().min(0).optional(),
 });
 
-export const triggerCreate = authRequired.input(triggerCreateInputSchema).handler(async ({ input, context }) => {
+export const triggerCreate = userRequired.input(triggerCreateInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...rest } = input;
-  const scope = grant(await authorize(context.iam, { permission: "settings:write", scope: { kind: "site", siteId } }));
+  const scope = await workspaceSiteScope(context, "ADMIN", { site: siteId });
   return unwrap(await graph.triggers.create(rest, scope));
 });
 
-export const triggerList = authRequired.input(triggerListInputSchema).handler(async ({ input, context }) => {
+export const triggerList = userRequired.input(triggerListInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...filter } = input;
-  const scope = grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "site", siteId } }));
+  const scope = await workspaceSiteScope(context, "VIEW", { site: siteId });
   return graph.triggers.list(filter, scope);
 });
 
-export const triggerGet = authRequired.input(scopedIdInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "settings:read", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const triggerGet = userRequired.input(scopedIdInputSchema).handler(async ({ input, context }) => {
+  const scope = await workspaceSiteScope(context, "VIEW", { integrationTrigger: input.id });
   return unwrap(await graph.triggers.getById(input.id, scope));
 });
 
-export const triggerUpdate = authRequired.input(triggerUpdateInputSchema).handler(async ({ input, context }) => {
-  const { id, siteId, ...updates } = input;
-  const scope = grant(await authorize(context.iam, { permission: "settings:write", scope: { kind: "site", siteId } }));
+export const triggerUpdate = userRequired.input(triggerUpdateInputSchema).handler(async ({ input, context }) => {
+  const { id, siteId: _siteId, ...updates } = input;
+  const scope = await workspaceSiteScope(context, "ADMIN", { integrationTrigger: id });
   return unwrap(await graph.triggers.update(id, updates, scope));
 });
 
-export const triggerDelete = authRequired.input(scopedIdInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "settings:admin", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const triggerDelete = userRequired.input(scopedIdInputSchema).handler(async ({ input, context }) => {
+  const scope = await workspaceSiteScope(context, "ADMIN", { integrationTrigger: input.id });
   return unwrap(await graph.triggers.remove(input.id, scope));
 });

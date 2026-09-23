@@ -1,19 +1,19 @@
 import { call } from "@orpc/server";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { AccessDenied } from "@rw/auth/iam/access";
 import { metricBucketLogList } from "../src/rpc/shift-recap.js";
 
 const mocks = vi.hoisted(() => ({
-  authorize: vi.fn(),
+  require: vi.fn(),
   station: { findMany: vi.fn() },
   metricBucket: { findMany: vi.fn() },
   metricBucketLog: { findMany: vi.fn() },
 }));
 vi.mock("@rw/db", () => ({ default: mocks }));
-vi.mock("@rw/auth/iam/policy", () => ({ authorize: mocks.authorize }));
 vi.mock("@rw/services/facility/shift/shift-comment", () => ({}));
 vi.mock("../src/rpc/middleware.js", async () => {
   const { os } = await import("@orpc/server");
-  return { authRequired: os, userOrDisplayRequired: os };
+  return { userRequired: os, userOrDisplayRequired: os };
 });
 
 const input = {
@@ -21,7 +21,7 @@ const input = {
   shiftInstanceId: "00000000-0000-4000-8000-000000000002",
   workCenterId: "00000000-0000-4000-8000-000000000003",
 };
-const context = { iam: {} } as any;
+const context = { access: { require: mocks.require } } as any;
 const station = { id: "00000000-0000-4000-8000-000000000004", name: "Station A" };
 const live = { id: "live", entityType: "STATION", entityId: station.id, entityName: station.name, totalItems: 12 };
 const archived = {
@@ -34,7 +34,7 @@ const archived = {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  mocks.authorize.mockResolvedValue({ ok: true });
+  mocks.require.mockResolvedValue({ siteId: "00000000-0000-4000-8000-000000000001" });
   mocks.station.findMany.mockResolvedValue([station]);
   mocks.metricBucket.findMany.mockResolvedValue([]);
   mocks.metricBucketLog.findMany.mockResolvedValue([]);
@@ -58,10 +58,8 @@ describe("shift recap metric buckets", () => {
     expect(mocks.metricBucket.findMany.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.metricBucketLog.findMany.mock.invocationCallOrder[0],
     );
-    expect(mocks.authorize).toHaveBeenCalledWith(context.iam, {
-      permission: "job:read",
-      scope: { kind: "site", siteId: input.siteId },
-    });
+    // Recaps are floor data: reads check VIEW on the workcenter asked for.
+    expect(mocks.require).toHaveBeenCalledWith("VIEW", { workcenter: input.workCenterId });
     expect(mocks.station.findMany).toHaveBeenCalledWith({
       where: { siteId: input.siteId, workcenterId: input.workCenterId },
       select: { id: true, name: true },
@@ -96,7 +94,7 @@ describe("shift recap metric buckets", () => {
   });
 
   test("authorization denial prevents all database reads", async () => {
-    mocks.authorize.mockResolvedValue({ ok: false, code: "FORBIDDEN", message: "Denied" });
+    mocks.require.mockRejectedValue(new AccessDenied("FORBIDDEN", "Denied"));
     await expect(call(metricBucketLogList, input, { context })).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(mocks.station.findMany).not.toHaveBeenCalled();
     expect(mocks.metricBucket.findMany).not.toHaveBeenCalled();

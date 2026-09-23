@@ -125,7 +125,7 @@ function validateEventActions(actions: PrismaJson.EventAction[]) {
   return null;
 }
 
-async function validateStationWorkspace(stationId: string, workspaceId?: string) {
+async function loadStation(stationId: string) {
   const station = await prisma.station.findUnique({
     where: { id: stationId },
     select: {
@@ -140,15 +140,11 @@ async function validateStationWorkspace(stationId: string, workspaceId?: string)
     return { error: "Station not found", code: "STATION_NOT_FOUND" };
   }
 
-  if (workspaceId && station.site.workspaceId !== workspaceId) {
-    return { error: "Unauthorized", code: "WORKSPACE_MISMATCH" };
-  }
-
   return { data: station };
 }
 
-export async function list(stationId: string, workspaceId?: string) {
-  const stationResult = await validateStationWorkspace(stationId, workspaceId);
+export async function list(stationId: string) {
+  const stationResult = await loadStation(stationId);
   if ("error" in stationResult) {
     return stationResult;
   }
@@ -161,12 +157,8 @@ export async function list(stationId: string, workspaceId?: string) {
   return { data: events };
 }
 
-export async function listExecutions(
-  stationId: string,
-  workspaceId?: string,
-  options: ListStationEventExecutionsOptions = {},
-) {
-  const stationResult = await validateStationWorkspace(stationId, workspaceId);
+export async function listExecutions(stationId: string, options: ListStationEventExecutionsOptions = {}) {
+  const stationResult = await loadStation(stationId);
   if ("error" in stationResult) {
     return stationResult;
   }
@@ -368,7 +360,7 @@ export async function getTagSnapshotsForProcessor(tagKeys: string[]) {
   };
 }
 
-export async function create(input: CreateStationEventInput, workspaceId?: string) {
+export async function create(input: CreateStationEventInput) {
   const { stationId, name, trigger, actions } = input;
 
   const actionValidation = validateEventActions(actions);
@@ -376,7 +368,7 @@ export async function create(input: CreateStationEventInput, workspaceId?: strin
     return actionValidation;
   }
 
-  const stationResult = await validateStationWorkspace(stationId, workspaceId);
+  const stationResult = await loadStation(stationId);
   if ("error" in stationResult) {
     return stationResult;
   }
@@ -400,7 +392,7 @@ export async function create(input: CreateStationEventInput, workspaceId?: strin
   return { data: event };
 }
 
-export async function update(input: UpdateStationEventInput, workspaceId?: string) {
+export async function update(input: UpdateStationEventInput) {
   const { stationId, eventId, expectedVersion, updates } = input;
 
   if (updates.actions !== undefined) {
@@ -410,7 +402,7 @@ export async function update(input: UpdateStationEventInput, workspaceId?: strin
     }
   }
 
-  const stationResult = await validateStationWorkspace(stationId, workspaceId);
+  const stationResult = await loadStation(stationId);
   if ("error" in stationResult) {
     return stationResult;
   }
@@ -485,8 +477,8 @@ export async function update(input: UpdateStationEventInput, workspaceId?: strin
   return { data: event };
 }
 
-export async function remove(stationId: string, eventId: string, workspaceId?: string) {
-  const stationResult = await validateStationWorkspace(stationId, workspaceId);
+export async function remove(stationId: string, eventId: string) {
+  const stationResult = await loadStation(stationId);
   if ("error" in stationResult) {
     return stationResult;
   }
@@ -517,8 +509,8 @@ export async function remove(stationId: string, eventId: string, workspaceId?: s
   return { success: true };
 }
 
-export async function toggle(stationId: string, eventId: string, enabled: boolean, workspaceId?: string) {
-  const stationResult = await validateStationWorkspace(stationId, workspaceId);
+export async function toggle(stationId: string, eventId: string, enabled: boolean) {
+  const stationResult = await loadStation(stationId);
   if ("error" in stationResult) {
     return stationResult;
   }
@@ -553,10 +545,10 @@ export async function toggle(stationId: string, eventId: string, enabled: boolea
   return { data: event };
 }
 
-export async function trigger(input: TriggerStationEventInput, workspaceId?: string) {
+export async function trigger(input: TriggerStationEventInput) {
   const { stationId, eventId, payload } = input;
 
-  const stationResult = await validateStationWorkspace(stationId, workspaceId);
+  const stationResult = await loadStation(stationId);
   if ("error" in stationResult) {
     return stationResult;
   }

@@ -34,7 +34,7 @@ const MODE_ROLE_RESTRICTED: ServiceError = {
 interface ActorInput {
   /** Pre-resolved employee (display flows where the UI knows the operator). */
   employeeId?: string;
-  /** USER principal — resolved to an employee via WorkspaceMembership. */
+  /** USER principal — resolved to an employee via the user's employee link. */
   userId?: string;
   /** Set by the rpc layer for modes:admin principals — skips role restrictions. */
   bypassRoles?: boolean;

@@ -4,13 +4,15 @@ import { hashToken } from "@rw/auth/secrets";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { validatePasswordStrength } from "../src/services/validation.js";
 import { TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD } from "./global-setup.js";
+import { makeUser, plantBucketId } from "./helpers/access.js";
 import { buildServer, type TestServer } from "./helpers/build-server.js";
 
 const INVITER_EMAIL = "inviter@test.local";
 const INVITER_PASSWORD = "InviterPass123!";
 const NOPERM_EMAIL = "noperm@test.local";
 const NOPERM_PASSWORD = "NopermPass123!";
-const ROLE_NAME = "Test Inviter Role (invite lifecycle)";
+const ENGINEER_EMAIL = "invite-staff-engineer@test.local";
+const ENGINEER_PASSWORD = "StaffEngineer123!";
 const INVITEE_EMAILS = [
   "invitee1@test.local",
   "invitee2@test.local",
@@ -23,7 +25,6 @@ const INVITEE_EMAILS = [
   "owner-invite@test.local",
   "ws2-pending@test.local",
   "ws3-owner@test.local",
-  "ws3-admin@test.local",
   "active-member@test.local",
 ];
 
@@ -46,51 +47,31 @@ async function login(server: TestServer, email: string, password: string) {
 describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () => {
   let server: TestServer;
   let workspaceId: string;
-  let roleId: string;
-  let ownerRoleId: string;
+  let siteId: string;
+  let plantBucket: string;
   let adminToken: string;
   let inviterToken: string;
   let nopermToken: string;
+
+  // A read-only bucket access at the default plant — the common invite grant.
+  const viewAccess = () => [{ bucketId: plantBucket, level: "VIEW" }];
 
   beforeAll(async () => {
     server = buildServer();
     await server.ready();
 
-    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { slug: "default" } });
+    const workspace = await prisma.workspace.findFirstOrThrow();
     workspaceId = workspace.id;
+    const site = await prisma.site.findFirstOrThrow({ where: { workspaceId, name: "Rockware" } });
+    siteId = site.id;
+    plantBucket = await plantBucketId(siteId);
 
-    const role = await prisma.role.create({
-      data: {
-        workspaceId,
-        name: ROLE_NAME,
-        scope: "WORKSPACE",
-        permissions: ["user:read", "user:write"],
-        isSystem: false,
-      },
+    // Inviter: plant ADMIN at the site — invite authority is ADMIN at each
+    // invited bucket's site plant. Noperm: plain member, no accesses.
+    await makeUser(INVITER_EMAIL, INVITER_PASSWORD, {
+      plants: [{ siteId, level: "ADMIN" }],
     });
-    roleId = role.id;
-
-    const ownerRole = await prisma.role.findFirstOrThrow({
-      where: { workspaceId, name: "Company Administrator", scope: "WORKSPACE", isSystem: true },
-    });
-    ownerRoleId = ownerRole.id;
-
-    for (const [email, password, assignRole] of [
-      [INVITER_EMAIL, INVITER_PASSWORD, true],
-      [NOPERM_EMAIL, NOPERM_PASSWORD, false],
-    ] as const) {
-      const created = await prisma.user.create({
-        data: { email, passwordHash: await hashPassword(password), status: "ACTIVE" },
-      });
-      const membership = await prisma.workspaceMembership.create({
-        data: { userId: created.id, workspaceId },
-      });
-      if (assignRole) {
-        await prisma.roleAssignment.create({
-          data: { membershipId: membership.id, roleId: role.id, siteId: null },
-        });
-      }
-    }
+    await makeUser(NOPERM_EMAIL, NOPERM_PASSWORD);
 
     adminToken = (await login(server, TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD)).json<{ accessToken: string }>()
       .accessToken;
@@ -99,9 +80,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
   });
 
   afterAll(async () => {
-    await prisma.user.deleteMany({ where: { email: { in: [INVITER_EMAIL, NOPERM_EMAIL, ...INVITEE_EMAILS] } } });
-    await prisma.role.deleteMany({ where: { name: ROLE_NAME } });
-    await prisma.workspace.deleteMany({ where: { slug: { in: ["invite-test-ws2", "invite-test-ws3"] } } });
+    await prisma.user.deleteMany({
+      where: { email: { in: [INVITER_EMAIL, NOPERM_EMAIL, ENGINEER_EMAIL, ...INVITEE_EMAILS] } },
+    });
     await server.close();
   });
 
@@ -127,7 +108,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
   let invitee1Temp: string;
 
   it("invite creates a pending user and returns the temp password once", async () => {
-    const res = await invite(adminToken, { email: INVITEE_EMAILS[0], roleId, firstName: "Ada" });
+    // Plant ADMIN so the invitee can pass the admin-gated roster later.
+    const res = await invite(adminToken, {
+      email: INVITEE_EMAILS[0],
+      bucketAccesses: [{ bucketId: plantBucket, level: "ADMIN" }],
+      firstName: "Ada",
+    });
     expect(res.statusCode).toBe(201);
     const body = res.json() as {
       user: { id: string; status: string; firstName: string | null };
@@ -148,11 +134,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
     expect(row.mustChangePassword).toBe(true);
     expect(row.inviteTokenExpiry).toBeTruthy();
 
-    const membership = await prisma.workspaceMembership.findUnique({
-      where: { userId_workspaceId: { userId: row.id, workspaceId } },
-      include: { roleAssignments: true },
-    });
-    expect(membership?.roleAssignments).toHaveLength(1);
+    const accesses = await prisma.bucketAccess.findMany({ where: { userId: row.id } });
+    expect(accesses).toHaveLength(1);
+    expect(accesses[0]?.level).toBe("ADMIN");
 
     const audit = await prisma.auditLog.findFirst({
       where: { action: "USER_INVITED", userId: row.id },
@@ -195,7 +179,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
     });
     expect(inviteCompleted).toBeTruthy();
 
-    // Same token, previously blocked route now passes (invitee has user:read)
+    // Same token, previously blocked route now passes (invitee is plant ADMIN)
     const unblocked = await server.inject({
       method: "GET",
       url: "/users",
@@ -207,8 +191,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
     expect((await login(server, INVITEE_EMAILS[0], "MyOwnPassword123!")).statusCode).toBe(200);
   });
 
-  it("resend rotates the temporary password and expiry without needing a role", async () => {
-    const first = await invite(adminToken, { email: INVITEE_EMAILS[1], roleId });
+  it("resend rotates the temporary password and expiry without needing accesses", async () => {
+    const first = await invite(adminToken, { email: INVITEE_EMAILS[1], bucketAccesses: viewAccess() });
     expect(first.statusCode).toBe(201);
     const t1 = (first.json() as { temporaryPassword: string }).temporaryPassword;
 
@@ -222,7 +206,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
   });
 
   it("expired invites refuse the correct password but stay generic for wrong ones", async () => {
-    const res = await invite(adminToken, { email: INVITEE_EMAILS[2], roleId });
+    const res = await invite(adminToken, { email: INVITEE_EMAILS[2], bucketAccesses: viewAccess() });
     const temp = (res.json() as { temporaryPassword: string }).temporaryPassword;
 
     await prisma.user.update({
@@ -245,11 +229,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
     expect(res.statusCode).toBe(200);
 
     expect(await prisma.user.findUnique({ where: { id: target.id } })).toBeNull();
-    expect(
-      await prisma.workspaceMembership.findUnique({
-        where: { userId_workspaceId: { userId: target.id, workspaceId } },
-      }),
-    ).toBeNull();
+    expect(await prisma.bucketAccess.count({ where: { userId: target.id } })).toBe(0);
 
     const audit = await prisma.auditLog.findFirst({
       where: { action: "INVITE_REVOKED", userId: target.id },
@@ -257,82 +237,75 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
     expect(audit?.metadata).toMatchObject({ email: INVITEE_EMAILS[2] });
 
     // Email is immediately re-invitable
-    const reinvite = await invite(adminToken, { email: INVITEE_EMAILS[2], roleId });
+    const reinvite = await invite(adminToken, { email: INVITEE_EMAILS[2], bucketAccesses: viewAccess() });
     expect(reinvite.statusCode).toBe(201);
   });
 
-  it("revoke guards: active users 409, unknown ids 404, other workspaces invisible", async () => {
+  it("revoke guards: active users 409, unknown ids 404", async () => {
     const active = await prisma.user.findUniqueOrThrow({ where: { email: INVITEE_EMAILS[0] } });
     expect((await revoke(adminToken, active.id)).statusCode).toBe(409);
 
     expect((await revoke(adminToken, "00000000-0000-4000-8000-000000000000")).statusCode).toBe(404);
-
-    const ws2 = await prisma.workspace.create({ data: { name: "Invite Test WS2", slug: "invite-test-ws2" } });
-    const foreign = await prisma.user.create({
-      data: {
-        email: INVITEE_EMAILS[9],
-        status: "PENDING",
-        passwordHash: await hashPassword("ForeignTemp123!"),
-        mustChangePassword: true,
-      },
-    });
-    await prisma.workspaceMembership.create({ data: { userId: foreign.id, workspaceId: ws2.id } });
-
-    expect((await revoke(adminToken, foreign.id)).statusCode).toBe(404);
   });
 
   it("orphaned pending users can be adopted by a fresh invite", async () => {
-    // Simulate the old bug: PENDING user with no membership at all
+    // Simulate the old bug: PENDING user with no access at all
     await prisma.user.create({
       data: { email: INVITEE_EMAILS[5], status: "PENDING" },
     });
 
-    const noRole = await invite(adminToken, { email: INVITEE_EMAILS[5] });
-    expect(noRole.statusCode).toBe(400);
-    expect((noRole.json() as { error: string }).error).toBe("roleId or workcenterGrants is required");
+    const noAccess = await invite(adminToken, { email: INVITEE_EMAILS[5] });
+    expect(noAccess.statusCode).toBe(400);
+    expect((noAccess.json() as { error: string }).error).toBe("bucketAccesses or asAccountAdmin is required");
 
-    const adopted = await invite(adminToken, { email: INVITEE_EMAILS[5], roleId });
+    const adopted = await invite(adminToken, { email: INVITEE_EMAILS[5], bucketAccesses: viewAccess() });
     expect(adopted.statusCode).toBe(201);
 
     const row = await prisma.user.findUniqueOrThrow({ where: { email: INVITEE_EMAILS[5] } });
-    const membership = await prisma.workspaceMembership.findUnique({
-      where: { userId_workspaceId: { userId: row.id, workspaceId } },
-      include: { roleAssignments: true },
-    });
-    expect(membership?.roleAssignments).toHaveLength(1);
+    expect(await prisma.bucketAccess.count({ where: { userId: row.id } })).toBe(1);
     expect(row.passwordHash).toBeTruthy();
   });
 
-  it("disabled users cannot be re-invited", async () => {
+  it("removed (disabled) people come back through a fresh invite", async () => {
     await prisma.user.create({
       data: { email: INVITEE_EMAILS[6], status: "DISABLED", passwordHash: await hashPassword("Whatever123!") },
     });
-    const res = await invite(adminToken, { email: INVITEE_EMAILS[6] });
-    expect(res.statusCode).toBe(400);
-    expect((res.json() as { error: string }).error).toBe("User is disabled");
+    const noAccess = await invite(adminToken, { email: INVITEE_EMAILS[6] });
+    expect(noAccess.statusCode).toBe(400);
+
+    const back = await invite(adminToken, { email: INVITEE_EMAILS[6], bucketAccesses: viewAccess() });
+    expect(back.statusCode).toBe(201);
+    const row = await prisma.user.findUniqueOrThrow({ where: { email: INVITEE_EMAILS[6] } });
+    expect(row.status).toBe("PENDING");
+    expect(row.mustChangePassword).toBe(true);
+    expect(await prisma.bucketAccess.count({ where: { userId: row.id } })).toBe(1);
   });
 
-  it("permission matrix: no user:write means no invite/revoke; owner invites need owner:all", async () => {
-    expect((await invite(nopermToken, { email: "nope@test.local", roleId })).statusCode).toBe(403);
+  it("permission matrix: no plant ADMIN means no invite/revoke; account-admin invites need an account admin", async () => {
+    expect((await invite(nopermToken, { email: "nope@test.local", bucketAccesses: viewAccess() })).statusCode).toBe(
+      403,
+    );
 
     const pending = await prisma.user.findUniqueOrThrow({ where: { email: INVITEE_EMAILS[1] } });
     expect((await revoke(nopermToken, pending.id)).statusCode).toBe(403);
 
-    // user:write is not enough to hand out the owner role
-    const ownerByInviter = await invite(inviterToken, { email: INVITEE_EMAILS[8], roleId: ownerRoleId });
-    expect(ownerByInviter.statusCode).toBe(403);
+    // Plant ADMIN invites at its plant, but cannot make account admins
+    const adminByInviter = await invite(inviterToken, { email: INVITEE_EMAILS[8], asAccountAdmin: true });
+    expect(adminByInviter.statusCode).toBe(403);
 
-    const ownerByOwner = await invite(adminToken, { email: INVITEE_EMAILS[8], roleId: ownerRoleId });
-    expect(ownerByOwner.statusCode).toBe(201);
+    const adminByAdmin = await invite(adminToken, { email: INVITEE_EMAILS[8], asAccountAdmin: true });
+    expect(adminByAdmin.statusCode).toBe(201);
+    const invited = await prisma.user.findUniqueOrThrow({ where: { email: INVITEE_EMAILS[8] } });
+    expect(invited.isAccountAdmin).toBe(true);
 
-    // ...and revoking an owner invite also needs owner:all
+    // ...and revoking an account-admin invite also needs an account admin
     const ownerInvite = await prisma.user.findUniqueOrThrow({ where: { email: INVITEE_EMAILS[8] } });
     expect((await revoke(inviterToken, ownerInvite.id)).statusCode).toBe(403);
     expect((await revoke(adminToken, ownerInvite.id)).statusCode).toBe(200);
   });
 
   it("pending invitees can activate through the reset-code flow", async () => {
-    const res = await invite(adminToken, { email: INVITEE_EMAILS[3], roleId });
+    const res = await invite(adminToken, { email: INVITEE_EMAILS[3], bucketAccesses: viewAccess() });
     expect(res.statusCode).toBe(201);
 
     const forgot = await server.inject({
@@ -381,8 +354,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
     expect((loginRes.json() as { error: string }).error).toBe("Please complete your registration first");
   });
 
-  it("removing a pending member deletes the user; active members lose only the membership", async () => {
-    const res = await invite(adminToken, { email: INVITEE_EMAILS[4], roleId });
+  it("removing a member disables them and drops their access; the user row survives", async () => {
+    const res = await invite(adminToken, { email: INVITEE_EMAILS[4], bucketAccesses: viewAccess() });
     expect(res.statusCode).toBe(201);
     const pending = await prisma.user.findUniqueOrThrow({ where: { email: INVITEE_EMAILS[4] } });
 
@@ -392,74 +365,66 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
       headers: { authorization: `Bearer ${adminToken}` },
     });
     expect(removePending.statusCode).toBe(200);
-    expect(await prisma.user.findUnique({ where: { id: pending.id } })).toBeNull();
+    const removed = await prisma.user.findUniqueOrThrow({ where: { id: pending.id } });
+    expect(removed.status).toBe("DISABLED");
+    expect(await prisma.bucketAccess.count({ where: { userId: pending.id } })).toBe(0);
 
-    const active = await prisma.user.create({
-      data: { email: INVITEE_EMAILS[12], status: "ACTIVE", passwordHash: await hashPassword("ActiveMember123!") },
-    });
-    await prisma.workspaceMembership.create({ data: { userId: active.id, workspaceId } });
-
+    const active = await makeUser(INVITEE_EMAILS[11], "ActiveMember123!", { plants: [{ siteId, level: "VIEW" }] });
     const removeActive = await server.inject({
       method: "DELETE",
-      url: `/workspaces/${workspaceId}/members/${active.id}`,
+      url: `/workspaces/${workspaceId}/members/${active.userId}`,
       headers: { authorization: `Bearer ${adminToken}` },
     });
     expect(removeActive.statusCode).toBe(200);
-    expect(await prisma.user.findUnique({ where: { id: active.id } })).not.toBeNull();
+    expect(await prisma.bucketAccess.count({ where: { userId: active.userId } })).toBe(0);
+    expect(((await login(server, INVITEE_EMAILS[11], "ActiveMember123!")).json() as { error: string }).error).toBe(
+      "Account is disabled",
+    );
   });
 
-  it("the last workspace owner cannot be removed", async () => {
-    // Isolated workspace so shared-DB owner counts can't skew the result
-    const ws3 = await prisma.workspace.create({ data: { name: "Invite Test WS3", slug: "invite-test-ws3" } });
-    const ws3OwnerRole = await prisma.role.create({
-      data: {
-        workspaceId: ws3.id,
-        name: "Company Administrator",
-        scope: "WORKSPACE",
-        permissions: ["owner:all", "user:admin", "user:write", "user:read"],
-        isSystem: true,
-      },
+  it("the last account admin cannot be removed or demoted", async () => {
+    const target = await makeUser(INVITEE_EMAILS[10], "LastAdmin123!", { accountAdmin: true });
+    // Files run one at a time, so the other admins can step aside briefly.
+    const others = await prisma.user.findMany({
+      where: { isAccountAdmin: true, id: { not: target.userId } },
+      select: { id: true },
     });
-    const ws3AdminRole = await prisma.role.create({
-      data: {
-        workspaceId: ws3.id,
-        name: "WS3 User Admin",
-        scope: "WORKSPACE",
-        permissions: ["user:read", "user:admin"],
-        isSystem: false,
-      },
-    });
+    await prisma.user.updateMany({ where: { id: { in: others.map((o) => o.id) } }, data: { isAccountAdmin: false } });
+    try {
+      // ENGINEER staff pass the account-admin gate without being an admin.
+      await prisma.user.upsert({
+        where: { email: ENGINEER_EMAIL },
+        update: { systemRole: "ENGINEER", passwordHash: await hashPassword(ENGINEER_PASSWORD), status: "ACTIVE" },
+        create: {
+          email: ENGINEER_EMAIL,
+          passwordHash: await hashPassword(ENGINEER_PASSWORD),
+          systemRole: "ENGINEER",
+          status: "ACTIVE",
+        },
+      });
+      const engineerToken = ((await login(server, ENGINEER_EMAIL, ENGINEER_PASSWORD)).json() as { accessToken: string })
+        .accessToken;
 
-    const owner = await prisma.user.create({
-      data: { email: INVITEE_EMAILS[10], status: "ACTIVE", passwordHash: await hashPassword("Ws3Owner123!") },
-    });
-    const ownerMembership = await prisma.workspaceMembership.create({
-      data: { userId: owner.id, workspaceId: ws3.id },
-    });
-    await prisma.roleAssignment.create({
-      data: { membershipId: ownerMembership.id, roleId: ws3OwnerRole.id, siteId: null },
-    });
+      const remove = await server.inject({
+        method: "DELETE",
+        url: `/workspaces/${workspaceId}/members/${target.userId}`,
+        headers: { authorization: `Bearer ${engineerToken}` },
+      });
+      expect(remove.statusCode).toBe(400);
+      expect((remove.json() as { error: string }).error).toBe("Cannot remove the last account admin");
 
-    const wsAdmin = await prisma.user.create({
-      data: { email: INVITEE_EMAILS[11], status: "ACTIVE", passwordHash: await hashPassword("Ws3Admin123!") },
-    });
-    const adminMembership = await prisma.workspaceMembership.create({
-      data: { userId: wsAdmin.id, workspaceId: ws3.id },
-    });
-    await prisma.roleAssignment.create({
-      data: { membershipId: adminMembership.id, roleId: ws3AdminRole.id, siteId: null },
-    });
-
-    const ws3AdminLogin = await login(server, INVITEE_EMAILS[11], "Ws3Admin123!");
-    expect(ws3AdminLogin.statusCode).toBe(200);
-    const ws3AdminToken = (ws3AdminLogin.json() as { accessToken: string }).accessToken;
-
-    const res = await server.inject({
-      method: "DELETE",
-      url: `/workspaces/${ws3.id}/members/${owner.id}`,
-      headers: { authorization: `Bearer ${ws3AdminToken}` },
-    });
-    expect(res.statusCode).toBe(400);
-    expect((res.json() as { error: string }).error).toBe("Cannot remove the last workspace owner");
+      const targetToken = ((await login(server, INVITEE_EMAILS[10], "LastAdmin123!")).json() as { accessToken: string })
+        .accessToken;
+      const demote = await server.inject({
+        method: "PUT",
+        url: `/workspaces/${workspaceId}/members/${target.userId}`,
+        headers: { authorization: `Bearer ${targetToken}` },
+        payload: { isAccountAdmin: false },
+      });
+      expect(demote.statusCode).toBe(400);
+      expect((demote.json() as { error: string }).error).toBe("Cannot remove the last account admin");
+    } finally {
+      await prisma.user.updateMany({ where: { id: { in: others.map((o) => o.id) } }, data: { isAccountAdmin: true } });
+    }
   });
 });

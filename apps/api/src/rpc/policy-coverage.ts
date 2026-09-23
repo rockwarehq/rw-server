@@ -1,15 +1,22 @@
 // Authorization coverage contract, enforced by test/policy-coverage.test.ts:
-// every oRPC procedure must call authorize()/authorizeList() — or, for the
-// site directory only, authorizeAccessibleSites() — INLINE in its handler
-// body (not behind a local helper — the gate scans handler source), unless
-// its dotted router path is listed here with a reason. Every REST route must
-// carry verifyAccessToken plus either requirePermission or a policy call,
-// unless listed in PUBLIC_REST_ROUTES.
+// every oRPC procedure must ask `context.access` (require / list / can /
+// requireSomewhere / requireAccountAdmin / sites) INLINE in its handler body (the
+// gate scans handler source; workspaceSiteScope and entity's tokenSite are
+// the only reviewed wrappers), unless its dotted router path is listed here
+// with a reason. Every REST route must carry verifyAccessToken plus either
+// accountAdminRequired or an access check, unless listed in PUBLIC_REST_ROUTES.
 //
 // Adding an entry here is a code-review decision, not a default
 // (ADR-0002 amendment, 2026-08-18).
 
 export const EXCLUDED_PROCEDURES: ReadonlySet<string> = new Set([
+  // ── bucket administration. bucket.list describes the caller's own access
+  // (no target to authorize); setAccess/removeAccess enforce authority in
+  // the members service (ADMIN at the touched bucket's plant, last-owner
+  // and last-plant-admin guards) — a second inline check would be theater.
+  "bucket.list",
+  "bucket.setAccess",
+  "bucket.removeAccess",
   // ── operator.* — display-identity-bound shop-floor flows. The principal is
   // a DISPLAY whose identity is verified against the display row itself
   // (assertDisplayIdentity + resolveDisplayContext), which is stricter than
@@ -27,7 +34,7 @@ export const EXCLUDED_PROCEDURES: ReadonlySet<string> = new Set([
   "station.triggerEvent",
   // ── display bootstrap — a TV registers/polls before any identity exists.
   // display.get exposes dashboard content by uuid (known trade-off);
-  // heartbeat's auth check is a live TODO (race with claim flow).
+  // heartbeat takes no token on purpose (it races the claim flow).
   // display-context-scoped listing: the display principal's own
   // site/workcenter/station bound the query (getDisplayDocumentContext).
   "document.listForDisplayContext",
@@ -76,15 +83,14 @@ export const SELF_SERVICE_REST_ROUTES: ReadonlySet<string> = new Set(
     "PUT /users/me/password",
     "POST /users/me/avatar",
     "DELETE /users/me/avatar",
-    // token minting — membership/site access verified by the auth service
-    "POST /auth/switch-workspace",
+    // token minting — site access verified by the auth service
     "POST /auth/switch-site",
     // self-scoped listing (only the caller's own workspaces)
     "GET /workspaces",
     // membership-gated read of workspace metadata
     "GET /workspaces/:id",
-    // in-service permission checks (invite.ts / members.ts enforce
-    // user:write + owner escalation internally)
+    // in-service access checks (invite.ts / members.ts check ADMIN at each
+    // touched plant, and ownership changes against the caller's person)
     "POST /users/invite",
     "DELETE /users/invite/:id",
     "PUT /workspaces/:id/members/:userId",

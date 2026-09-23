@@ -2,9 +2,7 @@ import { ORPCError } from "@orpc/server";
 import type { Automation, AutomationAction, AutomationFramework } from "@rw/automations";
 import * as z from "zod";
 import { getAutomationFramework } from "../automations/index.js";
-import { authRequired } from "./middleware.js";
-import { authorize, authorizeList } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { userRequired } from "./middleware.js";
 
 // Automations belong to a site (the engine's `partition`). Handlers resolve the single shared
 // framework (cached after first build; the first call pays the Prisma initial-load cost) and gate
@@ -68,8 +66,8 @@ function validateActions(fw: AutomationFramework, actions: z.infer<typeof action
 }
 
 /** Every event and action schema the editor can pick from (`getCatalog` needs a chosen event). */
-export const listSchemas = authRequired.handler(async ({ context }) => {
-  grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "anySite" } }));
+export const listSchemas = userRequired.handler(async ({ context }) => {
+  context.access.requireSomewhere("VIEW");
 
   const fw = await getAutomationFramework();
   return { events: Object.values(fw.eventSchemas), actions: Object.values(fw.actionSchemas) };
@@ -79,7 +77,7 @@ export const listSchemas = authRequired.handler(async ({ context }) => {
  * Catalog (event + action schemas, facts, variables) for a specific (eventType, actionType) — and
  * optionally specific versions. If a version is omitted, the framework uses each schema's `latest`.
  */
-export const getCatalog = authRequired
+export const getCatalog = userRequired
   .input(
     z.object({
       eventType: z.string().min(1),
@@ -89,7 +87,7 @@ export const getCatalog = authRequired
     }),
   )
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "anySite" } }));
+    context.access.requireSomewhere("VIEW");
 
     const fw = await getAutomationFramework();
     return fw.catalog(input.eventType, input.actionType, input.eventVersion, input.actionVersion);
@@ -101,10 +99,10 @@ export const getCatalog = authRequired
  * registered (startup validation would have caught a schema-side typo — this is defense against
  * typo'd client calls).
  */
-export const listRefOptions = authRequired
+export const listRefOptions = userRequired
   .input(z.object({ source: z.string().min(1), siteId: z.uuid().optional() }))
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "settings:read", scope: { kind: "anySite" } }));
+    context.access.requireSomewhere("VIEW");
 
     const fw = await getAutomationFramework();
     try {
@@ -116,12 +114,10 @@ export const listRefOptions = authRequired
   });
 
 /** Automations for one site (the requested site, or the token's active site) plus any global ones. */
-export const listAutomations = authRequired
+export const listAutomations = userRequired
   .input(z.object({ siteId: z.uuid().optional() }).optional())
   .handler(async ({ input, context }) => {
-    const scope = grant(
-      await authorizeList(context.iam, { permission: "settings:read", requestedSiteId: input?.siteId }),
-    );
+    const scope = context.access.list("VIEW", input?.siteId);
 
     const fw = await getAutomationFramework();
     return fw.store
@@ -130,7 +126,7 @@ export const listAutomations = authRequired
       .map(present);
   });
 
-export const createAutomation = authRequired
+export const createAutomation = userRequired
   .input(
     z.object({
       siteId: z.uuid(),
@@ -147,9 +143,7 @@ export const createAutomation = authRequired
     }),
   )
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, { permission: "settings:write", scope: { kind: "site", siteId: input.siteId } }),
-    );
+    await context.access.require("ADMIN", { site: input.siteId });
 
     const fw = await getAutomationFramework();
     const eventSchema = fw.eventSchemas[input.event];
@@ -177,7 +171,7 @@ export const createAutomation = authRequired
     return present(automation);
   });
 
-export const updateAutomation = authRequired
+export const updateAutomation = userRequired
   .input(
     z.object({
       id: z.string(),
@@ -190,7 +184,7 @@ export const updateAutomation = authRequired
     }),
   )
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "settings:write", scope: { kind: "automation", id: input.id } }));
+    await context.access.require("ADMIN", { automation: input.id });
 
     const fw = await getAutomationFramework();
     const existing = fw.store.get(input.id);
@@ -222,8 +216,8 @@ export const updateAutomation = authRequired
     return present(updated);
   });
 
-export const deleteAutomation = authRequired.input(z.object({ id: z.string() })).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "settings:admin", scope: { kind: "automation", id: input.id } }));
+export const deleteAutomation = userRequired.input(z.object({ id: z.string() })).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { automation: input.id });
 
   const fw = await getAutomationFramework();
   if (!(await fw.store.remove(input.id))) throw new ORPCError("NOT_FOUND", { message: "automation not found" });

@@ -126,12 +126,6 @@ export interface DimensionDef {
 export interface FactDef {
   label: string;
   description?: string;
-  /**
-   * The read permission gating this fact, mirroring the sibling rpc routers
-   * that expose the same tables (job:read, product:read, employee:read,
-   * calls:read). Enforced by the report rpc layer.
-   */
-  permission: string;
   /** Unquoted table name the fact reads from. Exactly one of table/source. */
   table?: string;
   /**

@@ -1,7 +1,5 @@
 import { z } from "zod";
-import { authRequired, userOrDisplayRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { userRequired, userOrDisplayRequired } from "./middleware.js";
 import prisma from "@rw/db";
 import * as shiftCommentService from "@rw/services/facility/shift/shift-comment";
 import * as shiftSignoffService from "@rw/services/facility/shift/shift-signoff";
@@ -27,10 +25,10 @@ const shiftInstanceSelect = {
   isScheduled: true,
 } as const;
 
-export const shiftInstanceList = authRequired
+export const shiftInstanceList = userRequired
   .input(shiftInstanceListInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "site", siteId: input.siteId } }));
+    await context.access.require("VIEW", { site: input.siteId });
 
     const rows = await prisma.shiftInstance.findMany({
       where: {
@@ -56,7 +54,7 @@ const currentShiftInstanceInputSchema = z.object({
 export const currentShiftInstance = userOrDisplayRequired
   .input(currentShiftInstanceInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "site", siteId: input.siteId } }));
+    await context.access.require("VIEW", { site: input.siteId });
 
     const now = new Date();
     const row = await prisma.shiftInstance.findFirst({
@@ -82,10 +80,10 @@ const metricBucketLogListInputSchema = z.object({
   workCenterId: z.uuid(),
 });
 
-export const metricBucketLogList = authRequired
+export const metricBucketLogList = userRequired
   .input(metricBucketLogListInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
+    await context.access.require("VIEW", { workcenter: input.workCenterId });
 
     // Get stations belonging to this workcenter
     const stations = await prisma.station.findMany({
@@ -162,10 +160,10 @@ const stationJobLogListInputSchema = z.object({
   workCenterId: z.uuid(),
 });
 
-export const stationJobLogList = authRequired
+export const stationJobLogList = userRequired
   .input(stationJobLogListInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
+    await context.access.require("VIEW", { workcenter: input.workCenterId });
 
     // Look up the shift instance for its time boundaries
     const shiftInstance = await prisma.shiftInstance.findFirstOrThrow({
@@ -226,8 +224,8 @@ const jobMetricsListInputSchema = z.object({
   workCenterId: z.uuid(),
 });
 
-export const jobMetricsList = authRequired.input(jobMetricsListInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
+export const jobMetricsList = userRequired.input(jobMetricsListInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { workcenter: input.workCenterId });
 
   // Get stations in workcenter to build path filter
   const stations = await prisma.station.findMany({
@@ -332,7 +330,10 @@ const downtimeLogListInputSchema = z.object({
 export const downtimeLogList = userOrDisplayRequired
   .input(downtimeLogListInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "status:read", scope: { kind: "site", siteId: input.siteId } }));
+    // Shift recaps are workcenter data: check the station or workcenter asked for.
+    if (input.stationId) await context.access.require("VIEW", { station: input.stationId });
+    else if (input.workCenterId) await context.access.require("VIEW", { workcenter: input.workCenterId });
+    else await context.access.require("VIEW", { site: input.siteId });
 
     const shiftInstance = await prisma.shiftInstance.findFirstOrThrow({
       where: { id: input.shiftInstanceId, siteId: input.siteId },
@@ -409,7 +410,7 @@ const scrapByReasonListInputSchema = z.object({
 export const scrapByReasonList = userOrDisplayRequired
   .input(scrapByReasonListInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "site", siteId: input.siteId } }));
+    await context.access.require("VIEW", { workcenter: input.workCenterId });
 
     const stations = await prisma.station.findMany({
       where: { siteId: input.siteId, workcenterId: input.workCenterId },
@@ -450,6 +451,7 @@ export const scrapByReasonList = userOrDisplayRequired
 
 // ============================================================================
 // Shift Comments (workcenter-overall + per-station, append-only thread)
+// Everything in a shift recap is workcenter data: checks name the workcenter.
 // ============================================================================
 
 const commentListInputSchema = z.object({
@@ -459,7 +461,7 @@ const commentListInputSchema = z.object({
 });
 
 export const commentList = userOrDisplayRequired.input(commentListInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "site", siteId: input.siteId } }));
+  await context.access.require("VIEW", { workcenter: input.workCenterId });
 
   const result = await shiftCommentService.list({
     shiftInstanceId: input.shiftInstanceId,
@@ -476,16 +478,17 @@ const commentCreateInputSchema = z.object({
   text: z.string().min(1).max(5000),
 });
 
-export const commentCreate = authRequired.input(commentCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "site", siteId: input.siteId } }));
+export const commentCreate = userRequired.input(commentCreateInputSchema).handler(async ({ input, context }) => {
+  // Written on the workcenter's own site, whatever siteId was sent.
+  const { siteId } = await context.access.require("MANAGE", { workcenter: input.workCenterId });
 
   const result = await shiftCommentService.create({
-    siteId: input.siteId,
+    siteId,
     shiftInstanceId: input.shiftInstanceId,
     workcenterId: input.workCenterId,
     stationId: input.stationId ?? null,
     text: input.text,
-    createdById: context.iam.id,
+    createdById: context.current.user.id,
   });
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
@@ -496,12 +499,12 @@ const commentUpdateInputSchema = z.object({
   text: z.string().min(1).max(5000),
 });
 
-export const commentUpdate = authRequired.input(commentUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "shiftComment", id: input.id } }));
+export const commentUpdate = userRequired.input(commentUpdateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { shiftComment: input.id });
 
   const result = await shiftCommentService.update(input.id, {
     text: input.text,
-    actorId: context.iam.id,
+    actorId: context.current.user.id,
   });
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
@@ -511,10 +514,10 @@ const commentDeleteInputSchema = z.object({
   id: z.uuid(),
 });
 
-export const commentDelete = authRequired.input(commentDeleteInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "shiftComment", id: input.id } }));
+export const commentDelete = userRequired.input(commentDeleteInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { shiftComment: input.id });
 
-  const result = await shiftCommentService.remove(input.id, { actorId: context.iam.id });
+  const result = await shiftCommentService.remove(input.id, { actorId: context.current.user.id });
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
@@ -530,7 +533,7 @@ const signoffInputSchema = z.object({
 });
 
 export const signoffGet = userOrDisplayRequired.input(signoffInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:read", scope: { kind: "site", siteId: input.siteId } }));
+  await context.access.require("VIEW", { workcenter: input.workCenterId });
 
   const result = await shiftSignoffService.get({
     shiftInstanceId: input.shiftInstanceId,
@@ -539,27 +542,28 @@ export const signoffGet = userOrDisplayRequired.input(signoffInputSchema).handle
   return result.data;
 });
 
-export const signoffCreate = authRequired.input(signoffInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "site", siteId: input.siteId } }));
+export const signoffCreate = userRequired.input(signoffInputSchema).handler(async ({ input, context }) => {
+  // Written on the workcenter's own site, whatever siteId was sent.
+  const { siteId } = await context.access.require("MANAGE", { workcenter: input.workCenterId });
 
   const result = await shiftSignoffService.create({
-    siteId: input.siteId,
+    siteId,
     shiftInstanceId: input.shiftInstanceId,
     workcenterId: input.workCenterId,
-    postedById: context.iam.id,
+    postedById: context.current.user.id,
   });
   if (result.error !== undefined) throwServiceError(result, { ALREADY_SIGNED_OFF: "CONFLICT" });
   return result.data;
 });
 
-export const signoffDelete = authRequired.input(signoffInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "schedule:write", scope: { kind: "site", siteId: input.siteId } }));
+export const signoffDelete = userRequired.input(signoffInputSchema).handler(async ({ input, context }) => {
+  const { siteId } = await context.access.require("MANAGE", { workcenter: input.workCenterId });
 
   const result = await shiftSignoffService.remove({
-    siteId: input.siteId,
+    siteId,
     shiftInstanceId: input.shiftInstanceId,
     workcenterId: input.workCenterId,
-    actorId: context.iam.id,
+    actorId: context.current.user.id,
   });
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };

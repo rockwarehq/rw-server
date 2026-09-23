@@ -332,23 +332,13 @@ export async function update(id: string, input: UpdateEmployeeInput) {
   if (input.roleId) {
     const role = await prisma.employeeRole.findUnique({
       where: { id: input.roleId },
-      select: {
-        id: true,
-        siteId: true,
-        site: { select: { workspaceId: true } },
-      },
+      select: { id: true, siteId: true },
     });
     if (!role)
       return {
         error: "Employee role not found",
         code: "ROLE_NOT_FOUND" as const,
       };
-    if (role.site.workspaceId !== employee.workspaceId) {
-      return {
-        error: "Employee role does not belong to this workspace",
-        code: "WORKSPACE_MISMATCH" as const,
-      };
-    }
     roleUpdate = { siteId: role.siteId, roleId: role.id };
   }
 

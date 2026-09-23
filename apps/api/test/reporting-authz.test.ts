@@ -1,6 +1,6 @@
 import prisma from "@rw/db";
-import { hashPassword } from "@rw/auth/password";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ensurePlantBucket, ensureWorkcenterBucket, makeUser } from "./helpers/access.js";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
 import { rpcCall } from "./helpers/rpc-call.js";
 
@@ -15,6 +15,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
   let siteA: { id: string };
   let siteB: { id: string };
   let stationB: { id: string };
+  let wcA: { id: string };
   let commentB: { id: string };
   let faToken: string;
   let readerToken: string;
@@ -35,6 +36,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
       create: { name: "RepAuthZ Site B", workspaceId },
       select: { id: true },
     });
+    // Raw-prisma sites/workcenters need their buckets created by hand.
+    await ensurePlantBucket(workspaceId, siteB.id, "RepAuthZ Site B");
     stationB = await prisma.station.upsert({
       where: { siteId_name: { siteId: siteB.id, name: "rep-authz-st-b" } },
       update: {},
@@ -48,10 +51,34 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
       });
       return existing ?? prisma.workcenter.create({ data: { name: "rep-authz-wc-b", siteId: siteB.id }, select: { id: true } });
     })();
-    // ShiftInstance needs a pattern/definition/assignment chain; borrow any
-    // existing instance for the FK — the policy resolver reads the COMMENT's
-    // siteId, which is what the cross-site test exercises.
-    const anyShift = await prisma.shiftInstance.findFirstOrThrow({ select: { id: true } });
+    await ensureWorkcenterBucket(workspaceId, siteB.id, wcB.id, "rep-authz-wc-b");
+    wcA =
+      (await prisma.workcenter.findFirst({ where: { siteId: siteA.id, name: "rep-authz-wc-a" }, select: { id: true } })) ??
+      (await prisma.workcenter.create({ data: { name: "rep-authz-wc-a", siteId: siteA.id }, select: { id: true } }));
+    await ensureWorkcenterBucket(workspaceId, siteA.id, wcA.id, "rep-authz-wc-a");
+    // ShiftInstance needs a pattern/assignment chain; build a minimal one at
+    // site B for the FK — the policy resolver reads the COMMENT's siteId,
+    // which is what the cross-site test exercises. (A fresh test DB carries
+    // no pre-existing instances to borrow.)
+    const patternB = await prisma.shiftPattern.create({
+      data: { name: "rep-authz-pattern", siteId: siteB.id },
+      select: { id: true },
+    });
+    const assignmentB = await prisma.shiftAssignment.create({
+      data: { patternId: patternB.id, siteId: siteB.id, rotationStartDate: new Date("2026-01-01T00:00:00Z") },
+      select: { id: true },
+    });
+    const anyShift = await prisma.shiftInstance.create({
+      data: {
+        assignmentId: assignmentB.id,
+        siteId: siteB.id,
+        shiftName: "rep-authz-shift",
+        businessDate: new Date("2026-01-01"),
+        startTime: new Date("2026-01-01T06:00:00Z"),
+        endTime: new Date("2026-01-01T14:00:00Z"),
+      },
+      select: { id: true },
+    });
     commentB = await prisma.shiftComment.create({
       data: {
         siteId: siteB.id,
@@ -62,36 +89,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
       select: { id: true },
     });
 
-    const faRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Plant Admin", scope: "SITE" } },
-      select: { id: true },
-    });
-    const readerRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Plant Member", scope: "SITE" } },
-      select: { id: true },
-    });
-    const passwordHash = await hashPassword(PASSWORD);
-    for (const { email, roleId } of [
-      { email: FA_EMAIL, roleId: faRole.id },
-      { email: READER_EMAIL, roleId: readerRole.id },
-    ]) {
-      const u = await prisma.user.upsert({
-        where: { email },
-        update: {},
-        create: { email, passwordHash, firstName: "RepAuthZ", status: "ACTIVE" },
-      });
-      const membership = await prisma.workspaceMembership.upsert({
-        where: { userId_workspaceId: { userId: u.id, workspaceId } },
-        update: {},
-        create: { userId: u.id, workspaceId },
-      });
-      const existing = await prisma.roleAssignment.findFirst({
-        where: { membershipId: membership.id, roleId, siteId: siteA.id },
-      });
-      if (!existing) {
-        await prisma.roleAssignment.create({ data: { membershipId: membership.id, roleId, siteId: siteA.id } });
-      }
-    }
+    // Bucket fixtures: FA administers site A's plant; the reader is a plain
+    // plant member (VIEW). Neither holds anything at site B.
+    await makeUser(FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
+    await makeUser(READER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "VIEW" }] });
 
     faToken = (await loginAs(server, FA_EMAIL, PASSWORD)).accessToken;
     readerToken = (await loginAs(server, READER_EMAIL, PASSWORD)).accessToken;
@@ -101,6 +102,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
     await prisma.user.deleteMany({ where: { email: { in: [FA_EMAIL, READER_EMAIL] } } });
     await prisma.shiftComment.deleteMany({ where: { siteId: siteB.id } });
     await prisma.shiftInstance.deleteMany({ where: { siteId: siteB.id } });
+    await prisma.shiftAssignment.deleteMany({ where: { siteId: siteB.id } });
+    await prisma.shiftPattern.deleteMany({ where: { siteId: siteB.id } });
     await prisma.station.deleteMany({ where: { siteId: siteB.id } });
     await prisma.workcenter.deleteMany({ where: { siteId: siteB.id } });
     await prisma.site.deleteMany({ where: { name: "RepAuthZ Site B" } });
@@ -114,23 +117,22 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
     expect(downtime.statusCode).toBe(403);
   });
 
-  it("log searches allow the granted site and honor permission mapping", async () => {
+  it("log searches allow plant admins; plant viewers without cells see no floor logs", async () => {
     const cycles = await rpcCall(server, "logs/cycleSearch", { siteId: siteA.id }, faToken);
     expect(cycles.statusCode).toBe(200);
-    // Plant Member carries employee:read, so logon search is permitted
+    // Logs are floor data: plant VIEW alone reaches no workcenter.
     const logon = await rpcCall(server, "logs/logonSearch", { siteId: siteA.id }, readerToken);
-    expect(logon.statusCode).toBe(200);
+    expect(logon.statusCode).toBe(403);
   });
 
-  it("a cross-site stationId probe on an authorized site returns no foreign data", async () => {
+  it("a cross-site stationId probe on an authorized site is denied", async () => {
     const res = await rpcCall(
       server,
       "logs/downtimeSearch",
       { siteId: siteA.id, stationId: stationB.id },
       faToken,
     );
-    expect(res.statusCode).toBe(200);
-    expect((res.json as { data: unknown[] }).data).toEqual([]);
+    expect(res.statusCode).toBe(403);
   });
 
   it("shift-recap reads deny out-of-scope sites before any lookup", async () => {
@@ -157,7 +159,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
       {
         siteId: siteA.id,
         shiftInstanceId: commentB.id,
-        workCenterId: stationB.id,
+        workCenterId: wcA.id,
         text: "no",
       },
       readerToken,

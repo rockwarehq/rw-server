@@ -2,8 +2,6 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { datasource } from "../services/device/index.js";
 import { errorWithDetailsSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { replyPolicyDenial } from "./authz.js";
 
 const pointProperties = {
   id: { type: "string", format: "uuid" },
@@ -96,8 +94,7 @@ export default async function points(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { id } = request.params;
-      const auth = await authorize(request.iam, { permission: "facility:read", scope: { kind: "point", id } });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("VIEW", { point: id });
 
       const point = await datasource.points.getById(id);
       if (!point) {
@@ -127,8 +124,7 @@ export default async function points(fastify: FastifyTypedInstance) {
       const { id } = request.params;
       const body = request.body;
 
-      const auth = await authorize(request.iam, { permission: "facility:write", scope: { kind: "point", id } });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("ADMIN", { point: id });
 
       const result = await datasource.points.update(id, body);
       if ("error" in result) {
@@ -154,8 +150,7 @@ export default async function points(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { id } = request.params;
-      const auth = await authorize(request.iam, { permission: "facility:write", scope: { kind: "point", id } });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("ADMIN", { point: id });
 
       const result = await datasource.points.remove(id);
       if ("error" in result) {

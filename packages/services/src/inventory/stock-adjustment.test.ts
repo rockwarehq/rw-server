@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, test } from "vitest";
-import prisma from "@rw/db";
+import prisma, { ensureAccountWorkspace } from "@rw/db";
 import * as orders from "../order/order.js";
 import { checkAutoComplete } from "../order/auto-complete.js";
 import { adjustStock, list } from "./stock-adjustment.js";
@@ -24,9 +24,7 @@ describe.skipIf(!process.env.DATABASE_URL)("stock adjustments", () => {
 
   beforeAll(async () => {
     const suffix = randomUUID();
-    const workspace = await prisma.workspace.create({
-      data: { name: `StockAdj Test ${suffix}`, slug: `stock-adj-${suffix}` },
-    });
+    const workspace = await ensureAccountWorkspace({ name: "Test Account", slug: "test-account" });
     siteId = (await prisma.site.create({ data: { name: `StockAdj Site ${suffix}`, workspaceId: workspace.id } })).id;
     otherSiteId = (await prisma.site.create({ data: { name: `StockAdj Other ${suffix}`, workspaceId: workspace.id } }))
       .id;

@@ -1,96 +1,100 @@
 # @rw/auth
 
-Identity, tokens, and the centralized authorization policy for the Rockware platform.
+Identity, tokens, and access checks for the Rockware platform.
 
 There is no root export — every consumer imports a subpath:
 
 ```ts
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
+import { AccessDenied, type Access } from "@rw/auth/iam/access";
 import { hashPassword } from "@rw/auth/password";
 import { verifyAccessToken } from "@rw/auth/verify";
 ```
 
-## Design constraints
+## Design rules
 
-- **One workspace per deployment.** The policy layer enforces permission + **site** scope only; workspace containment is vacuously true and costs zero queries.
-- **`authorize` never throws.** Every check returns a verified grant or a typed denial; transports decide how a denial becomes an HTTP/oRPC error.
-- **Token claims are never trusted for authorization.** The API auth plugin loads a per-request `PermissionSnapshot`, so every policy check in a request is query-free.
-- **JWT verification is DB-free.** `@rw/auth/verify` has no `@rw/db` import, so services with their own Prisma pool (e.g. livestore) can verify tokens without opening a second connection pool.
+- **One workspace per deployment.** Checks look at the level and the **site** only.
+- **Ask the caller, like Basecamp's `Current.person`.** The API's auth plugin works out who is calling once per request (`current`) and gives every handler an `access` object to ask.
+- **A "no" throws.** Every check throws `AccessDenied`. Each transport turns it into its wire error in one place.
+- **Never trust token claims for access.** The plugin loads the caller's bucket rows once per request (one query), so later checks need no more queries.
+- **JWT checks never touch the database.** `@rw/auth/verify` has no `@rw/db` import, so services with their own Prisma pool (like livestore) can check tokens without opening a second pool.
 
 ## Module map
 
 | Subpath | Purpose |
 | --- | --- |
-| `iam/policy` | `authorize` / `authorizeList` / `authorizeAccessibleSites` — the authorization decision point |
-| `iam/permissions` | Permission catalog, `PermissionSnapshot`, system-role (staff) permissions |
-| `iam/policy-resolvers` | `RESOLVERS` table — derives a resource's site from its id (~50 kinds) |
-| `iam/index` | `roles` and `assignments` services (DB-backed role bundles) |
+| `iam/access` | `Access`, `UserAccess`, `DeviceAccess`, `Person`, `loadPerson`, `AccessDenied` |
+| `iam/rows` | Where a row lives: site (and workcenter) for ~50 row kinds |
+| `context` | `Current`: who is calling (user, display, or API token) |
 | `verify` | HS256 access-token sign/verify, per-audience HKDF keys, 15-min expiry |
 | `tokens` | Rotating 7-day refresh tokens with reuse-theft detection (user + display) |
 | `display-session` | Kiosk/display login, refresh, logout |
 | `api-tokens` | Opaque `rw_app_` tokens — plaintext shown once, SHA-256 stored |
 | `password` | bcrypt hash/compare |
 | `secrets` | Opaque-secret generation, SHA-256 hashing, timing-safe compare |
-| `context` | `IAMContext` and principal types (`USER`, `DISPLAY`, `APP`, …) |
 | `env` | Fail-fast auth config (`JWT_SECRET` validation, key derivation) |
 
-## Authorization
-
-One call per protected operation: authorize a **permission** against a **scope**, producing a verified grant or a typed denial.
+## Checking access in a handler
 
 ```ts
-authorize(iam, { permission: "job:read", scope: { kind: "customer", id: input.id } });
-// → SiteGrant | WorkspaceGrant | PolicyDenial
+// one row: find where it lives, then check the level there
+await context.access.require("MANAGE", { statusReason: input.id });
+
+// a site (create flows)
+await context.access.require("MANAGE", { site: input.siteId });
+
+// lists: always one site; floor lists narrow the crew to their cells.
+// Spread the whole scope so the crew filter can't be left behind.
+const scope = context.access.list("VIEW", input.siteId, "WORKCENTER");
+return station.list({ ...input, ...scope });
+
+// account-admin-only, "at some plant", and plain yes/no
+context.access.requireAccountAdmin();
+context.access.requireSomewhere("ADMIN");
+if (context.access.can("MANAGE", { site: siteId })) { /* … */ }
 ```
 
-`ScopeRef` kinds:
+- **Always `await` `require`.** It looks up the row first. A forgotten `await` would skip the check, so the coverage test fails the build when one is missing.
+- **Missing rows are `NOT_FOUND`.** The row lookup runs before the level check, so an unknown id says "not found" and a caller never learns more than that.
+- **Rows with no site** (unassigned gateways, workspace documents) follow the "somewhere" rule. Reading needs any site. Changing needs the level at some plant.
+- **REST handlers** use `request.access` the same way. Use `currentUser(request)` for the signed-in user.
 
-| Scope | Meaning |
-| --- | --- |
-| `{ kind: "workspace" }` | Workspace-level action (e.g. site.create) |
-| `{ kind: "anySite" }` | Permission held workspace-wide or at ≥1 site |
-| `{ kind: "site", siteId }` | A literal site id from input/params |
-| `{ kind: "order", id }`, … | A resource ref — its site is resolved via `RESOLVERS` |
+## Access model — buckets
 
-Denials carry a code, never an exception: `UNAUTHENTICATED`, `NO_WORKSPACE`, `NOT_FOUND`, `FORBIDDEN`. Resource resolution runs **before** the permission check, so a nonexistent id is `NOT_FOUND` and existence is never disclosed to an unauthorized caller.
+Rows live in containers. Your access is the containers you are in.
 
-### In an oRPC handler
+| Container | Level | Meaning |
+| --- | --- | --- |
+| **Account** | account admin (`User.isAccountAdmin`) | sites, the workspace, people, making account admins |
+| **Plant** (one per site) | VIEW | viewer: read the plant's shared things (orders, catalogs, schedules, dashboards, equipment lists) |
+| | MANAGE ("member") | also change them: jobs, orders, products, tools, materials, customers, labels, dashboards, documents |
+| | ADMIN | also set up the shop floor (workcenters, stations, reason codes, call definitions, modes, dispositions, andon rules, shift patterns, devices, integrations, graph, automations, site settings), people and access. Reaches every workcenter. |
+| **Workcenter** (one per cell) | VIEW | watch the cell's floor |
+| | MANAGE | run the cell: change jobs, calls, modes, downtime reasons, dispositions, comments, sign-offs |
 
-The `grant()` adapter (`apps/api/src/rpc/authz.ts`) unwraps a grant or throws the mapped `ORPCError`:
+A `Person` holds only the rows they were given. Two rules are worked out at check time:
 
-```ts
-export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "customer", id: input.id } }));
-  return unwrap(await customerService.getById(input.id));
-});
-```
+- **Membership rule.** Any workcenter access lets you read the plant (plant VIEW).
+- **Cascade rule.** Plant ADMIN means MANAGE on every cell at that site. A plant member only reaches the cells they were given.
+- **ADMIN is a plant level.** `require("ADMIN", { station })` asks the station's plant, so setting up a cell needs plant ADMIN.
 
-### List queries — single-site by design
+Typical people: plant manager and engineer = plant ADMIN; planner = plant MANAGE; shift supervisor = plant MANAGE (or VIEW) plus MANAGE on their cells; maintenance lead = plant MANAGE plus the cells they look after.
 
-A user works within one site, so list queries are never cross-site. `authorizeList` scopes to the requested site or, absent one, the token's active site; `scopeFilter`/`scopeWhere` apply the proven scope to the query:
+Two kinds of people skip the buckets, like Basecamp's account roles:
 
-```ts
-export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "job:read", requestedSiteId: input.siteId }));
-  return customerService.list({ ...input, ...scopeFilter(scope) });
-});
-```
+- **Account admins** (`User.isAccountAdmin`). The account is the one workspace this deployment serves.
+- **Rockware staff.** SUPPORT reads everywhere; ENGINEER manages everywhere.
 
-The one sanctioned multi-site shape is `authorizeAccessibleSites` (site picker / directory surfaces). REST handlers use `replyPolicyDenial()` (`apps/api/src/api/authz.ts`) instead of `grant()`:
+**Displays and API tokens** stay outside buckets. They are bound to one site. A display may do anything at its site that its procedures allow. An API token may only read.
 
-```ts
-const scope = await authorizeAccessibleSites(request.iam, { permission: "facility:read" });
-if (!scope.ok) return replyPolicyDenial(reply, scope);
-return site.list({ ...request.query, workspaceId: scope.workspaceId, siteIds: scope.siteIds });
-```
+### Plant data vs workcenter data
 
-## Permission model
+- **Plant data** is shared by every workcenter at the plant: jobs, products, tools, materials, orders, customers, reason codes, shift patterns. Everyone at the plant can see it, crew included, so they can pick a job or look up a part. Plant members (MANAGE) change the everyday things; setup things need ADMIN.
+- **Workcenter data** is what happens on the floor (cycles, state logs, calls, inventory made, dispositions) plus the stations themselves. It is checked on its workcenter, so crew see and change only their own workcenters' data.
+- **Data is sorted by where it was made, not where it is shown.** Logs, metrics, shift recaps and historian series add up floor data, so they are floor data too, even on a plant-wide screen. Use `floorFilter` (log searches) or `requireFloorEntities` (metric series) from `apps/api/src/rpc/scope.ts`: crew get their own cells, and only callers who see the whole floor get site-wide or job-wide totals.
+- **Using plant data on the floor** is checked where the write lands. For example, `station.changeJob` needs MANAGE on the station's workcenter; the job only has to be in the same plant. Crew never need edit rights on the job.
+- **Which jobs show up at which station** is not an access question. Labels and station label filters decide that.
 
-Permissions are `resource:action` over 13 resources (`facility`, `schedule`, `job`, `status`, `tool`, `product`, `dashboard`, `entity`, `graph`, `user`, `employee`, `billing`, `settings`) × three actions (`read`, `write`, `admin`), plus the reserved `owner:all`.
-
-The **catalog is hardcoded** — it is the type-safe contract the whole codebase compiles against. **Roles and assignments live in the DB** (workspace-owned bundles of permissions, assignable workspace-wide or per site). Rockware-staff permissions (`SUPPORT`, `ENGINEER`) live in `SYSTEM_ROLE_PERMISSIONS` in code, so customer data can never influence them.
-
-`loadPermissionSnapshot(userId, workspaceId)` captures a user's system role and role assignments in two queries; the pure evaluators (`snapshotHasPermission`, `snapshotAccessibleSites`) run against it without touching the DB.
+`iam/rows.ts` groups every row kind under these headings. When you add a kind whose rows carry a `workcenterId` (on the row or its station), return it there; otherwise the row is checked as plant data.
 
 ## Tokens & sessions
 
@@ -106,9 +110,9 @@ pnpm --filter @rw/auth build   # tsc -b
 pnpm --filter @rw/auth test    # vitest, runs against src (no build needed)
 ```
 
-Policy tests inject fakes through `createPolicy(deps)` — no DB required.
+Access tests build a `Person` directly and pass a fake row lookup, so no database is needed.
 
 ## Further reading
 
 - `docs/adrs/0002-database-access-boundary.md` — why handlers must obtain scope from the policy layer before touching the database.
-- `apps/api/src/rpc/policy-coverage.ts` + `apps/api/test/policy-coverage.test.ts` — the coverage gate: every procedure/route must call the policy layer or be explicitly excluded with a reason.
+- `apps/api/src/rpc/policy-coverage.ts` + `apps/api/test/policy-coverage.test.ts` — the coverage gate. Every procedure and route must ask `access` (awaited) or be excluded with a reason.
