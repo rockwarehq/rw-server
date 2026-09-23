@@ -38,8 +38,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("graph/entity/integration author
       where: { workspaceId_name_scope: { workspaceId, name: "Plant Admin", scope: "SITE" } },
       select: { id: true },
     });
-    const officeRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Plant Member", scope: "SITE" } },
+    // Graph data is production-visible, graph authoring is configuration:
+    // the read tier is a custom production:read role (Plant Member's base
+    // tier no longer includes production visibility).
+    const officeRole = await prisma.role.upsert({
+      where: { workspaceId_name_scope: { workspaceId, name: "graph-authz-viewer", scope: "SITE" } },
+      update: { permissions: ["production:read"] },
+      create: { workspaceId, name: "graph-authz-viewer", scope: "SITE", permissions: ["production:read"] },
       select: { id: true },
     });
     const passwordHash = await hashPassword(PASSWORD);
@@ -124,7 +129,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("graph/entity/integration author
     expect(del.statusCode).toBe(404);
   });
 
-  it("Plant Member can read but not configure the graph (engineering writes stripped)", async () => {
+  it("production viewers can read but not configure the graph", async () => {
     const list = await rpcCall(server, "graph/node/list", { siteId: siteA.id }, officeToken);
     expect(list.statusCode).toBe(200);
     const create = await rpcCall(server, "graph/node/create", { siteId: siteA.id, name: "office-nope" }, officeToken);

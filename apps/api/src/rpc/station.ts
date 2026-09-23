@@ -193,7 +193,7 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
   // workcenter; without one the check is site-level (plant roles only).
   grant(
     await authorize(context.iam, {
-      permission: "facility:write",
+      permission: "configuration:write",
       scope: { kind: "site", siteId: input.siteId, workcenterId: input.workcenterId },
     }),
   );
@@ -209,7 +209,9 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
 export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
   // Displays are pinned to their own site by the policy; a workcenterId from
   // another site simply intersects to an empty result.
-  const scope = grant(await authorizeList(context.iam, { permission: "facility:read", requestedSiteId: input.siteId }));
+  const scope = grant(
+    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+  );
   return station.list({ ...input, ...scopeFilter(scope) });
 });
 
@@ -218,7 +220,7 @@ export const list = userOrDisplayRequired.input(listInputSchema).handler(async (
  */
 export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "facility:read", scope: { kind: "station", id: input.id } }),
+    await authorize(context.iam, { permission: "production:read", scope: { kind: "station", id: input.id } }),
   );
 
   const result = await station.getById(input.id, scope.workspaceId);
@@ -235,7 +237,7 @@ export const get = authRequired.input(idInputSchema).handler(async ({ input, con
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
   const scope = grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "station", id: id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "station", id: id } }),
   );
 
   const result = await station.update(id, updateData, scope.workspaceId);
@@ -248,7 +250,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
  */
 export const move = authRequired.input(moveInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "station", id: input.id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "station", id: input.id } }),
   );
   // Moving INTO a workcenter also needs facility:write there — otherwise a
   // workcenter grant could push stations into someone else's workcenter.
@@ -256,7 +258,7 @@ export const move = authRequired.input(moveInputSchema).handler(async ({ input, 
   if (input.workcenterId) {
     grant(
       await authorize(context.iam, {
-        permission: "facility:write",
+        permission: "configuration:write",
         scope: { kind: "site", siteId: scope.siteId, workcenterId: input.workcenterId },
       }),
     );
@@ -272,7 +274,7 @@ export const move = authRequired.input(moveInputSchema).handler(async ({ input, 
  */
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "facility:admin", scope: { kind: "station", id: input.id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "station", id: input.id } }),
   );
 
   const result = await station.remove(input.id, scope.workspaceId);
@@ -286,7 +288,7 @@ export const remove = authRequired.input(idInputSchema).handler(async ({ input, 
 export const createEvent = authRequired.input(createEventInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
     await authorize(context.iam, {
-      permission: "facility:write",
+      permission: "configuration:write",
       scope: { kind: "station", id: input.stationId },
     }),
   );
@@ -302,7 +304,7 @@ export const createEvent = authRequired.input(createEventInputSchema).handler(as
 export const updateEvent = authRequired.input(updateEventInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
     await authorize(context.iam, {
-      permission: "facility:write",
+      permission: "configuration:write",
       scope: { kind: "station", id: input.stationId },
     }),
   );
@@ -318,7 +320,7 @@ export const updateEvent = authRequired.input(updateEventInputSchema).handler(as
 export const listEvents = authRequired.input(listEventsInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
     await authorize(context.iam, {
-      permission: "facility:read",
+      permission: "configuration:read",
       scope: { kind: "station", id: input.stationId },
     }),
   );
@@ -336,7 +338,7 @@ export const listEventExecutions = authRequired
   .handler(async ({ input, context }) => {
     const scope = grant(
       await authorize(context.iam, {
-        permission: "facility:read",
+        permission: "configuration:read",
         scope: { kind: "station", id: input.stationId },
       }),
     );
@@ -392,7 +394,7 @@ export const getTagSnapshotsForProcessor = processorRequired
 export const toggleEvent = authRequired.input(toggleEventInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
     await authorize(context.iam, {
-      permission: "facility:write",
+      permission: "configuration:write",
       scope: { kind: "station", id: input.stationId },
     }),
   );
@@ -422,7 +424,7 @@ export const triggerEvent = processorRequired.input(triggerEventInputSchema).han
 export const deleteEvent = authRequired.input(stationEventIdInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
     await authorize(context.iam, {
-      permission: "facility:write",
+      permission: "configuration:write",
       scope: { kind: "station", id: input.stationId },
     }),
   );
@@ -457,7 +459,7 @@ const stationIdInputSchema = z.object({
 export const addDatasource = authRequired.input(addDatasourceInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
     await authorize(context.iam, {
-      permission: "facility:write",
+      permission: "configuration:write",
       scope: { kind: "station", id: input.stationId },
     }),
   );
@@ -473,7 +475,7 @@ export const addDatasource = authRequired.input(addDatasourceInputSchema).handle
 export const removeDatasource = authRequired.input(removeDatasourceInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
     await authorize(context.iam, {
-      permission: "facility:write",
+      permission: "configuration:write",
       scope: { kind: "station", id: input.stationId },
     }),
   );
@@ -489,7 +491,7 @@ export const removeDatasource = authRequired.input(removeDatasourceInputSchema).
 export const listDatasources = authRequired.input(stationIdInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
     await authorize(context.iam, {
-      permission: "facility:read",
+      permission: "configuration:read",
       scope: { kind: "station", id: input.stationId },
     }),
   );
@@ -561,7 +563,7 @@ export const splitDowntime = userOrDisplayRequired
   .handler(async ({ input, context }) => {
     grant(
       await authorize(context.iam, {
-        permission: "status:write",
+        permission: "production:write",
         scope: { kind: "stationStateLog", id: input.entryId },
       }),
     );
@@ -579,7 +581,7 @@ export const assignDowntimeReason = userOrDisplayRequired
   .handler(async ({ input, context }) => {
     grant(
       await authorize(context.iam, {
-        permission: "status:write",
+        permission: "production:write",
         scope: { kind: "stationStateLog", id: input.entryId },
       }),
     );
@@ -598,7 +600,7 @@ export const assignDowntimeReason = userOrDisplayRequired
 export const changeJob = userOrDisplayRequired.input(changeJobInputSchema).handler(async ({ input, context }) => {
   grant(
     await authorize(context.iam, {
-      permission: "job:write",
+      permission: "production:write",
       scope: { kind: "station", id: input.stationId },
     }),
   );
@@ -619,7 +621,7 @@ export const amendJobHistory = userOrDisplayRequired
   .handler(async ({ input, context }) => {
     grant(
       await authorize(context.iam, {
-        permission: "job:write",
+        permission: "production:write",
         scope: { kind: "station", id: input.stationId },
       }),
     );
@@ -638,7 +640,7 @@ export const listJobHistoryAmendments = authRequired
   .handler(async ({ input, context }) => {
     grant(
       await authorize(context.iam, {
-        permission: "job:read",
+        permission: "production:read",
         scope: { kind: "site", siteId: input.siteId },
       }),
     );
@@ -650,7 +652,7 @@ export const retryJobHistoryRebuild = authRequired
   .handler(async ({ input, context }) => {
     grant(
       await authorize(context.iam, {
-        permission: "job:write",
+        permission: "production:write",
         scope: { kind: "station", id: input.stationId },
       }),
     );
@@ -665,7 +667,7 @@ export const retryJobHistoryRebuild = authRequired
 export const listStateLogs = authRequired.input(listStateLogsInputSchema).handler(async ({ input, context }) => {
   grant(
     await authorize(context.iam, {
-      permission: "facility:read",
+      permission: "production:read",
       scope: { kind: "station", id: input.stationId },
     }),
   );
@@ -689,7 +691,10 @@ const setLabelFilterInputSchema = z.object({
  */
 export const setLabelFilter = authRequired.input(setLabelFilterInputSchema).handler(async ({ input, context }) => {
   grant(
-    await authorize(context.iam, { permission: "facility:write", scope: { kind: "station", id: input.stationId } }),
+    await authorize(context.iam, {
+      permission: "configuration:write",
+      scope: { kind: "station", id: input.stationId },
+    }),
   );
 
   const result = await station.setLabelFilter(input);
@@ -701,7 +706,9 @@ export const setLabelFilter = authRequired.input(setLabelFilterInputSchema).hand
  * List the station's label filters.
  */
 export const listLabelFilters = authRequired.input(stationIdInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "facility:read", scope: { kind: "station", id: input.stationId } }));
+  grant(
+    await authorize(context.iam, { permission: "production:read", scope: { kind: "station", id: input.stationId } }),
+  );
 
   const result = await station.listLabelFilters(input.stationId);
   if (result.error !== undefined) throwServiceError(result);

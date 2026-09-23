@@ -94,7 +94,9 @@ const searchInputSchema = z.object({
 // ============================================================================
 
 export const definitionCreate = authRequired.input(definitionCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "calls:admin", scope: { kind: "site", siteId: input.siteId } }));
+  grant(
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
+  );
 
   const result = await call.createDefinition(input);
   if ("error" in result) throwServiceError(result);
@@ -104,19 +106,28 @@ export const definitionCreate = authRequired.input(definitionCreateInputSchema).
 export const definitionList = userOrDisplayRequired
   .input(definitionListInputSchema)
   .handler(async ({ input, context }) => {
-    const scope = grant(await authorizeList(context.iam, { permission: "calls:read", requestedSiteId: input.siteId }));
+    const scope = grant(
+      await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+    );
     return call.listDefinitions({ ...input, ...scopeFilter(scope) });
   });
 
 export const definitionGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "calls:read", scope: { kind: "callDefinition", id: input.id } }));
+  grant(
+    await authorize(context.iam, { permission: "production:read", scope: { kind: "callDefinition", id: input.id } }),
+  );
 
   const result = await call.getDefinitionById(input.id);
   return unwrap(result, { notFoundMessage: "Call definition not found" });
 });
 
 export const definitionUpdate = authRequired.input(definitionUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "calls:admin", scope: { kind: "callDefinition", id: input.id } }));
+  grant(
+    await authorize(context.iam, {
+      permission: "configuration:write",
+      scope: { kind: "callDefinition", id: input.id },
+    }),
+  );
 
   const { id, ...updateData } = input;
   const result = await call.updateDefinition(id, updateData);
@@ -125,7 +136,12 @@ export const definitionUpdate = authRequired.input(definitionUpdateInputSchema).
 });
 
 export const definitionArchive = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "calls:admin", scope: { kind: "callDefinition", id: input.id } }));
+  grant(
+    await authorize(context.iam, {
+      permission: "configuration:write",
+      scope: { kind: "callDefinition", id: input.id },
+    }),
+  );
 
   const result = await call.archiveDefinition(input.id);
   if ("error" in result) throwServiceError(result);
@@ -137,7 +153,9 @@ export const definitionArchive = authRequired.input(idInputSchema).handler(async
 // ============================================================================
 
 export const open = userOrDisplayRequired.input(openInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "calls:write", scope: { kind: "station", id: input.stationId } }));
+  grant(
+    await authorize(context.iam, { permission: "production:write", scope: { kind: "station", id: input.stationId } }),
+  );
 
   const result = await call.open({
     stationId: input.stationId,
@@ -152,11 +170,11 @@ export const open = userOrDisplayRequired.input(openInputSchema).handler(async (
 });
 
 export const close = userOrDisplayRequired.input(closeInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "calls:write", scope: { kind: "call", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "production:write", scope: { kind: "call", id: input.id } }));
 
-  // calls:admin bypasses definition answer-role restrictions so an office
+  // production:admin bypasses definition answer-role restrictions so an office
   // supervisor can always clear a stuck call (quiet check — no throw).
-  const admin = await authorize(context.iam, { permission: "calls:admin", scope: { kind: "call", id: input.id } });
+  const admin = await authorize(context.iam, { permission: "production:admin", scope: { kind: "call", id: input.id } });
 
   const result = await call.close({
     id: input.id,
@@ -170,18 +188,22 @@ export const close = userOrDisplayRequired.input(closeInputSchema).handler(async
 });
 
 export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "calls:read", scope: { kind: "call", id: input.id } }));
+  grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "call", id: input.id } }));
 
   const result = await call.getById(input.id);
   return unwrap(result, { notFoundMessage: "Call not found" });
 });
 
 export const listActive = userOrDisplayRequired.input(listActiveInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "calls:read", requestedSiteId: input.siteId }));
+  const scope = grant(
+    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+  );
   return call.listActive({ ...input, ...scopeFilter(scope), workcenterIds: scope.workcenterIds });
 });
 
 export const search = authRequired.input(searchInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "calls:read", requestedSiteId: input.siteId }));
+  const scope = grant(
+    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+  );
   return call.search({ ...input, workcenterIds: scope.workcenterIds });
 });

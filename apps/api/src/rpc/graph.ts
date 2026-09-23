@@ -195,25 +195,27 @@ function unwrap<T>(result: { data: T } | { error: string; code: string } | null)
 
 export const nodeCreate = authRequired.input(nodeCreateInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...nodeInput } = input;
-  const scope = grant(await authorize(context.iam, { permission: "graph:write", scope: { kind: "site", siteId } }));
+  const scope = grant(
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId } }),
+  );
   return unwrap(await graph.nodes.create(nodeInput, scope));
 });
 
 export const nodeList = graphReadRequired.input(nodeListInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...filter } = input;
-  const scope = grant(await authorize(context.iam, { permission: "graph:read", scope: { kind: "site", siteId } }));
+  const scope = grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "site", siteId } }));
   return graph.nodes.list(filter, scope);
 });
 
 export const nodeQuery = graphReadRequired.input(nodeQueryInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...filter } = input;
-  const scope = grant(await authorize(context.iam, { permission: "graph:read", scope: { kind: "site", siteId } }));
+  const scope = grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "site", siteId } }));
   return graph.nodes.query(filter, scope);
 });
 
 export const nodeGet = graphReadRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:read", scope: { kind: "graphNode", id: input.id } }),
+    await authorize(context.iam, { permission: "production:read", scope: { kind: "graphNode", id: input.id } }),
   );
   return unwrap(await graph.nodes.getById(input.id, scope));
 });
@@ -221,40 +223,42 @@ export const nodeGet = graphReadRequired.input(idInputSchema).handler(async ({ i
 export const nodeUpdate = authRequired.input(nodeUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updates } = input;
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphNode", id: id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "graphNode", id: id } }),
   );
   return unwrap(await graph.nodes.update(id, updates, scope));
 });
 
 export const nodeDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphNode", id: input.id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "graphNode", id: input.id } }),
   );
   return unwrap(await graph.nodes.remove(input.id, scope));
 });
 
 export const typeCatalog = graphReadRequired.input(siteInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:read", scope: { kind: "site", siteId: input.siteId } }),
+    await authorize(context.iam, { permission: "production:read", scope: { kind: "site", siteId: input.siteId } }),
   );
   return unwrap(await graph.nodeTypes.catalog(scope));
 });
 
 export const typeCreate = authRequired.input(typeCreateInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...typeInput } = input;
-  const scope = grant(await authorize(context.iam, { permission: "graph:write", scope: { kind: "site", siteId } }));
+  const scope = grant(
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId } }),
+  );
   return unwrap(await graph.nodeTypes.create(typeInput, scope));
 });
 
 export const typeList = graphReadRequired.input(typeListInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...filter } = input;
-  const scope = grant(await authorize(context.iam, { permission: "graph:read", scope: { kind: "site", siteId } }));
+  const scope = grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "site", siteId } }));
   return graph.nodeTypes.list(filter, scope);
 });
 
 export const typeGet = graphReadRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:read", scope: { kind: "graphNodeType", id: input.id } }),
+    await authorize(context.iam, { permission: "production:read", scope: { kind: "graphNodeType", id: input.id } }),
   );
   return unwrap(await graph.nodeTypes.getById(input.id, scope));
 });
@@ -262,21 +266,24 @@ export const typeGet = graphReadRequired.input(idInputSchema).handler(async ({ i
 export const typeUpdate = authRequired.input(typeUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updates } = input;
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphNodeType", id: id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "graphNodeType", id: id } }),
   );
   return unwrap(await graph.nodeTypes.update(id, updates, scope));
 });
 
 export const typeDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphNodeType", id: input.id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "graphNodeType", id: input.id } }),
   );
   return unwrap(await graph.nodeTypes.remove(input.id, scope));
 });
 
 export const typeInputCreate = authRequired.input(typeInputCreateInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphNodeType", id: input.typeId } }),
+    await authorize(context.iam, {
+      permission: "configuration:write",
+      scope: { kind: "graphNodeType", id: input.typeId },
+    }),
   );
   return unwrap(await graph.nodeTypes.createInput(input, scope));
 });
@@ -284,21 +291,27 @@ export const typeInputCreate = authRequired.input(typeInputCreateInputSchema).ha
 export const typeInputUpdate = authRequired.input(typeInputUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updates } = input;
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphTypeInput", id: id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "graphTypeInput", id: id } }),
   );
   return unwrap(await graph.nodeTypes.updateInput(id, updates, scope));
 });
 
 export const typeInputDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphTypeInput", id: input.id } }),
+    await authorize(context.iam, {
+      permission: "configuration:write",
+      scope: { kind: "graphTypeInput", id: input.id },
+    }),
   );
   return unwrap(await graph.nodeTypes.removeInput(input.id, scope));
 });
 
 export const typeFacetCreate = authRequired.input(typeFacetCreateInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphNodeType", id: input.typeId } }),
+    await authorize(context.iam, {
+      permission: "configuration:write",
+      scope: { kind: "graphNodeType", id: input.typeId },
+    }),
   );
   return unwrap(await graph.nodeTypes.createFacet(input, scope));
 });
@@ -306,21 +319,27 @@ export const typeFacetCreate = authRequired.input(typeFacetCreateInputSchema).ha
 export const typeFacetUpdate = authRequired.input(typeFacetUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updates } = input;
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphTypeFacet", id: id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "graphTypeFacet", id: id } }),
   );
   return unwrap(await graph.nodeTypes.updateFacet(id, updates, scope));
 });
 
 export const typeFacetDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphTypeFacet", id: input.id } }),
+    await authorize(context.iam, {
+      permission: "configuration:write",
+      scope: { kind: "graphTypeFacet", id: input.id },
+    }),
   );
   return unwrap(await graph.nodeTypes.removeFacet(input.id, scope));
 });
 
 export const typeFieldCreate = authRequired.input(typeFieldCreateInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphNodeType", id: input.typeId } }),
+    await authorize(context.iam, {
+      permission: "configuration:write",
+      scope: { kind: "graphNodeType", id: input.typeId },
+    }),
   );
   return unwrap(await graph.nodeTypes.createField(input, scope));
 });
@@ -328,21 +347,24 @@ export const typeFieldCreate = authRequired.input(typeFieldCreateInputSchema).ha
 export const typeFieldUpdate = authRequired.input(typeFieldUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updates } = input;
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphTypeField", id: id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "graphTypeField", id: id } }),
   );
   return unwrap(await graph.nodeTypes.updateField(id, updates, scope));
 });
 
 export const typeFieldDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphTypeField", id: input.id } }),
+    await authorize(context.iam, {
+      permission: "configuration:write",
+      scope: { kind: "graphTypeField", id: input.id },
+    }),
   );
   return unwrap(await graph.nodeTypes.removeField(input.id, scope));
 });
 
 export const propertyCreate = authRequired.input(propertyCreateInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphNode", id: input.nodeId } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "graphNode", id: input.nodeId } }),
   );
   return unwrap(await graph.properties.create(input, scope));
 });
@@ -350,7 +372,7 @@ export const propertyCreate = authRequired.input(propertyCreateInputSchema).hand
 export const propertyList = graphReadRequired.input(propertyListInputSchema).handler(async ({ input, context }) => {
   if (input.nodeId) {
     const scope = grant(
-      await authorize(context.iam, { permission: "graph:read", scope: { kind: "graphNode", id: input.nodeId } }),
+      await authorize(context.iam, { permission: "production:read", scope: { kind: "graphNode", id: input.nodeId } }),
     );
     if (input.siteId && input.siteId !== scope.siteId)
       throw new ORPCError("BAD_REQUEST", { message: "siteId must match node site" });
@@ -360,14 +382,14 @@ export const propertyList = graphReadRequired.input(propertyListInputSchema).han
 
   const siteId = input.siteId;
   if (!siteId) throw new ORPCError("BAD_REQUEST", { message: "siteId or nodeId is required" });
-  const scope = grant(await authorize(context.iam, { permission: "graph:read", scope: { kind: "site", siteId } }));
+  const scope = grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "site", siteId } }));
   const { siteId: _siteId, ...filter } = input;
   return graph.properties.list(filter, scope);
 });
 
 export const propertyGet = graphReadRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:read", scope: { kind: "graphProperty", id: input.id } }),
+    await authorize(context.iam, { permission: "production:read", scope: { kind: "graphProperty", id: input.id } }),
   );
   return unwrap(await graph.properties.getById(input.id, scope));
 });
@@ -375,47 +397,49 @@ export const propertyGet = graphReadRequired.input(idInputSchema).handler(async 
 export const propertyUpdate = authRequired.input(propertyUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updates } = input;
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphProperty", id: id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "graphProperty", id: id } }),
   );
   return unwrap(await graph.properties.update(id, updates, scope));
 });
 
 export const propertyDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphProperty", id: input.id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "graphProperty", id: input.id } }),
   );
   return unwrap(await graph.properties.remove(input.id, scope));
 });
 
 export const propertyDependents = graphReadRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:read", scope: { kind: "graphProperty", id: input.id } }),
+    await authorize(context.iam, { permission: "production:read", scope: { kind: "graphProperty", id: input.id } }),
   );
   return unwrap(await graph.properties.dependents(input.id, scope));
 });
 
 export const propertyValidate = authRequired.input(propertyValidateInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphNode", id: input.nodeId } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "graphNode", id: input.nodeId } }),
   );
   return unwrap(await graph.properties.validate(input, scope));
 });
 
 export const hookCreate = authRequired.input(hookCreateInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...hookInput } = input;
-  const scope = grant(await authorize(context.iam, { permission: "graph:write", scope: { kind: "site", siteId } }));
+  const scope = grant(
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId } }),
+  );
   return unwrap(await graph.hooks.create(hookInput, scope));
 });
 
 export const hookList = authRequired.input(hookListInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...filter } = input;
-  const scope = grant(await authorize(context.iam, { permission: "graph:read", scope: { kind: "site", siteId } }));
+  const scope = grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "site", siteId } }));
   return graph.hooks.list(filter, scope);
 });
 
 export const hookGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:read", scope: { kind: "graphHook", id: input.id } }),
+    await authorize(context.iam, { permission: "production:read", scope: { kind: "graphHook", id: input.id } }),
   );
   return unwrap(await graph.hooks.getById(input.id, scope));
 });
@@ -423,14 +447,14 @@ export const hookGet = authRequired.input(idInputSchema).handler(async ({ input,
 export const hookUpdate = authRequired.input(hookUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updates } = input;
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphHook", id: id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "graphHook", id: id } }),
   );
   return unwrap(await graph.hooks.update(id, updates, scope));
 });
 
 export const hookDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:write", scope: { kind: "graphHook", id: input.id } }),
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "graphHook", id: input.id } }),
   );
   return unwrap(await graph.hooks.remove(input.id, scope));
 });
@@ -449,7 +473,7 @@ export const introspectTypeSchema = graphReadRequired
   .input(typeSchemaInputSchema)
   .handler(async ({ input, context }) => {
     const scope = grant(
-      await authorize(context.iam, { permission: "graph:read", scope: { kind: "site", siteId: input.siteId } }),
+      await authorize(context.iam, { permission: "production:read", scope: { kind: "site", siteId: input.siteId } }),
     );
     return unwrap(await graph.introspect.typeNodeSchema(input.typeRef, scope));
   });
@@ -458,14 +482,14 @@ export const introspectTypeSchema = graphReadRequired
 // decide whether to refetch.
 export const introspectVersion = graphReadRequired.input(siteInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:read", scope: { kind: "site", siteId: input.siteId } }),
+    await authorize(context.iam, { permission: "production:read", scope: { kind: "site", siteId: input.siteId } }),
   );
   return graph.introspect.graphVersion(scope);
 });
 
 export const introspectSnapshot = graphReadRequired.input(siteInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:read", scope: { kind: "site", siteId: input.siteId } }),
+    await authorize(context.iam, { permission: "production:read", scope: { kind: "site", siteId: input.siteId } }),
   );
   return unwrap(await graph.introspect.snapshot(scope));
 });
@@ -479,7 +503,7 @@ export const introspectValues = graphReadRequired
   .input(introspectValuesInputSchema)
   .handler(async ({ input, context }) => {
     const scope = grant(
-      await authorize(context.iam, { permission: "graph:read", scope: { kind: "site", siteId: input.siteId } }),
+      await authorize(context.iam, { permission: "production:read", scope: { kind: "site", siteId: input.siteId } }),
     );
     const properties = await graph.introspect.verifiedSiteProperties(input.propertyIds, scope);
     const { available, envelopes } = await readGraphValues(properties.map((p) => p.id));
@@ -497,7 +521,7 @@ export const introspectValues = graphReadRequired
 
 export const introspectExplain = graphReadRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:read", scope: { kind: "graphProperty", id: input.id } }),
+    await authorize(context.iam, { permission: "production:read", scope: { kind: "graphProperty", id: input.id } }),
   );
   const explanation = unwrap(await graph.introspect.explain(input.id, scope));
   const { available, envelopes } = await readGraphValues([input.id]);
@@ -509,7 +533,7 @@ export const introspectExplain = graphReadRequired.input(idInputSchema).handler(
 
 export const introspectConformance = graphReadRequired.input(siteInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorize(context.iam, { permission: "graph:read", scope: { kind: "site", siteId: input.siteId } }),
+    await authorize(context.iam, { permission: "production:read", scope: { kind: "site", siteId: input.siteId } }),
   );
   return unwrap(await graph.introspect.conformance(scope));
 });
@@ -554,7 +578,9 @@ const planInputSchema = z.object({
 // Requires graph:write — a plan is a rehearsal of writes and can probe names/ids.
 export const introspectPlan = authRequired.input(planInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...changeset } = input;
-  const scope = grant(await authorize(context.iam, { permission: "graph:write", scope: { kind: "site", siteId } }));
+  const scope = grant(
+    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId } }),
+  );
   return unwrap(await graph.planner.plan(changeset, scope));
 });
 
@@ -570,7 +596,7 @@ export const introspectDiagnostics = graphReadRequired
   .input(introspectDiagnosticsInputSchema)
   .handler(async ({ input, context }) => {
     const scope = grant(
-      await authorize(context.iam, { permission: "graph:read", scope: { kind: "site", siteId: input.siteId } }),
+      await authorize(context.iam, { permission: "production:read", scope: { kind: "site", siteId: input.siteId } }),
     );
     const snapshot = unwrap(await graph.introspect.snapshot(scope));
     const scanned = snapshot.properties.slice(0, input.scanLimit);

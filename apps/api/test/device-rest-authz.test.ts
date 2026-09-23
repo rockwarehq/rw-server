@@ -50,8 +50,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("device REST authorization (Tier
       where: { workspaceId_name_scope: { workspaceId, name: "Plant Admin", scope: "SITE" } },
       select: { id: true },
     });
-    const readerRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Plant Member", scope: "SITE" } },
+    // Device/data-plane reads are technical setup now: the reader tier is a
+    // custom configuration:read role (Plant Member no longer sees devices).
+    const readerRole = await prisma.role.upsert({
+      where: { workspaceId_name_scope: { workspaceId, name: "dev-authz-viewer", scope: "SITE" } },
+      update: { permissions: ["configuration:read"] },
+      create: { workspaceId, name: "dev-authz-viewer", scope: "SITE", permissions: ["configuration:read"] },
       select: { id: true },
     });
     const passwordHash = await hashPassword(PASSWORD);

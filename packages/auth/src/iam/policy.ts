@@ -2,10 +2,12 @@ import { type IAMContext, Principal } from "../context.js";
 import {
   type AccessibleSites,
   getAccessibleSites as defaultGetAccessibleSites,
+  getVisibleSites as defaultGetVisibleSites,
   hasPermission as defaultHasPermission,
   type Permission,
   snapshotAccessibleSites,
   snapshotHasPermission,
+  snapshotVisibleSites,
   snapshotWorkcentersWithPermission,
 } from "./permissions.js";
 import {
@@ -129,6 +131,8 @@ export interface PolicyDeps {
   hasPermission: typeof defaultHasPermission;
   getAccessibleSites: typeof defaultGetAccessibleSites;
   resolveSiteRef: typeof defaultResolveSiteRef;
+  /** Fresh-load twin of snapshotVisibleSites; defaulted so tests need not provide it. */
+  getVisibleSites?: typeof defaultGetVisibleSites;
 }
 
 /**
@@ -231,6 +235,13 @@ export function createPolicy(deps: PolicyDeps) {
       return snapshotAccessibleSites(iam.permissionSnapshot, permission);
     }
     return deps.getAccessibleSites(iam.id as string, permission, workspaceId);
+  }
+
+  function userVisibleSites(iam: IAMContext, workspaceId: string): Promise<AccessibleSites> | AccessibleSites {
+    if (iam.permissionSnapshot) {
+      return snapshotVisibleSites(iam.permissionSnapshot);
+    }
+    return (deps.getVisibleSites ?? defaultGetVisibleSites)(iam.id as string, workspaceId);
   }
 
   /** Permission held workspace-wide or at >=1 site (query-free w/ snapshot). */
@@ -361,10 +372,14 @@ export function createPolicy(deps: PolicyDeps) {
   /**
    * Site-directory scope: the accessible-site set for the site picker and
    * site administration ONLY. Every other list is single-site.
+   *
+   * Without a permission this is MEMBERSHIP visibility (any assignment or
+   * grant at the site) — the site picker's rule: roles are no longer
+   * guaranteed to carry any particular read key.
    */
   async function authorizeAccessibleSites(
     iam: IAMContext | undefined,
-    check: { permission: Permission },
+    check: { permission?: Permission },
   ): Promise<SiteDirectoryScope | PolicyDenial> {
     const auth = requireAuthenticated(iam);
     if (!auth.ok) return auth;
@@ -378,7 +393,9 @@ export function createPolicy(deps: PolicyDeps) {
       return { ok: true, workspaceId, siteIds: [ownSiteId] };
     }
 
-    const access = await userAccessibleSites(auth.iam, check.permission, workspaceId);
+    const access = check.permission
+      ? await userAccessibleSites(auth.iam, check.permission, workspaceId)
+      : await userVisibleSites(auth.iam, workspaceId);
     if (access.all) {
       return { ok: true, workspaceId };
     }
