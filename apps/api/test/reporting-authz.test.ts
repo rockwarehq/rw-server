@@ -15,6 +15,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
   let siteA: { id: string };
   let siteB: { id: string };
   let stationB: { id: string };
+  let wcA: { id: string };
   let commentB: { id: string };
   let faToken: string;
   let readerToken: string;
@@ -51,6 +52,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
       return existing ?? prisma.workcenter.create({ data: { name: "rep-authz-wc-b", siteId: siteB.id }, select: { id: true } });
     })();
     await ensureWorkcenterBucket(workspaceId, siteB.id, wcB.id, "rep-authz-wc-b");
+    wcA =
+      (await prisma.workcenter.findFirst({ where: { siteId: siteA.id, name: "rep-authz-wc-a" }, select: { id: true } })) ??
+      (await prisma.workcenter.create({ data: { name: "rep-authz-wc-a", siteId: siteA.id }, select: { id: true } }));
+    await ensureWorkcenterBucket(workspaceId, siteA.id, wcA.id, "rep-authz-wc-a");
     // ShiftInstance needs a pattern/assignment chain; build a minimal one at
     // site B for the FK — the policy resolver reads the COMMENT's siteId,
     // which is what the cross-site test exercises. (A fresh test DB carries
@@ -112,23 +117,22 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
     expect(downtime.statusCode).toBe(403);
   });
 
-  it("log searches allow the granted site and honor permission mapping", async () => {
+  it("log searches allow plant admins; plant viewers without cells see no floor logs", async () => {
     const cycles = await rpcCall(server, "logs/cycleSearch", { siteId: siteA.id }, faToken);
     expect(cycles.statusCode).toBe(200);
-    // Plant VIEW covers the reporting reads, so logon search is permitted
+    // Logs are floor data: plant VIEW alone reaches no workcenter.
     const logon = await rpcCall(server, "logs/logonSearch", { siteId: siteA.id }, readerToken);
-    expect(logon.statusCode).toBe(200);
+    expect(logon.statusCode).toBe(403);
   });
 
-  it("a cross-site stationId probe on an authorized site returns no foreign data", async () => {
+  it("a cross-site stationId probe on an authorized site is denied", async () => {
     const res = await rpcCall(
       server,
       "logs/downtimeSearch",
       { siteId: siteA.id, stationId: stationB.id },
       faToken,
     );
-    expect(res.statusCode).toBe(200);
-    expect((res.json as { data: unknown[] }).data).toEqual([]);
+    expect(res.statusCode).toBe(403);
   });
 
   it("shift-recap reads deny out-of-scope sites before any lookup", async () => {
@@ -155,7 +159,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
       {
         siteId: siteA.id,
         shiftInstanceId: commentB.id,
-        workCenterId: stationB.id,
+        workCenterId: wcA.id,
         text: "no",
       },
       readerToken,

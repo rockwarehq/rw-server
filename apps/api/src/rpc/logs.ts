@@ -4,6 +4,7 @@
 
 import { z } from "zod";
 import { userRequired, userOrDisplayRequired } from "./middleware.js";
+import { floorFilter } from "./scope.js";
 import prisma from "@rw/db";
 import { Prisma } from "@rw/db";
 import {
@@ -102,7 +103,8 @@ const metricBucketLogSearchInputSchema = z.object({
 export const metricBucketLogSearch = userOrDisplayRequired
   .input(metricBucketLogSearchInputSchema)
   .handler(async ({ input, context }) => {
-    await context.access.require("VIEW", { site: input.siteId });
+    // Floor data: crew only see their own cells (may narrow the filter).
+    Object.assign(input, await floorFilter(context, input.siteId, input));
 
     const where: Record<string, unknown> = {
       siteId: input.siteId,
@@ -269,7 +271,8 @@ const hourlyBucketSearchInputSchema = z.object({
 export const hourlyBucketSearch = userOrDisplayRequired
   .input(hourlyBucketSearchInputSchema)
   .handler(async ({ input, context }) => {
-    await context.access.require("VIEW", { site: input.siteId });
+    // Floor data: crew only see their own cells (may narrow the filter).
+    Object.assign(input, await floorFilter(context, input.siteId, input));
 
     const where: Record<string, unknown> = {
       siteId: input.siteId,
@@ -355,7 +358,8 @@ const stationShiftSummaryInputSchema = z.object({
 export const stationShiftSummary = userRequired
   .input(stationShiftSummaryInputSchema)
   .handler(async ({ input, context }) => {
-    await context.access.require("VIEW", { site: input.siteId });
+    // Floor data: crew only see their own cells (may narrow the filter).
+    Object.assign(input, await floorFilter(context, input.siteId, input));
 
     const where = {
       siteId: input.siteId,
@@ -436,7 +440,8 @@ const downtimeLogSearchInputSchema = z.object({
 export const downtimeLogSearch = userRequired
   .input(downtimeLogSearchInputSchema)
   .handler(async ({ input, context }) => {
-    await context.access.require("VIEW", { site: input.siteId });
+    // Floor data: crew only see their own cells (may narrow the filter).
+    Object.assign(input, await floorFilter(context, input.siteId, input));
 
     // Resolve station IDs for the scope
     let stationIds: string[];
@@ -705,7 +710,8 @@ const dispositionLogSearchInputSchema = z.object({
 export const dispositionLogSearch = userRequired
   .input(dispositionLogSearchInputSchema)
   .handler(async ({ input, context }) => {
-    await context.access.require("VIEW", { site: input.siteId });
+    // Floor data: crew only see their own cells (may narrow the filter).
+    Object.assign(input, await floorFilter(context, input.siteId, input));
 
     const where: Prisma.ItemDispositionLogWhereInput = {
       siteId: input.siteId,
@@ -868,7 +874,8 @@ const materialUsageSearchInputSchema = z.object({
 export const materialUsageSearch = userRequired
   .input(materialUsageSearchInputSchema)
   .handler(async ({ input, context }) => {
-    await context.access.require("VIEW", { site: input.siteId });
+    // Floor data: crew only see their own cells (may narrow the filter).
+    Object.assign(input, await floorFilter(context, input.siteId, input));
 
     // Resolve station scope — always build workcenter map for shift lookup
     let stationIds: string[] | undefined;
@@ -1121,7 +1128,8 @@ const CYCLE_FIELD_TO_SQL: Record<string, Prisma.Sql> = {
 };
 
 export const cycleSearch = userRequired.input(cycleSearchInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("VIEW", { site: input.siteId });
+  // Floor data: crew only see their own cells (may narrow the filter).
+  Object.assign(input, await floorFilter(context, input.siteId, input));
 
   // Resolve station scope to a uuid[] we can ANY() in SQL.
   let stationIds: string[];
@@ -1361,7 +1369,8 @@ const logonLogSearchInputSchema = z.object({
 });
 
 export const logonLogSearch = userRequired.input(logonLogSearchInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("VIEW", { site: input.siteId });
+  // Floor data: crew only see their own cells (may narrow the filter).
+  Object.assign(input, await floorFilter(context, input.siteId, input));
 
   const where: Prisma.StationLogonSessionWhereInput = {
     station: { siteId: input.siteId },
@@ -1510,7 +1519,8 @@ const partLogSearchInputSchema = z.object({
 });
 
 export const partLogSearch = userRequired.input(partLogSearchInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("VIEW", { site: input.siteId });
+  // Floor data: crew only see their own cells (may narrow the filter).
+  Object.assign(input, await floorFilter(context, input.siteId, input));
 
   // Resolve station scope + workcenter map for shift lookup
   let stationIds: string[];

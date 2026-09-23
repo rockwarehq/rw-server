@@ -83,7 +83,7 @@ const metricBucketLogListInputSchema = z.object({
 export const metricBucketLogList = userRequired
   .input(metricBucketLogListInputSchema)
   .handler(async ({ input, context }) => {
-    await context.access.require("VIEW", { site: input.siteId });
+    await context.access.require("VIEW", { workcenter: input.workCenterId });
 
     // Get stations belonging to this workcenter
     const stations = await prisma.station.findMany({
@@ -163,7 +163,7 @@ const stationJobLogListInputSchema = z.object({
 export const stationJobLogList = userRequired
   .input(stationJobLogListInputSchema)
   .handler(async ({ input, context }) => {
-    await context.access.require("VIEW", { site: input.siteId });
+    await context.access.require("VIEW", { workcenter: input.workCenterId });
 
     // Look up the shift instance for its time boundaries
     const shiftInstance = await prisma.shiftInstance.findFirstOrThrow({
@@ -225,7 +225,7 @@ const jobMetricsListInputSchema = z.object({
 });
 
 export const jobMetricsList = userRequired.input(jobMetricsListInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("VIEW", { site: input.siteId });
+  await context.access.require("VIEW", { workcenter: input.workCenterId });
 
   // Get stations in workcenter to build path filter
   const stations = await prisma.station.findMany({
@@ -330,7 +330,10 @@ const downtimeLogListInputSchema = z.object({
 export const downtimeLogList = userOrDisplayRequired
   .input(downtimeLogListInputSchema)
   .handler(async ({ input, context }) => {
-    await context.access.require("VIEW", { site: input.siteId });
+    // Shift recaps are workcenter data: check the station or workcenter asked for.
+    if (input.stationId) await context.access.require("VIEW", { station: input.stationId });
+    else if (input.workCenterId) await context.access.require("VIEW", { workcenter: input.workCenterId });
+    else await context.access.require("VIEW", { site: input.siteId });
 
     const shiftInstance = await prisma.shiftInstance.findFirstOrThrow({
       where: { id: input.shiftInstanceId, siteId: input.siteId },
@@ -407,7 +410,7 @@ const scrapByReasonListInputSchema = z.object({
 export const scrapByReasonList = userOrDisplayRequired
   .input(scrapByReasonListInputSchema)
   .handler(async ({ input, context }) => {
-    await context.access.require("VIEW", { site: input.siteId });
+    await context.access.require("VIEW", { workcenter: input.workCenterId });
 
     const stations = await prisma.station.findMany({
       where: { siteId: input.siteId, workcenterId: input.workCenterId },
@@ -448,6 +451,7 @@ export const scrapByReasonList = userOrDisplayRequired
 
 // ============================================================================
 // Shift Comments (workcenter-overall + per-station, append-only thread)
+// Everything in a shift recap is workcenter data: checks name the workcenter.
 // ============================================================================
 
 const commentListInputSchema = z.object({
@@ -457,7 +461,7 @@ const commentListInputSchema = z.object({
 });
 
 export const commentList = userOrDisplayRequired.input(commentListInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("VIEW", { site: input.siteId });
+  await context.access.require("VIEW", { workcenter: input.workCenterId });
 
   const result = await shiftCommentService.list({
     shiftInstanceId: input.shiftInstanceId,
@@ -475,10 +479,11 @@ const commentCreateInputSchema = z.object({
 });
 
 export const commentCreate = userRequired.input(commentCreateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { site: input.siteId });
+  // Written on the workcenter's own site, whatever siteId was sent.
+  const { siteId } = await context.access.require("MANAGE", { workcenter: input.workCenterId });
 
   const result = await shiftCommentService.create({
-    siteId: input.siteId,
+    siteId,
     shiftInstanceId: input.shiftInstanceId,
     workcenterId: input.workCenterId,
     stationId: input.stationId ?? null,
@@ -528,7 +533,7 @@ const signoffInputSchema = z.object({
 });
 
 export const signoffGet = userOrDisplayRequired.input(signoffInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("VIEW", { site: input.siteId });
+  await context.access.require("VIEW", { workcenter: input.workCenterId });
 
   const result = await shiftSignoffService.get({
     shiftInstanceId: input.shiftInstanceId,
@@ -538,10 +543,11 @@ export const signoffGet = userOrDisplayRequired.input(signoffInputSchema).handle
 });
 
 export const signoffCreate = userRequired.input(signoffInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { site: input.siteId });
+  // Written on the workcenter's own site, whatever siteId was sent.
+  const { siteId } = await context.access.require("MANAGE", { workcenter: input.workCenterId });
 
   const result = await shiftSignoffService.create({
-    siteId: input.siteId,
+    siteId,
     shiftInstanceId: input.shiftInstanceId,
     workcenterId: input.workCenterId,
     postedById: context.current.user.id,
@@ -551,10 +557,10 @@ export const signoffCreate = userRequired.input(signoffInputSchema).handler(asyn
 });
 
 export const signoffDelete = userRequired.input(signoffInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { site: input.siteId });
+  const { siteId } = await context.access.require("MANAGE", { workcenter: input.workCenterId });
 
   const result = await shiftSignoffService.remove({
-    siteId: input.siteId,
+    siteId,
     shiftInstanceId: input.shiftInstanceId,
     workcenterId: input.workCenterId,
     actorId: context.current.user.id,

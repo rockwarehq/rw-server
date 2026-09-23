@@ -58,8 +58,8 @@ describe("shift recap metric buckets", () => {
     expect(mocks.metricBucket.findMany.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.metricBucketLog.findMany.mock.invocationCallOrder[0],
     );
-    // Bucket model: reads check the VIEW tier at the site's plant bucket.
-    expect(mocks.require).toHaveBeenCalledWith("VIEW", { site: input.siteId });
+    // Recaps are floor data: reads check VIEW on the workcenter asked for.
+    expect(mocks.require).toHaveBeenCalledWith("VIEW", { workcenter: input.workCenterId });
     expect(mocks.station.findMany).toHaveBeenCalledWith({
       where: { siteId: input.siteId, workcenterId: input.workCenterId },
       select: { id: true, name: true },

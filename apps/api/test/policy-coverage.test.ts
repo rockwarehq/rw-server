@@ -13,16 +13,17 @@ import { buildServer, type TestServer } from "./helpers/build-server.js";
  * commented exclusion. Tier 1 — no database required.
  */
 
-// An access check on the request's `access` object, or one of the two
+// An access check on the request's `access` object, or one of the
 // reviewed wrappers that check before returning a scope.
 // (Imported calls are rewritten as `(0, mod.fn)(…)`, so the wrappers match
 // by name.)
 const POLICY_CALL =
-  /\baccess\.(require|requireSomewhere|requireOwner|list|sites|can|canSomewhere)\(|\b(workspaceSiteScope|tokenSite)\b/;
+  /\baccess\.(require|requireSomewhere|requireOwner|list|sites|can|canSomewhere)\(|\b(workspaceSiteScope|tokenSite|floorFilter|requireFloorEntities)\b/;
 
 // require() is async: without `await` a denial is never seen and the
 // handler carries on. Same for the wrappers.
-const UNAWAITED_CHECK = /(?<!await )(\b\w+\.access\.require\(|\btokenSite\(|\([^()]*\bworkspaceSiteScope\)\()/;
+const UNAWAITED_CHECK =
+  /(?<!await )(\b\w+\.access\.require\(|\btokenSite\(|\([^()]*\b(workspaceSiteScope|floorFilter|requireFloorEntities)\)\()/;
 
 interface Leaf {
   path: string;

@@ -7,6 +7,7 @@ import * as query from "../services/metrics.js";
 import { getShiftForEntity } from "@rw/services/metrics/shift";
 import { rowToSnapshot } from "@rw/services/metrics/sync";
 import { userOrDisplayRequired } from "./middleware.js";
+import { requireFloorEntities } from "./scope.js";
 import {
   subscribeMetricChanges,
   subscribeMetricValueChanges,
@@ -443,7 +444,7 @@ export const stream = userOrDisplayRequired
   .input(streamInputSchema)
   .output(eventIterator(metricChangeSchema))
   .handler(async function* ({ context, input, signal }) {
-    await context.access.require("VIEW", { site: input.siteId });
+    await requireFloorEntities(context, input.siteId, input.entities);
 
     const subscriptions = new Map<string, Set<string>>();
     for (const entity of input.entities) {
@@ -477,7 +478,7 @@ export const streamValues = userOrDisplayRequired
   .input(streamValuesInputSchema)
   .output(eventIterator(streamValueEventSchema))
   .handler(async function* ({ context, input, signal }) {
-    await context.access.require("VIEW", { site: input.siteId });
+    await requireFloorEntities(context, input.siteId, input.requests);
 
     const requestByKey = new Map<string, NormalizedMetricValueRequest>();
     for (const request of input.requests) {
@@ -559,7 +560,7 @@ export const getBuckets = userOrDisplayRequired
   .input(getBucketsInputSchema)
   .output(z.array(bucketSchema))
   .handler(async ({ context, input }) => {
-    await context.access.require("VIEW", { site: input.siteId });
+    await requireFloorEntities(context, input.siteId, input.entities);
 
     const buckets = await query.getBuckets({
       siteId: input.siteId,
@@ -591,7 +592,7 @@ export const getShiftValues = userOrDisplayRequired
   .input(getShiftValuesInputSchema)
   .output(getShiftValuesOutputSchema)
   .handler(async ({ context, input }) => {
-    await context.access.require("VIEW", { site: input.siteId });
+    await requireFloorEntities(context, input.siteId, input.entities);
 
     const uniqueMetricKeys = [...new Set(input.metricKeys)] as ShiftMetricKey[];
 

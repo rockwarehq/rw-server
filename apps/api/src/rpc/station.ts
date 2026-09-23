@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
 import { userRequired, processorRequired, userOrDisplayRequired } from "./middleware.js";
+import { requireFloorEntities } from "./scope.js";
 import { station } from "@rw/services/facility/index";
 import { amendJobHistory as amendJobHistoryService, listAmendments, retryRebuild } from "@rw/services/history/index";
 import { type CodeOverrides, throwServiceError } from "./errors.js";
@@ -546,7 +547,9 @@ export const amendJobHistory = userOrDisplayRequired
 export const listJobHistoryAmendments = userRequired
   .input(listJobHistoryAmendmentsInputSchema)
   .handler(async ({ input, context }) => {
-    await context.access.require("VIEW", { site: input.siteId });
+    // Job history is floor data: one station, or the whole floor.
+    if (input.stationId) await context.access.require("VIEW", { station: input.stationId });
+    else await requireFloorEntities(context, input.siteId, [{ entityType: "SITE", entityId: input.siteId }]);
     return listAmendments(input);
   });
 
