@@ -393,11 +393,6 @@ async function ensureStation(siteId: string, workcenterId: string, groupLabelId:
     if (Object.keys(patch).length > 0) {
       await prisma.station.update({ where: { id: existing.id }, data: patch });
     }
-    await prisma.stationJob.upsert({
-      where: { stationId_jobId: { stationId: existing.id, jobId } },
-      update: {},
-      create: { stationId: existing.id, jobId },
-    });
     return existing.id;
   }
 
@@ -423,11 +418,6 @@ async function ensureStation(siteId: string, workcenterId: string, groupLabelId:
     },
   });
   await prisma.station.update({ where: { id: station.id }, data: { currentVersionId: version.id } });
-  await prisma.stationJob.upsert({
-    where: { stationId_jobId: { stationId: station.id, jobId } },
-    update: {},
-    create: { stationId: station.id, jobId },
-  });
   mark(true, `Station ${name}`);
   return station.id;
 }

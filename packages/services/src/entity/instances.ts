@@ -434,51 +434,6 @@ async function listSystemInstances(
     };
   }
 
-  if (key === SYSTEM_ENTITY_KEYS.WorkOrder) {
-    const where = {
-      siteId: scope.siteId,
-      site: { workspaceId: scope.workspaceId },
-      deletedAt: null,
-      ...(name ? { orderNumber: { contains: name, mode: "insensitive" as const } } : {}),
-    };
-    const [orders, total] = await Promise.all([
-      prisma.workOrder.findMany({
-        where,
-        ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
-        skip: Number(offset),
-        orderBy: { orderNumber: "asc" },
-      }),
-      prisma.workOrder.count({ where }),
-    ]);
-    return {
-      data: orders.map((order) =>
-        systemInstance(
-          key,
-          { id: order.id, name: order.orderNumber },
-          {
-            id: order.id,
-            orderNumber: order.orderNumber,
-            status: order.status,
-            targetQuantity: order.targetQuantity,
-            completedQuantity: order.completedQuantity,
-            scrapQuantity: order.scrapQuantity,
-            dueDate: order.dueDate,
-            priority: order.priority,
-            siteId: order.siteId,
-            jobId: order.jobId,
-            productId: order.productId,
-            createdAt: order.createdAt,
-            updatedAt: order.updatedAt,
-            deletedAt: order.deletedAt,
-          },
-        ),
-      ),
-      total,
-      limit: Number(limit),
-      offset: Number(offset),
-    };
-  }
-
   if (key === SYSTEM_ENTITY_KEYS.Employee) {
     const where = {
       workspaceId: scope.workspaceId,

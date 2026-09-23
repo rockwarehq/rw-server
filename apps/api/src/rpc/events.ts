@@ -136,7 +136,7 @@ export const ingest = processorRequired
       select: {
         id: true,
         status: true,
-        location: {
+        site: {
           select: {
             workspaceId: true,
           },
@@ -162,7 +162,7 @@ export const ingest = processorRequired
           id: event.id,
           type: "PointValue",
           gatewayId: event.gatewayId,
-          workspaceId: gateway.location?.workspaceId ?? null,
+          workspaceId: gateway.site?.workspaceId ?? null,
           receivedAt,
           payload: {
             pointId: event.payload.pointId,

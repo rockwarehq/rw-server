@@ -1,4 +1,4 @@
-// Postgres timeout classifier — lifted from rw-server/src/database/timeouts.ts.
+// Postgres timeout classifier.
 //
 // When statement_timeout / lock_timeout / idle_in_transaction_session_timeout
 // fire, Postgres returns specific SQLSTATEs that Prisma surfaces in the error

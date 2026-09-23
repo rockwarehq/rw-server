@@ -490,10 +490,7 @@ export async function update(id: string, input: UpdateJobInput) {
 export async function remove(id: string) {
   const job = await prisma.job.findUnique({
     where: { id },
-    include: {
-      site: { select: { workspaceId: true } },
-      _count: { select: { orders: true } },
-    },
+    include: { site: { select: { workspaceId: true } } },
   });
 
   if (!job) {
@@ -502,13 +499,6 @@ export async function remove(id: string) {
 
   if (job.deletedAt) {
     return { error: "Job already deleted", code: "JOB_DELETED" };
-  }
-
-  if (job._count.orders > 0) {
-    return {
-      error: "Cannot delete job that has work orders. Delete work orders first.",
-      code: "HAS_ORDERS",
-    };
   }
 
   await prisma.job.update({
