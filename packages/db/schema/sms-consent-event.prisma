@@ -1,0 +1,27 @@
+/// Append-only history: the proof a text was permitted when it was sent.
+model SmsConsentEvent {
+  id String @id @default(uuid()) @db.Uuid
+
+  consentId String     @db.Uuid
+  consent   SmsConsent @relation(fields: [consentId], references: [id], onDelete: Cascade)
+
+  status SmsConsentStatus
+  method SmsConsentMethod
+
+  /// MANUAL = a person recorded it in the app; SYSTEM = Twilio/carrier told us (STOP).
+  source      ActionSource @default(MANUAL)
+  /// The signed-in user who recorded it, when there was one.
+  actorUserId String?      @db.Uuid
+  actor       User?        @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  /// Free text: where a paper form is filed, what the person actually said, ...
+  note        String?
+
+  /// rw-hub event this was replicated from; unique per consent row, since one event lands once
+  /// per workspace holding the number.
+  relayEventId String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([consentId, relayEventId])
+  @@index([consentId, createdAt(sort: Desc)])
+}

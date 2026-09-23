@@ -1,0 +1,25 @@
+model StationEvent {
+  id      String  @id @default(uuid()) @db.Uuid
+  name    String
+  enabled Boolean @default(true)
+
+  /// [EventTrigger]
+  trigger Json
+  /// [EventAction[]]
+  actions Json
+
+  lastRunAt DateTime? @db.Timestamptz(3)
+  runCount  Int       @default(0)
+  version   Int       @default(1)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  executions StationEventExecution[]
+
+  @@index([stationId, enabled])
+  @@index([stationId, createdAt])
+}

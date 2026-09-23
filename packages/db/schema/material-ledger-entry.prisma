@@ -1,0 +1,65 @@
+/// The book of record for every quantity-changing material event.
+///
+/// Manual events (receipts, adjustments, write-offs, transfers) are append-only:
+/// each event is one immutable row. Production consumption is tracked as
+/// `PRODUCTION` rows that are **mutable during a shift** — the same row
+/// accumulates weight as cycles close, via the `MaterialShiftUsage` binding.
+/// Once the shift ends nothing touches the row again.
+///
+/// Balance is a single aggregate: `SUM(quantity) WHERE materialId = ?`.
+enum MaterialLedgerKind {
+  RECEIPT // stock received from supplier
+  ADJUSTMENT // manual audit delta (signed)
+  WRITE_OFF // damaged, expired, scrapped (negative)
+  TRANSFER_IN // from another site
+  TRANSFER_OUT // to another site (negative)
+  OPENING_BALANCE // initial count at onboarding
+  PRODUCTION // production usage; mutable-during-shift, incremented by cycle close
+}
+
+model MaterialLedgerEntry {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  materialId String   @db.Uuid
+  material   Material @relation(fields: [materialId], references: [id], onDelete: Restrict)
+
+  kind     MaterialLedgerKind
+  quantity Decimal            @db.Decimal(18, 4)
+  unit     WeightUnit
+
+  // ── Dimension snapshots (star pattern for BI) ──
+  /// PRODUCTION rows: the shift whose staging rows were flushed here.
+  /// Manual rows: the site-level shift running when the event was recorded.
+  shiftInstanceId String?        @db.Uuid
+  shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled     Boolean        @default(true)
+
+  /// Business date of that shift.
+  businessDate DateTime? @db.Date
+
+  unitCost    Decimal? @db.Decimal(14, 4)
+  reference   String?
+  note        String?
+  description String?
+
+  performedByUserId String? @db.Uuid
+  performedByUser   User?   @relation(fields: [performedByUserId], references: [id], onDelete: SetNull)
+
+  /// For PRODUCTION rows: every staging row whose flush contributed to this
+  /// ledger entry's quantity. A single PRODUCTION row aggregates all
+  /// (station, job, product) consumption of a single material in a single
+  /// shift, so the back-relation is a list. Empty for manual events.
+  shiftUsages MaterialShiftUsage[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([materialId, createdAt])
+  @@index([siteId, createdAt])
+  @@index([siteId, businessDate])
+  @@index([shiftInstanceId])
+}

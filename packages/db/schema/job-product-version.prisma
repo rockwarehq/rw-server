@@ -1,0 +1,18 @@
+model JobProductVersion {
+  id       String  @id @default(uuid()) @db.Uuid
+  version  Int
+  isActive Boolean @default(true)
+  quantity Int     @default(1)
+
+  jobProductId String     @db.Uuid
+  jobProduct   JobProduct @relation("JobProductVersions", fields: [jobProductId], references: [id])
+
+  currentOfJobProduct JobProduct?          @relation("JobProductCurrent")
+  inventoryItems      InventoryItem[]
+  itemDispositionLogs ItemDispositionLog[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([jobProductId, version])
+  @@index([jobProductId])
+}

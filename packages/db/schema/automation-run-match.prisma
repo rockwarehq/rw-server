@@ -1,0 +1,14 @@
+/// Join: one row per (run, automation) where the automation's conditions matched. 
+model AutomationRunMatch {
+  id           String        @id @default(uuid()) @db.Uuid
+  runId        String        @db.Uuid
+  run          AutomationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  automationId String        @db.Uuid
+  /// Order this automation was reached in the dispatch loop (0-based).
+  matchIdx     Int
+  /// Set when the match did NOT run its actions, with why (e.g. "cooldown").
+  skipped      String?
+
+  @@unique([runId, automationId])
+  @@index([automationId])
+}

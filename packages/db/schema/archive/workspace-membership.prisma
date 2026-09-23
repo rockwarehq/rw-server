@@ -1,0 +1,35 @@
+/// ARCHIVED — was the membership's standing; now User.isAccountAdmin.
+enum WorkspaceRole {
+  OWNER
+  MEMBER
+}
+
+/// ARCHIVED — one workspace per deployment made memberships redundant.
+/// Their data moved to User (isAccountAdmin, employeeId) and
+/// BucketAccess.userId. Kept as a frozen archive with RoleAssignment and
+/// WorkcenterGrant, which still point here. NO code reads or writes it.
+model WorkspaceMembership {
+  id String @id @default(uuid()) @db.Uuid
+
+  joinedAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  workspaceId String    @db.Uuid
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  employeeId String? @db.Uuid
+
+  workspaceRole WorkspaceRole @default(MEMBER)
+
+  // ARCHIVED relations (pre-bucket model; no code paths).
+  roleAssignments  RoleAssignment[]
+  workcenterGrants WorkcenterGrant[]
+
+  @@unique([userId, workspaceId])
+  @@unique([workspaceId, employeeId])
+  @@index([workspaceId])
+  @@map("WorkspaceMember")
+}

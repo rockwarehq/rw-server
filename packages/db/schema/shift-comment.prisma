@@ -1,0 +1,29 @@
+model ShiftComment {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  shiftInstanceId String        @db.Uuid
+  shiftInstance   ShiftInstance @relation(fields: [shiftInstanceId], references: [id], onDelete: Cascade)
+
+  workcenterId String     @db.Uuid
+  workcenter   Workcenter @relation(fields: [workcenterId], references: [id], onDelete: Cascade)
+
+  /// null = workcenter-overall comment; non-null = per-station comment
+  stationId String?  @db.Uuid
+  station   Station? @relation(fields: [stationId], references: [id], onDelete: SetNull)
+
+  text String
+
+  createdById String? @db.Uuid
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([shiftInstanceId])
+  @@index([shiftInstanceId, stationId])
+  @@index([stationId])
+}

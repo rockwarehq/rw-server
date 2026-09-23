@@ -24,7 +24,7 @@ It also acts as the platform's **signal interpreter**: graph hooks turn raw tag 
 | `totalizer` | Running total — each trigger firing (hook-condition shaped) adds the source property's latest value; optional reset condition zeroes it (e.g. shift change); state persisted in NATS KV (ADR-0010) |
 | `rollup` | Structural aggregation over child assets (sum / weighted avg), max depth 3 |
 
-Configuration lives in Postgres (`GraphNode`, `GraphProperty`, `GraphEdge`, `GraphHook` — `packages/db/schema/graph.prisma`); **values never touch Postgres** — current values live in the NATS KV bucket `imm_cvt` (key `prop.<id>`), aggregation state in `imm_agg_state`.
+Configuration lives in Postgres (`GraphNode`, `GraphProperty`, `GraphEdge`, `GraphHook` — the `packages/db/schema/graph*.prisma` files); **values never touch Postgres** — current values live in the NATS KV bucket `imm_cvt` (key `prop.<id>`), aggregation state in `imm_agg_state`.
 
 ## The engine loop
 

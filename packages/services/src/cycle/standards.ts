@@ -1,6 +1,6 @@
 // Effective-standard resolution for the three cycle modes — the ONE place the
 // standardCycle the system runs off is derived from mode + station + job
-// config. Pure, no DB. Mode semantics: see CycleMode in workcenter.prisma.
+// config. Pure, no DB. Mode semantics: see CycleMode in station-version.prisma.
 
 import { secondsPerUnitIn, type RatePeriod } from "../lib/units/quantity.js";
 

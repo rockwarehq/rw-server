@@ -1,0 +1,33 @@
+/// Supervisor sign-off ("post") of a shift recap for one workcenter.
+/// At most one ACTIVE sign-off per (shiftInstance, workcenter); reopening
+/// soft-deletes the row (recording who reopened) and a re-post revives it.
+/// The shift instance may be site-level (workCenterId null) — shared by every
+/// workcenter on the default schedule — which is why the workcenter is part
+/// of the key rather than a column on ShiftInstance.
+model ShiftSignoff {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  shiftInstanceId String        @db.Uuid
+  shiftInstance   ShiftInstance @relation(fields: [shiftInstanceId], references: [id], onDelete: Cascade)
+
+  workcenterId String     @db.Uuid
+  workcenter   Workcenter @relation(fields: [workcenterId], references: [id], onDelete: Cascade)
+
+  postedById String?  @db.Uuid
+  postedBy   User?    @relation("ShiftSignoffPostedBy", fields: [postedById], references: [id], onDelete: SetNull)
+  postedAt   DateTime @db.Timestamptz(3)
+
+  /// Set when the sign-off is reopened; cleared when the row is revived.
+  reopenedById String? @db.Uuid
+  reopenedBy   User?   @relation("ShiftSignoffReopenedBy", fields: [reopenedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@unique([shiftInstanceId, workcenterId])
+  @@index([workcenterId])
+}

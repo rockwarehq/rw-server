@@ -1,0 +1,39 @@
+enum IntegrationRunStatus {
+  PENDING // started, no result yet
+  SUCCEEDED
+  FAILED
+}
+
+/// One execution of one action — otherwise a failure at a customer site leaves no trace.
+model IntegrationRun {
+  id            String      @id @default(uuid()) @db.Uuid
+  integrationId String      @db.Uuid
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  /// Action key and version from the type's catalog, e.g. "procedure.execute" @ "1".
+  actionKey     String
+  actionVersion String
+
+  status IntegrationRunStatus @default(PENDING)
+
+  /// What asked for this run ("hook", "automation", "manual") and its id. Loose so a new consumer needs no migration.
+  triggerType String
+  triggerId   String?
+
+  /// Resolved action input. Secrets are never part of an action input, so this is safe to retain.
+  input Json @default("{}")
+
+  result Json?
+  error  String?
+
+  /// Source event id. Delivery is at-least-once, so unique turns a redelivery into a detectable duplicate.
+  dedupeKey String? @unique
+
+  startedAt  DateTime  @default(now()) @db.Timestamptz(3)
+  finishedAt DateTime? @db.Timestamptz(3)
+  durationMs Int?
+
+  @@index([integrationId, startedAt])
+  @@index([status])
+  @@index([triggerType, triggerId])
+}

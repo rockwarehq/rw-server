@@ -27,38 +27,3 @@ model Label {
   @@unique([siteId, name])
   @@index([siteId])
 }
-
-/// What kind of item a filter narrows.
-enum LabelFilterTarget {
-  JOB
-  TOOL
-  STATUS_REASON
-  DISPOSITION_REASON
-}
-
-/// A filter one item defines against another kind of item. Example: a
-/// station's JOB filter says "only jobs with at least one of these labels
-/// can run here"; its STATUS_REASON filter narrows the downtime codes the
-/// operator screen offers. No row for a target = everything is eligible.
-///
-/// v1: only stations own filters. When another item needs to own filters
-/// later, it gets its own owner column on this table (one owner set per
-/// row) — real foreign keys, not a loose ownerType/ownerId pair.
-model LabelFilter {
-  id String @id @default(uuid()) @db.Uuid
-
-  stationId String  @db.Uuid
-  station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
-
-  target LabelFilterTarget
-
-  /// The criteria: a filtered item must carry at least one of these labels.
-  /// The service requires at least one label per filter row.
-  labels Label[]
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
-  @@unique([stationId, target])
-  @@index([stationId])
-}

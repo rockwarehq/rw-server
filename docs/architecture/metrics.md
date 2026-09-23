@@ -48,7 +48,7 @@ share the same pipeline: `computeBucketFromEvents` -> write base buckets ->
 
 ### MetricBucket Table
 
-Defined in `prisma/schema/metric.prisma`. Each row represents the KPI
+Defined in `packages/db/schema/metric-bucket.prisma`. Each row represents the KPI
 state for one entity at one time-granularity window.
 
 **Identity columns:**

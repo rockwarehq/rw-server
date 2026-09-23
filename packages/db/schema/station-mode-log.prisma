@@ -1,0 +1,78 @@
+/// Audit trail: one row per stretch a station spent in a mode
+/// (StationJobLog pattern). endTime IS NULL = the station's active mode.
+model StationModeLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  modeId String         @db.Uuid
+  mode   ProductionMode @relation(fields: [modeId], references: [id], onDelete: Restrict)
+
+  startTime DateTime  @db.Timestamptz(3)
+  endTime   DateTime? @db.Timestamptz(3)
+
+  // At most one open entry per station: partial unique index on (stationId)
+  // WHERE open — hand-written in the production_modes migration.
+
+  // ── Dimension snapshots (star pattern for BI), captured when the mode is forced ──
+  // Same shape as Call: tool/product only when the job has exactly one active;
+  // multi-tool/product jobs dimension through jobId instead.
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id], onDelete: SetNull)
+
+  jobId String? @db.Uuid
+  job   Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  jobVersionId String?     @db.Uuid
+  jobVersion   JobVersion? @relation(fields: [jobVersionId], references: [id])
+
+  stationVersionId String?         @db.Uuid
+  stationVersion   StationVersion? @relation(fields: [stationVersionId], references: [id])
+
+  toolId String? @db.Uuid
+  tool   Tool?   @relation(fields: [toolId], references: [id], onDelete: SetNull)
+
+  productId String?  @db.Uuid
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  toolVersionId    String? @db.Uuid
+  productVersionId String? @db.Uuid
+
+  shiftInstanceId String?        @db.Uuid
+  shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled     Boolean        @default(true)
+  /// Business date of the shift the mode was forced in.
+  businessDate    DateTime?      @db.Date
+
+  /// Who forced the mode. SYSTEM = a programmatic caller (automation, alarm) — skips the mode's role gates.
+  source     ActionSource @default(MANUAL)
+  sourceType String? // programmatic origin discriminator, e.g. "automation"
+  sourceRef  String? // free-form correlation id (automation id, alarm id, ...)
+
+  startedByEmployeeId        String?   @db.Uuid
+  startedByEmployee          Employee? @relation("ModeLogStartedBy", fields: [startedByEmployeeId], references: [id], onDelete: SetNull)
+  startedByEmployeeVersionId String?   @db.Uuid
+  endedByEmployeeId          String?   @db.Uuid
+  endedByEmployee            Employee? @relation("ModeLogEndedBy", fields: [endedByEmployeeId], references: [id], onDelete: SetNull)
+  endedByEmployeeVersionId   String?   @db.Uuid
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([stationId, startTime])
+  @@index([stationId, endTime])
+  @@index([siteId])
+  @@index([siteId, businessDate])
+  @@index([modeId])
+  @@index([shiftInstanceId])
+  @@index([workcenterId])
+  @@index([jobId])
+  @@index([toolId])
+  @@index([productId])
+}

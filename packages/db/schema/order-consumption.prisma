@@ -1,0 +1,46 @@
+enum ConsumptionSource {
+  MANUAL // a user completed the order
+  AUTO // the site auto-complete rule completed it
+  BACKFILL // migrated from legacy allocation history
+}
+
+/// The durable fulfillment record: written once per line item when an order is
+/// completed, recording how much stock the completion consumed. Aggregate-only
+/// by design — per-unit provenance lives on InventoryItem (cycle → station/job),
+/// and explicit item-level linkage is deferred to the scheduling module.
+model OrderConsumption {
+  id       String            @id @default(uuid()) @db.Uuid
+  quantity Decimal           @db.Decimal(18, 4)
+  source   ConsumptionSource
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  orderId String @db.Uuid
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  orderLineItemId String        @db.Uuid
+  orderLineItem   OrderLineItem @relation(fields: [orderLineItemId], references: [id], onDelete: Cascade)
+
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  // ── Dimension snapshots (star pattern for BI): the site-level shift running
+  // when the order completed ──
+  shiftInstanceId String?        @db.Uuid
+  shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled     Boolean        @default(true)
+
+  /// Business date of that shift.
+  businessDate DateTime? @db.Date
+
+  createdByUserId String?  @db.Uuid
+  createdAt       DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([orderId])
+  @@index([siteId, productId])
+  @@index([siteId, businessDate])
+  @@index([shiftInstanceId])
+}

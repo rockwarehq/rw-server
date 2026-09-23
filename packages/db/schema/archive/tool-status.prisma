@@ -1,0 +1,17 @@
+/// ARCHIVED — never used. Waits to be dropped.
+model ToolStatus {
+  id   String @id @default(uuid()) @db.Uuid
+  name String
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  tools Tool[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}

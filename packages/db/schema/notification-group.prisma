@@ -1,0 +1,28 @@
+/// Used by NotificationGroup and NotificationDelivery.
+enum NotificationChannel {
+  EMAIL
+  SMS
+}
+
+/// Admin-defined, per-site group of employees notified together. Channels are
+/// chosen on the group so senders (automations) never know about email vs SMS.
+model NotificationGroup {
+  id          String                @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  channels    NotificationChannel[] @default([EMAIL])
+
+  members Employee[] @relation("NotificationGroupMembers")
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  notifications Notification[]
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}

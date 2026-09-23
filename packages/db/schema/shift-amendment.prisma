@@ -1,0 +1,67 @@
+enum ShiftAmendmentStatus {
+  PENDING_REBUILD
+  APPLIED
+  FAILED
+}
+
+/// A correction to a shift that is running or has finished (ADR-0015). The
+/// instance rows are edited in place when it is created; the facts inside the
+/// changed window are re-stamped in the same transaction; the metric buckets
+/// are rebuilt asynchronously and `status` tracks that. Undo is another
+/// amendment restoring `previous*`.
+///
+/// The builder treats amendments like overrides (latest per date + shift
+/// wins), so the ensure tick and the calendar preview reproduce amended days.
+model ShiftAmendment {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  workCenterId String?     @db.Uuid
+  workCenter   Workcenter? @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
+
+  assignmentId String          @db.Uuid
+  assignment   ShiftAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  businessDate DateTime @db.Date
+  /// Pattern shift name, or the name of an added shift.
+  shiftName    String
+
+  /// The window and state the shift had before this amendment. Null when the
+  /// amendment added a shift to a day that had already run: there was no shift
+  /// to describe, and undoing it removes the row rather than restoring one.
+  previousStartTime DateTime? @db.Timestamptz(3)
+  previousEndTime   DateTime? @db.Timestamptz(3)
+  previousScheduled Boolean?
+  previousName      String?
+
+  /// Same shape as ShiftOverride: replacement window and/or the three-way scheduled flag + note.
+  startTime   DateTime? @db.Timestamptz(3)
+  endTime     DateTime? @db.Timestamptz(3)
+  isScheduled Boolean?
+  note        String?
+
+  /// Union of the old and new windows: what was re-stamped and what the rebuild recomputes.
+  windowStart DateTime @db.Timestamptz(3)
+  windowEnd   DateTime @db.Timestamptz(3)
+
+  /// Set when this amendment reverses an earlier one: the id of the amendment
+  /// it undid. Neither an undo nor the amendment it undid is in force, so the
+  /// calendar shows the shift as planned again and neither can be undone twice.
+  undoOfId String? @db.Uuid
+
+  status       ShiftAmendmentStatus @default(PENDING_REBUILD)
+  rebuildError String?
+  rebuiltAt    DateTime?            @db.Timestamptz(3)
+
+  createdById String? @db.Uuid
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([siteId, businessDate])
+  @@index([workCenterId, businessDate])
+  @@index([siteId, status])
+}

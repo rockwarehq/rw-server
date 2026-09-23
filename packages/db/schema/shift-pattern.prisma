@@ -1,0 +1,58 @@
+/// A reusable template that defines the shift schedule for a site.
+/// Contains one or more ShiftDefinitions that describe the shifts
+/// within each rotation day.
+///
+/// Workflow:
+///   1. Create a ShiftPattern with its ShiftDefinitions.
+///   2. Assign it to a Site (and optionally a Workcenter) via ShiftAssignment.
+///   3. A published pattern can still be edited: the edit rebuilds the days
+///      that have not run and leaves the rows that have (ADR-0015). Cloning it
+///      instead keeps the old schedule readable, tracked by `clonedFromId`.
+model ShiftPattern {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Human-readable name for the pattern (e.g., "Standard 3-Shift").
+  name String
+
+  /// Controls how the business date is derived for a block of shifts
+  /// on a given rotation day:
+  ///   false → business date = calendar date when the FIRST shift starts
+  ///   true  → business date = calendar date when the LAST shift ends
+  ///
+  /// Example (rotation day with 3 shifts spanning midnight):
+  ///   Shift 1: 3/9 8:30am–5:00pm
+  ///   Shift 2: 3/9 5:00pm–3/10 12:45am
+  ///   Shift 3: 3/10 12:45am–8:30am
+  ///
+  ///   useEndDateForBusinessDate = false → business date = 3/9
+  ///   useEndDateForBusinessDate = true  → business date = 3/10
+  useEndDateForBusinessDate Boolean @default(true)
+
+  /// How many days before the rotation repeats (e.g., 7 for a weekly cycle).
+  /// Each day can have a different set of ShiftDefinitions.
+  totalDaysInRotation Int @default(8)
+
+  /// Optional constraint: which day of the week the rotation is designed
+  /// to start on (e.g., "MONDAY"). Used when assigning mid-cycle — if the
+  /// pattern starts on Monday but is assigned on Wednesday, the assignment
+  /// knows to begin on rotation day 3.
+  startOnDayOfWeek String?
+
+  // ── Clone lineage ──
+  clonedFromId   String?        @db.Uuid
+  clonedFrom     ShiftPattern?  @relation("ClonedPatterns", fields: [clonedFromId], references: [id])
+  clonedPatterns ShiftPattern[] @relation("ClonedPatterns")
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  shifts     ShiftDefinition[]
+  assignment ShiftAssignment? // 1:1 — a pattern is published at most once
+
+  /// Set instead of deleting once the pattern has been published: its
+  /// assignment and past instances are history other tables are stamped on.
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+}

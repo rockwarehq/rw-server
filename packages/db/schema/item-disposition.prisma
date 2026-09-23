@@ -1,0 +1,24 @@
+model ItemDisposition {
+  id   String @id @default(uuid()) @db.Uuid
+  name String
+
+  /// Seeded, protected disposition (the site's "Scrap") — cannot be renamed
+  /// or removed; scrap-all production modes resolve it by this flag. At most
+  /// one per site (partial unique index, hand-written in the migration).
+  isSystem Boolean @default(false)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  itemDispositionReasons ItemDispositionReason[] @relation("DispositionReasonDispositions")
+  itemDispositionLogs    ItemDispositionLog[]
+  productionModes        ProductionMode[]
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}

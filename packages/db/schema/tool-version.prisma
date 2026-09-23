@@ -1,0 +1,24 @@
+model ToolVersion {
+  id          String  @id @default(uuid()) @db.Uuid
+  version     Int
+  name        String
+  description String?
+  pmLimit     Int?
+  pmWarn      Int?
+  cavityCount Int?
+
+  toolId String @db.Uuid
+  tool   Tool   @relation("ToolVersions", fields: [toolId], references: [id])
+
+  currentOfTool       Tool?                @relation("ToolCurrent")
+  inventoryItems      InventoryItem[]
+  itemDispositionLogs ItemDispositionLog[]
+  cycles              Cycle[]
+
+  attrs Json @default("{}")
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([toolId, version])
+  @@index([toolId])
+}

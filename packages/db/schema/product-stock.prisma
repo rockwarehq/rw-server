@@ -1,0 +1,25 @@
+/// Per-(site, product) on-hand aggregate. A derived cache of facts:
+/// produced (InventoryItem) − scrapped (ItemDispositionLog) − consumed
+/// (OrderConsumption) + adjustment (manual corrections). Every writer updates
+/// it in the same transaction as the underlying fact, and it is rebuildable at
+/// any time via the stock re-derivation script.
+/// Available-to-promise = GREATEST(produced − scrapped − consumed + adjustment, 0),
+/// clamped at read time; raw negatives stay visible for diagnostics.
+model ProductStock {
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  produced   Decimal @default(0) @db.Decimal(18, 4)
+  scrapped   Decimal @default(0) @db.Decimal(18, 4)
+  consumed   Decimal @default(0) @db.Decimal(18, 4)
+  /// Backed by ProductStockAdjustment: SUM(delta) — rebuildable like the
+  /// other fact columns.
+  adjustment Decimal @default(0) @db.Decimal(18, 4)
+
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@id([siteId, productId])
+}

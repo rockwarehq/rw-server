@@ -1,0 +1,5 @@
+/// Used by Call, Notification, SmsConsentEvent, StationModeLog and JobHistoryAmendment.
+enum ActionSource {
+  MANUAL
+  SYSTEM
+}

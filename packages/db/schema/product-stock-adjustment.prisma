@@ -1,0 +1,48 @@
+enum StockAdjustmentReason {
+  CYCLE_COUNT // physical count reconciliation
+  DAMAGE // damaged/lost stock written down
+  FOUND // stock discovered
+  INITIAL // opening balance at onboarding
+  OTHER
+}
+
+/// Append-only book of record for manual on-hand corrections. Each row is one
+/// immutable signed delta applied to ProductStock.adjustment in the same
+/// transaction. `resultingOnHand` snapshots the RAW (unclamped) on-hand after
+/// the delta — for count entries this equals the counted quantity.
+model ProductStockAdjustment {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  delta           Decimal @db.Decimal(18, 4)
+  resultingOnHand Decimal @db.Decimal(18, 4)
+
+  reason StockAdjustmentReason
+  note   String?
+
+  // ── Dimension snapshots (star pattern for BI): the site-level shift running
+  // when the adjustment was recorded ──
+  shiftInstanceId String?        @db.Uuid
+  shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled     Boolean        @default(true)
+
+  /// Business date of that shift.
+  businessDate DateTime? @db.Date
+
+  performedByUserId String? @db.Uuid
+  performedByUser   User?   @relation(fields: [performedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([siteId, productId, createdAt])
+  @@index([siteId, createdAt])
+  @@index([siteId, businessDate])
+  @@index([shiftInstanceId])
+}

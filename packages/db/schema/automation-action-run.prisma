@@ -1,0 +1,34 @@
+enum AutomationActionRunStatus {
+  SUCCESS
+  FAILED
+  SKIPPED
+  /// Deferred to the ActionScheduler; the real outcome is recorded later as its own run.
+  SCHEDULED
+}
+
+/// One row per action attempt within an AutomationRun.
+model AutomationActionRun {
+  id String @id @default(uuid()) @db.Uuid
+
+  runId String        @db.Uuid
+  run   AutomationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  automationId String @db.Uuid
+
+  /// Index within the automation's actions[] array at the time the run was attempted.
+  actionIdx     Int
+  actionType    String
+  actionVersion String
+
+  status AutomationActionRunStatus
+  /// Error message when status = FAILED.
+  error  String?
+
+  startedAt  DateTime  @default(now()) @db.Timestamptz(3)
+  finishedAt DateTime? @db.Timestamptz(3)
+
+  @@index([runId])
+  @@index([automationId])
+  // Useful for "how many sendAlert@1 actions ran / failed today" without scanning the whole table.
+  @@index([actionType])
+}

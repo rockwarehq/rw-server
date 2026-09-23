@@ -1,3 +1,11 @@
+/// Internal Rockware staff. Users with a SystemRole get access from code
+/// (SUPPORT = read everywhere, ENGINEER = manage/admin everywhere). They
+/// hold no bucket access and are not account admins.
+enum SystemRole {
+  SUPPORT
+  ENGINEER
+}
+
 enum UserStatus {
   PENDING // Invited but hasn't set password
   ACTIVE // Can log in
@@ -69,25 +77,4 @@ model User {
 
   // SMS consent decisions this user recorded
   smsConsentEvents SmsConsentEvent[]
-}
-
-model RefreshToken {
-  id        String    @id @default(uuid()) @db.Uuid
-  tokenHash String    @unique
-  expiresAt DateTime  @db.Timestamptz(3)
-  revokedAt DateTime? @db.Timestamptz(3)
-  // Set (alongside revokedAt) when the token was replaced by a successor
-  // during refresh rotation. A rotated token re-presented within the reuse
-  // grace window refreshes normally; a token revoked WITHOUT rotatedAt
-  // (logout-all, theft response) never does.
-  rotatedAt DateTime? @db.Timestamptz(3)
-  userAgent String?
-  ipAddress String?
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-
-  userId String @db.Uuid
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
 }

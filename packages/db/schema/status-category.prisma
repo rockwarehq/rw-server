@@ -1,0 +1,18 @@
+/// Used in (StatusReason) to group like reasons
+model StatusCategory {
+  id   String @id @default(uuid()) @db.Uuid
+  name String
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  statusReasons StatusReason[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}

@@ -1,0 +1,28 @@
+model ProductMaterialVersion {
+  id      String @id @default(uuid()) @db.Uuid
+  version Int
+
+  weight      Decimal?    @db.Decimal(14, 4)
+  weightUnits WeightUnit?
+  itemCost    Decimal?    @db.Decimal(14, 4)
+  attrs       Json        @default("{}")
+
+  productMaterialId String          @db.Uuid
+  productMaterial   ProductMaterial @relation("ProductMaterialVersions", fields: [productMaterialId], references: [id], onDelete: Cascade)
+
+  materialVersionId String          @db.Uuid
+  materialVersion   MaterialVersion @relation(fields: [materialVersionId], references: [id])
+
+  productVersionId String         @db.Uuid
+  productVersion   ProductVersion @relation(fields: [productVersionId], references: [id])
+
+  currentOfProductMaterial ProductMaterial?     @relation("ProductMaterialCurrent")
+  inventoryItems           InventoryItem[]
+  itemDispositionLogs      ItemDispositionLog[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([productMaterialId, version])
+  @@index([productMaterialId])
+  @@index([materialVersionId])
+}

@@ -1,0 +1,64 @@
+/// Log of job assignments on a station. Each entry records when a job was
+/// assigned and (optionally) when it was replaced or cleared. The open entry
+/// (endTime IS NULL) represents the currently active job. Rows are cut at
+/// shift boundaries so every row belongs to one shift; blockId ties the
+/// pieces of one physical run together.
+model StationJobLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  stationId String  @db.Uuid
+  station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  /// One value per job assignment; shared by the per-shift pieces it was cut into.
+  blockId String
+
+  // ── Dimension snapshots (star pattern for BI), captured at assignment ──
+  siteId String? @db.Uuid
+  site   Site?   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id], onDelete: SetNull)
+
+  /// Shift the assignment started in.
+  shiftInstanceId String?        @db.Uuid
+  shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled     Boolean        @default(true)
+
+  /// Business date of that shift.
+  businessDate DateTime? @db.Date
+
+  jobId String @db.Uuid
+  job   Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  /// Snapshot of the job version at assignment time.
+  jobVersionId String @db.Uuid
+
+  startTime         DateTime  @db.Timestamptz(3)
+  endTime           DateTime? @db.Timestamptz(3) // null = currently running
+  /// Standard cycle time (seconds) snapshotted from the job version at assignment time.
+  standardCycle     Decimal?  @db.Decimal(10, 2)
+  /// Effective standard quantity per cycle snapshotted at assignment.
+  standardQuantity  Decimal?  @db.Decimal(18, 4)
+  quantityUnit      String    @default("")
+  /// Watermark for incremental bucket accumulation. The background worker
+  /// advances this on each tick so only the delta since the last tick is processed.
+  lastAccumulatedAt DateTime? @db.Timestamptz(3)
+
+  /// Set on pieces written by a job history amendment.
+  amendmentId String?              @db.Uuid
+  amendment   JobHistoryAmendment? @relation(fields: [amendmentId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([stationId])
+  @@index([stationId, endTime])
+  @@index([stationId, startTime])
+  @@index([jobId])
+  @@index([blockId])
+  @@index([siteId, businessDate])
+  @@index([shiftInstanceId])
+  @@index([amendmentId])
+}

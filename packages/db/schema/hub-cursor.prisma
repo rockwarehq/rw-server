@@ -1,0 +1,7 @@
+/// Where the rw-hub poll left off. One row: the hub knows tenants, not workspaces.
+model HubCursor {
+  id     String @id @default("singleton")
+  cursor String @default("0")
+
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+}

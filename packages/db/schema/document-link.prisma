@@ -1,0 +1,24 @@
+enum DocumentTargetType {
+  SITE
+  WORKCENTER
+  STATION
+  JOB
+  TOOL
+  PRODUCT
+  MATERIAL
+}
+
+model DocumentLink {
+  id String @id @default(uuid()) @db.Uuid
+
+  documentId String   @db.Uuid
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  targetType DocumentTargetType
+  targetId   String             @db.Uuid
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([documentId, targetType, targetId])
+  @@index([targetType, targetId])
+}

@@ -1,0 +1,47 @@
+enum AutomationRunStatus {
+  SUCCESS
+  FAILED
+  /// Event exceeded the framework's maxHops and was not evaluated; `error` says so.
+  DROPPED
+}
+
+/// One row per fw.fire() call
+model AutomationRun {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// AppEvent.type / .version / .id (UUID generated inside fire()).
+  eventType    String
+  eventVersion String
+  eventId      String @db.Uuid
+  /// AppEvent.payload as raised (post-zod validation, pre-dispatch).
+  payload      Json
+
+  /// AppEvent.partition — the site the event was raised for (null when the payload carried none).
+  siteId String? @db.Uuid
+
+  /// Chain tracing (AppEvent.correlationId / causationId / hop): the root event of the chain,
+  /// the event that directly caused this one, and how many automation hops deep it is.
+  correlationId String  @db.Uuid
+  causationId   String? @db.Uuid
+  hop           Int     @default(0)
+
+  /// Automations that matched conditions for this run, in dispatch order. Empty join when no
+  /// automations matched — still a valid run, not an error.
+  matches AutomationRunMatch[]
+
+  status AutomationRunStatus
+  /// Error message when status = FAILED (the throw that aborted dispatch).
+  error  String?
+
+  firedAt    DateTime  @default(now()) @db.Timestamptz(3)
+  /// When dispatch finished (success OR failure). Null only while in-flight.
+  finishedAt DateTime? @db.Timestamptz(3)
+
+  actionRuns AutomationActionRun[]
+
+  @@index([firedAt(sort: Desc)])
+  @@index([eventType])
+  @@index([status])
+  @@index([siteId, firedAt(sort: Desc)])
+  @@index([correlationId])
+}

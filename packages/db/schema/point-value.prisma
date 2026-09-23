@@ -1,0 +1,24 @@
+enum PointValueQuality {
+  GOOD
+  BAD
+  UNKNOWN
+}
+
+model PointValue {
+  id                 String            @id @db.Uuid
+  previousValueRaw   Json?
+  quality            PointValueQuality @default(UNKNOWN)
+  valueRaw           Json
+  previousValue      Float?
+  value              Float?
+  timestamp          DateTime          @db.Timestamptz(3)
+  gatewayTimestamp   DateTime          @db.Timestamptz(3)
+  processorTimestamp DateTime          @default(now()) @db.Timestamptz(3)
+
+  pointId String @db.Uuid
+
+  point Point @relation(fields: [pointId], references: [id], onDelete: Cascade)
+
+  @@index([pointId, timestamp])
+  @@index([timestamp])
+}

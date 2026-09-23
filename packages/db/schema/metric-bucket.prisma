@@ -1,3 +1,4 @@
+/// Used by MetricBucket and MetricBucketLog.
 enum BucketEntityType {
   STATION
   WORKCENTER
@@ -5,6 +6,7 @@ enum BucketEntityType {
   JOB
 }
 
+/// Used by MetricBucket and MetricBucketLog.
 enum BucketGranularity {
   MINUTE
   HOUR
@@ -151,97 +153,4 @@ model MetricBucket {
   @@unique([entityType, entityId, granularity, startTime])
   @@index([siteId, granularity, startTime])
   @@index([siteId, businessDate])
-}
-
-/// Historical (archived) metric buckets. Same schema as MetricBucket
-/// but without DB-generated columns — OEE ratios are snapshotted at
-/// archive time. Rows are moved here from MetricBucket when the
-/// business day rolls over, keeping the active table small.
-model MetricBucketLog {
-  id String @id @default(uuid()) @db.Uuid
-
-  siteId String @db.Uuid
-  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
-
-  entityType BucketEntityType
-  entityId   String           @db.Uuid
-  entityName String           @default("")
-
-  path String @default("")
-
-  granularity     BucketGranularity
-  granularityName String            @default("")
-  startTime       DateTime          @db.Timestamptz(3)
-  durationSeconds Int
-
-  shiftInstanceId String? @db.Uuid
-  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
-  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
-  isScheduled     Boolean @default(true)
-
-  businessDate  DateTime? @db.Date
-  businessShift String?
-
-  // ── KPIs: Counting ────────────────────────────────────────────
-  totalCycles    Int @default(0)
-  expectedCycles Int @default(0)
-  badCycles      Int @default(0)
-  totalItems     Int @default(0)
-  badItems       Int @default(0)
-  expectedItems  Int @default(0)
-
-  // ── KPIs: Duration (integer seconds) ──────────────────────────
-  runSeconds           Int @default(0)
-  downSeconds          Int @default(0)
-  plannedDownSeconds   Int @default(0)
-  unplannedDownSeconds Int @default(0)
-
-  // ── KPIs: Time (integer seconds) ──────────────────────────────
-  idealCycleSeconds Int @default(0)
-  totalCycleSeconds Int @default(0)
-
-  // ── KPIs: Elapsed (for in-progress OEE) ───────────────────────
-  elapsedExpectedCycles           Int @default(0)
-  elapsedExpectedItems            Int @default(0)
-  elapsedPlannedProductionSeconds Int @default(0)
-
-  // ── Display: current job's standard cycle ─────────────────────
-  currentStandardCycle Decimal? @db.Decimal(10, 2)
-
-  /// Job ID of the station's current job when this bucket was last updated.
-  currentJobId   String? @db.Uuid
-  /// Human-readable name of the current job.
-  currentJobName String?
-
-  // ── Computed columns (PostgreSQL generated columns) ────────────
-  // Same formulas as MetricBucket — auto-compute on every write.
-  // Application code must NOT write to these columns.
-
-  /// Good cycles = totalCycles - badCycles
-  goodCycles Int? @default(dbgenerated())
-  /// Good items = totalItems - badItems
-  goodItems  Int? @default(dbgenerated())
-
-  /// Planned production time = durationSeconds - plannedDownSeconds
-  plannedProductionSeconds Int? @default(dbgenerated())
-
-  /// Availability = runSeconds / elapsedPlannedProductionSeconds
-  availability Decimal? @default(dbgenerated()) @db.Decimal(10, 6)
-  /// Performance = idealCycleSeconds / runSeconds
-  performance  Decimal? @default(dbgenerated()) @db.Decimal(10, 6)
-  /// Quality = (totalItems - badItems) / totalItems
-  quality      Decimal? @default(dbgenerated()) @db.Decimal(10, 6)
-  /// OEE = (idealCycleSeconds * (totalItems - badItems)) / (elapsedPlannedProductionSeconds * totalItems)
-  oee          Decimal? @default(dbgenerated()) @db.Decimal(10, 6)
-
-  /// When this row was archived from MetricBucket
-  archivedAt DateTime @default(now()) @db.Timestamptz(3)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
-  @@unique([entityType, entityId, granularity, startTime])
-  @@index([siteId, granularity, startTime])
-  @@index([siteId, businessDate])
-  @@index([siteId, archivedAt])
 }

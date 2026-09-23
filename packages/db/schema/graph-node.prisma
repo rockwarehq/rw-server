@@ -1,0 +1,23 @@
+model GraphNode {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  siteId      String  @db.Uuid
+  typeRef     String?
+  typeContext Json    @default("{}")
+  facets      Json    @default("{}")
+  isDeleted   Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  properties GraphProperty[]
+  site       Site            @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, name])
+  @@index([siteId])
+  @@index([siteId, typeRef])
+  @@index([facets], type: Gin)
+  @@index([isDeleted])
+  // Livestore's 30s definition reconcile filters on updatedAt.
+  @@index([updatedAt])
+}

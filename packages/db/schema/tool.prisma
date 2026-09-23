@@ -1,0 +1,39 @@
+model Tool {
+  id               String  @id @default(uuid()) @db.Uuid
+  currentVersionId String? @unique @db.Uuid
+
+  pmCount   Int? @default(0)
+  lifeCount Int? @default(0)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id])
+
+  currentVersion ToolVersion?  @relation("ToolCurrent", fields: [currentVersionId], references: [id])
+  versions       ToolVersion[] @relation("ToolVersions")
+
+  // ARCHIVED (never used)
+  toolStatusId String?     @db.Uuid
+  toolStatus   ToolStatus? @relation(fields: [toolStatusId], references: [id], onDelete: SetNull)
+
+  // ARCHIVED (never used)
+  toolLocationId String?       @unique @db.Uuid
+  toolLocation   ToolLocation? @relation(fields: [toolLocationId], references: [id], onDelete: SetNull)
+
+  labels Label[]
+
+  toolCavities        ToolCavity[]
+  jobs                JobTool[]
+  jobProducts         JobProduct[]
+  calls               Call[]
+  modeLogs            StationModeLog[]
+  inventoryItems      InventoryItem[]
+  itemDispositionLogs ItemDispositionLog[]
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  @@index([toolStatusId])
+  @@index([toolLocationId])
+}

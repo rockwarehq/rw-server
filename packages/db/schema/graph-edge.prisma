@@ -1,0 +1,14 @@
+model GraphEdge {
+  id             String @id @default(uuid()) @db.Uuid
+  fromPropertyId String @db.Uuid
+  toPropertyId   String @db.Uuid
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  fromProperty GraphProperty @relation("FromProperty", fields: [fromPropertyId], references: [id], onDelete: Cascade)
+  toProperty   GraphProperty @relation("ToProperty", fields: [toPropertyId], references: [id], onDelete: Cascade)
+
+  @@unique([fromPropertyId, toPropertyId])
+  @@index([fromPropertyId])
+  @@index([toPropertyId])
+}

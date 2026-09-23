@@ -1,0 +1,86 @@
+model InventoryItem {
+  id    String @id @default(uuid()) @db.Uuid
+  attrs Json   @default("{}")
+
+  /// Quantity produced for this item. Defaults to 1 (discrete piece); cycle
+  /// events may supply a measured quantity (e.g. wire length per cycle).
+  quantity Decimal @default(1) @db.Decimal(18, 4)
+
+  /// Unit for `quantity`, copied from the station's quantity unit. Blank when
+  /// the station has none.
+  quantityUnit String @default("")
+
+  cycleId String @db.Uuid
+  cycle   Cycle  @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+
+  /// Set on items created by a job history amendment; null = produced as recorded.
+  amendmentId String?              @db.Uuid
+  amendment   JobHistoryAmendment? @relation(fields: [amendmentId], references: [id], onDelete: SetNull)
+
+  // ── Dimension snapshots (star pattern for BI), captured at record time ──
+  // Denormalized from the cycle so item-grain queries need no joins.
+  siteId String? @db.Uuid
+  site   Site?   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  stationId String?  @db.Uuid
+  station   Station? @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id], onDelete: SetNull)
+
+  jobId String? @db.Uuid
+  job   Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  /// Stable ids paired with the version snapshots below.
+  productId String?  @db.Uuid
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  toolId String? @db.Uuid
+  tool   Tool?   @relation(fields: [toolId], references: [id], onDelete: SetNull)
+
+  /// Shift the item was produced in (resolved at cycle end).
+  shiftInstanceId String?        @db.Uuid
+  shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+  /// Mirrors ShiftInstance.isScheduled at write time (ADR-0015): false = the
+  /// shift stamped here was unscheduled time. Re-stamped by shift amendments.
+  isScheduled     Boolean        @default(true)
+
+  /// Business date of that shift.
+  businessDate DateTime? @db.Date
+
+  // Snapshot: version IDs at point in time
+  jobProductVersionId String?            @db.Uuid
+  jobProductVersion   JobProductVersion? @relation(fields: [jobProductVersionId], references: [id])
+
+  productVersionId String         @db.Uuid
+  productVersion   ProductVersion @relation(fields: [productVersionId], references: [id])
+
+  toolVersionId String?      @db.Uuid
+  toolVersion   ToolVersion? @relation(fields: [toolVersionId], references: [id])
+
+  toolCavityVersionId String?            @db.Uuid
+  toolCavityVersion   ToolCavityVersion? @relation(fields: [toolCavityVersionId], references: [id])
+
+  productMaterialVersions ProductMaterialVersion[]
+
+  /// Production mode the station was in when the item was created.
+  modeId String?         @db.Uuid
+  mode   ProductionMode? @relation(fields: [modeId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([cycleId])
+  @@index([cycleId, deletedAt])
+  @@index([amendmentId])
+  @@index([jobProductVersionId])
+  @@index([productVersionId])
+  @@index([toolVersionId])
+  @@index([toolCavityVersionId])
+  // Star stamps: date slicing + FK-backing only (see Cycle) — no speculative
+  // per-dimension indexes on this hot insert path.
+  @@index([siteId, businessDate])
+  @@index([shiftInstanceId])
+  @@index([workcenterId])
+}

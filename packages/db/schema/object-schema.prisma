@@ -1,0 +1,38 @@
+enum ObjectSchemaSource {
+  RECORD
+  DOCUMENT
+}
+
+model ObjectSchema {
+  id              String             @id @default(uuid()) @db.Uuid
+  key             String
+  label           String
+  name            String
+  description     String?
+  source          ObjectSchemaSource @default(DOCUMENT)
+  meta            Json               @default("{}")
+  displayFieldKey String?
+  isSystem        Boolean            @default(false)
+  version         Int                @default(1)
+  isDeleted       Boolean            @default(false)
+
+  workspaceId String?    @db.Uuid
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  siteId      String?    @db.Uuid
+  site        Site?      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  fields             ObjectSchemaField[] @relation("SchemaFields")
+  referencedByFields ObjectSchemaField[] @relation("FieldRefSchema")
+  instances          ObjectInstance[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([siteId, key])
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@index([siteId])
+  @@index([source])
+  @@index([isSystem])
+  @@index([isDeleted])
+}

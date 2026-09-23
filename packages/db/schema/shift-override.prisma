@@ -1,0 +1,35 @@
+/// One-off change to the shifts of a specific business date, applied when
+/// instances are materialized: cancel a shift (holiday, scheduled down) or
+/// replace its window. Keyed by shift name so it survives pattern changes.
+///
+///   shiftName = null   → every shift on that date
+///   isScheduled        → null = as the definition says; false = not worked, the
+///                        window is kept as an unscheduled row (name unchanged);
+///                        true = worked (switches an unscheduled definition on)
+///   startTime/endTime  → replacement window (both or neither)
+model ShiftOverride {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  /// Null = site-level schedule.
+  workCenterId String?     @db.Uuid
+  workCenter   Workcenter? @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
+
+  businessDate DateTime @db.Date
+  shiftName    String?
+
+  startTime DateTime? @db.Timestamptz(3)
+  endTime   DateTime? @db.Timestamptz(3)
+
+  isScheduled Boolean?
+  /// Free text for the calendar (e.g. "Holiday", "Down for maintenance").
+  note        String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([siteId, businessDate])
+  @@index([workCenterId, businessDate])
+}

@@ -1,0 +1,47 @@
+/// Links a ShiftPattern to a Site and optional Workcenter, activating it.
+///
+/// Multiple assignments can exist for the same entity over time. When
+/// assignments overlap, the most recently created one wins.
+///
+/// Example: A 7-day rotation designed to start on Monday is assigned on
+/// Wednesday at the 2nd shift. `rotationStartDefinition` points to the
+/// ShiftDefinition for rotation day 3, sortOrder 2. On the first calendar
+/// day only shifts with sortOrder >= 2 are materialized. From day 2 onward
+/// all shifts materialize normally.
+model ShiftAssignment {
+  id String @id @default(uuid()) @db.Uuid
+
+  pattern   ShiftPattern @relation(fields: [patternId], references: [id])
+  patternId String       @db.Uuid
+
+  /// The calendar date when this assignment takes effect.
+  rotationStartDate DateTime @db.Timestamptz(3)
+
+  /// Optional end date. Null means the assignment is open-ended.
+  rotationEndDate DateTime? @db.Timestamptz(3)
+
+  /// Optional reference to the ShiftDefinition where this assignment's
+  /// rotation begins. Encodes both the rotation day (via dayOfRotation)
+  /// and the first shift to materialize on the start date (via sortOrder).
+  ///
+  /// When null, the assignment starts at rotation day 1 and materializes
+  /// all shifts from the first day onward.
+  rotationStartDefinitionId String?          @db.Uuid
+  rotationStartDefinition   ShiftDefinition? @relation(fields: [rotationStartDefinitionId], references: [id])
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  workCenterId String?     @db.Uuid
+  workCenter   Workcenter? @relation(fields: [workCenterId], references: [id])
+
+  instances  ShiftInstance[]
+  amendments ShiftAmendment[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([patternId])
+  @@index([siteId])
+  @@index([workCenterId])
+}

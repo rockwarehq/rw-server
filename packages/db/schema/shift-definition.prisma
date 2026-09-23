@@ -1,0 +1,60 @@
+/// A single shift within a rotation day. Multiple ShiftDefinitions
+/// per dayOfRotation form the complete schedule for that day.
+///
+/// Shifts are ordered by `sortOrder` within a rotation day. The
+/// `startDayOffset` field explicitly resolves midnight-crossing
+/// ambiguity: a shift with startDayOffset=1 starts on the calendar
+/// day after the rotation day's anchor date.
+///
+/// Example — 3 shifts on rotation day 1 (local times):
+///   sortOrder=1  startTime="08:30"  durationHrs=8.5   startDayOffset=0  → 08:30–17:00
+///   sortOrder=2  startTime="17:00"  durationHrs=7.75  startDayOffset=0  → 17:00–00:45+1
+///   sortOrder=3  startTime="00:45"  durationHrs=7.75  startDayOffset=1  → 00:45–08:30 (next calendar day)
+///
+/// Computing absolute start time:
+///   absoluteStart = rotationDayAnchorDate + startDayOffset days + startTime
+///   absoluteEnd   = absoluteStart + durationHrs
+model ShiftDefinition {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Which day in the rotation cycle this shift belongs to (1-based).
+  /// Different rotation days can have entirely different shift configurations.
+  dayOfRotation Int
+
+  /// Ordering within the rotation day (1-based). Determines the sequence
+  /// of shifts and drives UI display order.
+  sortOrder Int
+
+  /// How many calendar days after the rotation day's anchor date this
+  /// shift starts. 0 = same calendar day, 1 = next calendar day,
+  /// -1 = the evening before (e.g. a 23:00 shift that belongs to the next day).
+  /// Eliminates midnight-crossing ambiguity — no runtime inference needed.
+  startDayOffset Int @default(0)
+
+  /// Start time in "HH:mm" format, site LOCAL wall-clock time (e.g., "08:30",
+  /// "23:00"). Materialization converts it to UTC per day with the site
+  /// timezone, so shifts follow daylight saving (ADR-0015).
+  startTime String
+
+  /// Duration in fractional hours (e.g., 8.5 = 8 hours 30 minutes).
+  durationHrs Float
+
+  /// Human-readable name (e.g., "Shift 1", "Night Shift").
+  shiftName String
+
+  /// False = defined but not worked by default (a weekend shift kept on the
+  /// rotation so it can be switched on for one date with its name and window
+  /// already right). Its instances are unscheduled time.
+  isScheduled Boolean @default(true)
+
+  pattern   ShiftPattern @relation(fields: [patternId], references: [id], onDelete: Cascade)
+  patternId String       @db.Uuid
+
+  instances ShiftInstance[]
+
+  /// Assignments that use this definition as their rotation start point.
+  startAssignments ShiftAssignment[]
+
+  @@unique([patternId, dayOfRotation, sortOrder])
+  @@index([patternId, dayOfRotation])
+}
