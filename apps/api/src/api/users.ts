@@ -5,7 +5,7 @@ import { user } from "../services/account/index.js";
 import { validHttpOrigin } from "@rw/services/email/index";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
 import { sensitiveRateLimit } from "../plugins/ratelimit.js";
-import { ownerRequired } from "../plugins/require-owner.js";
+import { accountAdminRequired } from "../plugins/require-account-admin.js";
 
 const userSchema = {
   type: "object",
@@ -15,6 +15,7 @@ const userSchema = {
     firstName: { type: "string", nullable: true },
     lastName: { type: "string", nullable: true },
     status: { type: "string", enum: ["PENDING", "ACTIVE", "DISABLED"] },
+    isAccountAdmin: { type: "boolean" },
     lastLoginAt: { type: "string", format: "date-time", nullable: true },
     createdAt: { type: "string", format: "date-time" },
     updatedAt: { type: "string", format: "date-time" },
@@ -71,7 +72,7 @@ const inviteBodySchema = {
   properties: {
     email: { type: "string", format: "email" },
     // Bucket accesses for new invites. New invites need bucketAccesses or
-    // asOwner; resending an existing pending invite needs neither.
+    // asAccountAdmin; resending an existing pending invite needs neither.
     bucketAccesses: {
       type: "array",
       items: {
@@ -83,8 +84,8 @@ const inviteBodySchema = {
         required: ["bucketId", "level"],
       },
     },
-    // Invite as workspace owner — reserved; only an owner may do this.
-    asOwner: { type: "boolean" },
+    // Invite as an account admin — only an account admin may do this.
+    asAccountAdmin: { type: "boolean" },
     firstName: { type: "string" },
     lastName: { type: "string" },
   },
@@ -214,7 +215,7 @@ const getMeResponseSchema = {
     access: {
       type: "object",
       properties: {
-        workspaceRole: { type: "string", enum: ["OWNER", "MEMBER"] },
+        isAccountAdmin: { type: "boolean" },
         staff: { type: "string", enum: ["NONE", "READ", "FULL"] },
         // The member's buckets, hook and cascade entries included (`via`
         // says how each entry arose) — the whole access story in one list.
@@ -492,14 +493,14 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       const me = asUser(request.current);
       if (!me) return reply.status(401).send({ error: "Unauthorized" });
 
-      const { email, bucketAccesses, asOwner, firstName, lastName } = request.body;
+      const { email, bucketAccesses, asAccountAdmin, firstName, lastName } = request.body;
       const result = await user.createInvite({
         email,
         inviterId: me.user.id,
         actor: me.access,
         workspaceId: me.workspaceId,
         bucketAccesses,
-        asOwner,
+        asAccountAdmin,
         firstName,
         lastName,
         // Safe here because this route is authenticated: the origin comes
@@ -707,7 +708,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "PUT",
     url: "/:id",
-    preHandler: [fastify.verifyAccessToken, ownerRequired()],
+    preHandler: [fastify.verifyAccessToken, accountAdminRequired()],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -732,7 +733,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/disable",
-    preHandler: [fastify.verifyAccessToken, ownerRequired()],
+    preHandler: [fastify.verifyAccessToken, accountAdminRequired()],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -773,7 +774,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/enable",
-    preHandler: [fastify.verifyAccessToken, ownerRequired()],
+    preHandler: [fastify.verifyAccessToken, accountAdminRequired()],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -808,7 +809,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/unlock",
-    preHandler: [fastify.verifyAccessToken, ownerRequired()],
+    preHandler: [fastify.verifyAccessToken, accountAdminRequired()],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -848,7 +849,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/password",
-    preHandler: [fastify.verifyAccessToken, ownerRequired()],
+    preHandler: [fastify.verifyAccessToken, accountAdminRequired()],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -893,8 +894,8 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
           return reply.status(404).send({ error: "User not found" });
         case "SYSTEM_USER":
           return reply.status(403).send({ error: "Cannot set a system user's password" });
-        case "OWNER_PERMISSION_REQUIRED":
-          return reply.status(403).send({ error: "Only a workspace owner can reset an owner's password" });
+        case "ACCOUNT_ADMIN_REQUIRED":
+          return reply.status(403).send({ error: "Only an account admin can reset an account admin's password" });
         case "SELF_RESET":
           return reply.status(400).send({ error: "Use the change password endpoint for your own account" });
         case "PERMANENT_REQUIRES_PASSWORD":

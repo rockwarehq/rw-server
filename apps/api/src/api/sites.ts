@@ -203,7 +203,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      request.access.requireOwner();
+      request.access.requireAccountAdmin();
 
       const result = await site.create({ ...request.body, workspaceId: currentUser(request).workspaceId });
       if ("error" in result && typeof result.error === "string") {
@@ -334,7 +334,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       // Sites are account-level: only the owner adds or removes them.
-      request.access.requireOwner();
+      request.access.requireAccountAdmin();
 
       const result = await site.remove(request.params.id);
       if ("error" in result) {

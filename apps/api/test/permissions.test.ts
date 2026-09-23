@@ -17,17 +17,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("access enforcement (Tier 2)", (
     server = buildServer();
     await server.ready();
 
-    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { slug: "default" } });
     const passwordHash = await hashPassword(LIMITED_PASSWORD);
-    const limited = await prisma.user.upsert({
+    await prisma.user.upsert({
       where: { email: LIMITED_EMAIL },
       update: {},
       create: { email: LIMITED_EMAIL, passwordHash, firstName: "Limited", status: "ACTIVE" },
-    });
-    await prisma.workspaceMembership.upsert({
-      where: { userId_workspaceId: { userId: limited.id, workspaceId: workspace.id } },
-      update: {},
-      create: { userId: limited.id, workspaceId: workspace.id },
     });
   });
 
@@ -75,7 +69,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access data (Tier 2)", (
   let users: Record<keyof typeof EMAILS, { userId: string }>;
 
   const accessFor = async (userId: string) => {
-    const person = await loadPerson(userId, workspaceId);
+    const person = await loadPerson(userId);
     if (!person) throw new Error("no person");
     return new UserAccess(person, siteId);
   };
@@ -86,7 +80,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access data (Tier 2)", (
     );
 
   beforeAll(async () => {
-    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { slug: "default" } });
+    const workspace = await prisma.workspace.findFirstOrThrow();
     workspaceId = workspace.id;
     const site = await prisma.site.create({ data: { workspaceId, name: "Bucket Data Site" }, select: { id: true } });
     siteId = site.id;
@@ -104,16 +98,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access data (Tier 2)", (
     stationInWc1 = s1.id;
 
     users = {
-      member: await makeUser(workspaceId, EMAILS.member, "bucket-data-pass-1", {
+      member: await makeUser(EMAILS.member, "bucket-data-pass-1", {
         plants: [{ siteId, level: "VIEW" }],
       }),
-      crew: await makeUser(workspaceId, EMAILS.crew, "bucket-data-pass-1", {
+      crew: await makeUser(EMAILS.crew, "bucket-data-pass-1", {
         workcenters: [{ workcenterId: wc1, level: "MANAGE" }],
       }),
-      manager: await makeUser(workspaceId, EMAILS.manager, "bucket-data-pass-1", {
+      manager: await makeUser(EMAILS.manager, "bucket-data-pass-1", {
         plants: [{ siteId, level: "MANAGE" }],
       }),
-      admin: await makeUser(workspaceId, EMAILS.admin, "bucket-data-pass-1", {
+      admin: await makeUser(EMAILS.admin, "bucket-data-pass-1", {
         plants: [{ siteId, level: "ADMIN" }],
       }),
     };

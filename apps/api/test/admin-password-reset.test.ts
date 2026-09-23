@@ -49,7 +49,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("admin password reset (Tier 2)",
     server = buildServer();
     await server.ready();
 
-    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { slug: "default" } });
+    const workspace = await prisma.workspace.findFirstOrThrow();
     const site = await prisma.site.findFirstOrThrow({
       where: { workspaceId: workspace.id, name: "Rockware" },
       select: { id: true },
@@ -71,14 +71,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("admin password reset (Tier 2)",
 
     // Site plant ADMIN — the old plant:admin. Workspace-scope routes still
     // exclude site admins, same as before.
-    await makeUser(workspace.id, PLANT_ADMIN_EMAIL, PLANT_ADMIN_PASSWORD, {
+    await makeUser(PLANT_ADMIN_EMAIL, PLANT_ADMIN_PASSWORD, {
       plants: [{ siteId: site.id, level: "ADMIN" }],
     });
 
-    const targetIds = await makeUser(workspace.id, TARGET_EMAIL, TARGET_PASSWORD);
+    const targetIds = await makeUser(TARGET_EMAIL, TARGET_PASSWORD);
     target = { id: targetIds.userId };
 
-    const ownerIds = await makeUser(workspace.id, SECOND_OWNER_EMAIL, "SecondOwner123!", { owner: true });
+    const ownerIds = await makeUser(SECOND_OWNER_EMAIL, "SecondOwner123!", { accountAdmin: true });
     secondOwner = { id: ownerIds.userId };
 
     systemUser = await prisma.user.create({

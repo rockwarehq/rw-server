@@ -16,7 +16,7 @@
 //   - Any access at a site lets you read the plant (plant VIEW).
 //   - Plant ADMIN means MANAGE on every workcenter at that site. A plant
 //     member only reaches the workcenters they were given.
-// Owners and Rockware staff skip the buckets (the bypass below).
+// Account admins and Rockware staff skip the buckets (the bypass below).
 //
 // Displays and API tokens stay simple: they are bound to one site. A
 // display may do anything at its site that its procedures allow; an API
@@ -57,10 +57,10 @@ const deny = (code: AccessDeniedCode, message: string) => new AccessDenied(code,
 
 // ── The person ───────────────────────────────────────────────────────────
 
-/** A user's standing in one workspace: the rows they were given, nothing derived. */
+/** A user's standing in the account: the rows they were given, nothing derived. */
 export interface Person {
-  /** Workspace owner: skips buckets, holds ownership-only actions. */
-  owner: boolean;
+  /** Account admin: skips buckets, holds the account-only actions. */
+  accountAdmin: boolean;
   /** Rockware staff: SUPPORT reads everywhere, ENGINEER manages everywhere. */
   staff: "SUPPORT" | "ENGINEER" | null;
   /** siteId → level on that site's PLANT bucket. */
@@ -70,44 +70,33 @@ export interface Person {
 }
 
 export function emptyPerson(overrides: Partial<Person> = {}): Person {
-  return { owner: false, staff: null, plants: new Map(), workcenters: new Map(), ...overrides };
+  return { accountAdmin: false, staff: null, plants: new Map(), workcenters: new Map(), ...overrides };
 }
 
-/** Prisma select for the membership rows a Person is built from. */
-export function personSelect(workspaceId: string) {
-  return {
-    systemRole: true,
-    memberships: {
-      where: { workspaceId },
-      select: {
-        workspaceRole: true,
-        bucketAccesses: {
-          select: { level: true, bucket: { select: { kind: true, siteId: true, workcenterId: true } } },
-        },
-      },
-    },
-  } as const;
-}
+/** Prisma select for the user fields a Person is built from. */
+export const personSelect = {
+  systemRole: true,
+  isAccountAdmin: true,
+  bucketAccesses: {
+    select: { level: true, bucket: { select: { kind: true, siteId: true, workcenterId: true } } },
+  },
+} as const;
 
 type PersonRows = {
   systemRole: "SUPPORT" | "ENGINEER" | null;
-  memberships: Array<{
-    workspaceRole: "OWNER" | "MEMBER";
-    bucketAccesses: Array<{
-      level: Level;
-      bucket: { kind: "PLANT" | "WORKCENTER"; siteId: string | null; workcenterId: string | null };
-    }>;
+  isAccountAdmin: boolean;
+  bucketAccesses: Array<{
+    level: Level;
+    bucket: { kind: "PLANT" | "WORKCENTER"; siteId: string | null; workcenterId: string | null };
   }>;
 };
 
-/** Turn a user row loaded with {@link personSelect} into a Person. Null without a membership (staff need none). */
-export function toPerson(user: PersonRows): Person | null {
+/** Turn a user row loaded with {@link personSelect} into a Person. */
+export function toPerson(user: PersonRows): Person {
   if (user.systemRole) return emptyPerson({ staff: user.systemRole });
-  const membership = user.memberships[0];
-  if (!membership) return null;
-  if (membership.workspaceRole === "OWNER") return emptyPerson({ owner: true });
+  if (user.isAccountAdmin) return emptyPerson({ accountAdmin: true });
   return personFromRows(
-    membership.bucketAccesses.map((a) => ({
+    user.bucketAccesses.map((a) => ({
       level: a.level,
       kind: a.bucket.kind,
       siteId: a.bucket.siteId,
@@ -116,12 +105,9 @@ export function toPerson(user: PersonRows): Person | null {
   );
 }
 
-/**
- * Load a user's person in a workspace. Null when the user is missing or has
- * no membership (staff need none). One query.
- */
-export async function loadPerson(userId: string, workspaceId: string): Promise<Person | null> {
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: personSelect(workspaceId) });
+/** Load a user's person. Null when the user is missing. One query. */
+export async function loadPerson(userId: string): Promise<Person | null> {
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: personSelect });
   return user ? toPerson(user) : null;
 }
 
@@ -165,17 +151,17 @@ export function workcenterLevel(person: Person, workcenterId: string, siteId: st
   return higher(own, cascade);
 }
 
-/** Sites where the person holds anything, or "all" for owners and staff. */
+/** Sites where the person holds anything, or "all" for account admins and staff. */
 export function visibleSites(person: Person): "all" | string[] {
-  if (person.owner || person.staff) return "all";
+  if (person.accountAdmin || person.staff) return "all";
   const ids = new Set(person.plants.keys());
   for (const wc of person.workcenters.values()) ids.add(wc.siteId);
   return [...ids];
 }
 
-/** The one place owners and staff skip the buckets. */
+/** The one place account admins and staff skip the buckets. */
 function bypasses(person: Person, level: Level): boolean {
-  return person.owner || person.staff === "ENGINEER" || (person.staff === "SUPPORT" && level === "VIEW");
+  return person.accountAdmin || person.staff === "ENGINEER" || (person.staff === "SUPPORT" && level === "VIEW");
 }
 
 // ── The Access interface ─────────────────────────────────────────────────
@@ -213,8 +199,8 @@ export interface Access {
   list(level: Level, siteId?: string, kind?: "PLANT" | "WORKCENTER"): ListScope;
   /** Throw unless the caller holds `level` at some plant (site-less rows, directories). */
   requireSomewhere(level: Level): void;
-  /** Throw unless the caller owns the workspace (ENGINEER staff too, unless `allowStaff: false`). */
-  requireOwner(options?: { allowStaff?: boolean }): void;
+  /** Throw unless the caller is an account admin (ENGINEER staff too, unless `allowStaff: false`). */
+  requireAccountAdmin(options?: { allowStaff?: boolean }): void;
   /** Sites the caller can see: "all" or a list. */
   sites(): "all" | string[];
 }
@@ -300,10 +286,10 @@ export class UserAccess implements Access {
     return [...this.person.plants.values()].some((held) => levelAtLeast(held, level));
   }
 
-  requireOwner(options: { allowStaff?: boolean } = {}): void {
+  requireAccountAdmin(options: { allowStaff?: boolean } = {}): void {
     const allowStaff = options.allowStaff ?? true;
-    if (this.person.owner || (allowStaff && this.person.staff === "ENGINEER")) return;
-    throw deny("FORBIDDEN", "Reserved for the workspace owner");
+    if (this.person.accountAdmin || (allowStaff && this.person.staff === "ENGINEER")) return;
+    throw deny("FORBIDDEN", "Reserved for account admins");
   }
 
   sites(): "all" | string[] {
@@ -358,7 +344,7 @@ export class DeviceAccess implements Access {
     throw deny("FORBIDDEN", "This action requires a user account");
   }
 
-  requireOwner(): void {
+  requireAccountAdmin(): void {
     throw deny("FORBIDDEN", "Workspace-level actions require a user account");
   }
 
@@ -384,7 +370,7 @@ export interface AccessEntry {
 
 /**
  * Every bucket a person reaches, labelled with how. For screens only
- * (/users/me, "my buckets"); checks never read this. Owners and staff
+ * (/users/me, "my buckets"); checks never read this. Account admins and staff
  * reach everything, so they get an empty list.
  */
 export async function describeAccess(person: Person): Promise<AccessEntry[]> {
@@ -431,7 +417,7 @@ export const noAccess: Access = {
   requireSomewhere: () => {
     throw deny("UNAUTHENTICATED", "Authentication required");
   },
-  requireOwner: () => {
+  requireAccountAdmin: () => {
     throw deny("UNAUTHENTICATED", "Authentication required");
   },
   sites: () => [],

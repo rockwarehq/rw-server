@@ -34,7 +34,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("crew floor lists (Tier 2)", () 
     stations.mine = await make("cl-mine", mine.id);
     stations.other = await make("cl-other", other.id);
 
-    await makeUser(workspaceId, EMAIL, PASSWORD, { workcenters: [{ workcenterId: mine.id, level: "VIEW" }] });
+    await makeUser(EMAIL, PASSWORD, { workcenters: [{ workcenterId: mine.id, level: "VIEW" }] });
     token = (await loginAs(server, EMAIL, PASSWORD)).accessToken;
   });
 

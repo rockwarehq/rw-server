@@ -34,7 +34,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
   let stationA: { id: string };
   let stationB: { id: string };
   let downEntryB: { id: string };
-  let memberMembershipId: string;
+  let memberUserId: string;
   let faToken: string;
   let readerToken: string;
   let memberToken: string;
@@ -94,14 +94,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
       select: { id: true },
     });
 
-    await makeUser(workspace.id, FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
-    await makeUser(workspace.id, READER_EMAIL, PASSWORD, { workcenters: [{ workcenterId: wcA.id, level: "VIEW" }] });
-    const member = await makeUser(workspace.id, MEMBER_EMAIL, PASSWORD, {
+    await makeUser(FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
+    await makeUser(READER_EMAIL, PASSWORD, { workcenters: [{ workcenterId: wcA.id, level: "VIEW" }] });
+    const member = await makeUser(MEMBER_EMAIL, PASSWORD, {
       plants: [{ siteId: siteA.id, level: "VIEW" }],
     });
-    memberMembershipId = member.membershipId;
-    await makeUser(workspace.id, ADMIN_EMAIL, PASSWORD, { owner: true });
-    await makeUser(workspace.id, NOROLE_EMAIL, PASSWORD);
+    memberUserId = member.userId;
+    await makeUser(ADMIN_EMAIL, PASSWORD, { accountAdmin: true });
+    await makeUser(NOROLE_EMAIL, PASSWORD);
 
     // One login per user for the whole suite — the sensitive-endpoint rate
     // limiter allows 5/min/IP and every inject comes from 127.0.0.1. Five
@@ -237,7 +237,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
       // Setting up stations is shop-floor setup (plant ADMIN). The bucket
       // snapshot is resolved per request, so upgrading the member's crew
       // access takes effect without a new login.
-      await setWorkcenterAccess(memberMembershipId, wcA.id, "MANAGE");
+      await setWorkcenterAccess(memberUserId, wcA.id, "MANAGE");
       try {
         const res = await rpcCall(
           server,
@@ -248,7 +248,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
         expect(res.statusCode).toBe(403);
       } finally {
         await prisma.bucketAccess.deleteMany({
-          where: { membershipId: memberMembershipId, bucket: { workcenterId: wcA.id } },
+          where: { userId: memberUserId, bucket: { workcenterId: wcA.id } },
         });
       }
     });

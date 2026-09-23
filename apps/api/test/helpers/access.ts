@@ -2,7 +2,7 @@ import prisma from "@rw/db";
 import { hashPassword } from "@rw/auth/password";
 
 // Bucket-era test fixtures: create users with plant/workcenter accesses.
-// Replaces the role-assignment helpers from the permission era.
+// The account is the one workspace; users carry no membership.
 
 export type Level = "VIEW" | "MANAGE" | "ADMIN";
 
@@ -49,21 +49,21 @@ export async function ensureWorkcenterBucket(
   return bucket.id;
 }
 
-export async function setPlantAccess(membershipId: string, siteId: string, level: Level): Promise<void> {
+export async function setPlantAccess(userId: string, siteId: string, level: Level): Promise<void> {
   const bucketId = await plantBucketId(siteId);
   await prisma.bucketAccess.upsert({
-    where: { bucketId_membershipId: { bucketId, membershipId } },
+    where: { bucketId_userId: { bucketId, userId } },
     update: { level },
-    create: { bucketId, membershipId, level },
+    create: { bucketId, userId, level },
   });
 }
 
-export async function setWorkcenterAccess(membershipId: string, workcenterId: string, level: Level): Promise<void> {
+export async function setWorkcenterAccess(userId: string, workcenterId: string, level: Level): Promise<void> {
   const bucketId = await workcenterBucketId(workcenterId);
   await prisma.bucketAccess.upsert({
-    where: { bucketId_membershipId: { bucketId, membershipId } },
+    where: { bucketId_userId: { bucketId, userId } },
     update: { level },
-    create: { bucketId, membershipId, level },
+    create: { bucketId, userId, level },
   });
 }
 
@@ -72,34 +72,24 @@ export interface AccessSpec {
   plants?: Array<{ siteId: string; level: Level }>;
   /** Workcenter accesses: workcenterId → level (VIEW | MANAGE). */
   workcenters?: Array<{ workcenterId: string; level: Level }>;
-  owner?: boolean;
+  accountAdmin?: boolean;
 }
 
-/** Upsert a user + membership + accesses in one call. Returns ids. */
-export async function makeUser(
-  workspaceId: string,
-  email: string,
-  password: string,
-  access: AccessSpec = {},
-): Promise<{ userId: string; membershipId: string }> {
+/** Upsert an active user with their accesses in one call. Returns the id. */
+export async function makeUser(email: string, password: string, access: AccessSpec = {}): Promise<{ userId: string }> {
   const passwordHash = await hashPassword(password);
+  const accountAdmin = access.accountAdmin === true;
   const user = await prisma.user.upsert({
     where: { email },
-    update: { passwordHash, status: "ACTIVE" },
-    create: { email, passwordHash, firstName: "Test", status: "ACTIVE" },
-    select: { id: true },
-  });
-  const membership = await prisma.workspaceMembership.upsert({
-    where: { userId_workspaceId: { userId: user.id, workspaceId } },
-    update: { workspaceRole: access.owner ? "OWNER" : "MEMBER" },
-    create: { userId: user.id, workspaceId, workspaceRole: access.owner ? "OWNER" : "MEMBER" },
+    update: { passwordHash, status: "ACTIVE", isAccountAdmin: accountAdmin },
+    create: { email, passwordHash, firstName: "Test", status: "ACTIVE", isAccountAdmin: accountAdmin },
     select: { id: true },
   });
   for (const p of access.plants ?? []) {
-    await setPlantAccess(membership.id, p.siteId, p.level);
+    await setPlantAccess(user.id, p.siteId, p.level);
   }
   for (const w of access.workcenters ?? []) {
-    await setWorkcenterAccess(membership.id, w.workcenterId, w.level);
+    await setWorkcenterAccess(user.id, w.workcenterId, w.level);
   }
-  return { userId: user.id, membershipId: membership.id };
+  return { userId: user.id };
 }

@@ -61,9 +61,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("employee domain authorization (
     // Bucket-era fixtures. Employee CRUD actors need plant ADMIN (the
     // scoped user was "Plant Admin" at site A); the manager holds plant
     // MANAGE to prove the people shelf is out of a manager's reach.
-    await makeUser(workspaceId, SCOPED_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
-    await makeUser(workspaceId, MANAGER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "MANAGE" }] });
-    await makeUser(workspaceId, NOROLE_EMAIL, PASSWORD);
+    await makeUser(SCOPED_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
+    await makeUser(MANAGER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "MANAGE" }] });
+    await makeUser(NOROLE_EMAIL, PASSWORD);
 
     scopedToken = (await loginAs(server, SCOPED_EMAIL, PASSWORD)).accessToken;
     managerToken = (await loginAs(server, MANAGER_EMAIL, PASSWORD)).accessToken;

@@ -15,7 +15,7 @@ export const list = userRequired.handler(async ({ context }) => {
   const person = context.access.person;
   const entries = await describeAccess(person);
   return {
-    owner: person.owner,
+    isAccountAdmin: person.accountAdmin,
     staff: staffLabel(person),
     buckets: entries.map(({ bucketId, ...entry }) => ({ id: bucketId, ...entry })),
   };
@@ -36,12 +36,10 @@ export const members = userRequired.input(membersInputSchema).handler(async ({ i
     where: { bucketId: input.bucketId },
     select: {
       level: true,
-      membership: {
-        select: { user: { select: { id: true, email: true, firstName: true, lastName: true } } },
-      },
+      user: { select: { id: true, email: true, firstName: true, lastName: true } },
     },
   });
-  return { members: accesses.map((a) => ({ level: a.level, user: a.membership.user })) };
+  return { members: accesses.map((a) => ({ level: a.level, user: a.user })) };
 });
 
 const setAccessInputSchema = z.object({
@@ -53,7 +51,6 @@ const setAccessInputSchema = z.object({
 /** Grant or change one member's access to one bucket. */
 export const setAccess = userRequired.input(setAccessInputSchema).handler(async ({ input, context }) => {
   const result = await workspaceService.updateAccess({
-    workspaceId: context.current.workspaceId,
     actor: context.access,
     targetUserId: input.userId,
     set: [{ bucketId: input.bucketId, level: input.level }],
@@ -74,7 +71,6 @@ const removeAccessInputSchema = z.object({
 /** Remove one member's access to one bucket. */
 export const removeAccess = userRequired.input(removeAccessInputSchema).handler(async ({ input, context }) => {
   const result = await workspaceService.updateAccess({
-    workspaceId: context.current.workspaceId,
     actor: context.access,
     targetUserId: input.userId,
     remove: [input.bucketId],

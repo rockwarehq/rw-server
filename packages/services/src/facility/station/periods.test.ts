@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, test } from "vitest";
-import prisma from "@rw/db";
+import prisma, { ensureAccountWorkspace } from "@rw/db";
 import { amendJobHistory } from "../../history/amend-job.js";
 import { splitOpenPeriodsForAllStations } from "./periods.js";
 import { assignDowntimeReason, transitionToDown } from "./state.js";
@@ -23,7 +23,7 @@ describe.skipIf(!process.env.DATABASE_URL)("shift period splits", () => {
 
   beforeAll(async () => {
     const suffix = randomUUID();
-    const workspace = await prisma.workspace.create({ data: { name: `Split ${suffix}`, slug: `split-${suffix}` } });
+    const workspace = await ensureAccountWorkspace({ name: "Test Account", slug: "test-account" });
     siteId = (await prisma.site.create({ data: { name: `Split Site ${suffix}`, workspaceId: workspace.id } })).id;
     const pattern = await prisma.shiftPattern.create({ data: { siteId, name: "P" } });
     const definition = await prisma.shiftDefinition.create({

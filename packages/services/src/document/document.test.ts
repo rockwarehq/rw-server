@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
-import prisma from "@rw/db";
+import prisma, { ensureAccountWorkspace } from "@rw/db";
 import * as documents from "./index.js";
 
 const storageMock = vi.hoisted(() => ({
@@ -27,12 +27,7 @@ describe("document service", () => {
     databaseInitialized = true;
 
     const suffix = randomUUID();
-    const workspace = await prisma.workspace.create({
-      data: {
-        name: `Document Test ${suffix}`,
-        slug: `document-test-${suffix}`,
-      },
-    });
+    const workspace = await ensureAccountWorkspace({ name: "Test Account", slug: "test-account" });
     const site = await prisma.site.create({
       data: {
         name: `Document Test Site ${suffix}`,
@@ -51,8 +46,9 @@ describe("document service", () => {
   afterAll(async () => {
     if (!databaseInitialized) return;
 
-    if (workspaceId) {
-      await prisma.workspace.deleteMany({ where: { id: workspaceId } });
+    // The account's workspace is shared; clean up this test's site only.
+    if (siteId) {
+      await prisma.site.deleteMany({ where: { id: siteId } });
     }
     await prisma.$disconnect();
   });

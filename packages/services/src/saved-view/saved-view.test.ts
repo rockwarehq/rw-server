@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, test } from "vitest";
-import prisma from "@rw/db";
+import prisma, { ensureAccountWorkspace } from "@rw/db";
 import * as views from "./crud.js";
 
 // Integration tests (document.test.ts conventions): require DATABASE_URL and
@@ -18,9 +18,7 @@ describe.skipIf(!process.env.DATABASE_URL)("savedView service", () => {
 
   beforeAll(async () => {
     const suffix = randomUUID();
-    const workspace = await prisma.workspace.create({
-      data: { name: `SavedView Test ${suffix}`, slug: `saved-view-${suffix}` },
-    });
+    const workspace = await ensureAccountWorkspace({ name: "Test Account", slug: "test-account" });
     workspaceId = workspace.id;
 
     const site = await prisma.site.create({

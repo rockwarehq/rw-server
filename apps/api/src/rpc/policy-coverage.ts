@@ -1,10 +1,10 @@
 // Authorization coverage contract, enforced by test/policy-coverage.test.ts:
 // every oRPC procedure must ask `context.access` (require / list / can /
-// requireSomewhere / requireOwner / sites) INLINE in its handler body (the
+// requireSomewhere / requireAccountAdmin / sites) INLINE in its handler body (the
 // gate scans handler source; workspaceSiteScope and entity's tokenSite are
 // the only reviewed wrappers), unless its dotted router path is listed here
 // with a reason. Every REST route must carry verifyAccessToken plus either
-// ownerRequired or an access check, unless listed in PUBLIC_REST_ROUTES.
+// accountAdminRequired or an access check, unless listed in PUBLIC_REST_ROUTES.
 //
 // Adding an entry here is a code-review decision, not a default
 // (ADR-0002 amendment, 2026-08-18).
@@ -83,8 +83,7 @@ export const SELF_SERVICE_REST_ROUTES: ReadonlySet<string> = new Set(
     "PUT /users/me/password",
     "POST /users/me/avatar",
     "DELETE /users/me/avatar",
-    // token minting — membership/site access verified by the auth service
-    "POST /auth/switch-workspace",
+    // token minting — site access verified by the auth service
     "POST /auth/switch-site",
     // self-scoped listing (only the caller's own workspaces)
     "GET /workspaces",

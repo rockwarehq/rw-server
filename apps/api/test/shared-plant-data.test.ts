@@ -77,9 +77,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("shared plant data (Tier 2)", ()
       ).id;
     }
 
-    await makeUser(workspaceId, EMAIL, PASSWORD, { workcenters: [{ workcenterId: wcA, level: "MANAGE" }] });
+    await makeUser(EMAIL, PASSWORD, { workcenters: [{ workcenterId: wcA, level: "MANAGE" }] });
     token = (await loginAs(server, EMAIL, PASSWORD)).accessToken;
-    await makeUser(workspaceId, MEMBER_EMAIL, PASSWORD, { plants: [{ siteId, level: "MANAGE" }] });
+    await makeUser(MEMBER_EMAIL, PASSWORD, { plants: [{ siteId, level: "MANAGE" }] });
     memberToken = (await loginAs(server, MEMBER_EMAIL, PASSWORD)).accessToken;
   }, 30_000);
 

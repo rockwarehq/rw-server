@@ -34,7 +34,7 @@ export interface OpenCallInput {
   message?: string;
   /** Pre-resolved employee (display flows where the UI knows the operator). */
   openedByEmployeeId?: string;
-  /** USER principal — resolved to an employee via WorkspaceMembership. */
+  /** USER principal — resolved to an employee via the user's employee link. */
   openedByUserId?: string;
 }
 

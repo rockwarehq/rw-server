@@ -47,8 +47,8 @@ await context.access.require("MANAGE", { site: input.siteId });
 const scope = context.access.list("VIEW", input.siteId, "WORKCENTER");
 return station.list({ ...input, ...scope });
 
-// owner-only, "at some plant", and plain yes/no
-context.access.requireOwner();
+// account-admin-only, "at some plant", and plain yes/no
+context.access.requireAccountAdmin();
 context.access.requireSomewhere("ADMIN");
 if (context.access.can("MANAGE", { site: siteId })) { /* … */ }
 ```
@@ -64,7 +64,7 @@ Rows live in containers. Your access is the containers you are in.
 
 | Container | Level | Meaning |
 | --- | --- | --- |
-| **Account** | owner | sites, the workspace, ownership |
+| **Account** | account admin (`User.isAccountAdmin`) | sites, the workspace, people, making account admins |
 | **Plant** (one per site) | VIEW | viewer: read the plant's shared things (orders, catalogs, schedules, dashboards, equipment lists) |
 | | MANAGE ("member") | also change them: jobs, orders, products, tools, materials, customers, labels, dashboards, documents |
 | | ADMIN | also set up the shop floor (workcenters, stations, reason codes, call definitions, modes, dispositions, andon rules, shift patterns, devices, integrations, graph, automations, site settings), people and access. Reaches every workcenter. |
@@ -81,7 +81,7 @@ Typical people: plant manager and engineer = plant ADMIN; planner = plant MANAGE
 
 Two kinds of people skip the buckets, like Basecamp's account roles:
 
-- **Workspace owners** (`WorkspaceMembership.workspaceRole = OWNER`).
+- **Account admins** (`User.isAccountAdmin`). The account is the one workspace this deployment serves.
 - **Rockware staff.** SUPPORT reads everywhere; ENGINEER manages everywhere.
 
 **Displays and API tokens** stay outside buckets. They are bound to one site. A display may do anything at its site that its procedures allow. An API token may only read.

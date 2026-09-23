@@ -56,12 +56,12 @@ export const create = userRequired.input(createInputSchema).handler(async ({ inp
 });
 
 export const list = userRequired.handler(async ({ context }) => {
-  context.access.requireOwner();
+  context.access.requireAccountAdmin();
   return listApiTokens(context.current.workspaceId);
 });
 
 export const revoke = userRequired.input(revokeInputSchema).handler(async ({ input, context }) => {
-  context.access.requireOwner();
+  context.access.requireAccountAdmin();
   const { workspaceId } = context.current;
 
   const result = await revokeApiToken(input.id, workspaceId);

@@ -53,7 +53,6 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("system-role user authentication
   afterAll(async () => {
     await prisma.user.deleteMany({ where: { email: { in: [ENGINEER_EMAIL, SUPPORT_EMAIL] } } });
     await prisma.station.deleteMany({ where: { id: stationA.id } });
-    await prisma.workspace.deleteMany({ where: { name: "sys-authz-ws-never" } });
     await server.close();
   });
 
@@ -67,12 +66,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("system-role user authentication
     const body = me.json() as {
       workspace: { id: string } | null;
       sites: unknown[];
-      access: { workspaceRole: string; staff: string; buckets: unknown[] };
+      access: { isAccountAdmin: boolean; staff: string; buckets: unknown[] };
     };
     expect(body.workspace).not.toBeNull();
     expect(body.sites.length).toBeGreaterThan(0);
     expect(body.access.staff).toBe("FULL");
-    expect(body.access.workspaceRole).toBe("MEMBER");
+    expect(body.access.isAccountAdmin).toBe(false);
     expect(body.access.buckets).toEqual([]);
   });
 
@@ -106,15 +105,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("system-role user authentication
     );
     expect(supportCreate.statusCode).toBe(403);
 
-    // Ownership-only actions (workspace create/delete, ownership transfer)
-    // reject even ENGINEER.
+    // A second workspace can't exist at all: the route is gone.
     const createWorkspace = await server.inject({
       method: "POST",
       url: "/workspaces",
       headers: { authorization: `Bearer ${engineerToken}` },
       payload: { name: "sys-authz-ws-never" },
     });
-    expect(createWorkspace.statusCode).toBe(403);
+    expect(createWorkspace.statusCode).toBe(404);
   });
 
   it("system users are hidden from the customer roster", async () => {
@@ -134,13 +132,15 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("system-role user authentication
     expect(emails).not.toContain(SUPPORT_EMAIL);
   });
 
-  it("system users hold no memberships or bucket accesses; standing comes from code", async () => {
-    // No membership rows exist, so bucket accesses (which hang off a
-    // membership) are impossible to grant to a system user.
-    const memberships = await prisma.workspaceMembership.count({
+  it("system users hold no bucket accesses and are not account admins; standing comes from code", async () => {
+    const accesses = await prisma.bucketAccess.count({
       where: { user: { email: { in: [ENGINEER_EMAIL, SUPPORT_EMAIL] } } },
     });
-    expect(memberships).toBe(0);
+    expect(accesses).toBe(0);
+    const admins = await prisma.user.count({
+      where: { email: { in: [ENGINEER_EMAIL, SUPPORT_EMAIL] }, isAccountAdmin: true },
+    });
+    expect(admins).toBe(0);
 
     const supportMe = await server.inject({
       method: "GET",

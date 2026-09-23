@@ -24,7 +24,7 @@ const VIEWER = plant("VIEW");
 const MEMBER = plant("MANAGE");
 const ADMIN = plant("ADMIN");
 const CREW = crew("MANAGE");
-const OWNER = emptyPerson({ owner: true });
+const ACCOUNT_ADMIN = emptyPerson({ accountAdmin: true });
 const SUPPORT = emptyPerson({ staff: "SUPPORT" });
 const ENGINEER = emptyPerson({ staff: "ENGINEER" });
 
@@ -65,7 +65,7 @@ describe("users: plant things", () => {
   });
 
   it("missing rows are NOT_FOUND with the kind's message", async () => {
-    const err = await denied(user(OWNER).require("VIEW", { station: "missing" }));
+    const err = await denied(user(ACCOUNT_ADMIN).require("VIEW", { station: "missing" }));
     expect(err.code).toBe("NOT_FOUND");
     expect(err.message).toBe("Station not found");
   });
@@ -111,7 +111,7 @@ describe("users: floor things", () => {
   });
 });
 
-describe("users: site-less rows, somewhere, owner", () => {
+describe("users: site-less rows, somewhere, account admin", () => {
   it("site-less rows: reads need any site, changes need the level at some plant", async () => {
     await expect(user(VIEWER).require("VIEW", { gateway: "g" })).resolves.toEqual({ siteId: null });
     await denied(user(VIEWER).require("MANAGE", { gateway: "g" }));
@@ -128,12 +128,12 @@ describe("users: site-less rows, somewhere, owner", () => {
     user(plant("ADMIN", SITE_B)).requireSomewhere("ADMIN");
   });
 
-  it("requireOwner: owners, and ENGINEER staff unless excluded", async () => {
-    user(OWNER).requireOwner();
-    user(ENGINEER).requireOwner();
-    await denied(() => user(ENGINEER).requireOwner({ allowStaff: false }));
-    expect((await denied(() => user(ADMIN).requireOwner())).message).toBe("Reserved for the workspace owner");
-    await denied(() => user(SUPPORT).requireOwner());
+  it("requireAccountAdmin: account admins, and ENGINEER staff unless excluded", async () => {
+    user(ACCOUNT_ADMIN).requireAccountAdmin();
+    user(ENGINEER).requireAccountAdmin();
+    await denied(() => user(ENGINEER).requireAccountAdmin({ allowStaff: false }));
+    expect((await denied(() => user(ADMIN).requireAccountAdmin())).message).toBe("Reserved for account admins");
+    await denied(() => user(SUPPORT).requireAccountAdmin());
   });
 
   it("staff: SUPPORT reads everywhere and writes nowhere; ENGINEER does both", async () => {
@@ -145,7 +145,7 @@ describe("users: site-less rows, somewhere, owner", () => {
   it("can() answers without throwing", () => {
     expect(user(MEMBER).can("MANAGE", { site: SITE_A })).toBe(true);
     expect(user(VIEWER).can("MANAGE", { site: SITE_A })).toBe(false);
-    expect(user(OWNER).can("ADMIN", { site: SITE_B })).toBe(true);
+    expect(user(ACCOUNT_ADMIN).can("ADMIN", { site: SITE_B })).toBe(true);
   });
 });
 
@@ -167,12 +167,12 @@ describe("users: lists", () => {
     const err = await denied(() => user(VIEWER, null).list("VIEW"));
     expect(err.code).toBe("NO_WORKSPACE");
     await denied(() => user(VIEWER).list("VIEW", SITE_B));
-    expect(user(OWNER, null).list("VIEW", SITE_B)).toEqual({ siteId: SITE_B });
+    expect(user(ACCOUNT_ADMIN, null).list("VIEW", SITE_B)).toEqual({ siteId: SITE_B });
   });
 
-  it("visible sites: membership for people, all for owners and staff", () => {
+  it("visible sites: membership for people, all for account admins and staff", () => {
     expect(visibleSites(CREW)).toEqual([SITE_A]);
-    expect(visibleSites(OWNER)).toBe("all");
+    expect(visibleSites(ACCOUNT_ADMIN)).toBe("all");
     expect(visibleSites(SUPPORT)).toBe("all");
   });
 });
@@ -195,12 +195,14 @@ describe("devices", () => {
     expect((await denied(app.require("VIEW", { job: "job-b" }))).message).toBe("Token not authorized for this site");
   });
 
-  it("devices are denied site-less rows, somewhere and owner checks", async () => {
+  it("devices are denied site-less rows, somewhere and account-admin checks", async () => {
     expect((await denied(display.require("VIEW", { gateway: "g" }))).message).toBe(
       "This action requires a user account",
     );
     await denied(() => display.requireSomewhere());
-    expect((await denied(() => app.requireOwner())).message).toBe("Workspace-level actions require a user account");
+    expect((await denied(() => app.requireAccountAdmin())).message).toBe(
+      "Workspace-level actions require a user account",
+    );
   });
 
   it("devices list within their own site only", async () => {
@@ -219,7 +221,7 @@ describe("no credentials", () => {
 
 describe("types", () => {
   it("require() proves a site for kinds that always have one", async () => {
-    const a = user(OWNER);
+    const a = user(ACCOUNT_ADMIN);
     const job = await a.require("VIEW", { job: "job-1" });
     const gw = await a.require("VIEW", { gateway: "g" });
     const site: string = job.siteId;

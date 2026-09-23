@@ -116,11 +116,21 @@ async function authenticateApp(token: string, log?: RequestLogger): Promise<Curr
   };
 }
 
+/** The account's workspace id. It never changes in a deployment, so it is read once. */
+let accountWorkspaceId: string | null = null;
+async function isAccountWorkspace(workspaceId: string): Promise<boolean> {
+  if (!accountWorkspaceId) {
+    const workspace = await prisma.workspace.findFirst({ select: { id: true } });
+    accountWorkspaceId = workspace?.id ?? null;
+  }
+  return workspaceId === accountWorkspaceId;
+}
+
 async function authenticateUser(token: AccessTokenPayload): Promise<Current | null> {
   const workspaceId = token.workspaceId;
-  if (!workspaceId) return null;
+  if (!workspaceId || !(await isAccountWorkspace(workspaceId))) return null;
 
-  // One query: the user, their membership here, and their bucket rows.
+  // One query: the user and their bucket rows.
   const user = await prisma.user.findUnique({
     where: { id: token.id },
     select: {
@@ -131,7 +141,7 @@ async function authenticateUser(token: AccessTokenPayload): Promise<Current | nu
       status: true,
       lockedUntil: true,
       mustChangePassword: true,
-      ...personSelect(workspaceId),
+      ...personSelect,
     },
   });
   if (!user) return null;
@@ -143,13 +153,7 @@ async function authenticateUser(token: AccessTokenPayload): Promise<Current | nu
   if (user.status !== "ACTIVE" && !pendingInvitee) return null;
   if (user.lockedUntil && user.lockedUntil > new Date()) return null;
 
-  // Staff hold no memberships by design; everyone else needs one here.
   const person = toPerson(user);
-  if (!person) return null;
-  if (person.staff) {
-    const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true } });
-    if (!workspace) return null;
-  }
 
   const siteId = token.siteId ?? null;
   if (siteId) {

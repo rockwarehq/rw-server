@@ -79,12 +79,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
     // plant member (VIEW — reads catalogs, no floor writes); "office" is a
     // plant manager, the bucket analogue of the old production:write role
     // (opening/closing calls sits at MANAGE now).
-    const fa = await makeUser(workspaceId, FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
-    await makeUser(workspaceId, READER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "VIEW" }] });
-    const office = await makeUser(workspaceId, OFFICE_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "MANAGE" }] });
+    const fa = await makeUser(FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
+    await makeUser(READER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "VIEW" }] });
+    const office = await makeUser(OFFICE_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "MANAGE" }] });
 
     // Link the FA user's membership to an employee so USER-initiated calls
-    // resolve attribution through WorkspaceMembership.employeeId.
+    // resolve attribution through User.employeeId.
     const employee = await prisma.employee.create({ data: { workspaceId }, select: { id: true } });
     employeeId = employee.id;
     const employeeVersion = await prisma.employeeVersion.create({
@@ -93,10 +93,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
     });
     employeeVersionId = employeeVersion.id;
     await prisma.employee.update({ where: { id: employeeId }, data: { versionId: employeeVersionId } });
-    await prisma.workspaceMembership.update({
-      where: { id: fa.membershipId },
-      data: { employeeId },
-    });
+    await prisma.user.update({ where: { id: fa.userId }, data: { employeeId } });
 
     // Employee roles for the definition-level role gates: both employees hold
     // "ops" at siteA; "maint" has no members; the siteB role tests cross-site
@@ -127,10 +124,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
     await prisma.employeeSiteAccess.create({
       data: { employeeId: officeEmployeeId, siteId: siteA.id, roleId: roleOpsId },
     });
-    await prisma.workspaceMembership.update({
-      where: { id: office.membershipId },
-      data: { employeeId: officeEmployeeId },
-    });
+    await prisma.user.update({ where: { id: office.userId }, data: { employeeId: officeEmployeeId } });
 
     faToken = (await loginAs(server, FA_EMAIL, PASSWORD)).accessToken;
     readerToken = (await loginAs(server, READER_EMAIL, PASSWORD)).accessToken;
@@ -156,10 +150,6 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
       await prisma.product.delete({ where: { id: dimIds.product2Id } });
       await prisma.workcenter.delete({ where: { id: dimIds.wcId } });
     }
-    await prisma.workspaceMembership.updateMany({
-      where: { employeeId: { in: [employeeId, officeEmployeeId] } },
-      data: { employeeId: null },
-    });
     await prisma.employee.deleteMany({ where: { id: { in: [employeeId, officeEmployeeId] } } });
     await prisma.employeeRole.deleteMany({ where: { id: { in: [roleOpsId, roleMaintId, roleSiteBId] } } });
     await prisma.user.deleteMany({ where: { email: { in: [FA_EMAIL, READER_EMAIL, OFFICE_EMAIL] } } });

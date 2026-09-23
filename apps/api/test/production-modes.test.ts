@@ -97,9 +97,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
     // member (VIEW); "office" is crew MANAGE of stationA's cell only — it
     // can operate the cell (force/clear) but holds nothing plant-wide, the
     // bucket analogue of the old production:write-without-admin role.
-    const fa = await makeUser(workspaceId, FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
-    await makeUser(workspaceId, READER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "VIEW" }] });
-    const office = await makeUser(workspaceId, OFFICE_EMAIL, PASSWORD, {
+    const fa = await makeUser(FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "ADMIN" }] });
+    await makeUser(READER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, level: "VIEW" }] });
+    const office = await makeUser(OFFICE_EMAIL, PASSWORD, {
       workcenters: [{ workcenterId: wcCell.id, level: "MANAGE" }],
     });
 
@@ -116,19 +116,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
     roleOpsId = await roleFor("pm-test-role-ops");
     roleMaintId = await roleFor("pm-test-role-maint");
 
-    const employeeFor = async (membershipId: string) => {
+    const employeeFor = async (userId: string) => {
       const employee = await prisma.employee.create({ data: { workspaceId }, select: { id: true } });
       await prisma.employeeSiteAccess.create({
         data: { employeeId: employee.id, siteId: siteA.id, roleId: roleOpsId },
       });
-      await prisma.workspaceMembership.update({
-        where: { id: membershipId },
-        data: { employeeId: employee.id },
-      });
+      await prisma.user.update({ where: { id: userId }, data: { employeeId: employee.id } });
       return employee.id;
     };
-    faEmployeeId = await employeeFor(fa.membershipId);
-    officeEmployeeId = await employeeFor(office.membershipId);
+    faEmployeeId = await employeeFor(fa.userId);
+    officeEmployeeId = await employeeFor(office.userId);
 
     faToken = (await loginAs(server, FA_EMAIL, PASSWORD)).accessToken;
     readerToken = (await loginAs(server, READER_EMAIL, PASSWORD)).accessToken;
@@ -157,10 +154,6 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
     await prisma.station.deleteMany({ where: { id: { in: [stationA.id, stationState.id] } } });
     await prisma.itemDispositionReason.deleteMany({ where: { siteId: siteA.id, name: "pm-test-reason" } });
     await prisma.statusReason.deleteMany({ where: { siteId: siteA.id, name: "pm-test-downtime-reason" } });
-    await prisma.workspaceMembership.updateMany({
-      where: { employeeId: { in: [faEmployeeId, officeEmployeeId] } },
-      data: { employeeId: null },
-    });
     await prisma.employee.deleteMany({ where: { id: { in: [faEmployeeId, officeEmployeeId] } } });
     await prisma.employeeRole.deleteMany({ where: { id: { in: [roleOpsId, roleMaintId] } } });
     await prisma.user.deleteMany({ where: { email: { in: [FA_EMAIL, READER_EMAIL, OFFICE_EMAIL] } } });

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, test } from "vitest";
-import prisma from "@rw/db";
+import prisma, { ensureAccountWorkspace } from "@rw/db";
 import * as signoffs from "./shift-signoff.js";
 
 // Integration tests (document.test.ts conventions): require DATABASE_URL and
@@ -22,9 +22,7 @@ describe.skipIf(!process.env.DATABASE_URL)("shiftSignoff service", () => {
 
   beforeAll(async () => {
     const suffix = randomUUID();
-    const workspace = await prisma.workspace.create({
-      data: { name: `Signoff ${suffix}`, slug: `signoff-${suffix}` },
-    });
+    const workspace = await ensureAccountWorkspace({ name: "Test Account", slug: "test-account" });
     siteId = (await prisma.site.create({ data: { name: `Signoff Site ${suffix}`, workspaceId: workspace.id } })).id;
     otherSiteId = (await prisma.site.create({ data: { name: `Signoff Other ${suffix}`, workspaceId: workspace.id } }))
       .id;

@@ -10,18 +10,18 @@ import { adminAt, checkBuckets, writeAccesses } from "../workspace/members.js";
 export interface CreateInviteInput {
   email: string;
   inviterId: string;
-  /** The inviter's access: ADMIN at each granted plant, owner to invite owners. */
+  /** The inviter's access: ADMIN at each granted plant, account admin to invite account admins. */
   actor: UserAccess;
   workspaceId: string;
   context?: InviteContext;
   /**
    * Bucket accesses for new invitees (and adoptions of orphaned pending
-   * users). New invites need bucketAccesses or asOwner; resending an
-   * existing pending invite needs neither.
+   * users, and re-invites of removed ones). New invites need bucketAccesses
+   * or asAccountAdmin; resending an existing pending invite needs neither.
    */
   bucketAccesses?: Array<{ bucketId: string; level: BucketLevel }>;
-  /** Invite as workspace owner — reserved; only an owner may do this. */
-  asOwner?: boolean;
+  /** Invite as an account admin — only an account admin may do this. */
+  asAccountAdmin?: boolean;
   firstName?: string;
   lastName?: string;
   /** Validated http(s) origin of the inviting client, used in the email link. */
@@ -51,44 +51,42 @@ export interface InviteContext {
 
 interface ResolvedInviteAccess {
   accesses: Array<{ bucketId: string; level: BucketLevel; siteId: string | null }>;
-  asOwner: boolean;
+  asAccountAdmin: boolean;
 }
 
-/** Resolve and validate the invite's access: bucket accesses, ownership, or both. */
+/** Resolve and validate the invite's access: bucket accesses, account admin, or both. */
 async function resolveInviteAccess(input: {
-  workspaceId: string;
   bucketAccesses?: Array<{ bucketId: string; level: BucketLevel }>;
-  asOwner?: boolean;
+  asAccountAdmin?: boolean;
 }): Promise<{ ok: true; access: ResolvedInviteAccess } | { ok: false; error: string }> {
   const wanted = input.bucketAccesses ?? [];
-  if (wanted.length === 0 && !input.asOwner) {
-    return { ok: false, error: "bucketAccesses or asOwner is required" };
+  if (wanted.length === 0 && !input.asAccountAdmin) {
+    return { ok: false, error: "bucketAccesses or asAccountAdmin is required" };
   }
   const check = await checkBuckets(
-    input.workspaceId,
     wanted.map((a) => a.bucketId),
     wanted,
   );
   if (!check.ok) return { ok: false, error: check.error };
   const accesses = wanted.map((a) => ({ ...a, siteId: check.buckets.get(a.bucketId)?.siteId ?? null }));
-  return { ok: true, access: { accesses, asOwner: input.asOwner === true } };
+  return { ok: true, access: { accesses, asAccountAdmin: input.asAccountAdmin === true } };
 }
 
-/** Handing out ownership is the owner's alone; buckets need ADMIN at their plant. */
+/** Making account admins is an account admin's alone; buckets need ADMIN at their plant. */
 function canInviteAccess(actor: UserAccess, access: ResolvedInviteAccess): boolean {
-  if (access.asOwner && !actor.person.owner) return false;
+  if (access.asAccountAdmin && !actor.person.accountAdmin) return false;
   return access.accesses.every((a) => adminAt(actor, a.siteId));
 }
 
 /**
  * Resend/revoke authority: ADMIN at any site the pending member has access
- * at; owner-memberships are owner-managed only.
+ * at; pending account admins are managed by account admins only.
  */
 function canManagePendingInvite(
   actor: UserAccess,
-  target: { workspaceRole: string; accessSiteIds: Array<string | null> },
+  target: { isAccountAdmin: boolean; accessSiteIds: Array<string | null> },
 ): boolean {
-  if (target.workspaceRole === "OWNER") return actor.person.owner;
+  if (target.isAccountAdmin) return actor.person.accountAdmin;
   const siteIds = target.accessSiteIds.filter((s): s is string => s !== null);
   // Orphaned invite with no access context — plant admins may clean up.
   if (siteIds.length === 0) return actor.canSomewhere("ADMIN");
@@ -123,9 +121,6 @@ export async function createInvite(
   if (existingUser?.status === "ACTIVE") {
     return { success: false, error: "User with this email already exists" };
   }
-  if (existingUser?.status === "DISABLED") {
-    return { success: false, error: "User is disabled" };
-  }
 
   const temporaryPassword = generateStrongPassword();
   const passwordHash = await hashPassword(temporaryPassword);
@@ -147,37 +142,33 @@ export async function createInvite(
   let user: { id: string; email: string; status: string; firstName: string | null; lastName: string | null };
   let mode: "resent" | "adopted" | "new";
   let auditAccess: {
-    asOwner?: boolean;
+    asAccountAdmin?: boolean;
     bucketAccesses?: Array<{ bucketId: string; level: string }>;
   } = {};
 
   const auditFromAccess = (access: ResolvedInviteAccess): typeof auditAccess => ({
-    ...(access.asOwner ? { asOwner: true } : {}),
+    ...(access.asAccountAdmin ? { asAccountAdmin: true } : {}),
     ...(access.accesses.length
       ? { bucketAccesses: access.accesses.map((a) => ({ bucketId: a.bucketId, level: a.level })) }
       : {}),
   });
 
   if (existingUser) {
-    // PENDING user — either a straight resend or adoption of an orphan
-    // (missing membership, or zero bucket accesses and not an owner: the
-    // states the old flow left permanently uninvitable).
-    const membership = await prisma.workspaceMembership.findUnique({
-      where: { userId_workspaceId: { userId: existingUser.id, workspaceId } },
-      select: {
-        id: true,
-        workspaceRole: true,
-        bucketAccesses: { select: { bucket: { select: { siteId: true } } } },
-      },
+    // PENDING or removed (DISABLED) user — either a straight resend, or an
+    // adoption: a removed person coming back, or a pending one with no
+    // access at all (the states the old flow left uninvitable).
+    const held = await prisma.bucketAccess.findMany({
+      where: { userId: existingUser.id },
+      select: { bucket: { select: { siteId: true } } },
     });
 
-    if (membership && (membership.bucketAccesses.length > 0 || membership.workspaceRole === "OWNER")) {
+    if (existingUser.status === "PENDING" && (held.length > 0 || existingUser.isAccountAdmin)) {
       mode = "resent";
       // Resend refreshes invite delivery only. Access changes are explicit
       // member-management actions and are not hidden in resend.
       const canResend = canManagePendingInvite(input.actor, {
-        workspaceRole: membership.workspaceRole,
-        accessSiteIds: membership.bucketAccesses.map((a) => a.bucket.siteId),
+        isAccountAdmin: existingUser.isAccountAdmin,
+        accessSiteIds: held.map((a) => a.bucket.siteId),
       });
       if (!canResend) {
         return { success: false, error: "Forbidden" };
@@ -208,24 +199,18 @@ export async function createInvite(
 
       try {
         user = await prisma.$transaction(async (tx) => {
+          // A removed person comes back as a fresh invitee.
           const updated = await tx.user.update({
             where: { id: existingUser.id },
-            data: inviteCredentialData,
+            data: {
+              ...inviteCredentialData,
+              status: "PENDING",
+              ...(access.asAccountAdmin ? { isAccountAdmin: true } : {}),
+            },
             select: { id: true, email: true, status: true, firstName: true, lastName: true },
           });
 
-          const adoptedMembership = await tx.workspaceMembership.upsert({
-            where: { userId_workspaceId: { userId: existingUser.id, workspaceId } },
-            update: { ...(access.asOwner ? { workspaceRole: "OWNER" as const } : {}) },
-            create: {
-              workspaceId,
-              userId: existingUser.id,
-              ...(access.asOwner ? { workspaceRole: "OWNER" as const } : {}),
-            },
-            select: { id: true },
-          });
-
-          await writeAccesses(tx, adoptedMembership.id, access.accesses);
+          await writeAccesses(tx, existingUser.id, access.accesses);
 
           return updated;
         });
@@ -253,21 +238,13 @@ export async function createInvite(
           data: {
             email: normalizedEmail,
             status: "PENDING",
+            isAccountAdmin: access.asAccountAdmin,
             ...inviteCredentialData,
           },
           select: { id: true, email: true, status: true, firstName: true, lastName: true },
         });
 
-        const membership = await tx.workspaceMembership.create({
-          data: {
-            workspaceId,
-            userId: createdUser.id,
-            ...(access.asOwner ? { workspaceRole: "OWNER" as const } : {}),
-          },
-          select: { id: true },
-        });
-
-        await writeAccesses(tx, membership.id, access.accesses);
+        await writeAccesses(tx, createdUser.id, access.accesses);
 
         return createdUser;
       });
@@ -335,20 +312,12 @@ export async function revokeInvite(input: {
       email: true,
       status: true,
       systemRole: true,
-      memberships: {
-        where: { workspaceId },
-        select: {
-          id: true,
-          workspaceRole: true,
-          bucketAccesses: { select: { bucket: { select: { siteId: true } } } },
-        },
-      },
+      isAccountAdmin: true,
+      bucketAccesses: { select: { bucket: { select: { siteId: true } } } },
     },
   });
 
-  // Unknown user and no-membership-here look the same, so one workspace
-  // cannot enumerate or delete another workspace's invites.
-  if (!target || target.memberships.length === 0) {
+  if (!target) {
     return { success: false, error: "USER_NOT_FOUND" };
   }
 
@@ -361,14 +330,14 @@ export async function revokeInvite(input: {
   }
 
   const canRevoke = canManagePendingInvite(input.actor, {
-    workspaceRole: target.memberships[0].workspaceRole,
-    accessSiteIds: target.memberships[0].bucketAccesses.map((a) => a.bucket.siteId),
+    isAccountAdmin: target.isAccountAdmin,
+    accessSiteIds: target.bucketAccesses.map((a) => a.bucket.siteId),
   });
   if (!canRevoke) {
     return { success: false, error: "FORBIDDEN" };
   }
 
-  // Memberships, bucket accesses, and refresh tokens all cascade
+  // Bucket accesses and refresh tokens cascade
   await prisma.user.delete({ where: { id: target.id } });
 
   await logEvent({

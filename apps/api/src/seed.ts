@@ -1,5 +1,5 @@
 import "dotenv/config";
-import prisma from "@rw/db";
+import prisma, { ensureAccountWorkspace } from "@rw/db";
 import { hashPassword } from "@rw/auth/password";
 import { ensureBuckets } from "./seed-buckets.js";
 
@@ -73,16 +73,12 @@ async function seed() {
     }
   }
 
-  // Create default workspace
-  const workspace = await prisma.workspace.upsert({
-    where: { slug: "default" },
-    update: {},
-    create: {
-      name: "Default",
-      slug: "default",
-      description: "Default workspace",
-      isDefault: true,
-    },
+  // The account: the one workspace this deployment serves.
+  const workspace = await ensureAccountWorkspace({
+    name: "Default",
+    slug: "default",
+    description: "Default workspace",
+    isDefault: true,
   });
 
   console.log(`Created workspace: ${workspace.name} (${workspace.id})`);
@@ -93,28 +89,20 @@ async function seed() {
 
   const passwordHash = await hashPassword(adminPassword);
 
+  // The first user is the account admin (skips buckets, runs the account).
   const admin = await prisma.user.upsert({
     where: { email: adminEmail },
-    update: {},
+    update: { isAccountAdmin: true },
     create: {
       email: adminEmail,
       passwordHash,
       firstName: "Admin",
       status: "ACTIVE",
+      isAccountAdmin: true,
     },
   });
 
-  console.log(`Created admin user: ${admin.email} (${admin.id})`);
-
-  // Add admin as the workspace OWNER (reserved ownership; bypasses
-  // buckets). Upserts so seed can re-run safely.
-  await prisma.workspaceMembership.upsert({
-    where: { userId_workspaceId: { userId: admin.id, workspaceId: workspace.id } },
-    update: { workspaceRole: "OWNER" },
-    create: { userId: admin.id, workspaceId: workspace.id, workspaceRole: "OWNER" },
-  });
-
-  console.log(`Added ${admin.email} as owner of ${workspace.name}`);
+  console.log(`Created account admin: ${admin.email} (${admin.id})`);
 
   // Create default site
   const rockwareSite = await prisma.site.upsert({

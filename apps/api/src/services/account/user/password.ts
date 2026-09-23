@@ -402,7 +402,7 @@ export type AdminSetPasswordError =
   | "USER_NOT_FOUND"
   | "SELF_RESET"
   | "SYSTEM_USER"
-  | "OWNER_PERMISSION_REQUIRED"
+  | "ACCOUNT_ADMIN_REQUIRED"
   | "WEAK_PASSWORD"
   | "PERMANENT_REQUIRES_PASSWORD";
 
@@ -424,7 +424,7 @@ export async function adminSetPassword(
 
   const target = await prisma.user.findUnique({
     where: { id: input.targetUserId },
-    select: { id: true, status: true, systemRole: true },
+    select: { id: true, status: true, systemRole: true, isAccountAdmin: true },
   });
 
   if (!target) {
@@ -435,20 +435,12 @@ export async function adminSetPassword(
     return { success: false, error: "SYSTEM_USER" };
   }
 
-  // Resetting an owner's password is a takeover vector, so it needs the
-  // ownership — same rule as changing an owner's access.
-  const targetIsOwner = await prisma.workspaceMembership.findFirst({
-    where: { workspaceId: input.workspaceId, userId: input.targetUserId, workspaceRole: "OWNER" },
-    select: { id: true },
-  });
-
-  if (targetIsOwner) {
-    const actorMembership = await prisma.workspaceMembership.findFirst({
-      where: { workspaceId: input.workspaceId, userId: input.actorId, workspaceRole: "OWNER" },
-      select: { id: true },
-    });
-    if (!actorMembership) {
-      return { success: false, error: "OWNER_PERMISSION_REQUIRED" };
+  // Resetting an account admin's password is a takeover vector, so it needs
+  // an account admin — same rule as changing who is an account admin.
+  if (target.isAccountAdmin) {
+    const actor = await prisma.user.findUnique({ where: { id: input.actorId }, select: { isAccountAdmin: true } });
+    if (!actor?.isAccountAdmin) {
+      return { success: false, error: "ACCOUNT_ADMIN_REQUIRED" };
     }
   }
 

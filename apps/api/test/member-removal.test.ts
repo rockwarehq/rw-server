@@ -71,7 +71,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
       plants: Array<{ siteId: string; level: Level }>;
     },
   ): Promise<string> {
-    const { userId } = await makeUser(workspaceId, email, options.password ?? "MemberPass123!", {
+    const { userId } = await makeUser(email, options.password ?? "MemberPass123!", {
       plants: options.plants,
     });
     if (options.status === "PENDING") {
@@ -108,7 +108,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
     server = buildServer();
     await server.ready();
 
-    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { slug: "default" } });
+    const workspace = await prisma.workspace.findFirstOrThrow();
     workspaceId = workspace.id;
 
     const siteA = await prisma.site.findFirstOrThrow({ where: { workspaceId, name: "Rockware" } });
@@ -169,45 +169,39 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
   it("plant ADMIN access stands in for the old Plant Admin role", async () => {
     const bucketId = await plantBucketId(siteAId);
     const access = await prisma.bucketAccess.findFirst({
-      where: { bucketId, membership: { userId: factoryAdminUserId } },
+      where: { bucketId, userId: factoryAdminUserId },
       select: { level: true },
     });
     expect(access?.level).toBe("ADMIN");
   });
 
-  it("factory admin removes a site-only member; membership cascades away", async () => {
+  it("factory admin removes a site-only member's access; the user stays active", async () => {
     const res = await removeSiteAccess(factoryAdminToken, siteOnlyUserId);
     expect(res.statusCode).toBe(200);
 
-    const membership = await prisma.workspaceMembership.findUnique({
-      where: { userId_workspaceId: { userId: siteOnlyUserId, workspaceId } },
-    });
-    expect(membership).toBeNull();
-    // ACTIVE user survives; only the membership is gone
+    expect(await prisma.bucketAccess.count({ where: { userId: siteOnlyUserId } })).toBe(0);
+    // Losing one plant's access is not removal from the account.
     const user = await prisma.user.findUnique({ where: { id: siteOnlyUserId } });
     expect(user?.status).toBe("ACTIVE");
   });
 
-  it("hybrid member keeps membership and other-site access after site removal", async () => {
+  it("hybrid member keeps other-site access after site removal", async () => {
     const res = await removeSiteAccess(adminToken, hybridUserId);
     expect(res.statusCode).toBe(200);
 
-    const membership = await prisma.workspaceMembership.findUniqueOrThrow({
-      where: { userId_workspaceId: { userId: hybridUserId, workspaceId } },
-      include: { bucketAccesses: { include: { bucket: true } } },
+    const accesses = await prisma.bucketAccess.findMany({
+      where: { userId: hybridUserId },
+      include: { bucket: true },
     });
-    expect(membership.bucketAccesses).toHaveLength(1);
-    expect(membership.bucketAccesses[0]?.bucket.siteId).toBe(siteBId);
+    expect(accesses).toHaveLength(1);
+    expect(accesses[0]?.bucket.siteId).toBe(siteBId);
   });
 
-  it("pending site-only invitee loses the membership; the user row survives", async () => {
+  it("pending site-only invitee loses the access; the user row survives", async () => {
     const res = await removeSiteAccess(adminToken, pendingUserId);
     expect(res.statusCode).toBe(200);
 
-    const membership = await prisma.workspaceMembership.findUnique({
-      where: { userId_workspaceId: { userId: pendingUserId, workspaceId } },
-    });
-    expect(membership).toBeNull();
+    expect(await prisma.bucketAccess.count({ where: { userId: pendingUserId } })).toBe(0);
     // Deleting the pending user is the invite-revoke route's job, not this
     // one's — the row stays PENDING.
     const user = await prisma.user.findUnique({ where: { id: pendingUserId } });
@@ -218,12 +212,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
     const res = await removeSiteAccess(adminToken, otherSiteUserId);
     expect(res.statusCode).toBe(200);
 
-    const membership = await prisma.workspaceMembership.findUniqueOrThrow({
-      where: { userId_workspaceId: { userId: otherSiteUserId, workspaceId } },
-      include: { bucketAccesses: { include: { bucket: true } } },
+    const accesses = await prisma.bucketAccess.findMany({
+      where: { userId: otherSiteUserId },
+      include: { bucket: true },
     });
-    expect(membership.bucketAccesses).toHaveLength(1);
-    expect(membership.bucketAccesses[0]?.bucket.siteId).toBe(siteBId);
+    expect(accesses).toHaveLength(1);
+    expect(accesses[0]?.bucket.siteId).toBe(siteBId);
   });
 
   it("404 for an unknown member", async () => {
@@ -237,7 +231,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
     expect(res.json()).toEqual({ error: "Cannot remove yourself" });
   });
 
-  it("tightened org route: a site plant ADMIN cannot delete workspace memberships", async () => {
+  it("account route: a plant ADMIN cannot remove people from the account", async () => {
     const res = await removeMember(secondSiteAdminToken, otherSiteUserId);
     expect(res.statusCode).toBe(403);
 
@@ -250,13 +244,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
     await prisma.user.deleteMany({ where: { email: "scoped-target@test.local" } });
   });
 
-  it("workspace owner still removes members org-wide", async () => {
+  it("an account admin removes people from the account: disabled, no access", async () => {
     const res = await removeMember(adminToken, otherSiteUserId);
     expect(res.statusCode).toBe(200);
-    const membership = await prisma.workspaceMembership.findUnique({
-      where: { userId_workspaceId: { userId: otherSiteUserId, workspaceId } },
-    });
-    expect(membership).toBeNull();
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: otherSiteUserId } });
+    expect(user.status).toBe("DISABLED");
+    expect(await prisma.bucketAccess.count({ where: { userId: otherSiteUserId } })).toBe(0);
   });
 
   it("blocks demoting the last plant admin at a site until another admin exists", async () => {

@@ -18,7 +18,7 @@ import { buildServer, type TestServer } from "./helpers/build-server.js";
 // (Imported calls are rewritten as `(0, mod.fn)(…)`, so the wrappers match
 // by name.)
 const POLICY_CALL =
-  /\baccess\.(require|requireSomewhere|requireOwner|list|sites|can|canSomewhere)\(|\b(workspaceSiteScope|tokenSite|floorFilter|requireFloorEntities)\b/;
+  /\baccess\.(require|requireSomewhere|requireAccountAdmin|list|sites|can|canSomewhere)\(|\b(workspaceSiteScope|tokenSite|floorFilter|requireFloorEntities)\b/;
 
 // require() is async: without `await` a denial is never seen and the
 // handler carries on. Same for the wrappers.
@@ -92,12 +92,12 @@ describe("REST authorization coverage", () => {
       const preHandlers = Array.isArray(route.preHandler) ? route.preHandler : route.preHandler ? [route.preHandler] : [];
       const hasAccessTokenGuard = preHandlers.some((fn) => fn === server.verifyAccessToken);
       const handlerSource = typeof route.handler === "function" ? route.handler.toString() : "";
-      // ownerRequired preHandlers check the caller's person; other routes
+      // accountAdminRequired preHandlers check the caller's person; other routes
       // ask request.access (or the person) in the handler.
       const hasPermissionGuard =
-        preHandlers.some((fn) => /\baccess\.person\.owner\b/.test(fn.toString())) ||
+        preHandlers.some((fn) => /\baccess\.person\.accountAdmin\b/.test(fn.toString())) ||
         POLICY_CALL.test(handlerSource) ||
-        /\baccess\.person\.owner\b/.test(handlerSource);
+        /\baccess\.person\.accountAdmin\b/.test(handlerSource);
       for (const method of methods) {
         if (method === "HEAD" || method === "OPTIONS") continue;
         routes.push({ method, url: route.url, hasAccessTokenGuard, hasPermissionGuard });

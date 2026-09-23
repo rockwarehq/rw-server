@@ -22,10 +22,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("mustChangePassword enforcement 
     server = buildServer();
     await server.ready();
 
-    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { slug: "default" } });
     // Workspace owner: enough standing that a blocked request can only be
     // explained by the must-change gate, not by missing access.
-    await makeUser(workspace.id, FLAGGED_EMAIL, TEMP_PASSWORD, { owner: true });
+    await makeUser(FLAGGED_EMAIL, TEMP_PASSWORD, { accountAdmin: true });
     await prisma.user.update({
       where: { email: FLAGGED_EMAIL },
       data: { mustChangePassword: true },

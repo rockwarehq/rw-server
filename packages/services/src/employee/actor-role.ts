@@ -49,8 +49,8 @@ export async function validateSiteRoleIds(
 
 /**
  * Resolve who is acting. An explicit employeeId must exist in the workspace;
- * a userId resolves through their WorkspaceMembership.employee link, which
- * may legitimately be unset (unattributed action, not an error).
+ * a userId resolves through the user's employee link, which may
+ * legitimately be unset (unattributed action, not an error).
  */
 export async function resolveEmployee(
   workspaceId: string,
@@ -68,13 +68,13 @@ export async function resolveEmployee(
     return { employeeId, employeeVersionId: employee.versionId };
   }
   if (userId) {
-    const membership = await prisma.workspaceMembership.findUnique({
-      where: { userId_workspaceId: { userId, workspaceId } },
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
       select: { employeeId: true, employee: { select: { versionId: true } } },
     });
     return {
-      employeeId: membership?.employeeId ?? null,
-      employeeVersionId: membership?.employee?.versionId ?? null,
+      employeeId: user?.employeeId ?? null,
+      employeeVersionId: user?.employee?.versionId ?? null,
     };
   }
   return { employeeId: null, employeeVersionId: null };

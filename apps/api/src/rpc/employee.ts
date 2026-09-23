@@ -82,14 +82,14 @@ export const list = userRequired.input(listInputSchema).handler(async ({ input, 
 
 export const get = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const sites = await employeeSites(input.id);
-  if (!sites.some((site) => context.access.can("ADMIN", { site }))) context.access.requireOwner();
+  if (!sites.some((site) => context.access.can("ADMIN", { site }))) context.access.requireAccountAdmin();
 
   return unwrap(await crud.getById(input.id), { notFoundMessage: "Employee not found" });
 });
 
 export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const sites = await employeeSites(input.id);
-  if (!sites.some((site) => context.access.can("ADMIN", { site }))) context.access.requireOwner();
+  if (!sites.some((site) => context.access.can("ADMIN", { site }))) context.access.requireAccountAdmin();
 
   const { id, ...updateData } = input;
   const result = await crud.update(id, updateData);
@@ -99,7 +99,7 @@ export const update = userRequired.input(updateInputSchema).handler(async ({ inp
 
 export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const sites = await employeeSites(input.id);
-  if (!sites.some((site) => context.access.can("ADMIN", { site }))) context.access.requireOwner();
+  if (!sites.some((site) => context.access.can("ADMIN", { site }))) context.access.requireAccountAdmin();
 
   const result = await crud.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
@@ -108,7 +108,7 @@ export const remove = userRequired.input(idInputSchema).handler(async ({ input, 
 
 export const setSmsConsent = userRequired.input(setSmsConsentInputSchema).handler(async ({ input, context }) => {
   const sites = await employeeSites(input.employeeId);
-  if (!sites.some((site) => context.access.can("ADMIN", { site }))) context.access.requireOwner();
+  if (!sites.some((site) => context.access.can("ADMIN", { site }))) context.access.requireAccountAdmin();
   return unwrap(await smsConsent.set({ ...input, actorUserId: context.current.user.id }));
 });
 
@@ -116,6 +116,6 @@ export const smsConsentHistory = userRequired
   .input(z.object({ employeeId: z.uuid() }))
   .handler(async ({ input, context }) => {
     const sites = await employeeSites(input.employeeId);
-    if (!sites.some((site) => context.access.can("ADMIN", { site }))) context.access.requireOwner();
+    if (!sites.some((site) => context.access.can("ADMIN", { site }))) context.access.requireAccountAdmin();
     return unwrap(await smsConsent.history(input.employeeId));
   });

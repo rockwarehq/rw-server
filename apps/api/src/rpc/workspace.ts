@@ -21,5 +21,5 @@ export const listBuckets = userRequired.input(emptyInputSchema).handler(async ({
 export const listMembers = userRequired.input(emptyInputSchema).handler(async ({ context }) => {
   context.access.requireSomewhere("ADMIN");
 
-  return { data: await workspaceService.listMembers(context.current.workspaceId) };
+  return { data: await workspaceService.listMembers() };
 });

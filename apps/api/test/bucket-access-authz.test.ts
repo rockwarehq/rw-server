@@ -30,7 +30,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access authorization (Ti
     server = buildServer();
     await server.ready();
 
-    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { slug: "default" } });
+    const workspace = await prisma.workspace.findFirstOrThrow();
     workspaceId = workspace.id;
     await prisma.user.deleteMany({ where: { email: { in: Object.values(EMAILS) } } });
     await prisma.site.deleteMany({ where: { workspaceId, name: "Bucket Authz Site" } });
@@ -47,13 +47,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access authorization (Ti
     await prisma.station.create({ data: { siteId, workcenterId: wc2, name: "ba-s2" } });
     await prisma.station.create({ data: { siteId, name: "ba-s-null" } });
 
-    const crew = await makeUser(workspaceId, EMAILS.crew, PASSWORD, {
+    const crew = await makeUser(EMAILS.crew, PASSWORD, {
       workcenters: [{ workcenterId: wc1, level: "VIEW" }],
     });
     crewUserId = crew.userId;
-    await makeUser(workspaceId, EMAILS.member, PASSWORD, { plants: [{ siteId, level: "VIEW" }] });
-    await makeUser(workspaceId, EMAILS.admin, PASSWORD, { plants: [{ siteId, level: "ADMIN" }] });
-    await makeUser(workspaceId, EMAILS.admin2, PASSWORD, { plants: [{ siteId, level: "ADMIN" }] });
+    await makeUser(EMAILS.member, PASSWORD, { plants: [{ siteId, level: "VIEW" }] });
+    await makeUser(EMAILS.admin, PASSWORD, { plants: [{ siteId, level: "ADMIN" }] });
+    await makeUser(EMAILS.admin2, PASSWORD, { plants: [{ siteId, level: "ADMIN" }] });
 
     for (const key of Object.keys(EMAILS) as Array<keyof typeof EMAILS>) {
       tokens[key] = (await loginAs(server, EMAILS[key], PASSWORD)).accessToken;
@@ -86,9 +86,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access authorization (Ti
       headers: { authorization: `Bearer ${tokens.crew}` },
     });
     expect(res.statusCode).toBe(200);
-    const access = (res.json() as { access: { workspaceRole: string; buckets: Array<Record<string, unknown>> } })
+    const access = (res.json() as { access: { isAccountAdmin: boolean; buckets: Array<Record<string, unknown>> } })
       .access;
-    expect(access.workspaceRole).toBe("MEMBER");
+    expect(access.isAccountAdmin).toBe(false);
     const byKind = new Map(access.buckets.map((b) => [`${b.kind}:${b.via}`, b.level]));
     expect(byKind.get("WORKCENTER:direct")).toBe("VIEW");
     expect(byKind.get("PLANT:member")).toBe("VIEW");
@@ -132,7 +132,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access authorization (Ti
   });
 
   it("the last plant admin cannot be removed or downgraded", async () => {
-    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { slug: "default" } });
+    const workspace = await prisma.workspace.findFirstOrThrow();
     const plant = await prisma.bucket.findFirstOrThrow({
       where: { siteId, kind: "PLANT" },
       select: { id: true },

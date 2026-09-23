@@ -80,7 +80,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tie
     // Bucket fixtures: "office" is a plant manager — job writes (create/tag)
     // sit at plant MANAGE, and the same level now covers the label catalog
     // (the old job:write-without-settings:write role has no bucket analogue).
-    await makeUser(workspaceId, OFFICE_EMAIL, PASSWORD, { plants: [{ siteId: site.id, level: "MANAGE" }] });
+    await makeUser(OFFICE_EMAIL, PASSWORD, { plants: [{ siteId: site.id, level: "MANAGE" }] });
 
     adminToken = (
       await loginAs(
@@ -109,7 +109,6 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tie
     await prisma.itemDisposition.deleteMany({ where: { name: { startsWith: PREFIX } } });
     await prisma.station.deleteMany({ where: { id: { in: stationIds } } });
     await prisma.label.deleteMany({ where: { name: { startsWith: PREFIX } } });
-    await prisma.workspaceMembership.deleteMany({ where: { user: { email: OFFICE_EMAIL } } });
     await prisma.user.deleteMany({ where: { email: OFFICE_EMAIL } });
     await prisma.site.deleteMany({ where: { id: siteB.id } });
     await server.close();

@@ -48,7 +48,7 @@ const listInputSchema = z.object({
  * Create a new site
  */
 export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  context.access.requireOwner();
+  context.access.requireAccountAdmin();
 
   const result = await site.create({ ...input, workspaceId: context.current.workspaceId });
   return unwrap(result);
@@ -154,7 +154,7 @@ export const update = userRequired.input(updateInputSchema).handler(async ({ inp
  */
 export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
   // Sites are account-level: only the owner adds or removes them.
-  context.access.requireOwner();
+  context.access.requireAccountAdmin();
 
   const result = await site.remove(input.id);
   // HAS_WORKCENTERS / HAS_GATEWAYS / HAS_DATASOURCES map to CONFLICT via the shared table

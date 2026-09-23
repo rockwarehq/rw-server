@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { createInterface } from "node:readline/promises";
-import prisma from "@rw/db";
+import prisma, { ensureAccountWorkspace } from "@rw/db";
 import { hashPassword } from "@rw/auth/password";
 import { ensureBuckets } from "./systemRoles.js";
 import config from "./config.js";
@@ -39,8 +39,7 @@ interface CustomerDevUser {
   persona: string;
   description: string;
   status?: "ACTIVE" | "DISABLED";
-  createMembership?: boolean;
-  owner?: boolean;
+  accountAdmin?: boolean;
   accesses: readonly PlantAccessSpec[];
 }
 
@@ -73,9 +72,9 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     email: "coadmin@example.com",
     firstName: "Co",
     lastName: "Administrator",
-    persona: "Co-Owner",
-    description: "Second workspace owner for testing multi-owner scenarios (mutual disable, ownership transfer).",
-    owner: true,
+    persona: "Co-Admin",
+    description: "Second account admin for testing multi-admin scenarios (mutual disable, last-admin guard).",
+    accountAdmin: true,
     accesses: [],
   },
   {
@@ -83,16 +82,7 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     firstName: "No",
     lastName: "Role",
     persona: "Member without Access",
-    description: "Active workspace member with no bucket access — verifies denial for half-onboarded users.",
-    accesses: [],
-  },
-  {
-    email: "nomember@example.com",
-    firstName: "No",
-    lastName: "Member",
-    persona: "User without Membership",
-    description: "Active user with no workspace membership — verifies login rejection at the membership check.",
-    createMembership: false,
+    description: "Active member with no bucket access — verifies denial for half-onboarded users.",
     accesses: [],
   },
   {
@@ -157,37 +147,31 @@ async function upsertSeedUser(input: {
 }
 
 async function setBucketAccesses(input: {
-  membershipId: string;
+  userId: string;
   siteIds: Record<SiteKey, string>;
   accesses: readonly PlantAccessSpec[];
 }) {
-  await prisma.bucketAccess.deleteMany({ where: { membershipId: input.membershipId } });
+  await prisma.bucketAccess.deleteMany({ where: { userId: input.userId } });
   for (const a of input.accesses) {
     const plant = await prisma.bucket.findFirstOrThrow({
       where: { siteId: input.siteIds[a.site], kind: "PLANT" },
       select: { id: true },
     });
     await prisma.bucketAccess.create({
-      data: { bucketId: plant.id, membershipId: input.membershipId, level: a.level },
+      data: { bucketId: plant.id, userId: input.userId, level: a.level },
     });
   }
 }
 
 function describeAssignments(spec: CustomerDevUser): string {
-  if (spec.createMembership === false) return "No workspace membership";
-  if (spec.owner) return "Workspace owner";
+  if (spec.accountAdmin) return "Account admin";
   if (spec.accesses.length === 0) return "Member, no access";
   const parts = spec.accesses.map((a) => `Site ${a.site} ${a.level}`);
   const summary = parts.join(" + ");
   return spec.status === "DISABLED" ? `${summary} (DISABLED)` : summary;
 }
 
-async function seedDevAccess(
-  workspaceId: string,
-  siteIds: Record<SiteKey, string>,
-  adminEmail: string,
-  passwordHash: string,
-) {
+async function seedDevAccess(siteIds: Record<SiteKey, string>, adminEmail: string, passwordHash: string) {
   const seededUsers: Array<{ email: string; persona: string; description: string; access: string }> = [];
 
   const admin = await upsertSeedUser({
@@ -196,16 +180,12 @@ async function seedDevAccess(
     firstName: "Company",
     lastName: "Administrator",
   });
-  await prisma.workspaceMembership.upsert({
-    where: { userId_workspaceId: { userId: admin.id, workspaceId } },
-    update: { workspaceRole: "OWNER" },
-    create: { userId: admin.id, workspaceId, workspaceRole: "OWNER" },
-  });
+  await prisma.user.update({ where: { id: admin.id }, data: { isAccountAdmin: true } });
   seededUsers.push({
     email: admin.email,
-    persona: "Workspace Owner",
-    description: "Reserved ownership: bypasses buckets, holds ownership-only operations.",
-    access: "Workspace owner",
+    persona: "Account Admin",
+    description: "Skips buckets and runs the account: sites, people, settings.",
+    access: "Account admin",
   });
 
   for (const userSpec of CUSTOMER_DEV_USERS) {
@@ -217,20 +197,8 @@ async function seedDevAccess(
       status: userSpec.status,
     });
 
-    if (userSpec.createMembership === false) {
-      await prisma.workspaceMembership.deleteMany({ where: { userId: user.id } });
-    } else {
-      const membership = await prisma.workspaceMembership.upsert({
-        where: { userId_workspaceId: { userId: user.id, workspaceId } },
-        update: { workspaceRole: userSpec.owner ? "OWNER" : "MEMBER" },
-        create: { userId: user.id, workspaceId, workspaceRole: userSpec.owner ? "OWNER" : "MEMBER" },
-      });
-      await setBucketAccesses({
-        membershipId: membership.id,
-        siteIds,
-        accesses: userSpec.accesses,
-      });
-    }
+    await prisma.user.update({ where: { id: user.id }, data: { isAccountAdmin: userSpec.accountAdmin === true } });
+    await setBucketAccesses({ userId: user.id, siteIds, accesses: userSpec.accesses });
 
     seededUsers.push({
       email: user.email,
@@ -247,11 +215,10 @@ async function seedDevAccess(
     lastName: "Support",
     systemRole: "SUPPORT",
   });
-  await prisma.workspaceMembership.deleteMany({ where: { userId: support.id } });
   seededUsers.push({
     email: support.email,
     persona: "Rockware Support Admin",
-    description: "Internal Rockware support account for system-role testing; no customer workspace membership.",
+    description: "Internal Rockware support account for system-role testing; holds no bucket access.",
     access: "System SUPPORT",
   });
 
@@ -261,10 +228,11 @@ async function seedDevAccess(
 async function bootstrap() {
   console.log("── Bootstrap ────────────────────────────────────────────");
 
-  const workspace = await prisma.workspace.upsert({
-    where: { slug: "default" },
-    update: {},
-    create: { name: "Default", slug: "default", description: "Default workspace", isDefault: true },
+  const workspace = await ensureAccountWorkspace({
+    name: "Default",
+    slug: "default",
+    description: "Default workspace",
+    isDefault: true,
   });
   console.log(`  Workspace: ${workspace.name} (${workspace.id})`);
 
@@ -297,12 +265,7 @@ async function bootstrap() {
   }
   console.log(`  Employee roles: ${DEFAULT_ROLES.length} seeded`);
 
-  const seededUsers = await seedDevAccess(
-    workspace.id,
-    { primary: site.id, secondary: secondarySite.id },
-    adminEmail,
-    passwordHash,
-  );
+  const seededUsers = await seedDevAccess({ primary: site.id, secondary: secondarySite.id }, adminEmail, passwordHash);
   console.log(`  RBAC dev users: ${seededUsers.length} seeded`);
   console.log(`  Dev user password: ${devUserPassword}`);
   for (const seededUser of seededUsers) {

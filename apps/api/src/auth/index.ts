@@ -30,7 +30,6 @@ export {
   logout,
   logoutAll,
   refreshSession,
-  switchWorkspace,
   switchSite,
   type LoginResult,
   type TokenPair,
