@@ -703,84 +703,6 @@
         }
       }
     },
-    "/auth/switch-workspace": {
-      "post": {
-        "tags": [
-          "auth"
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "workspaceId": {
-                    "type": "string",
-                    "format": "uuid"
-                  }
-                },
-                "required": [
-                  "workspaceId"
-                ]
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "accessToken": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/auth/switch-site": {
       "post": {
         "tags": [
@@ -995,12 +917,8 @@
                     "access": {
                       "type": "object",
                       "properties": {
-                        "workspaceRole": {
-                          "type": "string",
-                          "enum": [
-                            "OWNER",
-                            "MEMBER"
-                          ]
+                        "isAccountAdmin": {
+                          "type": "boolean"
                         },
                         "staff": {
                           "type": "string",
@@ -1140,6 +1058,9 @@
                         "ACTIVE",
                         "DISABLED"
                       ]
+                    },
+                    "isAccountAdmin": {
+                      "type": "boolean"
                     },
                     "lastLoginAt": {
                       "type": "string",
@@ -1502,6 +1423,9 @@
                               "DISABLED"
                             ]
                           },
+                          "isAccountAdmin": {
+                            "type": "boolean"
+                          },
                           "lastLoginAt": {
                             "type": "string",
                             "format": "date-time",
@@ -1605,7 +1529,7 @@
                       ]
                     }
                   },
-                  "asOwner": {
+                  "asAccountAdmin": {
                     "type": "boolean"
                   },
                   "firstName": {
@@ -2058,6 +1982,9 @@
                         "DISABLED"
                       ]
                     },
+                    "isAccountAdmin": {
+                      "type": "boolean"
+                    },
                     "lastLoginAt": {
                       "type": "string",
                       "format": "date-time",
@@ -2196,6 +2123,9 @@
                         "ACTIVE",
                         "DISABLED"
                       ]
+                    },
+                    "isAccountAdmin": {
+                      "type": "boolean"
                     },
                     "lastLoginAt": {
                       "type": "string",
@@ -2867,119 +2797,33 @@
                           }
                         }
                       },
+                      "isAccountAdmin": {
+                        "type": "boolean"
+                      },
                       "workspaceRole": {
                         "type": "string",
                         "enum": [
                           "OWNER",
                           "MEMBER"
                         ]
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "workspaces"
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "slug": {
-                    "type": "string"
-                  },
-                  "description": {
-                    "type": "string"
-                  },
-                  "isDefault": {
-                    "type": "boolean"
-                  },
-                  "settings": {
-                    "type": "object",
-                    "additionalProperties": true
-                  }
-                },
-                "required": [
-                  "name"
-                ]
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "201": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string",
-                      "format": "uuid"
-                    },
-                    "name": {
-                      "type": "string"
-                    },
-                    "slug": {
-                      "type": "string"
-                    },
-                    "description": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "isDefault": {
-                      "type": "boolean"
-                    },
-                    "settings": {
-                      "type": "object",
-                      "additionalProperties": true
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time"
-                    },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time"
-                    },
-                    "_count": {
-                      "type": "object",
-                      "properties": {
-                        "members": {
-                          "type": "number"
+                      },
+                      "workspace": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "slug": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string",
+                            "nullable": true
+                          }
                         }
                       }
                     }
@@ -2988,37 +2832,7 @@
               }
             }
           },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
           "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "403": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -3295,89 +3109,6 @@
             }
           }
         }
-      },
-      "delete": {
-        "tags": [
-          "workspaces"
-        ],
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "in": "path",
-            "name": "id",
-            "required": true
-          }
-        ],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
       }
     },
     "/workspaces/{id}/members": {
@@ -3411,11 +3142,11 @@
                   "items": {
                     "type": "object",
                     "properties": {
-                      "membershipId": {
+                      "userId": {
                         "type": "string",
                         "format": "uuid"
                       },
-                      "joinedAt": {
+                      "createdAt": {
                         "type": "string",
                         "format": "date-time"
                       },
@@ -3488,12 +3219,8 @@
                       "access": {
                         "type": "object",
                         "properties": {
-                          "workspaceRole": {
-                            "type": "string",
-                            "enum": [
-                              "OWNER",
-                              "MEMBER"
-                            ]
+                          "isAccountAdmin": {
+                            "type": "boolean"
                           },
                           "buckets": {
                             "type": "array",
@@ -3600,283 +3327,6 @@
             }
           }
         }
-      },
-      "post": {
-        "tags": [
-          "workspaces"
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "userId": {
-                    "type": "string",
-                    "format": "uuid"
-                  },
-                  "bucketAccesses": {
-                    "type": "array",
-                    "minItems": 1,
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "bucketId": {
-                          "type": "string",
-                          "format": "uuid"
-                        },
-                        "level": {
-                          "type": "string",
-                          "enum": [
-                            "VIEW",
-                            "MANAGE",
-                            "ADMIN"
-                          ]
-                        }
-                      },
-                      "required": [
-                        "bucketId",
-                        "level"
-                      ]
-                    }
-                  }
-                },
-                "required": [
-                  "userId",
-                  "bucketAccesses"
-                ]
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "in": "path",
-            "name": "id",
-            "required": true
-          }
-        ],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "201": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "membershipId": {
-                      "type": "string",
-                      "format": "uuid"
-                    },
-                    "joinedAt": {
-                      "type": "string",
-                      "format": "date-time"
-                    },
-                    "employeeId": {
-                      "type": [
-                        "null",
-                        "string"
-                      ],
-                      "format": "uuid"
-                    },
-                    "user": {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "type": "string",
-                          "format": "uuid"
-                        },
-                        "email": {
-                          "type": "string"
-                        },
-                        "firstName": {
-                          "type": "string",
-                          "nullable": true
-                        },
-                        "lastName": {
-                          "type": "string",
-                          "nullable": true
-                        },
-                        "status": {
-                          "type": "string",
-                          "enum": [
-                            "PENDING",
-                            "ACTIVE",
-                            "DISABLED"
-                          ]
-                        },
-                        "lastLoginAt": {
-                          "type": [
-                            "null",
-                            "string"
-                          ],
-                          "format": "date-time"
-                        },
-                        "invitedBy": {
-                          "type": [
-                            "null",
-                            "string"
-                          ],
-                          "format": "uuid"
-                        },
-                        "invitedAt": {
-                          "type": [
-                            "null",
-                            "string"
-                          ],
-                          "format": "date-time"
-                        },
-                        "inviteExpiry": {
-                          "type": [
-                            "null",
-                            "string"
-                          ],
-                          "format": "date-time"
-                        },
-                        "mustChangePassword": {
-                          "type": "boolean"
-                        }
-                      }
-                    },
-                    "access": {
-                      "type": "object",
-                      "properties": {
-                        "workspaceRole": {
-                          "type": "string",
-                          "enum": [
-                            "OWNER",
-                            "MEMBER"
-                          ]
-                        },
-                        "buckets": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "bucketId": {
-                                "type": "string",
-                                "format": "uuid"
-                              },
-                              "kind": {
-                                "type": "string",
-                                "enum": [
-                                  "PLANT",
-                                  "WORKCENTER"
-                                ]
-                              },
-                              "siteId": {
-                                "type": [
-                                  "null",
-                                  "string"
-                                ],
-                                "format": "uuid"
-                              },
-                              "workcenterId": {
-                                "type": [
-                                  "null",
-                                  "string"
-                                ],
-                                "format": "uuid"
-                              },
-                              "name": {
-                                "type": "string"
-                              },
-                              "level": {
-                                "type": "string",
-                                "enum": [
-                                  "VIEW",
-                                  "MANAGE",
-                                  "ADMIN"
-                                ]
-                              }
-                            }
-                          }
-                        },
-                        "siteIds": {
-                          "type": "array",
-                          "items": {
-                            "type": "string",
-                            "format": "uuid"
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
       }
     },
     "/workspaces/{id}/members/{userId}": {
@@ -3922,12 +3372,8 @@
                       "format": "uuid"
                     }
                   },
-                  "workspaceRole": {
-                    "type": "string",
-                    "enum": [
-                      "OWNER",
-                      "MEMBER"
-                    ]
+                  "isAccountAdmin": {
+                    "type": "boolean"
                   }
                 }
               }
@@ -3967,11 +3413,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "membershipId": {
+                    "userId": {
                       "type": "string",
                       "format": "uuid"
                     },
-                    "joinedAt": {
+                    "createdAt": {
                       "type": "string",
                       "format": "date-time"
                     },
@@ -4044,12 +3490,8 @@
                     "access": {
                       "type": "object",
                       "properties": {
-                        "workspaceRole": {
-                          "type": "string",
-                          "enum": [
-                            "OWNER",
-                            "MEMBER"
-                          ]
+                        "isAccountAdmin": {
+                          "type": "boolean"
                         },
                         "buckets": {
                           "type": "array",
