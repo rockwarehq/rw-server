@@ -135,15 +135,13 @@ export const gatewayGet = authRequired.input(gatewayIdInputSchema).handler(async
  */
 export const gatewayUpdate = authRequired.input(gatewayUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
-  // SPIKE: equipment lives in the site's Config bucket; configuring it is
-  // MANAGE. A gateway with no site (the unassigned pool) has NO bucket and
-  // is invisible here — the old "null site" escape hatch, felt directly.
+  // SPIKE v3: equipment is a plant thing; configuring it is MANAGE. A
+  // gateway with no site (the unassigned pool) is unhomed — owner territory.
   const gatewayRow = await prisma.gateway.findUnique({ where: { id }, select: { siteId: true } });
   if (!gatewayRow) throw new ORPCError("NOT_FOUND", { message: "Gateway not found" });
-  if (!gatewayRow.siteId) throw new ORPCError("FORBIDDEN", { message: "Unbucketed gateway (spike)" });
   const { workspaceId } = grant(
     await authorizeBucketTier(context.iam, {
-      ref: { kind: "site", siteId: gatewayRow.siteId, area: "PLANT_CONFIG" },
+      ref: gatewayRow.siteId ? { kind: "plant", siteId: gatewayRow.siteId } : { kind: "unhomed" },
       tier: "MANAGE",
     }),
   );

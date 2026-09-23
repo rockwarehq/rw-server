@@ -91,13 +91,8 @@ const nextNumberInputSchema = z.object({
 // ============================================================================
 
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  // SPIKE: orders live in the site's Office bucket; creating one is WORK.
-  grant(
-    await authorizeBucketTier(context.iam, {
-      ref: { kind: "site", siteId: input.siteId, area: "PLANT_OFFICE" },
-      tier: "WORK",
-    }),
-  );
+  // SPIKE v3: orders are plant things; writing the plant is MANAGE.
+  grant(await authorizeBucketTier(context.iam, { ref: { kind: "plant", siteId: input.siteId }, tier: "MANAGE" }));
 
   // DUPLICATE_PRODUCT here means duplicate products within the create payload
   // and historically fell through to BAD_REQUEST (unlike addLineItem, where the
@@ -109,13 +104,11 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
 });
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  // SPIKE: you either see the Office bucket (all site orders) or you don't —
-  // no per-row narrowing exists inside a bucket.
+  // SPIKE v3: every plant member reads the order book — you're in the
+  // plant or you're not; no per-row narrowing inside a bucket.
   const siteId = input.siteId ?? context.iam.siteId;
   if (!siteId) throw new ORPCError("BAD_REQUEST", { message: "Site context required" });
-  const scope = grant(
-    await authorizeBucketTier(context.iam, { ref: { kind: "site", siteId, area: "PLANT_OFFICE" }, tier: "VIEW" }),
-  );
+  const scope = grant(await authorizeBucketTier(context.iam, { ref: { kind: "plant", siteId }, tier: "VIEW" }));
   void scope;
   return orderService.list({ ...input, siteId });
 });

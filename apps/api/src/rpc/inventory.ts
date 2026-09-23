@@ -327,15 +327,12 @@ export const productCreate = authRequired.input(productCreateInputSchema).handle
  * List products with optional filters
  */
 export const productList = authRequired.input(productListInputSchema).handler(async ({ input, context }) => {
-  // SPIKE: catalogs live in the site's Library bucket; membership in ANY
-  // bucket at the site confers VIEW on the Library (the auto-membership hook).
+  // SPIKE v3: catalogs are common plant things; any access at the site
+  // makes you a plant member (the membership hook), and members read them.
   const librarySiteId = input.siteId ?? context.iam.siteId;
   if (!librarySiteId) throw new ORPCError("BAD_REQUEST", { message: "Site context required" });
   const scope = grant(
-    await authorizeBucketTier(context.iam, {
-      ref: { kind: "site", siteId: librarySiteId, area: "PLANT_LIBRARY" },
-      tier: "VIEW",
-    }),
+    await authorizeBucketTier(context.iam, { ref: { kind: "plant", siteId: librarySiteId }, tier: "VIEW" }),
   );
 
   void scope;

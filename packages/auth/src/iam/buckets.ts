@@ -1,10 +1,18 @@
-// ─── SPIKE: Basecamp-bucket access model (throwaway exploration) ─────────
+// ─── SPIKE: Basecamp-bucket access model, v3 (throwaway) ─────────────────
 //
-// The whole access model in one file. Every row belongs to exactly one
-// bucket; a person's access is the set of buckets they are in, each with a
-// tier (VIEW < WORK < MANAGE). There is no permission vocabulary: what you
-// can do is decided by WHERE the thing lives and WHETHER you are in that
-// bucket. Workspace owners/staff bypass, like Basecamp account roles.
+// The whole access model in one file, two container kinds:
+//
+//   PLANT (one per site)   — everyone at the plant is a member.
+//     VIEW   member: read all the common plant things.
+//     MANAGE write the plant and everything in it (cascades to every
+//            workcenter bucket at the site).
+//     ADMIN  the reserved shelf: people, access, dangerous settings.
+//   WORKCENTER (one per WC) — the crew.
+//     VIEW   watch this cell's floor.
+//     WORK   operate it.
+//
+// Workspace owners (owner:all) and Rockware staff bypass, like the Basecamp
+// account owner. No permission vocabulary anywhere.
 //
 // The one deliberate cheat: rows do not carry a bucketId column (that would
 // mean backfilling 117 tables). The resolver derives the bucket from the
@@ -15,10 +23,10 @@ import prisma from "@rw/db";
 import { type IAMContext, Principal } from "../context.js";
 import type { PolicyDenial } from "./policy.js";
 
-export type BucketKind = "WORKCENTER" | "PLANT_OFFICE" | "PLANT_LIBRARY" | "PLANT_CONFIG";
-export type BucketTier = "VIEW" | "WORK" | "MANAGE";
+export type BucketKind = "PLANT" | "WORKCENTER";
+export type BucketTier = "VIEW" | "WORK" | "MANAGE" | "ADMIN";
 
-const TIER_RANK: Record<BucketTier, number> = { VIEW: 1, WORK: 2, MANAGE: 3 };
+const TIER_RANK: Record<BucketTier, number> = { VIEW: 1, WORK: 2, MANAGE: 3, ADMIN: 4 };
 
 export interface BucketEntry {
   bucketId: string;
@@ -49,7 +57,9 @@ export type BucketRef =
   | { kind: "bucket"; bucketId: string }
   | { kind: "workcenter"; workcenterId: string }
   | { kind: "station"; stationId: string }
-  | { kind: "site"; siteId: string; area: Exclude<BucketKind, "WORKCENTER"> };
+  | { kind: "plant"; siteId: string }
+  /** A row no bucket owns (null-site pool rows): owner territory. */
+  | { kind: "unhomed" };
 
 const deny = (code: PolicyDenial["code"], message: string): PolicyDenial => ({ ok: false, code, message });
 
@@ -60,7 +70,7 @@ export async function loadBucketSnapshot(userId: string, workspaceId: string): P
   if (!user) return null;
   if (user.systemRole) {
     // Spike simplification: staff bypass. A real design would keep SUPPORT
-    // read-only (tier ceiling), which the bypass flag cannot express.
+    // read-only (a tier ceiling), which a bypass flag cannot express.
     return { admin: true, entries: [], byBucket: new Map() };
   }
 
@@ -93,25 +103,39 @@ export async function loadBucketSnapshot(userId: string, workspaceId: string): P
     tier: a.tier as BucketTier,
   }));
 
-  // The Library hook: being in ANY bucket at a site confers VIEW on that
-  // site's Library — shared catalogs are readable by every site member,
-  // the way everyone on a Basecamp project can read its Docs & Files.
-  const memberSiteIds = [...new Set(entries.map((e) => e.siteId).filter((s): s is string => s !== null))];
-  if (memberSiteIds.length > 0) {
-    const held = new Set(entries.map((e) => e.bucketId));
-    const libraries = await prisma.bucket.findMany({
-      where: { siteId: { in: memberSiteIds }, kind: "PLANT_LIBRARY" },
-      select: { id: true, siteId: true, workcenterId: true },
+  const held = new Set(entries.map((e) => e.bucketId));
+  const siteIds = [...new Set(entries.map((e) => e.siteId).filter((s): s is string => s !== null))];
+  if (siteIds.length > 0) {
+    const siteBuckets = await prisma.bucket.findMany({
+      where: { siteId: { in: siteIds } },
+      select: { id: true, kind: true, siteId: true, workcenterId: true },
     });
-    for (const lib of libraries) {
-      if (!held.has(lib.id)) {
+
+    // Membership hook: ANY access at a site makes you a member of its
+    // plant — "everyone at the plant is a member" is literal, including
+    // grant-only crew.
+    for (const b of siteBuckets) {
+      if (b.kind === "PLANT" && !held.has(b.id)) {
+        entries.push({ bucketId: b.id, kind: "PLANT", siteId: b.siteId, workcenterId: null, tier: "VIEW" });
+        held.add(b.id);
+      }
+    }
+
+    // Cascade: managing the plant means managing everything in it — every
+    // workcenter bucket at the site, without per-cell rows.
+    const managedSites = new Set(
+      entries.filter((e) => e.kind === "PLANT" && TIER_RANK[e.tier] >= TIER_RANK.MANAGE).map((e) => e.siteId),
+    );
+    for (const b of siteBuckets) {
+      if (b.kind === "WORKCENTER" && managedSites.has(b.siteId) && !held.has(b.id)) {
         entries.push({
-          bucketId: lib.id,
-          kind: "PLANT_LIBRARY",
-          siteId: lib.siteId,
-          workcenterId: lib.workcenterId,
-          tier: "VIEW",
+          bucketId: b.id,
+          kind: "WORKCENTER",
+          siteId: b.siteId,
+          workcenterId: b.workcenterId,
+          tier: "MANAGE",
         });
+        held.add(b.id);
       }
     }
   }
@@ -145,10 +169,9 @@ async function resolveBucket(ref: BucketRef): Promise<ResolvedBucket | null> {
       return b ? { bucketId: b.id, siteId: b.siteId } : null;
     }
     case "station": {
-      // A station with no workcenter has NO bucket. Under the old model
-      // "workcenterId IS NULL" meant readable site-wide; under buckets an
-      // unbucketed row is invisible to everyone but workspace admins. The
-      // spike keeps that consequence on purpose — feel it in the tests.
+      // A station with no workcenter has NO bucket: only workspace owners
+      // can touch it (the bypass runs before resolution). The old model's
+      // "workcenterId IS NULL means readable site-wide" hatch is gone.
       const station = await prisma.station.findUnique({
         where: { id: ref.stationId },
         select: { workcenterId: true },
@@ -156,13 +179,15 @@ async function resolveBucket(ref: BucketRef): Promise<ResolvedBucket | null> {
       if (!station?.workcenterId) return null;
       return resolveBucket({ kind: "workcenter", workcenterId: station.workcenterId });
     }
-    case "site": {
+    case "plant": {
       const b = await prisma.bucket.findFirst({
-        where: { siteId: ref.siteId, kind: ref.area },
+        where: { siteId: ref.siteId, kind: "PLANT" },
         select: { id: true, siteId: true },
       });
       return b ? { bucketId: b.id, siteId: b.siteId } : null;
     }
+    case "unhomed":
+      return null;
   }
 }
 
@@ -183,8 +208,22 @@ export async function authorizeBucketTier(
   const workspaceId = iam.workspaceId;
   if (!workspaceId) return deny("NO_WORKSPACE", "Workspace context required");
 
+  // Owners and staff bypass BEFORE resolution, so rows no bucket owns
+  // (device pool, workcenter-less stations) are owner-territory instead of
+  // universally invisible.
+  let snapshot: BucketSnapshot | null = null;
+  if (iam.principal === Principal.USER) {
+    snapshot = await loadBucketSnapshot(iam.id as string, workspaceId);
+    if (!snapshot) return deny("FORBIDDEN", "No workspace membership");
+  }
+
   const resolved = await resolveBucket(check.ref);
-  if (!resolved) return deny("NOT_FOUND", "No bucket owns this row");
+  if (!resolved) {
+    if (snapshot?.admin) {
+      return { ok: true, workspaceId, siteId: null, bucketId: "unhomed" };
+    }
+    return deny("NOT_FOUND", "No bucket owns this row");
+  }
 
   // Devices are site-bound, exactly as before: a display is implicitly in
   // every bucket of its own site. (A real design would bucket-bind devices.)
@@ -195,11 +234,9 @@ export async function authorizeBucketTier(
     return { ok: true, workspaceId, siteId: resolved.siteId, bucketId: resolved.bucketId };
   }
 
-  const snapshot = await loadBucketSnapshot(iam.id as string, workspaceId);
-  if (!snapshot) return deny("FORBIDDEN", "No workspace membership");
-  if (snapshot.admin) return { ok: true, workspaceId, siteId: resolved.siteId, bucketId: resolved.bucketId };
+  if (snapshot?.admin) return { ok: true, workspaceId, siteId: resolved.siteId, bucketId: resolved.bucketId };
 
-  const entry = snapshot.byBucket.get(resolved.bucketId);
+  const entry = snapshot?.byBucket.get(resolved.bucketId);
   if (!entry || TIER_RANK[entry.tier] < TIER_RANK[check.tier]) {
     return deny("FORBIDDEN", `Not in this bucket at tier ${check.tier}`);
   }
@@ -208,7 +245,7 @@ export async function authorizeBucketTier(
 
 // ── Visibility helpers (lists, trees, pickers) ───────────────────────────
 
-/** Sites where the principal holds any bucket — the "my projects" list. */
+/** Sites where the principal holds any bucket — the "my plants" list. */
 export async function bucketVisibleSiteIds(userId: string, workspaceId: string): Promise<"all" | string[]> {
   const snapshot = await loadBucketSnapshot(userId, workspaceId);
   if (!snapshot) return [];

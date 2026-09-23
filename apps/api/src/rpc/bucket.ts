@@ -35,7 +35,16 @@ const membersInputSchema = z.object({ bucketId: z.uuid() });
 
 /** Who's in this bucket — the whole sharing/roster UI in one query. */
 export const members = authRequired.input(membersInputSchema).handler(async ({ input, context }) => {
-  grant(await authorizeBucketTier(context.iam, { ref: { kind: "bucket", bucketId: input.bucketId }, tier: "MANAGE" }));
+  // SPIKE v3: rosters are on the reserved shelf — reading who has access
+  // is plant ADMIN territory (Basecamp: only admins see account people).
+  const target = await prisma.bucket.findUnique({ where: { id: input.bucketId }, select: { siteId: true } });
+  if (!target) throw new ORPCError("NOT_FOUND", { message: "Bucket not found" });
+  grant(
+    await authorizeBucketTier(context.iam, {
+      ref: target.siteId ? { kind: "plant", siteId: target.siteId } : { kind: "unhomed" },
+      tier: "ADMIN",
+    }),
+  );
 
   const accesses = await prisma.bucketAccess.findMany({
     where: { bucketId: input.bucketId },

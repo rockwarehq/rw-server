@@ -1,11 +1,17 @@
--- SPIKE (throwaway): Basecamp-bucket access model.
--- Every row belongs to one bucket; access = membership in the bucket with a
--- small tier. This migration creates the containers and compiles the
--- CURRENT access model (roles + workcenter grants) into bucket accesses so
--- the spike can be exercised against realistic data.
+-- SPIKE (throwaway): Basecamp-bucket access model, v3 — two containers.
+--
+-- The whole model: a PLANT bucket everyone at the site is in (member = read
+-- the common things; MANAGE = write the plant and everything in it; ADMIN =
+-- the reserved shelf), and one WORKCENTER bucket per cell for the crew
+-- (VIEW = watch, WORK = operate). Workspace owners bypass, like the
+-- Basecamp account owner. No permission vocabulary.
+--
+-- This migration creates the containers and compiles the CURRENT access
+-- model (roles + workcenter grants) into bucket accesses so the spike runs
+-- against realistic data.
 
-CREATE TYPE "BucketKind" AS ENUM ('WORKCENTER', 'PLANT_OFFICE', 'PLANT_LIBRARY', 'PLANT_CONFIG');
-CREATE TYPE "BucketTier" AS ENUM ('VIEW', 'WORK', 'MANAGE');
+CREATE TYPE "BucketKind" AS ENUM ('PLANT', 'WORKCENTER');
+CREATE TYPE "BucketTier" AS ENUM ('VIEW', 'WORK', 'MANAGE', 'ADMIN');
 
 CREATE TABLE "Bucket" (
   "id" UUID NOT NULL,
@@ -41,24 +47,22 @@ CREATE INDEX "BucketAccess_membershipId_idx" ON "BucketAccess"("membershipId");
 
 -- ── Bootstrap the containers ─────────────────────────────────────────────
 
--- One bucket per workcenter (the floor "project").
+-- One PLANT bucket per site.
+INSERT INTO "Bucket" ("id", "workspaceId", "siteId", "kind", "workcenterId", "name", "updatedAt")
+SELECT gen_random_uuid(), s."workspaceId", s."id", 'PLANT', NULL, s."name", now()
+FROM "Site" s;
+
+-- One WORKCENTER bucket per workcenter.
 INSERT INTO "Bucket" ("id", "workspaceId", "siteId", "kind", "workcenterId", "name", "updatedAt")
 SELECT gen_random_uuid(), s."workspaceId", wc."siteId", 'WORKCENTER', wc."id", wc."name", now()
 FROM "Workcenter" wc JOIN "Site" s ON s."id" = wc."siteId";
 
--- Three structural buckets per site.
-INSERT INTO "Bucket" ("id", "workspaceId", "siteId", "kind", "workcenterId", "name", "updatedAt")
-SELECT gen_random_uuid(), s."workspaceId", s."id", k.kind::"BucketKind", NULL, s."name" || ' — ' || k.label, now()
-FROM "Site" s
-CROSS JOIN (VALUES ('PLANT_OFFICE', 'Office'), ('PLANT_LIBRARY', 'Library'), ('PLANT_CONFIG', 'Config')) AS k(kind, label);
-
 -- ── Compile today's access model into bucket accesses ────────────────────
--- Tier mapping from the eight-key model:
---   planning:read  -> VIEW on Office        planning:write -> WORK on Office
---   production:*   -> (site-wide holders)   VIEW/WORK/MANAGE on every WC bucket
---   configuration:write -> MANAGE on Config plant:admin -> MANAGE everywhere
---   WorkcenterGrant READ/WRITE -> VIEW/WORK on that workcenter's bucket.
--- Company Administrator (owner:all) is a workspace-level bypass: no rows.
+--   Plant Member (planning:read)            -> PLANT VIEW  (member)
+--   Planner / Plant Engineer (writes)       -> PLANT MANAGE
+--   Plant Admin (plant:admin)               -> PLANT ADMIN
+--   WorkcenterGrant READ / WRITE            -> that WC bucket VIEW / WORK
+--   Company Administrator (owner:all)       -> workspace bypass, no rows.
 
 WITH site_roles AS (
   SELECT ra."membershipId", ra."siteId", r."permissions"
@@ -66,37 +70,19 @@ WITH site_roles AS (
   WHERE ra."siteId" IS NOT NULL AND NOT r."permissions" @> ARRAY['owner:all']
 ),
 wanted AS (
-  -- Office
   SELECT sr."membershipId", b."id" AS bucket_id,
-         CASE WHEN sr."permissions" && ARRAY['plant:admin'] THEN 'MANAGE'
-              WHEN sr."permissions" && ARRAY['planning:write','production:admin'] THEN 'WORK'
+         CASE WHEN sr."permissions" && ARRAY['plant:admin'] THEN 'ADMIN'
+              WHEN sr."permissions" && ARRAY['planning:write','production:write','production:admin','configuration:write'] THEN 'MANAGE'
               ELSE 'VIEW' END AS tier
-  FROM site_roles sr JOIN "Bucket" b ON b."siteId" = sr."siteId" AND b."kind" = 'PLANT_OFFICE'
-  WHERE sr."permissions" && ARRAY['planning:read','planning:write','production:admin','plant:admin']
+  FROM site_roles sr JOIN "Bucket" b ON b."siteId" = sr."siteId" AND b."kind" = 'PLANT'
   UNION ALL
-  -- Config
-  SELECT sr."membershipId", b."id",
-         CASE WHEN sr."permissions" && ARRAY['plant:admin','configuration:write'] THEN 'MANAGE' ELSE 'VIEW' END
-  FROM site_roles sr JOIN "Bucket" b ON b."siteId" = sr."siteId" AND b."kind" = 'PLANT_CONFIG'
-  WHERE sr."permissions" && ARRAY['configuration:read','configuration:write','plant:admin','production:admin']
-  UNION ALL
-  -- Every workcenter bucket at the site, for site-wide production holders
-  SELECT sr."membershipId", b."id",
-         CASE WHEN sr."permissions" && ARRAY['production:admin','plant:admin'] THEN 'MANAGE'
-              WHEN sr."permissions" && ARRAY['production:write'] THEN 'WORK'
-              ELSE 'VIEW' END
-  FROM site_roles sr JOIN "Bucket" b ON b."siteId" = sr."siteId" AND b."kind" = 'WORKCENTER'
-  WHERE sr."permissions" && ARRAY['production:read','production:write','production:admin','plant:admin']
-  UNION ALL
-  -- Workcenter grants -> that one workcenter's bucket
   SELECT g."membershipId", b."id",
          CASE WHEN g."access" = 'WRITE' THEN 'WORK' ELSE 'VIEW' END
   FROM "WorkcenterGrant" g JOIN "Bucket" b ON b."workcenterId" = g."workcenterId"
 ),
 best AS (
-  -- Highest tier wins when several sources grant the same bucket.
   SELECT "membershipId", bucket_id,
-         (array_agg(tier ORDER BY CASE tier WHEN 'MANAGE' THEN 3 WHEN 'WORK' THEN 2 ELSE 1 END DESC))[1] AS tier
+         (array_agg(tier ORDER BY CASE tier WHEN 'ADMIN' THEN 4 WHEN 'MANAGE' THEN 3 WHEN 'WORK' THEN 2 ELSE 1 END DESC))[1] AS tier
   FROM wanted GROUP BY "membershipId", bucket_id
 )
 INSERT INTO "BucketAccess" ("id", "bucketId", "membershipId", "tier", "updatedAt")

@@ -1,129 +1,109 @@
-# Spike: Basecamp-bucket access control
+# Spike: Basecamp-bucket access control (v3 — Plant + Workcenter)
 
-**Throwaway branch. Do not merge.** This explores what our access control
-would look like if it worked like Basecamp's buckets: every row lives in
-exactly one bucket, your access is the list of buckets you are in, and
-that's the whole model. No permission strings anywhere.
+**Throwaway branch. Do not merge.** This explores access control architected
+like Basecamp's buckets: rows live in containers, your access is the
+containers you are in, and that's the whole model. No permission strings.
 
-## What was built
+## The model (two containers, one ladder)
 
-- `Bucket` + `BucketAccess` tables (`packages/db/schema/iam.prisma`, spike
-  section) with a migration that bootstraps buckets from existing data and
-  compiles today's roles + workcenter grants into bucket memberships.
-- One evaluator file (`packages/auth/src/iam/buckets.ts`, ~230 lines): one
-  snapshot loader, **one resolver**, **one gate** (`authorizeBucketTier`),
-  two visibility helpers. This file replaces, for the converted slice: the
-  permission catalog, the implication rules, 54 per-kind policy resolvers,
-  and the role/grant evaluators.
-- A converted vertical slice: station get/update/changeJob, order
-  list/create, product list, gateway update, the bare site tree, plus a new
-  `bucket.list` / `bucket.members` admin surface.
-- `apps/api/test/bucket-spike.test.ts`: 8 passing tests against a dedicated
-  database (`rw_bucket_spike`) exercising the whole model.
+| Container | Who's in it | Tier | Meaning |
+| --- | --- | --- | --- |
+| **Plant** (one per site) | everyone at the plant | **member** (VIEW) | read all the common plant things: orders, customers, schedules, catalogs, taxonomy, jobs, stock, dashboards, documents, equipment lists |
+| | | **MANAGE** | write the plant and everything in it — including every workcenter (the cascade) |
+| | | **ADMIN** | the reserved shelf: people/rosters, access administration, dangerous settings |
+| **Workcenter** (one per cell) | the crew | **VIEW** | watch this cell's floor |
+| | | **WORK** | operate it (jobs, downtime, calls, comments) |
 
-## The shape of the model
+Completing rules:
+- **Membership hook:** any workcenter access ⇒ plant member. "Everyone at
+  the plant is a member" is literal, including grant-only crew.
+- **Cascade:** plant MANAGE ⇒ MANAGE on every workcenter bucket at the
+  site, with zero per-cell rows.
+- **Floor visibility is crew membership**, not plant membership — same as
+  the shipped target model.
+- **Unhomed rows** (device pool, workcenter-less stations): workspace-owner
+  territory. A rule in the gate, not a container.
+- Workspace owners (Company Administrator) and staff bypass, like the
+  Basecamp account owner.
 
-| Bucket kind | What lives in it | Who's usually in it |
-| --- | --- | --- |
-| one per **workcenter** | stations, cycles, downtime, calls, comments | operators (WORK), cell leads (MANAGE), viewers (VIEW) |
-| **Office** (one per plant) | orders, customers, scheduling, stock | planners (WORK), members (VIEW) |
-| **Library** (one per plant) | products, materials, tools, jobs-as-definitions, status reasons, labels | *everyone in any bucket at the plant, automatically (VIEW)* |
-| **Config** (one per plant) | gateways, datasources, graph, integrations | engineers (MANAGE) |
+Role translation from the shipped 8-key model is exact: Plant Member →
+plant member · Plant Engineer → plant MANAGE · Plant Admin → plant ADMIN ·
+WorkcenterGrant READ/WRITE → workcenter VIEW/WORK · Company Administrator
+→ owner. **Two concepts replace eight keys + implication rules + grant
+maps.**
 
-Three tiers: `VIEW < WORK < MANAGE`. Workspace ownership (`owner:all`) and
-Rockware staff bypass buckets entirely, like the Basecamp account owner.
+## How the containers got here (the review trail)
 
-Access questions become one sentence: *"Is Maria in the Line 2 bucket, and
-at what tier?"* The admin UI is a roster per bucket (`bucket.members`), and
-a user's whole access story is `bucket.list`.
+- v1 shipped three site containers (Office / Library / Config) + workcenter
+  buckets. Review found five placement problems: Library mixed two write
+  audiences, jobs and stock were parked by default rather than by
+  principle, consume-universal artifacts (dashboards) were scattered,
+  people-administration had no container, and null-site rows were
+  untouchable by anyone.
+- A 6-kind fix (add People + HQ, split cleanly) solved all five but
+  multiplied places — rejected: containers are supposed to be few.
+- The keeper insight: **containers separate readers; tiers separate what
+  members do.** At a plant there are only two read-worlds that matter —
+  "everyone here" and "this cell's crew". That collapses every site
+  container into ONE Plant bucket whose ladder (member / manage / admin)
+  carries the write distinctions, with the reserved shelf handling the few
+  admin-only reads (people data).
 
-## What felt great in code
+## What the code shows (all pinned by tests)
 
-1. **One gate.** Every converted handler is
-   `authorizeBucketTier(iam, { ref, tier })`. No choosing a permission key,
-   no wondering whether reads should be `production:read` or
-   `configuration:read` — the decision was made once, when the data was
-   assigned to a bucket. The month of call-site mapping this repo just did
-   (iterations 3–5) was exactly the cost of NOT having that property.
-2. **One resolver.** `resolveBucket()` (a switch with 4 arms) stands in for
-   `policy-resolvers.ts`'s 54 kinds. With a real `bucketId` column it would
-   be a single indexed lookup for every row type, forever.
-3. **The admin surface collapses.** Roles, role assignments, workcenter
-   grants, and the `/users/me` permission expansion become two queries:
-   my buckets, this bucket's members.
-4. **The Library hook.** "Everyone at the plant can read the catalogs"
-   stopped being a special `authorizeReferenceRead` code path and became a
-   membership rule.
+- The crew operates its cell, reads the plant's common things, configures
+  nothing; configuring any station is plant MANAGE via the cascade — no
+  per-cell grants for managers.
+- A member reads orders and catalogs and sees no floor.
+- MANAGE writes orders, equipment, and any station; rosters still deny.
+- ADMIN reads rosters (`bucket/members`) on top of everything MANAGE has.
+- The owner alone touches unhomed rows (pool gateway, workcenter-less
+  station); for everyone else they don't exist.
+- `bucket/list` shows the whole access story in one call — hook and
+  cascade entries included.
 
-## What broke, honestly
+## Deltas vs the shipped model (the price of two containers)
 
-1. **The escape hatch is the load-bearing wall.** Today,
-   `workcenterId IS NULL` means "readable site-wide" — and a census of all
-   117 models shows **53% of the schema lives in that hatch** (36
-   site-anchored models + 26 catalogs), while only 19% anchors to a
-   workcenter. Buckets have no hatch. The spike's answer (Office / Library /
-   Config buckets per plant) works, but it means most of the "bucket" model
-   is really three site-wide areas — closer to our current site scoping
-   than to Basecamp's many-small-projects world.
-2. **Unbucketed rows become invisible to everyone.** A station with no
-   workcenter, a gateway in the unassigned pool: no bucket → `NOT_FOUND`,
-   even for the workspace owner (test: "the escape hatch is gone"). Real
-   adoption must either forbid unhomed rows (make `workcenterId` required,
-   give the pool an HQ bucket) or reinvent the hatch — and reinventing the
-   hatch is how you end up back where you started.
-3. **The stamp is not the owner.** Fact rows carry `workcenterId` as a
-   nullable, drifting BI stamp: `station.move` re-points a station without
-   touching 9 fact tables' history, and job-history amendment re-stamps old
-   rows from the station's *current* workcenter. Promoting the stamp to the
-   access key forces a decision nobody has had to make yet: when a machine
-   moves cells, does its history move buckets (operators lose their own
-   past) or stay (the new cell can't see the machine's history)? Basecamp
-   never faces this because recordings don't migrate between projects.
-4. **Shared rows with no single home.** A site-level `ShiftInstance` is one
-   row serving every workcenter; `ProductStock` is keyed by site+product;
-   SITE-grain metric rollups aggregate every bucket; `DocumentLink` can
-   point one document at targets in several workcenters. One-bucket-per-row
-   has no honest answer for these — they'd all migrate to site-area buckets,
-   further shrinking the "project-like" part of the model.
-5. **Aggregation is the workload.** Reports, shift recap, metrics rollups,
-   and the nine site-wide log-search endpoints all deliberately span
-   buckets. Basecamp's UI rarely aggregates across projects; a factory's UI
-   does it constantly. Every one of those surfaces would need
-   "union of my buckets" query narrowing — buildable (the
-   `bucketWorkcenterIds` helper is the seam), but it is most of the
-   adoption cost and none of the elegance.
+1. **Planner merges into plant MANAGE.** A three-step ladder has no
+   "writes orders but not equipment" rung. If that role matters, the
+   escape is one extra rung on the Plant ladder (WORK = planning writes) —
+   a tier, not a container.
+2. **Crew reads the order book** (membership hook makes them plant
+   members). Arguably a feature: the floor sees what to produce.
+3. **Members read equipment/config lists** (they're common things);
+   changing them stays MANAGE.
+4. **People data goes wholly behind ADMIN** — engineers no longer read the
+   roster.
 
-## What the spike faked
+## What still fights the schema (unchanged from v1, still true)
 
-- Rows don't carry `bucketId`; the resolver derives the bucket from
-  existing ownership columns. Real adoption = a `bucketId` column + backfill
-  on every content table, plus bucket creation hooks on site/workcenter
-  create (the test mirrors the hook manually).
-- No per-request snapshot caching (the gate loads fresh per call).
-- Devices keep today's site binding instead of real bucket binding.
-- Staff SUPPORT became a full bypass; a real design needs a read-only
-  ceiling the bypass flag can't express.
-- Aggregation surfaces were left on the existing policy.
+- Fact-row `workcenterId` is a drifting BI stamp (`station.move` re-points
+  without re-stamping 9 fact tables; job amendments re-stamp from current
+  state). Crew-visible history vs moved machines needs a decision the key
+  model never forced.
+- One-row-many-buckets cases remain: site-level `ShiftInstance`,
+  `ProductStock`, multi-target `DocumentLink`, SITE-grain metric rollups —
+  though under v3 they all land naturally in the Plant bucket, which
+  defuses most of them.
+- Site-wide aggregation surfaces (reports, recap, metrics, log search)
+  need "union of my workcenter buckets" narrowing (`bucketWorkcenterIds`
+  is the seam). This is the bulk of real adoption work.
+
+## What the spike fakes
+
+Rows don't carry `bucketId` (the resolver derives it from existing
+ownership columns); no per-request snapshot caching; devices keep site
+binding instead of bucket binding; staff SUPPORT is a full bypass instead
+of a read-only ceiling; aggregation surfaces stay on the existing policy.
 
 ## Verdict
 
-The bucket model is genuinely better at the two things Basecamp built it
-for: **explaining access** ("who's in this bucket") and **enforcing it
-cheaply** (one gate, one resolver). It is genuinely worse at the two things
-a factory system does all day: **site-wide aggregation** and **rows whose
-home moves or is shared**. The census says this schema is a site-anchored
-system with a workcenter-shaped floor slice — which is why the honest
-bucket design here collapses to "three site areas + workcenter projects",
-and that is functionally the model the 8-key simplification already
-shipped, expressed as containers instead of keys.
-
-**If this direction is ever wanted for real**, the incremental path exists
-and is cheap to start: (1) add `bucketId` + creation hooks and dual-write
-it alongside today's model, (2) move the admin/sharing UI to
-buckets-as-the-surface (compiling to roles/grants underneath — no evaluator
-risk), (3) only then consider swapping the evaluator, domain by domain, the
-same way the vocabulary migration was done. Step 2 alone captures most of
-the UX win ("who's in this bucket") with none of the data-model risk.
+v3 is the version worth taking seriously. It is *simpler than the shipped
+model* (two containers and a ladder vs eight keys, implication rules and
+grant maps), it translates the shipped built-ins exactly, and the
+migration path is incremental: keep the shipped evaluator, put buckets on
+top as the sharing/administration surface (compiling to roles + grants),
+and only swap the enforcement underneath if the surface proves itself.
 
 ## Running it
 

@@ -91,16 +91,15 @@ model RoleAssignment {
 // diff small. See SPIKE.md on this branch.
 
 enum BucketKind {
-  WORKCENTER // one per workcenter: the floor "project"
-  PLANT_OFFICE // one per site: orders, customers, scheduling, stock
-  PLANT_LIBRARY // one per site: shared catalogs, readable by any site member
-  PLANT_CONFIG // one per site: equipment, data models, integrations
+  PLANT // one per site: everyone at the plant is a member
+  WORKCENTER // one per workcenter: the crew's floor bucket
 }
 
 enum BucketTier {
-  VIEW // see everything in the bucket
-  WORK // operate: create/edit the bucket's day-to-day rows
-  MANAGE // configure the bucket and its contents; admin actions
+  VIEW // Plant: member (read the common things). Workcenter: watch the floor.
+  WORK // Workcenter only: operate the cell.
+  MANAGE // Plant: write the plant and everything in it (cascades to every workcenter).
+  ADMIN // Plant only: the reserved shelf — people, access, dangerous settings.
 }
 
 model Bucket {
