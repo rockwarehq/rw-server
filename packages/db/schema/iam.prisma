@@ -27,6 +27,10 @@ model Role {
   description String?
   scope       RoleScope
   permissions String[]
+  /// Exact permission array as it was before the vocabulary expand
+  /// migration copied it here. Review aid and rollback source while both
+  /// permission vocabularies exist; removed when the legacy keys go away.
+  legacyPermissions Json?
   isSystem    Boolean   @default(false)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
