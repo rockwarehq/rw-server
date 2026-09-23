@@ -59,7 +59,7 @@ describe("shift recap metric buckets", () => {
       mocks.metricBucketLog.findMany.mock.invocationCallOrder[0],
     );
     expect(mocks.authorize).toHaveBeenCalledWith(context.iam, {
-      permission: "job:read",
+      permission: "production:read",
       scope: { kind: "site", siteId: input.siteId },
     });
     expect(mocks.station.findMany).toHaveBeenCalledWith({

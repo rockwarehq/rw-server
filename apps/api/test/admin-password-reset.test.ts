@@ -61,13 +61,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("admin password reset (Tier 2)",
 
     const workspace = await prisma.workspace.findUniqueOrThrow({ where: { slug: "default" } });
 
-    // Workspace-scoped user:admin role that is NOT an owner role
+    // Workspace-scoped plant:admin role that is NOT an owner role
     const role = await prisma.role.create({
       data: {
         workspaceId: workspace.id,
         name: ROLE_NAME,
         scope: "WORKSPACE",
-        permissions: ["user:read", "user:write", "user:admin"],
+        permissions: ["plant:admin"],
         isSystem: false,
       },
     });
@@ -211,7 +211,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("admin password reset (Tier 2)",
     expect(system.statusCode).toBe(403);
   });
 
-  it("denies a caller without user:admin", async () => {
+  it("denies a caller without plant:admin", async () => {
     const targetTokens = await login(server, TARGET_EMAIL, "ExplicitTemp123!");
     const res = await server.inject({
       method: "POST",

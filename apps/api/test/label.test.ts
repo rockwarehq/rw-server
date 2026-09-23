@@ -78,12 +78,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("labels and station filters (Tie
     // (no writes at all) and a Plant Admin could also create labels.
     const officeRole = await prisma.role.upsert({
       where: { workspaceId_name_scope: { workspaceId, name: `${PREFIX}-job-writer`, scope: "SITE" } },
-      update: { permissions: ["facility:read", "job:read", "job:write"] },
+      update: { permissions: ["production:read", "production:write"] },
       create: {
         workspaceId,
         name: `${PREFIX}-job-writer`,
         scope: "SITE",
-        permissions: ["facility:read", "job:read", "job:write"],
+        permissions: ["production:read", "production:write"],
       },
       select: { id: true },
     });

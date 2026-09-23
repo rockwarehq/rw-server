@@ -89,7 +89,7 @@ export const getSnapshots = userOrDisplayRequired
     // Displays are pinned to their own site by the policy; site-scoped users
     // must have every point inside an accessible site; all-sites users keep
     // the existence/workspace validation.
-    const scope = grant(await authorizeList(context.iam, { permission: "facility:read" }));
+    const scope = grant(await authorizeList(context.iam, { permission: "production:read" }));
     const accessValidationResult: ValidatePointSiteAccessResult = await validatePointSiteAccess(pointIds, scope.siteId);
 
     if (!accessValidationResult.success) {
@@ -109,7 +109,7 @@ export const stream = userOrDisplayRequired
     // Displays are pinned to their own site by the policy; site-scoped users
     // must have every point inside an accessible site; all-sites users keep
     // the existence/workspace validation.
-    const scope = grant(await authorizeList(context.iam, { permission: "facility:read" }));
+    const scope = grant(await authorizeList(context.iam, { permission: "production:read" }));
     const accessValidationResult: ValidatePointSiteAccessResult = await validatePointSiteAccess(pointIds, scope.siteId);
 
     if (!accessValidationResult.success) {

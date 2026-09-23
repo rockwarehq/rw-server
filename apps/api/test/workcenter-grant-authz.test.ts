@@ -151,9 +151,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("workcenter grant authorization 
       expect(products.statusCode).toBe(200);
     });
 
-    it("WRITE grant writes global resources site-wide", async () => {
+    it("WRITE grant no longer creates site-level jobs — grants confer workcenter production access only", async () => {
       const created = await rpcCall(server, "job/create", { siteId: siteA.id, name: `${PREFIX}-job-1` }, writeToken);
-      expect(created.statusCode).toBe(200);
+      expect(created.statusCode).toBe(403);
     });
 
     it("READ grant cannot write anything", async () => {

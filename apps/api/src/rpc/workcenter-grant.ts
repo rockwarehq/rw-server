@@ -28,7 +28,9 @@ const removeInputSchema = z.object({
 });
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(await authorize(context.iam, { permission: "user:read", scope: { kind: "anySite" } }));
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "plant:admin", scope: { kind: "anySite" } }),
+  );
 
   const rows = input.userId
     ? await workcenterGrants.listForUser(input.userId, workspaceId)
@@ -38,7 +40,7 @@ export const list = authRequired.input(listInputSchema).handler(async ({ input, 
 
 export const upsert = authRequired.input(upsertInputSchema).handler(async ({ input, context }) => {
   grant(
-    await authorize(context.iam, { permission: "user:admin", scope: { kind: "workcenter", id: input.workcenterId } }),
+    await authorize(context.iam, { permission: "plant:admin", scope: { kind: "workcenter", id: input.workcenterId } }),
   );
 
   try {
@@ -50,7 +52,7 @@ export const upsert = authRequired.input(upsertInputSchema).handler(async ({ inp
 
 export const remove = authRequired.input(removeInputSchema).handler(async ({ input, context }) => {
   grant(
-    await authorize(context.iam, { permission: "user:admin", scope: { kind: "workcenter", id: input.workcenterId } }),
+    await authorize(context.iam, { permission: "plant:admin", scope: { kind: "workcenter", id: input.workcenterId } }),
   );
 
   await workcenterGrants.removeGrant(input);

@@ -275,15 +275,16 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
 
-      // Spinning up another workspace is an org-level privilege: require
-      // settings:admin in the caller's workspace. A token without workspace
-      // context cannot prove it, so it is denied (fail-closed).
+      // Spinning up another workspace is an ownership-level privilege:
+      // reserved company ownership (owner:all) in the caller's workspace. A
+      // token without workspace context cannot prove it, so it is denied
+      // (fail-closed).
       if (!workspaceId) {
         return reply.status(401).send({ error: "No workspace context" });
       }
-      const ok = await hasPermission(userId, "settings:admin", { workspaceId });
+      const ok = await hasPermission(userId, "owner:all", { workspaceId });
       if (!ok) {
-        return reply.status(403).send({ error: "forbidden", required: "settings:admin" });
+        return reply.status(403).send({ error: "forbidden", required: "owner:all" });
       }
 
       if (request.body.slug && (await workspace.slugExists(request.body.slug))) {
@@ -336,7 +337,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "PUT",
     url: "/:id",
-    preHandler: [fastify.verifyAccessToken, requirePermission("settings:write", { workspaceParam: "id" })],
+    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { workspaceParam: "id" })],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -357,11 +358,11 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
     },
   });
 
-  // Delete workspace (requires settings:admin — ownership-level destructive op)
+  // Delete workspace (ownership-level destructive op)
   fastify.route({
     method: "DELETE",
     url: "/:id",
-    preHandler: [fastify.verifyAccessToken, requirePermission("settings:admin", { workspaceParam: "id" })],
+    preHandler: [fastify.verifyAccessToken, requirePermission("owner:all", { workspaceParam: "id" })],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -408,7 +409,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       if (!isMember) {
         return reply.status(403).send({ error: "Not a member of this workspace" });
       }
-      const auth = await authorize(request.iam, { permission: "user:read", scope: { kind: "anySite" } });
+      const auth = await authorize(request.iam, { permission: "plant:admin", scope: { kind: "anySite" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       return workspace.listMembers(request.params.id);
@@ -419,7 +420,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/members",
-    preHandler: [fastify.verifyAccessToken, requirePermission("user:write", { workspaceParam: "id" })],
+    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { workspaceParam: "id" })],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -511,7 +512,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
     url: "/:id/members/:userId",
     preHandler: [
       fastify.verifyAccessToken,
-      requirePermission("user:admin", { workspaceParam: "id", scope: "workspace" }),
+      requirePermission("plant:admin", { workspaceParam: "id", scope: "workspace" }),
     ],
     schema: {
       tags: ["workspaces"],
@@ -558,7 +559,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "DELETE",
     url: "/:id/members/:userId/site-access",
-    preHandler: [fastify.verifyAccessToken, requirePermission("user:admin", { scope: "site" })],
+    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { scope: "site" })],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],

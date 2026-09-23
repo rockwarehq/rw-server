@@ -64,7 +64,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
         workspaceId,
         name: ROLE_NAME,
         scope: "WORKSPACE",
-        permissions: ["user:read", "user:write"],
+        permissions: ["plant:admin"],
         isSystem: false,
       },
     });
@@ -195,7 +195,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
     });
     expect(inviteCompleted).toBeTruthy();
 
-    // Same token, previously blocked route now passes (invitee has user:read)
+    // Same token, previously blocked route now passes (invitee has plant:admin)
     const unblocked = await server.inject({
       method: "GET",
       url: "/users",
@@ -312,13 +312,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
     expect((res.json() as { error: string }).error).toBe("User is disabled");
   });
 
-  it("permission matrix: no user:write means no invite/revoke; owner invites need owner:all", async () => {
+  it("permission matrix: no plant:admin means no invite/revoke; owner invites need owner:all", async () => {
     expect((await invite(nopermToken, { email: "nope@test.local", roleId })).statusCode).toBe(403);
 
     const pending = await prisma.user.findUniqueOrThrow({ where: { email: INVITEE_EMAILS[1] } });
     expect((await revoke(nopermToken, pending.id)).statusCode).toBe(403);
 
-    // user:write is not enough to hand out the owner role
+    // plant:admin is not enough to hand out the owner role
     const ownerByInviter = await invite(inviterToken, { email: INVITEE_EMAILS[8], roleId: ownerRoleId });
     expect(ownerByInviter.statusCode).toBe(403);
 
@@ -416,7 +416,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
         workspaceId: ws3.id,
         name: "Company Administrator",
         scope: "WORKSPACE",
-        permissions: ["owner:all", "user:admin", "user:write", "user:read"],
+        permissions: ["owner:all", "plant:admin"],
         isSystem: true,
       },
     });
@@ -425,7 +425,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
         workspaceId: ws3.id,
         name: "WS3 User Admin",
         scope: "WORKSPACE",
-        permissions: ["user:read", "user:admin"],
+        permissions: ["plant:admin"],
         isSystem: false,
       },
     });

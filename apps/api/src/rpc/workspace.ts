@@ -8,7 +8,9 @@ import { grant } from "./authz.js";
 const emptyInputSchema = z.object({});
 
 export const listUserRoles = authRequired.input(emptyInputSchema).handler(async ({ context }) => {
-  const { workspaceId } = grant(await authorize(context.iam, { permission: "user:read", scope: { kind: "anySite" } }));
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "plant:admin", scope: { kind: "anySite" } }),
+  );
 
   const roleList = await roles.list(workspaceId);
 
@@ -27,7 +29,9 @@ export const listUserRoles = authRequired.input(emptyInputSchema).handler(async 
 });
 
 export const listMembers = authRequired.input(emptyInputSchema).handler(async ({ context }) => {
-  const { workspaceId } = grant(await authorize(context.iam, { permission: "user:read", scope: { kind: "anySite" } }));
+  const { workspaceId } = grant(
+    await authorize(context.iam, { permission: "plant:admin", scope: { kind: "anySite" } }),
+  );
 
   return { data: await workspaceService.listMembers(workspaceId) };
 });

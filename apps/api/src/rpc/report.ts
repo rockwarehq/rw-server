@@ -98,7 +98,7 @@ export const schema = userOrDisplayRequired
     }
     if (granted.size === 0) {
       // No catalog access at all — surface the denial instead of an empty list.
-      grant(await authorizeList(context.iam, { permission: "job:read", requestedSiteId: input.siteId }));
+      grant(await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }));
     }
     return { facts: reportSchema(granted) };
   });

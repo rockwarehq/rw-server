@@ -146,7 +146,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
         name: CUSTOM_SITE_ADMIN_ROLE,
         scope: "SITE",
         // facility:read is what makes a site "accessible" for switch-site
-        permissions: ["facility:read", "user:read", "user:admin"],
+        permissions: ["plant:admin"],
         isSystem: false,
       },
     });
@@ -266,7 +266,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
     expect(res.json()).toEqual({ error: "Cannot remove yourself" });
   });
 
-  it("tightened org route: site-scoped user:admin cannot delete workspace memberships", async () => {
+  it("tightened org route: site-scoped plant:admin cannot delete workspace memberships", async () => {
     const res = await removeMember(customAdminToken, otherSiteUserId);
     expect(res.statusCode).toBe(403);
 
