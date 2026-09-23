@@ -7,7 +7,7 @@ The Prisma schema is split across ~24 domain files in `packages/db/schema/`. Thi
 ```mermaid
 graph TD
   ws[Workspace] --> site[Site]
-  ws --> user[User + WorkspaceMembership]
+  ws --> user[User + BucketAccess]
   site --> wc["Workcenter (self-nesting)"]
   wc --> st[Station]
   site --> gw[Gateway] --> ds[Datasource] --> pt[Point / Group]

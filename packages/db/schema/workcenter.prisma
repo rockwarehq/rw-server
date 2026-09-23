@@ -29,7 +29,6 @@ model Workcenter {
   signoffs            ShiftSignoff[]
   calls               Call[]
   modeLogs            StationModeLog[]
-  grants              WorkcenterGrant[] // ARCHIVED
   cycles              Cycle[]
   inventoryItems      InventoryItem[]
   stateLogs           StationStateLog[]

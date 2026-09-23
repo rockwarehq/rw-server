@@ -44,8 +44,8 @@ Opaque `rw_app_`-prefixed tokens for customer integrations: SHA-256 hash lookup 
 ## RBAC
 
 - Access is bucket membership: a PLANT bucket per site (VIEW = read, MANAGE = "member": change the shared plant things, ADMIN = shop-floor setup + people/access + every workcenter) and a WORKCENTER bucket per cell (VIEW = watch, MANAGE = run the cell). Floor data (logs, metrics, recaps) stays in its workcenter even on plant-wide screens. Account admins (`User.isAccountAdmin`) and Rockware staff bypass. Each deployment serves one workspace (the account): `Workspace.singletonGuard` keeps it to one row, and users carry no workspace membership. No permission vocabulary; evaluated in `packages/auth/src/iam/access.ts`.
-- Access rows are `BucketAccess` (membership ↔ bucket ↔ level; schema: `packages/db/schema/bucket/`). The old `Role` / `RoleAssignment` / `WorkcenterGrant` tables are a frozen archive with no code paths (`packages/db/schema/archive/`).
-- `SystemRole` (SUPPORT, ENGINEER) marks internal staff without workspace membership.
+- Access rows are `BucketAccess` (user ↔ bucket ↔ level; schema: `packages/db/schema/bucket/`). The old `Role` / `RoleAssignment` / `WorkcenterGrant` / `WorkspaceMember` tables were dropped in migration `20260929100000_drop_dead_models`.
+- `SystemRole` (SUPPORT, ENGINEER) marks internal staff. They hold no bucket access and are not account admins.
 - Enforcement is two-level: oRPC middleware admits the right kinds of caller (user, display, API token); handlers then ask `context.access` (for example `await context.access.require("MANAGE", { station: id })`), which throws `AccessDenied` on a "no".
 
 ## Session flow (app-side, `apps/api/src/auth/session.ts`)

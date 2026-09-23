@@ -64,7 +64,6 @@ model User {
 
   // Relations
   bucketAccesses          BucketAccess[]
-  memberships             WorkspaceMembership[] // ARCHIVED
   refreshTokens           RefreshToken[]
   shiftComments           ShiftComment[]
   shiftSignoffsPosted     ShiftSignoff[]           @relation("ShiftSignoffPostedBy")

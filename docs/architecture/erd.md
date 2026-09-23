@@ -18,8 +18,9 @@ The condensed core: tenancy, the ISA-95 asset tree, production, and the two para
 ```mermaid
 erDiagram
   Workspace ||--o{ Site : "owns"
-  Workspace ||--o{ WorkspaceMembership : ""
-  User ||--o{ WorkspaceMembership : ""
+  Workspace ||--o{ Bucket : ""
+  User ||--o{ BucketAccess : ""
+  Bucket ||--o{ BucketAccess : ""
   Site ||--o{ Workcenter : "cascade"
   Workcenter |o--o{ Workcenter : "parent of"
   Site ||--o{ Station : "cascade"
@@ -29,9 +30,6 @@ erDiagram
   Site ||--o{ Job : ""
   Station ||--o{ Cycle : ""
   JobVersion ||--o{ Cycle : "required snapshot"
-  WorkOrder |o--o{ Cycle : ""
-  Site ||--o{ WorkOrder : ""
-  Product ||--o{ WorkOrder : "Restrict"
   Cycle ||--o{ InventoryItem : "cascade"
   Site ||--o{ ShiftInstance : ""
   Site ||--o{ MetricBucket : "cascade"
@@ -48,7 +46,7 @@ erDiagram
 
 ## Tenancy & IAM
 
-Source: `packages/db/schema/` — `workspace.prisma`, `site/`, `user/`, `bucket/`, `api-token.prisma`, `audit-log.prisma`; old models in `archive/`.
+Source: `packages/db/schema/` — `workspace.prisma`, `site/`, `user/`, `bucket/`, `api-token.prisma`, `audit-log.prisma`.
 
 ```mermaid
 erDiagram
@@ -56,7 +54,7 @@ erDiagram
     uuid id PK
     string name "unique"
     string slug "unique"
-    boolean isDefault
+    int singletonGuard "always 0, unique - one row"
     json settings
   }
   User {
@@ -64,32 +62,29 @@ erDiagram
     string email "unique"
     UserStatus status
     SystemRole systemRole "nullable - Rockware staff"
+    boolean isAccountAdmin
+    uuid employeeId FK "nullable, unique, SetNull"
     string firstName "DEPRECATED"
     string lastName "DEPRECATED"
   }
-  WorkspaceMembership {
+  Bucket {
     uuid id PK
-    uuid userId FK "cascade"
     uuid workspaceId FK "cascade"
-    uuid employeeId FK "nullable, SetNull"
+    uuid siteId FK "nullable, cascade"
+    uuid workcenterId FK "nullable, unique, cascade"
+    BucketKind kind "PLANT or WORKCENTER"
+  }
+  BucketAccess {
+    uuid id PK
+    uuid bucketId FK "cascade"
+    uuid userId FK "cascade"
+    BucketLevel level "VIEW, MANAGE or ADMIN"
   }
   RefreshToken {
     uuid id PK
     uuid userId FK "cascade"
     string tokenHash "unique"
     datetime rotatedAt "rotation grace marker"
-  }
-  Role {
-    uuid id PK
-    uuid workspaceId FK "cascade"
-    RoleScope scope "WORKSPACE or SITE"
-    string-array permissions
-  }
-  RoleAssignment {
-    uuid id PK
-    uuid membershipId FK "cascade"
-    uuid roleId FK "cascade"
-    uuid siteId FK "nullable, cascade"
   }
   ApiToken {
     uuid id PK
@@ -125,21 +120,13 @@ erDiagram
     datetime deletedAt
     datetime archivedAt
   }
-  Location {
-    uuid id PK "DEPRECATED model"
-    uuid parentId FK "self, SetNull"
-    uuid workspaceId FK "nullable"
-    LocationType type
-  }
 
-  Workspace ||--o{ WorkspaceMembership : "cascade"
-  User ||--o{ WorkspaceMembership : "cascade"
-  Employee |o--o{ WorkspaceMembership : "SetNull"
+  Employee |o--o| User : "SetNull"
   User ||--o{ RefreshToken : "cascade"
-  Workspace ||--o{ Role : "cascade"
-  WorkspaceMembership ||--o{ RoleAssignment : "cascade"
-  Role ||--o{ RoleAssignment : "cascade"
-  Site |o--o{ RoleAssignment : "cascade"
+  Workspace ||--o{ Bucket : "cascade"
+  Site |o--o{ Bucket : "cascade"
+  Bucket ||--o{ BucketAccess : "cascade"
+  User ||--o{ BucketAccess : "cascade"
   Workspace ||--o{ ApiToken : "cascade"
   Site ||--o{ ApiToken : "cascade"
   User |o--o{ ApiToken : "createdBy, SetNull"
@@ -149,11 +136,10 @@ erDiagram
   Site ||--o{ StatusReason : "cascade"
   Site ||--o{ StatusCategory : "cascade"
   StatusCategory |o--o{ StatusReason : "SetNull"
-  Workspace |o--o{ Location : "DEPRECATED"
-  Location |o--o{ Location : "parent of"
 ```
 
-- `User.systemRole` marks internal Rockware staff whose permissions resolve from code; the no-membership rule is enforced in the service layer, not the schema.
+- `User.systemRole` marks internal Rockware staff whose access comes from code. They hold no bucket access and are not account admins; the service layer checks this, not the schema.
+- Each deployment has one workspace. `Workspace.singletonGuard` is always 0 and unique, so a second row can't be inserted.
 - `AuditLog` has **no FK constraints at all** — ids are retained even if the user/workspace is deleted. Intentional for audit trails, but nothing validates them at write time.
 
 ## Asset hierarchy
@@ -211,11 +197,6 @@ erDiagram
     uuid stationEventId FK "cascade"
     StationEventExecutionStatus status
   }
-  StationJob {
-    uuid id PK
-    uuid stationId FK "cascade"
-    uuid jobId FK "cascade"
-  }
   StationJobLog {
     uuid id PK
     uuid stationId FK "cascade"
@@ -244,8 +225,6 @@ erDiagram
   Station }o--o{ Label : "implicit m2m"
   Station ||--o{ LabelFilter : "cascade"
   Label }o--o{ LabelFilter : "implicit m2m"
-  Station ||--o{ StationJob : "allowed jobs"
-  Job ||--o{ StationJob : "cascade"
   Station ||--o{ StationJobLog : "cascade"
   Job ||--o{ StationJobLog : "cascade"
   StationJobLog }o..|| JobVersion : "jobVersionId - no FK"
@@ -303,8 +282,6 @@ erDiagram
     uuid id PK
     uuid siteId FK "NO cascade"
     uuid currentVersionId FK "nullable, unique"
-    uuid toolStatusId FK "nullable, SetNull"
-    uuid toolLocationId FK "nullable, unique, SetNull"
     datetime deletedAt
     datetime archivedAt
   }
@@ -327,12 +304,6 @@ erDiagram
     int version "unique per cavity"
     int position
   }
-  ToolStatus {
-    uuid id PK
-    uuid siteId FK "cascade"
-    datetime deletedAt
-    datetime archivedAt
-  }
   Label {
     uuid id PK
     uuid siteId FK "cascade"
@@ -343,26 +314,16 @@ erDiagram
     uuid stationId FK "cascade"
     LabelFilterTarget target "unique per station+target"
   }
-  ToolLocation {
-    uuid id PK
-    uuid siteId FK "cascade"
-    datetime deletedAt
-    datetime archivedAt
-  }
 
   Site ||--o{ Job : "no cascade"
   JobVersion |o--o| Job : "currentVersion 1to1"
   Job ||--o{ JobVersion : "versions"
   Site ||--o{ Tool : "no cascade"
-  ToolStatus |o--o{ Tool : "SetNull"
-  ToolLocation |o--o| Tool : "1to1, SetNull"
   ToolVersion |o--o| Tool : "currentVersion 1to1"
   Tool ||--o{ ToolVersion : "versions"
   Tool ||--o{ ToolCavity : "cascade"
   ToolCavityVersion |o--o| ToolCavity : "currentVersion 1to1"
   ToolCavity ||--o{ ToolCavityVersion : "versions"
-  Site ||--o{ ToolStatus : "cascade"
-  Site ||--o{ ToolLocation : "cascade"
   Tool }o--o{ Label : "implicit m2m"
   Job }o--o{ Label : "implicit m2m"
   Product }o--o{ Label : "implicit m2m"
@@ -381,7 +342,7 @@ erDiagram
 
 ## Production
 
-Source: `packages/db/schema/cycle.prisma`, `archive/work-order.prisma`.
+Source: `packages/db/schema/cycle.prisma`.
 
 ```mermaid
 erDiagram
@@ -389,7 +350,6 @@ erDiagram
     uuid id PK
     uuid siteId FK "no cascade"
     uuid stationId FK "no cascade"
-    uuid orderId FK "nullable, to WorkOrder"
     uuid stationVersionId FK "nullable snapshot"
     uuid jobVersionId FK "REQUIRED snapshot"
     uuid sourceEventId "unique - livestore hook dedupe"
@@ -398,31 +358,17 @@ erDiagram
     datetime end "nullable - open cycle"
     datetime deletedAt "soft delete"
   }
-  WorkOrder {
-    uuid id PK
-    uuid siteId FK "no cascade"
-    uuid jobId FK "nullable"
-    uuid productId FK "Restrict"
-    string orderNumber "unique per site"
-    WorkOrderStatus status
-    datetime deletedAt
-  }
 
   Site ||--o{ Cycle : "no cascade"
   Station ||--o{ Cycle : "no cascade"
-  WorkOrder |o--o{ Cycle : ""
   StationVersion |o--o{ Cycle : "snapshot"
   JobVersion ||--o{ Cycle : "required snapshot"
   Cycle }o--o{ ToolVersion : "implicit m2m"
   Cycle }o--o{ JobTool : "implicit m2m"
   Cycle ||--o{ InventoryItem : "cascade"
   Cycle |o--o{ ItemDispositionLog : ""
-  Site ||--o{ WorkOrder : "no cascade"
-  Job |o--o{ WorkOrder : ""
-  Product ||--o{ WorkOrder : "Restrict"
 ```
 
-- `Cycle.orderId` points at **WorkOrder** (production), *not* the fulfillment `Order` in the inventory domain. The two order concepts are unrelated tables — see [findings](#audit-findings).
 - `Cycle.jobVersionId` is required while `stationVersionId` is optional — an inconsistency in the snapshot pattern.
 - `sourceEventId @unique` is the idempotency key for cycles created from LiveStore hook events (at-least-once delivery).
 
@@ -817,7 +763,6 @@ erDiagram
     uuid siteId FK "cascade"
     string name "unique per site"
     json condition
-    string legacyEventType "DEPRECATED column eventType"
     string eventNamespace
     string eventName
     boolean isDeleted
@@ -892,7 +837,6 @@ erDiagram
   Gateway {
     uuid id PK
     uuid siteId FK "nullable, Restrict"
-    uuid locationId FK "DEPRECATED"
     string serialNumber "unique"
     GatewayStatus status
     int specVersion
@@ -912,7 +856,6 @@ erDiagram
     uuid id PK
     uuid gatewayId FK "nullable, SetNull"
     uuid siteId FK "nullable, Restrict"
-    uuid locationId FK "DEPRECATED"
     DataSourceType type
     string driver "denormalized - no FK to Driver"
     string driverVersion "denormalized"
@@ -943,12 +886,10 @@ erDiagram
   }
 
   Site |o--o{ Gateway : "Restrict"
-  Location |o--o{ Gateway : "DEPRECATED, Restrict"
   Gateway ||--o{ GatewayToken : "cascade"
   Gateway ||--o{ CommandQueue : "cascade"
   Gateway |o--o{ Datasource : "SetNull"
   Site |o--o{ Datasource : "Restrict"
-  Location |o--o{ Datasource : "DEPRECATED, Restrict"
   Datasource ||--o{ PointGroup : "cascade"
   Datasource ||--o{ Point : "cascade"
   PointGroup |o--o{ Point : "SetNull"
@@ -1014,7 +955,7 @@ erDiagram
   Station ||--o{ StationLogonSession : "cascade"
   Display ||--o{ StationLogonSession : "cascade"
   ShiftInstance |o--o{ StationLogonSession : "SetNull"
-  Employee |o--o{ WorkspaceMembership : "links operator to User tier"
+  Employee |o--o| User : "login for this employee, SetNull"
 ```
 
 - `logonMethod` is a plain string, not an enum — the allowed values live only in code.
@@ -1222,12 +1163,12 @@ Every dashed line above. Nothing prevents dangling ids; each consumer must handl
 
 ### 2. Inconsistent `onDelete` on `siteId` — Site is effectively undeletable
 
-Site children mix three behaviors: **Cascade** (Workcenter, Station, Graph\*, Metric\*, Dashboard, Document, Integration, …), **Restrict** (Gateway, Datasource, ShiftPattern, ShiftAssignment), and **default NoAction** (Cycle, Job, Tool, Product, Material, WorkOrder, Order, ItemDispositionLog, MaterialLedgerEntry). Deleting a Site with any production history fails mid-graph, after some cascades would have fired had the transaction not rolled back. Either everything cascades, or Site deletion should be soft-only and the mixed actions documented.
+Site children mix three behaviors: **Cascade** (Workcenter, Station, Graph\*, Metric\*, Dashboard, Document, Integration, …), **Restrict** (Gateway, Datasource, ShiftPattern, ShiftAssignment), and **default NoAction** (Cycle, Job, Tool, Product, Material, Order, ItemDispositionLog, MaterialLedgerEntry). Deleting a Site with any production history fails mid-graph, after some cascades would have fired had the transaction not rolled back. Either everything cascades, or Site deletion should be soft-only and the mixed actions documented.
 
 ### 3. Three coexisting soft-delete conventions
 
 - `deletedAt DateTime?` — operational entities (Cycle, Station, Customer, Document, SavedView, …)
-- `archivedAt DateTime?` — versioned catalog entities (Job, Tool, Product, Material, StatusReason, ToolStatus, ItemDisposition\*, ProductMaterial); several carry **both** `deletedAt` and `archivedAt` with distinct meanings
+- `archivedAt DateTime?` — versioned catalog entities (Job, Tool, Product, Material, StatusReason, ItemDisposition\*, ProductMaterial); several carry **both** `deletedAt` and `archivedAt` with distinct meanings
 - `isDeleted Boolean` — Graph\*, Object\*, Integration\*
 
 No global middleware enforces filtering; every query must remember. See the standing `docs/notes/soft-delete-audit.md` for the per-callsite audit.
@@ -1236,13 +1177,13 @@ No global middleware enforces filtering; every query must remember. See the stan
 
 Station, Job, Tool, ToolCavity, Product, Material, ProductMaterial, JobProduct, and Employee each hold `currentVersionId? @unique` → their `*Version` table, while the version table holds a required FK back to the parent. Consequences: two-step inserts (create parent → create version → set pointer), and neither row can be hard-deleted without ordering care. Consistent — but worth confirming every write path sets the pointer atomically.
 
-### 5. Two unrelated "order" concepts
+### 5. Two unrelated "order" concepts (resolved)
 
-`WorkOrder` (`archive/work-order.prisma`; `Cycle.orderId` → **WorkOrder**) vs. `Order`/`OrderLineItem` (`order/`, fulfillment). `WorkOrder` is archived: no code reads or writes it, and it waits to be dropped. `Order` is the only live one.
+There used to be a production `WorkOrder` next to the fulfillment `Order`. Nothing ever wrote `WorkOrder`, so it was dropped (migration `20260929100000_drop_dead_models`). `Order`/`OrderLineItem` (`order/`) is the only order now.
 
 ### 6. Tenancy scoping inconsistencies
 
-Most entities scope by `siteId` with workspace implicit. Direct `workspaceId` scoping: User-tier IAM (Role, ApiToken), Employee, ObjectSchema (either scope, both nullable). **`Automation` has neither** — globally-unique label, no tenant column. `ObjectSchema` rows with both scopes null are representable.
+Most entities scope by `siteId` with workspace implicit. Direct `workspaceId` scoping: Bucket, ApiToken, Employee, ObjectSchema (either scope, both nullable). **`Automation` has neither** — globally-unique label, no tenant column. `ObjectSchema` rows with both scopes null are representable.
 
 ### 7. Snapshot-column nullability inconsistencies
 
@@ -1250,7 +1191,7 @@ Most entities scope by `siteId` with workspace implicit. Direct `workspaceId` sc
 
 ### 8. Deprecated-but-present schema
 
-`Location` model + `LocationType` enum; `Gateway.locationId`, `Datasource.locationId`; `User.firstName`/`lastName`; `GraphHook.legacyEventType` (mapped to column `eventType`). Each carries real FK constraints (Location's are `Restrict` — a Location referenced by a Gateway can't be deleted). Worth a removal milestone.
+`User.firstName`/`lastName` are still here: code still reads them, so that code has to move to the employee profile before the columns can go. The rest of the old schema (`Location`, `WorkOrder`, `StationJob`, `ToolStatus`, `ToolLocation`, the pre-bucket access tables and their columns) was dropped in `20260929100000_drop_dead_models`.
 
 ### 9. Parallel hand-maintained schema: `SYSTEM_ENTITY_REGISTRY`
 

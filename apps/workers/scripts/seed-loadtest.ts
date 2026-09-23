@@ -64,7 +64,6 @@ if (!Number.isInteger(STATION_COUNT) || STATION_COUNT < 1 || STATION_COUNT > 10_
 }
 
 const SITE_NAME = process.env.SEED_SITE_NAME ?? "Rockware";
-const WORKSPACE_SLUG = process.env.SEED_WORKSPACE_SLUG ?? "default";
 const GATEWAY_ID = process.env.SEED_GATEWAY_ID;
 // Stations are grouped into workcenters of SEED_WC_SIZE (default 50). Station i
 // belongs to workcenter ceil(i / size). Re-running MOVES existing stations to
@@ -108,10 +107,9 @@ function mark(created: boolean, label: string) {
 // ---------------------------------------------------------------------------
 
 async function resolveScope() {
-  const workspace = await prisma.workspace.findFirst({
-    where: { OR: [{ slug: WORKSPACE_SLUG }, { isDefault: true }] },
-  });
-  if (!workspace) throw new Error(`Workspace "${WORKSPACE_SLUG}" not found — run db:seed first`);
+  // One workspace per deployment: the account.
+  const workspace = await prisma.workspace.findFirst();
+  if (!workspace) throw new Error("No workspace found — run db:seed first");
 
   const site = await prisma.site.findFirst({
     where: { workspaceId: workspace.id, name: SITE_NAME },

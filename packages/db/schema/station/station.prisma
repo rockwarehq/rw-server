@@ -29,7 +29,6 @@ model Station {
   labels       Label[]
   labelFilters LabelFilter[]
 
-  allowedJobs   StationJob[] // ARCHIVED
   statusReasons StatusReason[]
 
   // Relations

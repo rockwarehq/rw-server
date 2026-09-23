@@ -13,7 +13,6 @@ model Product {
   labels              Label[]
   materialShiftUsage  MaterialShiftUsage[]
   jobProducts         JobProduct[]
-  workOrders          WorkOrder[] // ARCHIVED
   pictures            ProductPicture[]
   orderLineItems      OrderLineItem[]
   stock               ProductStock[]

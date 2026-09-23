@@ -10,11 +10,9 @@ model Job {
 
   tools       JobTool[]
   jobProducts JobProduct[]
-  orders      WorkOrder[] // ARCHIVED
   labels      Label[]
 
   currentOfStations    Station[]             @relation("StationCurrentJob")
-  stationJobs          StationJob[] // ARCHIVED
   stationJobLogs       StationJobLog[]
   materialShiftUsage   MaterialShiftUsage[]
   calls                Call[]

@@ -11,14 +11,6 @@ model Tool {
   currentVersion ToolVersion?  @relation("ToolCurrent", fields: [currentVersionId], references: [id])
   versions       ToolVersion[] @relation("ToolVersions")
 
-  // ARCHIVED (never used)
-  toolStatusId String?     @db.Uuid
-  toolStatus   ToolStatus? @relation(fields: [toolStatusId], references: [id], onDelete: SetNull)
-
-  // ARCHIVED (never used)
-  toolLocationId String?       @unique @db.Uuid
-  toolLocation   ToolLocation? @relation(fields: [toolLocationId], references: [id], onDelete: SetNull)
-
   labels Label[]
 
   toolCavities        ToolCavity[]
@@ -33,7 +25,4 @@ model Tool {
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
   deletedAt  DateTime? @db.Timestamptz(3)
   archivedAt DateTime? @db.Timestamptz(3)
-
-  @@index([toolStatusId])
-  @@index([toolLocationId])
 }

@@ -12,7 +12,6 @@ const workspaceSchema = {
     name: { type: "string" },
     slug: { type: "string" },
     description: { type: "string", nullable: true },
-    isDefault: { type: "boolean" },
     settings: { type: "object", additionalProperties: true },
     createdAt: { type: "string", format: "date-time" },
     updatedAt: { type: "string", format: "date-time" },

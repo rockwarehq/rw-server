@@ -9,17 +9,10 @@ model Workspace {
   name           String  @unique
   slug           String  @unique
   description    String?
-  isDefault      Boolean @default(false) // Left over from many workspaces; always one now
   settings       Json    @default("{}")
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
-  // ARCHIVED (pre-account-admin model)
-  memberships WorkspaceMembership[]
-
-  // ARCHIVED (Location replaced by Site)
-  locations Location[]
 
   // Sites owned by this workspace
   sites Site[]
@@ -29,9 +22,6 @@ model Workspace {
 
   // Access-control containers
   buckets Bucket[]
-
-  // ARCHIVED (pre-bucket model)
-  roles Role[]
 
   // Shared object schemas owned by this workspace
   objectSchemas ObjectSchema[]

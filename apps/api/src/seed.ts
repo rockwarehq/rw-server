@@ -78,7 +78,6 @@ async function seed() {
     name: "Default",
     slug: "default",
     description: "Default workspace",
-    isDefault: true,
   });
 
   console.log(`Created workspace: ${workspace.name} (${workspace.id})`);

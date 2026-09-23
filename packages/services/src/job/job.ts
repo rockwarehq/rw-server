@@ -4,6 +4,12 @@ import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { refreshStationsRunningJob } from "../facility/station/state.js";
 
+// Work orders are gone, but shipped UIs still read a job's `_count.orders`.
+// Keep it on the wire, always 0.
+function withOrderCount<T extends { _count: object }>(job: T) {
+  return { ...job, _count: { ...job._count, orders: 0 } };
+}
+
 // ============================================================================
 // Types - Job
 // ============================================================================
@@ -155,7 +161,7 @@ export async function create(input: CreateJobInput) {
         currentVersion: true,
         site: { select: { id: true, name: true } },
         labels: { select: { id: true, name: true, color: true } },
-        _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
+        _count: { select: { tools: true, jobProducts: true, versions: true } },
       },
     });
   });
@@ -168,7 +174,7 @@ export async function create(input: CreateJobInput) {
     workspaceId: site.workspaceId,
   });
 
-  return { data: job };
+  return { data: withOrderCount(job) };
 }
 
 /**
@@ -258,7 +264,7 @@ export async function list(filter: ListJobsFilter = {}) {
         currentVersion: true,
         site: { select: { id: true, name: true } },
         labels: { select: { id: true, name: true, color: true } },
-        _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
+        _count: { select: { tools: true, jobProducts: true, versions: true } },
         // Opt-in (e.g. the workspace timeline's job band): product names per
         // job without a per-job get.
         ...(includeProducts
@@ -284,7 +290,7 @@ export async function list(filter: ListJobsFilter = {}) {
   ]);
 
   return {
-    data: jobs,
+    data: jobs.map(withOrderCount),
     total,
     limit: Number(limit),
     offset: Number(offset),
@@ -346,7 +352,7 @@ export async function getById(id: string) {
           },
         },
       },
-      _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
+      _count: { select: { tools: true, jobProducts: true, versions: true } },
     },
   });
 
@@ -358,7 +364,7 @@ export async function getById(id: string) {
     return { error: "Job has been deleted", code: "JOB_DELETED" };
   }
 
-  return { data: job };
+  return { data: withOrderCount(job) };
 }
 
 /**
@@ -444,7 +450,7 @@ export async function update(id: string, input: UpdateJobInput) {
         currentVersion: true,
         site: { select: { id: true, name: true } },
         labels: { select: { id: true, name: true, color: true } },
-        _count: { select: { tools: true, jobProducts: true, orders: true, versions: true } },
+        _count: { select: { tools: true, jobProducts: true, versions: true } },
       },
     });
   });
@@ -481,7 +487,7 @@ export async function update(id: string, input: UpdateJobInput) {
     });
   }
 
-  return { data: job };
+  return { data: withOrderCount(job) };
 }
 
 /**
