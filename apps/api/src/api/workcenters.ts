@@ -2,8 +2,6 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { workcenter } from "@rw/services/facility/index";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
-import { replyPolicyDenial } from "./authz.js";
 
 // ============================================================================
 // Schemas
@@ -184,11 +182,7 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "site", siteId: request.body.siteId },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { site: request.body.siteId });
 
       const result = await workcenter.create(request.body);
       if ("error" in result && typeof result.error === "string") {
@@ -214,16 +208,11 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
         403: errorSchema,
       },
     },
-    handler: async (request, reply) => {
+    handler: async (request, _reply) => {
       // The workcenter directory is a plant thing: every member may read it.
-      const scope = await authorizeList(request.iam, {
-        tier: "VIEW",
-        bucketKind: "PLANT",
-        requestedSiteId: request.query.siteId,
-      });
-      if (!scope.ok) return replyPolicyDenial(reply, scope);
+      const scope = request.access.list("VIEW", request.query.siteId);
 
-      return workcenter.list({ ...request.query, ...scopeFilter(scope) });
+      return workcenter.list({ ...request.query, siteId: scope.siteId });
     },
   });
 
@@ -244,13 +233,9 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        tier: "VIEW",
-        scope: { kind: "workcenter", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("VIEW", { workcenter: request.params.id });
 
-      const result = await workcenter.getById(request.params.id, auth.workspaceId);
+      const result = await workcenter.getById(request.params.id);
       if (!result || "error" in result) {
         return reply.status(404).send({ error: "Workcenter not found" });
       }
@@ -278,13 +263,9 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "workcenter", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { workcenter: request.params.id });
 
-      const result = await workcenter.update(request.params.id, request.body, auth.workspaceId);
+      const result = await workcenter.update(request.params.id, request.body);
       if ("error" in result && typeof result.error === "string") {
         const status = getStatusForCode(result.code ?? "UNKNOWN");
         return reply.status(status).send({ error: result.error });
@@ -313,13 +294,9 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "workcenter", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { workcenter: request.params.id });
 
-      const result = await workcenter.move(request.params.id, request.body.parentId, auth.workspaceId);
+      const result = await workcenter.move(request.params.id, request.body.parentId);
       if ("error" in result && typeof result.error === "string") {
         const status = getStatusForCode(result.code ?? "UNKNOWN");
         return reply.status(status).send({ error: result.error });
@@ -347,13 +324,9 @@ export default async function workcenters(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "workcenter", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { workcenter: request.params.id });
 
-      const result = await workcenter.remove(request.params.id, auth.workspaceId);
+      const result = await workcenter.remove(request.params.id);
       if ("error" in result && typeof result.error === "string") {
         const status = getStatusForCode(result.code ?? "UNKNOWN");
         return reply.status(status).send({ error: result.error });

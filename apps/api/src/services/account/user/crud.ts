@@ -1,6 +1,7 @@
 import prisma from "@rw/db";
 import type { UserStatus } from "@rw/db";
-import { loadBucketSnapshot, snapshotVisibleSites, staffSnapshot } from "@rw/auth/iam/index";
+import type { UserCurrent } from "@rw/auth/context";
+import { describeAccess, staffLabel, visibleSites } from "@rw/auth/iam/access";
 import { logEvent } from "@rw/services/audit/index";
 import { getWorkspaceAccessSummaries } from "../workspace/members.js";
 import { resolveAvatarUrl } from "./avatar.js";
@@ -90,7 +91,11 @@ export async function list(filter: ListUsersFilter = {}) {
   return { users, total, limit, offset };
 }
 
-export async function getMe(userId: string, workspaceId?: string, siteId?: string) {
+export async function getMe(me: UserCurrent) {
+  const userId = me.user.id;
+  const { workspaceId } = me;
+  const siteId = me.siteId;
+  const person = me.access.person;
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: {
@@ -118,7 +123,7 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
 
   // Rockware-staff users hold no memberships: build the view from the
   // token's workspace context and the code-resolved staff standing.
-  if (user.systemRole && workspaceId) {
+  if (user.systemRole) {
     const workspace = await prisma.workspace.findUnique({
       where: { id: workspaceId },
       select: { id: true, name: true, slug: true },
@@ -139,14 +144,14 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
       sites,
       access: {
         workspaceRole: "MEMBER" as const,
-        staff: staffSnapshot(user.systemRole).staff,
+        staff: staffLabel(person),
         buckets: [],
       },
     };
   }
 
   const membership = await prisma.workspaceMembership.findFirst({
-    where: { userId, ...(workspaceId ? { workspaceId } : {}) },
+    where: { userId, workspaceId },
     include: {
       workspace: { select: { id: true, name: true, slug: true } },
       employee: {
@@ -178,36 +183,20 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
     };
   }
 
-  // One snapshot serves the whole access view: the member's buckets (hook
-  // and cascade entries included, labeled by `via`) and site visibility.
-  const snapshot = await loadBucketSnapshot(userId, membership.workspaceId);
-  const visible = snapshot ? snapshotVisibleSites(snapshot) : { all: false as const, siteIds: [] };
+  // The request's person serves the whole access view: site visibility and
+  // the member's buckets (labelled by `via` for the UI).
+  const visible = visibleSites(person);
   const sites = await prisma.site.findMany({
     where: {
       workspaceId: membership.workspaceId,
-      ...(visible.all ? {} : { id: { in: visible.siteIds } }),
+      ...(visible === "all" ? {} : { id: { in: visible } }),
     },
     select: { id: true, name: true },
     orderBy: { name: "asc" },
   });
   const site = siteId ? (sites.find((item) => item.id === siteId) ?? null) : null;
 
-  const bucketRows = snapshot
-    ? await prisma.bucket.findMany({
-        where: { id: { in: snapshot.entries.map((e) => e.bucketId) } },
-        select: { id: true, name: true },
-      })
-    : [];
-  const bucketNames = new Map(bucketRows.map((b) => [b.id, b.name]));
-  const buckets = (snapshot?.entries ?? []).map((e) => ({
-    bucketId: e.bucketId,
-    kind: e.kind,
-    siteId: e.siteId,
-    workcenterId: e.workcenterId,
-    name: bucketNames.get(e.bucketId) ?? "",
-    tier: e.tier,
-    via: e.via,
-  }));
+  const buckets = await describeAccess(person);
 
   return {
     user: userView,
@@ -225,7 +214,7 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
     site,
     sites,
     access: {
-      workspaceRole: snapshot?.owner ? ("OWNER" as const) : ("MEMBER" as const),
+      workspaceRole: person.owner ? ("OWNER" as const) : ("MEMBER" as const),
       staff: "NONE" as const,
       buckets,
     },

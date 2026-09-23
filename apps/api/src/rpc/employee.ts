@@ -1,7 +1,5 @@
 import { z } from "zod";
-import { authRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { userRequired } from "./middleware.js";
 import { crud, smsConsent } from "../services/employee/index.js";
 import { throwServiceError, unwrap } from "./errors.js";
 
@@ -59,27 +57,27 @@ const setSmsConsentInputSchema = z.object({
 // Procedures
 // ============================================================================
 
-export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "site", siteId: input.siteId } }));
+export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await crud.create(input);
   return result.data;
 });
 
-export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "site", siteId: input.siteId } }));
+export const list = userRequired.input(listInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { site: input.siteId });
 
   return crud.list(input);
 });
 
-export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "anySite" } }));
+export const get = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  context.access.requireSomewhere("ADMIN");
 
   return unwrap(await crud.getById(input.id), { notFoundMessage: "Employee not found" });
 });
 
-export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "anySite" } }));
+export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+  context.access.requireSomewhere("ADMIN");
 
   const { id, ...updateData } = input;
   const result = await crud.update(id, updateData);
@@ -89,22 +87,22 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
   return result.data;
 });
 
-export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "anySite" } }));
+export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  context.access.requireSomewhere("ADMIN");
 
   const result = await crud.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
 });
 
-export const setSmsConsent = authRequired.input(setSmsConsentInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "anySite" } }));
-  return unwrap(await smsConsent.set({ ...input, actorUserId: context.iam.id }));
+export const setSmsConsent = userRequired.input(setSmsConsentInputSchema).handler(async ({ input, context }) => {
+  context.access.requireSomewhere("ADMIN");
+  return unwrap(await smsConsent.set({ ...input, actorUserId: context.current.user.id }));
 });
 
-export const smsConsentHistory = authRequired
+export const smsConsentHistory = userRequired
   .input(z.object({ employeeId: z.uuid() }))
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "anySite" } }));
+    context.access.requireSomewhere("ADMIN");
     return unwrap(await smsConsent.history(input.employeeId));
   });

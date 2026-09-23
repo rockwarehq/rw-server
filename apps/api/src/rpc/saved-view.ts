@@ -1,8 +1,5 @@
 import { z } from "zod";
-import { ORPCError } from "@orpc/server";
-import { authRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { userRequired } from "./middleware.js";
 import { savedView } from "@rw/services/saved-view/index";
 import { throwServiceError } from "./errors.js";
 
@@ -115,19 +112,10 @@ const idInputSchema = z.object({ id: z.uuid() });
 // Procedures
 // ============================================================================
 
-function requireUserContext(iam: { id?: string; workspaceId?: string }) {
-  if (!iam.workspaceId) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
-  if (!iam.id) {
-    throw new ORPCError("BAD_REQUEST", { message: "User context required" });
-  }
-  return { userId: iam.id, workspaceId: iam.workspaceId };
-}
-
-export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  const { userId, workspaceId } = requireUserContext(context.iam);
-  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }));
+export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
+  const userId = context.current.user.id;
+  const { workspaceId } = context.current;
+  await context.access.require("MANAGE", { site: input.siteId });
 
   const result = await savedView.create(
     {
@@ -146,9 +134,10 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
   return result.data;
 });
 
-export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const { userId, workspaceId } = requireUserContext(context.iam);
-  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId: input.siteId } }));
+export const list = userRequired.input(listInputSchema).handler(async ({ input, context }) => {
+  const userId = context.current.user.id;
+  const { workspaceId } = context.current;
+  await context.access.require("VIEW", { site: input.siteId });
 
   const result = await savedView.list(
     { siteId: input.siteId, page: input.page, scopeId: input.scopeId ?? null, userId },
@@ -158,9 +147,10 @@ export const list = authRequired.input(listInputSchema).handler(async ({ input, 
   return { data: result.data };
 });
 
-export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  const { userId, workspaceId } = requireUserContext(context.iam);
-  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "savedView", id: input.id } }));
+export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+  const userId = context.current.user.id;
+  const { workspaceId } = context.current;
+  await context.access.require("MANAGE", { savedView: input.id });
 
   const result = await savedView.update(
     input.id,
@@ -179,9 +169,10 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
   return result.data;
 });
 
-export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const { userId, workspaceId } = requireUserContext(context.iam);
-  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "savedView", id: input.id } }));
+export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  const userId = context.current.user.id;
+  const { workspaceId } = context.current;
+  await context.access.require("MANAGE", { savedView: input.id });
 
   const result = await savedView.remove(input.id, { actorId: userId }, workspaceId);
   if (result.error !== undefined) {

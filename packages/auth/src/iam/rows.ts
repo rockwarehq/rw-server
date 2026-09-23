@@ -1,22 +1,21 @@
 import prisma from "@rw/db";
 
-// Site derivation for resource-scoped authorization checks. Each resolver is
-// a narrow read of the denormalized siteId column (or one required-parent
-// hop) — deliberately narrower than service getById calls so the policy can
-// decide before any data is fetched.
+// Where a row lives: the site (and, for floor rows, the workcenter) it
+// belongs to. access.ts uses this to find the row's bucket before any data
+// is fetched. Each lookup is a narrow read of the denormalized siteId column
+// (or one hop through a required parent).
 //
-// Missing row => null => NOT_FOUND. A row with `siteId: null` (resources
-// that can exist without a site: unassigned gateways/datasources, unclaimed
-// displays, workspace-level documents, global object schemas) is NOT a
-// not-found — policy.ts applies the anySite rule to it.
+// Missing row => null => NOT_FOUND. A row with `siteId: null` (unassigned
+// gateways/datasources, unclaimed displays, workspace-level documents,
+// global object schemas) is NOT a not-found: access.ts applies the
+// "somewhere" rule to it.
 //
-// No soft-delete filtering here: services must keep producing their own
-// *_DELETED error codes after authorization (wire parity, ADR-0003).
+// No soft-delete filtering here: services keep producing their own
+// *_DELETED error codes after the check (wire parity, ADR-0003).
 //
-// Kinds whose rows carry a workcenter binding also return `workcenterId`, so
-// workcenter grants can be evaluated (status/calls/facility-write scoping).
-// A row with workcenterId null (station directly under the site, call not
-// tied to a workcenter) evaluates site-level only — plant roles required.
+// Kinds whose rows carry a workcenter also return `workcenterId`, so the
+// check runs against that cell's bucket. A row with workcenterId null is a
+// plant thing.
 
 export type SiteRow = { siteId: string | null; workcenterId?: string | null } | null;
 
@@ -74,7 +73,7 @@ export const RESOLVERS = {
     prisma.notificationGroup.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   notification: (id: string) => prisma.notification.findUnique({ where: { id }, select: { siteId: true } }).then(one),
 
-  // ── nullable siteId column (null => anySite rule in policy.ts) ─────
+  // ── nullable siteId column (null => the "somewhere" rule) ───────────
   gateway: (id: string) => prisma.gateway.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   datasource: (id: string) => prisma.datasource.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   display: (id: string) =>
@@ -148,29 +147,85 @@ export const RESOLVERS = {
       .then((r) => via(r?.datasource)),
 } satisfies Record<string, (id: string) => Promise<SiteRow>>;
 
-export type ResolvableKind = keyof typeof RESOLVERS;
+export type RowKind = keyof typeof RESOLVERS;
 
-/**
- * Kinds whose rows can legitimately carry siteId null (or a null-site
- * parent): authorize() may return a WorkspaceGrant for these. All other
- * resolvable kinds always prove a concrete siteId.
- */
-export const NULLABLE_SITE_KINDS = [
-  "gateway",
-  "datasource",
-  "display",
-  "document",
-  "objectSchema",
-  "objectInstance",
-  "automation",
-  "point",
-  "pointGroup",
-] as const satisfies readonly ResolvableKind[];
+/** Kinds whose rows can live at no site; every other kind always has one. */
+export type SitelessRowKind =
+  | "gateway"
+  | "datasource"
+  | "display"
+  | "document"
+  | "objectSchema"
+  | "objectInstance"
+  | "automation"
+  | "point"
+  | "pointGroup";
 
-export type NullableSiteKind = (typeof NULLABLE_SITE_KINDS)[number];
+/** A row reference: exactly one `{ kind: id }` pair, e.g. `{ station: id }`. */
+export type RowRef = { [K in RowKind]: { [P in K]: string } & { [P in Exclude<RowKind, K>]?: never } }[RowKind];
 
-export type ResolvableSiteRef = { kind: ResolvableKind; id: string };
-
-export async function resolveSiteRef(ref: ResolvableSiteRef): Promise<SiteRow> {
-  return RESOLVERS[ref.kind](ref.id);
+export function rowRefParts(ref: RowRef): { kind: RowKind; id: string } {
+  const [kind, id] = Object.entries(ref).find(([, v]) => v !== undefined) as [RowKind, string];
+  return { kind, id };
 }
+
+export async function locateRow(kind: RowKind, id: string): Promise<SiteRow> {
+  return RESOLVERS[kind](id);
+}
+
+export const NOT_FOUND_MESSAGES: Record<RowKind, string> = {
+  station: "Station not found",
+  workcenter: "Workcenter not found",
+  label: "Label not found",
+  stationStateLog: "State log entry not found",
+  order: "Order not found",
+  orderLineItem: "Order line item not found",
+  customer: "Customer not found",
+  statusReason: "Status reason not found",
+  statusCategory: "Status category not found",
+  call: "Call not found",
+  callDefinition: "Call definition not found",
+  productionMode: "Production mode not found",
+  notificationGroup: "Notification group not found",
+  notification: "Notification not found",
+  disposition: "Disposition not found",
+  dispositionReason: "Disposition reason not found",
+  dispositionLog: "Disposition log not found",
+  tool: "Tool not found",
+  toolCavity: "Tool cavity not found",
+  job: "Job not found",
+  jobProduct: "Job item not found",
+  product: "Product not found",
+  productMaterial: "Product material not found",
+  productAltGroup: "Alternative group not found",
+  productPicture: "Product picture not found",
+  material: "Material not found",
+  inventoryItem: "Inventory item not found",
+  dashboard: "Dashboard not found",
+  savedView: "Saved view not found",
+  shiftPattern: "Shift pattern not found",
+  shiftDefinition: "Shift definition not found",
+  shiftAssignment: "Shift assignment not found",
+  shiftComment: "Shift comment not found",
+  employeeRole: "Employee role not found",
+  cycle: "Cycle not found",
+  graphNode: "Graph node not found",
+  graphNodeType: "Graph node type not found",
+  graphTypeField: "Graph type field not found",
+  graphTypeInput: "Graph type input not found",
+  graphTypeFacet: "Graph type facet not found",
+  graphProperty: "Graph property not found",
+  graphHook: "Graph hook not found",
+  integration: "Integration not found",
+  integrationTrigger: "Integration trigger not found",
+  siteAndonRule: "Andon rule not found",
+  gateway: "Gateway not found",
+  datasource: "Datasource not found",
+  display: "Display not found",
+  document: "Document not found",
+  objectSchema: "Schema not found",
+  objectInstance: "Instance not found",
+  automation: "Automation not found",
+  point: "Point not found",
+  pointGroup: "Point group not found",
+};

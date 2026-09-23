@@ -1,9 +1,8 @@
 import type { JSONSchema } from "json-schema-to-ts";
+import { currentUser } from "./authz.js";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { datasource } from "../services/device/index.js";
 import { errorWithDetailsSchema, idParamsSchema, gatewaySummarySchema } from "./schemas.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
-import { replyPolicyDenial } from "./authz.js";
 
 const siteSummarySchema = {
   type: "object",
@@ -337,13 +336,9 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     preHandler: fastify.verifyAccessToken,
     handler: async (request, reply) => {
       const body = request.body;
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "site", siteId: request.body.siteId },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { site: request.body.siteId });
 
-      const result = await datasource.create({ ...body, workspaceId: auth.workspaceId });
+      const result = await datasource.create({ ...body, workspaceId: currentUser(request).workspaceId });
       if ("error" in result) {
         return reply.status(getStatusForCode(result.code ?? "UNKNOWN")).send({ error: result.error });
       }
@@ -363,10 +358,9 @@ export default async function datasources(fastify: FastifyTypedInstance) {
         200: paginatedDatasourceListSchema,
       },
     },
-    handler: async (request, reply) => {
+    handler: async (request, _reply) => {
       const { gatewayId, siteId, driver, type, status, name, unassigned, limit = 50, offset = 0 } = request.query;
-      const scope = await authorizeList(request.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: siteId });
-      if (!scope.ok) return replyPolicyDenial(reply, scope);
+      const scope = request.access.list("VIEW", siteId);
 
       return datasource.list({
         gatewayId,
@@ -377,7 +371,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
         unassigned: unassigned === "true",
         limit,
         offset,
-        ...scopeFilter(scope),
+        siteId: scope.siteId,
       });
     },
   });
@@ -397,11 +391,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { id } = request.params;
-      const auth = await authorize(request.iam, {
-        tier: "VIEW",
-        scope: { kind: "datasource", id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("VIEW", { datasource: id });
 
       const result = await datasource.getById(id);
       if (!result) {
@@ -430,13 +420,9 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const { id } = request.params;
       const body = request.body;
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "datasource", id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { datasource: id });
 
-      const result = await datasource.update(id, body, auth.workspaceId);
+      const result = await datasource.update(id, body);
       if ("error" in result) {
         return reply.status(getStatusForCode(result.code ?? "UNKNOWN")).send({ error: result.error });
       }
@@ -461,13 +447,9 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     preHandler: fastify.verifyAccessToken,
     handler: async (request, reply) => {
       const { id } = request.params;
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "datasource", id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { datasource: id });
 
-      const result = await datasource.remove(id, auth.workspaceId);
+      const result = await datasource.remove(id);
       if ("error" in result) {
         return reply.status(getStatusForCode(result.code ?? "UNKNOWN")).send({ error: result.error });
       }
@@ -494,18 +476,10 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const { id } = request.params;
       const { gatewayId } = request.body;
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "datasource", id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { datasource: id });
       if (gatewayId) {
         // Attaching to a gateway requires MANAGE for the gateway's site too.
-        const target = await authorize(request.iam, {
-          tier: "MANAGE",
-          scope: { kind: "gateway", id: gatewayId },
-        });
-        if (!target.ok) return replyPolicyDenial(reply, target);
+        await request.access.require("MANAGE", { gateway: gatewayId });
       }
 
       const result = await datasource.assign(id, gatewayId);
@@ -540,11 +514,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const { datasourceId } = request.params;
       const body = request.body;
 
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "datasource", id: datasourceId },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { datasource: datasourceId });
 
       const result = await datasource.groups.create(datasourceId, body);
       if ("error" in result) {
@@ -573,11 +543,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { datasourceId } = request.params;
-      const auth = await authorize(request.iam, {
-        tier: "VIEW",
-        scope: { kind: "datasource", id: datasourceId },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("VIEW", { datasource: datasourceId });
 
       const result = await datasource.groups.list(datasourceId);
       if ("error" in result) {
@@ -611,11 +577,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const { datasourceId } = request.params;
       const body = request.body;
 
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "datasource", id: datasourceId },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { datasource: datasourceId });
 
       const result = await datasource.points.create(datasourceId, body);
       if ("error" in result) {
@@ -647,11 +609,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const { datasourceId } = request.params;
       const { groupId, ungrouped } = request.query;
 
-      const auth = await authorize(request.iam, {
-        tier: "VIEW",
-        scope: { kind: "datasource", id: datasourceId },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("VIEW", { datasource: datasourceId });
 
       const result = await datasource.points.list(datasourceId, { groupId, ungrouped });
       if ("error" in result) {
@@ -681,11 +639,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const { datasourceId } = request.params;
       const { points } = request.body;
 
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "datasource", id: datasourceId },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { datasource: datasourceId });
 
       const result = await datasource.points.bulkCreate(datasourceId, points);
       if ("error" in result) {

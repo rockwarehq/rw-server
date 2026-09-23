@@ -1,7 +1,5 @@
 import { z } from "zod";
-import { authRequired } from "./middleware.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { userRequired } from "./middleware.js";
 import * as orderService from "@rw/services/order/order";
 import { throwServiceError, unwrap } from "./errors.js";
 
@@ -88,60 +86,58 @@ const nextNumberInputSchema = z.object({
 // Procedures
 // ============================================================================
 
-export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }));
+export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { site: input.siteId });
 
   // DUPLICATE_PRODUCT here means duplicate products within the create payload
   // and historically fell through to BAD_REQUEST (unlike addLineItem, where the
   // same code is a CONFLICT with existing state).
   // createdByUserId is the same identity transitionStatus already records.
-  return unwrap(await orderService.create({ ...input, createdByUserId: context.iam.id ?? null }), {
+  return unwrap(await orderService.create({ ...input, createdByUserId: context.current.user.id ?? null }), {
     overrides: { DUPLICATE_PRODUCT: "BAD_REQUEST" },
   });
 });
 
-export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
-  );
-  return orderService.list({ ...input, ...scopeFilter(scope) });
+export const list = userRequired.input(listInputSchema).handler(async ({ input, context }) => {
+  const scope = context.access.list("VIEW", input.siteId);
+  return orderService.list({ ...input, siteId: scope.siteId });
 });
 
-export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "order", id: input.id } }));
+export const get = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { order: input.id });
 
   return unwrap(await orderService.get(input.id));
 });
 
-export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "order", id: input.id } }));
+export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { order: input.id });
 
   const { id, ...updateData } = input;
   return unwrap(await orderService.update(id, updateData));
 });
 
-export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "order", id: input.id } }));
+export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { order: input.id });
 
   const result = await orderService.remove(input.id);
   if (result.error) throwServiceError(result);
   return { success: true };
 });
 
-export const transitionStatus = authRequired.input(transitionStatusInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "order", id: input.id } }));
+export const transitionStatus = userRequired.input(transitionStatusInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { order: input.id });
 
   return unwrap(
     await orderService.transitionStatus(input.id, input.status, {
       allowPartial: input.allowPartial,
       source: "MANUAL",
-      userId: context.iam.id ?? null,
+      userId: context.current.user.id ?? null,
     }),
   );
 });
 
-export const addLineItem = authRequired.input(addLineItemInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "order", id: input.orderId } }));
+export const addLineItem = userRequired.input(addLineItemInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { order: input.orderId });
 
   const result = await orderService.addLineItem(input.orderId, {
     productId: input.productId,
@@ -150,31 +146,31 @@ export const addLineItem = authRequired.input(addLineItemInputSchema).handler(as
   return unwrap(result);
 });
 
-export const updateLineItem = authRequired.input(updateLineItemInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "orderLineItem", id: input.id } }));
+export const updateLineItem = userRequired.input(updateLineItemInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { orderLineItem: input.id });
 
   const { id, ...updateData } = input;
   return unwrap(await orderService.updateLineItem(id, updateData));
 });
 
-export const removeLineItem = authRequired.input(removeLineItemInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "orderLineItem", id: input.id } }));
+export const removeLineItem = userRequired.input(removeLineItemInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { orderLineItem: input.id });
 
   const result = await orderService.removeLineItem(input.id);
   if (result.error) throwServiceError(result);
   return { success: true };
 });
 
-export const reorder = authRequired.input(reorderInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }));
+export const reorder = userRequired.input(reorderInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { site: input.siteId });
 
   const result = await orderService.reorder(input.siteId, input.orderedIds);
   if ("error" in result && result.error) throwServiceError(result);
   return { success: true };
 });
 
-export const nextNumber = authRequired.input(nextNumberInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId: input.siteId } }));
+export const nextNumber = userRequired.input(nextNumberInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { site: input.siteId });
 
   return orderService.getNextOrderNumber(input.siteId);
 });

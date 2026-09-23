@@ -13,8 +13,6 @@ import {
   type ShiftWindow,
 } from "@rw/historian";
 import { userOrDisplayRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
 import { throwServiceError } from "./errors.js";
 
 // Historian series queries (ADR 0008): `query` returns a range snapshot plus
@@ -144,12 +142,7 @@ async function dbNowMs(): Promise<number> {
 // ============================================================================
 
 export const query = userOrDisplayRequired.input(queryInputSchema).handler(async ({ context, input }) => {
-  grant(
-    await authorize(context.iam, {
-      tier: "VIEW",
-      scope: { kind: "site", siteId: input.series.siteId },
-    }),
-  );
+  await context.access.require("VIEW", { site: input.series.siteId });
   const definition = await authorizeSeries(input.series);
 
   const window = await resolveSnapshotPage(input.series.seriesType, input.series, input.pageToken, () =>
@@ -193,12 +186,7 @@ export const query = userOrDisplayRequired.input(queryInputSchema).handler(async
 });
 
 export const changes = userOrDisplayRequired.input(changesInputSchema).handler(async ({ context, input }) => {
-  grant(
-    await authorize(context.iam, {
-      tier: "VIEW",
-      scope: { kind: "site", siteId: input.series.siteId },
-    }),
-  );
+  await context.access.require("VIEW", { site: input.series.siteId });
   const definition = await authorizeSeries(input.series);
 
   const decoded = decodeCursor(input.cursor, input.series.seriesType, input.series, Date.now());

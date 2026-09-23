@@ -1,10 +1,7 @@
 import { z } from "zod";
-import { publicProcedure, authRequired } from "./middleware.js";
-import { authorize, authorizeList } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { publicProcedure, userRequired } from "./middleware.js";
 import { display } from "@rw/services/display/index";
 import { throwServiceError, unwrap } from "./errors.js";
-import { Principal } from "../auth/index.js";
 
 // ============================================================================
 // Input Schemas
@@ -63,15 +60,9 @@ export const get = publicProcedure.input(idInputSchema).handler(async ({ input }
  * Heartbeat - update lastSeenAt timestamp
  * Called by the TV/tablet periodically
  */
-export const heartbeat = publicProcedure.input(idInputSchema).handler(async ({ input, context }) => {
-  const claimedDisplay = await display.getClaimedDisplayForAuth(input.id);
-  if (claimedDisplay) {
-    if (!context.iam?.validToken || context.iam.principal !== Principal.DISPLAY || context.iam.displayId !== input.id) {
-      // Disabling check for now, may not be needed and causes race condition between claiming display and getting auth token
-      // throw new ORPCError("UNAUTHORIZED", { message: "Display authentication required" });
-    }
-  }
-
+export const heartbeat = publicProcedure.input(idInputSchema).handler(async ({ input }) => {
+  // No token check on purpose: requiring the display's own token raced
+  // with claiming (a display heartbeats before it has its token).
   const result = await display.heartbeat(input.id);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
@@ -84,10 +75,9 @@ export const heartbeat = publicProcedure.input(idInputSchema).handler(async ({ i
 /**
  * Claim a display by its claim code
  */
-export const claim = authRequired.input(claimInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const claim = userRequired.input(claimInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { site: input.siteId });
+  const { workspaceId } = context.current;
 
   const result = await display.claim(workspaceId, input.claimCode, {
     name: input.name,
@@ -103,21 +93,18 @@ export const claim = authRequired.input(claimInputSchema).handler(async ({ input
 /**
  * List displays for a site
  */
-export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
-  );
+export const list = userRequired.input(listInputSchema).handler(async ({ input, context }) => {
+  const scope = context.access.list("VIEW", input.siteId);
 
-  return display.listForWorkspace(scope.workspaceId, { ...input, siteId: scope.siteId });
+  return display.listForWorkspace(context.current.workspaceId, { ...input, siteId: scope.siteId });
 });
 
 /**
  * Assign a dashboard to a display
  */
-export const assignDashboard = authRequired.input(assignDashboardInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "display", id: input.id } }),
-  );
+export const assignDashboard = userRequired.input(assignDashboardInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { display: input.id });
+  const { workspaceId } = context.current;
 
   const result = await display.assignDashboard(workspaceId, input.id, input.dashboardId);
   // Historical mapping: dashboard/display site mismatch is referential-input
@@ -129,10 +116,9 @@ export const assignDashboard = authRequired.input(assignDashboardInputSchema).ha
 /**
  * Unassign dashboard from a display
  */
-export const unassignDashboard = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "display", id: input.id } }),
-  );
+export const unassignDashboard = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { display: input.id });
+  const { workspaceId } = context.current;
 
   const result = await display.unassignDashboard(workspaceId, input.id);
   if (result.error !== undefined) throwServiceError(result);
@@ -142,10 +128,9 @@ export const unassignDashboard = authRequired.input(idInputSchema).handler(async
 /**
  * Update display (rename)
  */
-export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "display", id: input.id } }),
-  );
+export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { display: input.id });
+  const { workspaceId } = context.current;
 
   const { id, ...updateData } = input;
   const result = await display.update(workspaceId, id, updateData);
@@ -160,10 +145,9 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 /**
  * Delete display
  */
-export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "display", id: input.id } }),
-  );
+export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { display: input.id });
+  const { workspaceId } = context.current;
 
   const result = await display.remove(workspaceId, input.id);
   if (result.error !== undefined) throwServiceError(result);

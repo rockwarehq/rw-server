@@ -13,9 +13,16 @@ import { buildServer, type TestServer } from "./helpers/build-server.js";
  * commented exclusion. Tier 1 — no database required.
  */
 
-// Bundlers/vitest rewrite imported calls as (0,__import__.authorize)(...),
-// so match the identifier rather than an exact call shape.
-const POLICY_CALL = /\bauthorize(List|AccessibleSites)?\b/;
+// An access check on the request's `access` object, or one of the two
+// reviewed wrappers that check before returning a scope.
+// (Imported calls are rewritten as `(0, mod.fn)(…)`, so the wrappers match
+// by name.)
+const POLICY_CALL =
+  /\baccess\.(require|requireSomewhere|requireOwner|list|sites|can|canSomewhere)\(|\b(workspaceSiteScope|tokenSite)\b/;
+
+// require() is async: without `await` a denial is never seen and the
+// handler carries on. Same for the wrappers.
+const UNAWAITED_CHECK = /(?<!await )(\b\w+\.access\.require\(|\btokenSite\(|\([^()]*\bworkspaceSiteScope\)\()/;
 
 interface Leaf {
   path: string;
@@ -55,6 +62,11 @@ describe("authorization coverage", () => {
     expect(unguarded).toEqual([]);
   });
 
+  it("every async access check is awaited", () => {
+    const unawaited = leaves.filter((leaf) => UNAWAITED_CHECK.test(leaf.handlerSource)).map((leaf) => leaf.path);
+    expect(unawaited).toEqual([]);
+  });
+
   it("the exclusion list contains no stale entries", () => {
     const known = new Set(leaves.map((leaf) => leaf.path));
     const stale = [...EXCLUDED_PROCEDURES].filter((path) => !known.has(path));
@@ -79,13 +91,12 @@ describe("REST authorization coverage", () => {
       const preHandlers = Array.isArray(route.preHandler) ? route.preHandler : route.preHandler ? [route.preHandler] : [];
       const hasAccessTokenGuard = preHandlers.some((fn) => fn === server.verifyAccessToken);
       const handlerSource = typeof route.handler === "function" ? route.handler.toString() : "";
-      // requireTier preHandlers are closures over the bucket snapshot;
-      // policy-based handlers contain authorize()/replyPolicyDenial() calls.
+      // ownerRequired preHandlers check the caller's person; other routes
+      // ask request.access (or the person) in the handler.
       const hasPermissionGuard =
-        preHandlers.some((fn) => /snapshotPlantTier|requireTier|loadBucketSnapshot/.test(fn.toString())) ||
+        preHandlers.some((fn) => /\baccess\.person\.owner\b/.test(fn.toString())) ||
         POLICY_CALL.test(handlerSource) ||
-        /\breplyPolicyDenial\b/.test(handlerSource) ||
-        /\bloadBucketSnapshot\b/.test(handlerSource);
+        /\baccess\.person\.owner\b/.test(handlerSource);
       for (const method of methods) {
         if (method === "HEAD" || method === "OPTIONS") continue;
         routes.push({ method, url: route.url, hasAccessTokenGuard, hasPermissionGuard });

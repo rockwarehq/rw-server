@@ -14,7 +14,7 @@ Every request resolves to an `IAMContext` (`packages/auth/src/context.ts`) with 
 | `WORKER` | Internal process | — | internal |
 | `UNKNOWN` | Failed/absent auth | — | none |
 
-The Fastify auth plugin (`apps/api/src/auth/plugin.ts`) runs as a preHandler on every request: it inspects the `Authorization` header, routes by token shape (`rw_` prefix → API-token lookup, otherwise JWT verify), hydrates the principal from the DB (user status, workspace membership, site access), and sets `request.iam`.
+The Fastify auth plugin (`apps/api/src/auth/plugin.ts`) runs as a preHandler on every request: it inspects the `Authorization` header, routes by token shape (`rw_` prefix → API-token lookup, otherwise JWT verify), loads the caller from the DB (user status, workspace membership, bucket rows), and sets `request.current` (who is calling) and `request.access` (what they may do).
 
 ## JWT design (`packages/auth/src/verify.ts`)
 
@@ -43,10 +43,10 @@ Opaque `rw_app_`-prefixed tokens for customer integrations: SHA-256 hash lookup 
 
 ## RBAC
 
-- Access is bucket membership: a PLANT bucket per site (VIEW = member, MANAGE = write everything incl. every workcenter, ADMIN = people/access) and a WORKCENTER bucket per cell (VIEW = watch, MANAGE = operate + configure). Workspace owners and Rockware staff bypass. No permission vocabulary; evaluated in `packages/auth/src/iam/buckets.ts` + `policy.ts`.
-- `Role` rows (schema: `packages/db/schema/iam.prisma`) are WORKSPACE- or SITE-scoped with a `permissions: String[]`; `RoleAssignment` links a `WorkspaceMembership` to a role, optionally narrowed to one site.
+- Access is bucket membership: a PLANT bucket per site (VIEW = member, MANAGE = write everything incl. every workcenter, ADMIN = people/access) and a WORKCENTER bucket per cell (VIEW = watch, MANAGE = operate + configure). Workspace owners and Rockware staff bypass. No permission vocabulary; evaluated in `packages/auth/src/iam/access.ts`.
+- Access rows are `BucketAccess` (membership ↔ bucket ↔ tier; schema: `packages/db/schema/iam.prisma`). The old `Role` / `RoleAssignment` / `WorkcenterGrant` tables are a frozen archive with no code paths.
 - `SystemRole` (SUPPORT, ENGINEER) marks internal staff without workspace membership.
-- Enforcement is two-tier: oRPC middleware asserts a valid principal type; handlers call `hasPermission(userId, permission, { workspaceId, siteId? })` before mutating.
+- Enforcement is two-tier: oRPC middleware admits the right kinds of caller (user, display, API token); handlers then ask `context.access` (for example `await context.access.require("MANAGE", { station: id })`), which throws `AccessDenied` on a "no".
 
 ## Session flow (app-side, `apps/api/src/auth/session.ts`)
 

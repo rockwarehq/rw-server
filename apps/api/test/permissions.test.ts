@@ -1,5 +1,5 @@
 import prisma from "@rw/db";
-import { authorize } from "@rw/auth/iam/policy";
+import { loadPerson, UserAccess } from "@rw/auth/iam/access";
 import { hashPassword } from "@rw/auth/password";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
@@ -59,7 +59,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("access enforcement (Tier 2)", (
 });
 
 // Tier 2: the bucket model evaluated end to end against real rows through
-// the fresh-DB-load path (the one requireTier and no-snapshot callers use).
+// the same person loader the auth plugin and session use.
 describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access data (Tier 2)", () => {
   const EMAILS = {
     member: "bucket-data-member@test.local",
@@ -73,14 +73,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access data (Tier 2)", (
   let stationInWc1: string;
   let users: Record<keyof typeof EMAILS, { userId: string }>;
 
-  const iamFor = (userId: string) =>
-    ({
-      principal: "USER",
-      validToken: true,
-      id: userId,
-      email: "x@test.local",
-      workspaceId,
-    }) as never;
+  const accessFor = async (userId: string) => {
+    const person = await loadPerson(userId, workspaceId);
+    if (!person) throw new Error("no person");
+    return new UserAccess(person, siteId);
+  };
+  const allowed = (check: Promise<unknown>) =>
+    check.then(
+      () => true,
+      () => false,
+    );
 
   beforeAll(async () => {
     const workspace = await prisma.workspace.findUniqueOrThrow({ where: { slug: "default" } });
@@ -119,32 +121,28 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("bucket access data (Tier 2)", (
   });
 
   it("member: reads plant things, sees no floor, writes nothing", async () => {
-    const iam = iamFor(users.member.userId);
-    expect((await authorize(iam, { tier: "VIEW", scope: { kind: "site", siteId } })).ok).toBe(true);
-    expect((await authorize(iam, { tier: "MANAGE", scope: { kind: "site", siteId } })).ok).toBe(false);
-    expect((await authorize(iam, { tier: "VIEW", scope: { kind: "station", id: stationInWc1 } })).ok).toBe(false);
+    const access = await accessFor(users.member.userId);
+    expect(await allowed(access.require("VIEW", { site: siteId }))).toBe(true);
+    expect(await allowed(access.require("MANAGE", { site: siteId }))).toBe(false);
+    expect(await allowed(access.require("VIEW", { station: stationInWc1 }))).toBe(false);
   });
 
   it("crew: member of the plant via the hook, manages only their own cell", async () => {
-    const iam = iamFor(users.crew.userId);
+    const access = await accessFor(users.crew.userId);
     // Hook: workcenter access makes them a plant member.
-    expect((await authorize(iam, { tier: "VIEW", scope: { kind: "site", siteId } })).ok).toBe(true);
+    expect(await allowed(access.require("VIEW", { site: siteId }))).toBe(true);
     // Their cell, including configuration.
-    expect((await authorize(iam, { tier: "MANAGE", scope: { kind: "station", id: stationInWc1 } })).ok).toBe(true);
+    expect(await allowed(access.require("MANAGE", { station: stationInWc1 }))).toBe(true);
     // Not the other cell, not the plant.
-    expect((await authorize(iam, { tier: "MANAGE", scope: { kind: "site", siteId, workcenterId: wc2 } })).ok).toBe(
-      false,
-    );
-    expect((await authorize(iam, { tier: "MANAGE", scope: { kind: "site", siteId } })).ok).toBe(false);
+    expect(await allowed(access.require("MANAGE", { workcenter: wc2 }))).toBe(false);
+    expect(await allowed(access.require("MANAGE", { site: siteId }))).toBe(false);
   });
 
   it("manager: the cascade manages every cell with zero per-cell rows", async () => {
-    const iam = iamFor(users.manager.userId);
-    expect((await authorize(iam, { tier: "MANAGE", scope: { kind: "station", id: stationInWc1 } })).ok).toBe(true);
-    expect((await authorize(iam, { tier: "MANAGE", scope: { kind: "site", siteId, workcenterId: wc2 } })).ok).toBe(
-      true,
-    );
+    const access = await accessFor(users.manager.userId);
+    expect(await allowed(access.require("MANAGE", { station: stationInWc1 }))).toBe(true);
+    expect(await allowed(access.require("MANAGE", { workcenter: wc2 }))).toBe(true);
     // The reserved shelf stays shut.
-    expect((await authorize(iam, { tier: "ADMIN", scope: { kind: "site", siteId } })).ok).toBe(false);
+    expect(await allowed(access.require("ADMIN", { site: siteId }))).toBe(false);
   });
 });

@@ -1,7 +1,5 @@
 import { z } from "zod";
-import { authRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { userRequired } from "./middleware.js";
 import { role } from "../services/employee/index.js";
 import { throwServiceError } from "./errors.js";
 
@@ -33,22 +31,22 @@ const idInputSchema = z.object({
 // Procedures
 // ============================================================================
 
-export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "site", siteId: input.siteId } }));
+export const list = userRequired.input(listInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await role.list(input.siteId);
   return result.data;
 });
 
-export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "site", siteId: input.siteId } }));
+export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { site: input.siteId });
 
   const result = await role.create(input);
   return result.data;
 });
 
-export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "employeeRole", id: input.id } }));
+export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { employeeRole: input.id });
 
   const { id, ...data } = input;
   const result = await role.update(id, data);
@@ -56,8 +54,8 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
   return result.data;
 });
 
-export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "employeeRole", id: input.id } }));
+export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { employeeRole: input.id });
 
   const result = await role.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);

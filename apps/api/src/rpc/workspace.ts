@@ -1,15 +1,14 @@
 import { z } from "zod";
 import prisma from "@rw/db";
 import { workspace as workspaceService } from "../services/account/index.js";
-import { authRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { userRequired } from "./middleware.js";
 
 const emptyInputSchema = z.object({});
 
 /** The assignable containers — what the member-management UI offers. */
-export const listBuckets = authRequired.input(emptyInputSchema).handler(async ({ context }) => {
-  const { workspaceId } = grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "anySite" } }));
+export const listBuckets = userRequired.input(emptyInputSchema).handler(async ({ context }) => {
+  context.access.requireSomewhere("ADMIN");
+  const { workspaceId } = context.current;
 
   const buckets = await prisma.bucket.findMany({
     where: { workspaceId },
@@ -19,8 +18,8 @@ export const listBuckets = authRequired.input(emptyInputSchema).handler(async ({
   return { data: buckets };
 });
 
-export const listMembers = authRequired.input(emptyInputSchema).handler(async ({ context }) => {
-  const { workspaceId } = grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "anySite" } }));
+export const listMembers = userRequired.input(emptyInputSchema).handler(async ({ context }) => {
+  context.access.requireSomewhere("ADMIN");
 
-  return { data: await workspaceService.listMembers(workspaceId) };
+  return { data: await workspaceService.listMembers(context.current.workspaceId) };
 });

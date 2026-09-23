@@ -1,8 +1,5 @@
 import { z } from "zod";
-import { authRequired, userOrDisplayRequired } from "./middleware.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
-import { Principal } from "../auth/index.js";
-import { grant } from "./authz.js";
+import { userRequired, userOrDisplayRequired } from "./middleware.js";
 import { call } from "@rw/services/facility/index";
 import { throwServiceError, unwrap } from "./errors.js";
 
@@ -93,8 +90,8 @@ const searchInputSchema = z.object({
 // Definition Procedures
 // ============================================================================
 
-export const definitionCreate = authRequired.input(definitionCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }));
+export const definitionCreate = userRequired.input(definitionCreateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { site: input.siteId });
 
   const result = await call.createDefinition(input);
   if ("error" in result) throwServiceError(result);
@@ -104,26 +101,19 @@ export const definitionCreate = authRequired.input(definitionCreateInputSchema).
 export const definitionList = userOrDisplayRequired
   .input(definitionListInputSchema)
   .handler(async ({ input, context }) => {
-    const scope = grant(
-      await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
-    );
-    return call.listDefinitions({ ...input, ...scopeFilter(scope) });
+    const scope = context.access.list("VIEW", input.siteId);
+    return call.listDefinitions({ ...input, siteId: scope.siteId });
   });
 
-export const definitionGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "callDefinition", id: input.id } }));
+export const definitionGet = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { callDefinition: input.id });
 
   const result = await call.getDefinitionById(input.id);
   return unwrap(result, { notFoundMessage: "Call definition not found" });
 });
 
-export const definitionUpdate = authRequired.input(definitionUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, {
-      tier: "MANAGE",
-      scope: { kind: "callDefinition", id: input.id },
-    }),
-  );
+export const definitionUpdate = userRequired.input(definitionUpdateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { callDefinition: input.id });
 
   const { id, ...updateData } = input;
   const result = await call.updateDefinition(id, updateData);
@@ -131,13 +121,8 @@ export const definitionUpdate = authRequired.input(definitionUpdateInputSchema).
   return result.data;
 });
 
-export const definitionArchive = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, {
-      tier: "MANAGE",
-      scope: { kind: "callDefinition", id: input.id },
-    }),
-  );
+export const definitionArchive = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { callDefinition: input.id });
 
   const result = await call.archiveDefinition(input.id);
   if ("error" in result) throwServiceError(result);
@@ -149,7 +134,7 @@ export const definitionArchive = authRequired.input(idInputSchema).handler(async
 // ============================================================================
 
 export const open = userOrDisplayRequired.input(openInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "station", id: input.stationId } }));
+  await context.access.require("MANAGE", { station: input.stationId });
 
   const result = await call.open({
     stationId: input.stationId,
@@ -157,47 +142,44 @@ export const open = userOrDisplayRequired.input(openInputSchema).handler(async (
     source: "MANUAL",
     message: input.message,
     openedByEmployeeId: input.employeeId,
-    openedByUserId: context.iam.principal === Principal.USER ? context.iam.id : undefined,
+    openedByUserId: context.current.kind === "user" ? context.current.user.id : undefined,
   });
   if ("error" in result) throwServiceError(result);
   return { ...result.data, deduped: result.deduped };
 });
 
 export const close = userOrDisplayRequired.input(closeInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "call", id: input.id } }));
+  await context.access.require("MANAGE", { call: input.id });
 
-  // MANAGE bypasses definition answer-role restrictions so a cell manager or
-  // plant manager can always clear a stuck call (quiet check — no throw).
-  const admin = await authorize(context.iam, { tier: "MANAGE", scope: { kind: "call", id: input.id } });
+  // Everyone past this gate may skip the definition's answer roles: users
+  // here hold MANAGE, and displays always could (unchanged from before
+  // buckets). Whether answer roles should ever bind is an open product
+  // question.
 
   const result = await call.close({
     id: input.id,
     closeMessage: input.closeMessage,
     closedByEmployeeId: input.employeeId,
-    closedByUserId: context.iam.principal === Principal.USER ? context.iam.id : undefined,
-    bypassAnswerRoles: admin.ok,
+    closedByUserId: context.current.kind === "user" ? context.current.user.id : undefined,
+    bypassAnswerRoles: true,
   });
   if ("error" in result) throwServiceError(result);
   return result.data;
 });
 
 export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "call", id: input.id } }));
+  await context.access.require("VIEW", { call: input.id });
 
   const result = await call.getById(input.id);
   return unwrap(result, { notFoundMessage: "Call not found" });
 });
 
 export const listActive = userOrDisplayRequired.input(listActiveInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "WORKCENTER", requestedSiteId: input.siteId }),
-  );
-  return call.listActive({ ...input, ...scopeFilter(scope), workcenterIds: scope.workcenterIds });
+  const scope = context.access.list("VIEW", input.siteId, "WORKCENTER");
+  return call.listActive({ ...input, siteId: scope.siteId, workcenterIds: scope.workcenterIds });
 });
 
-export const search = authRequired.input(searchInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "WORKCENTER", requestedSiteId: input.siteId }),
-  );
+export const search = userRequired.input(searchInputSchema).handler(async ({ input, context }) => {
+  const scope = context.access.list("VIEW", input.siteId, "WORKCENTER");
   return call.search({ ...input, workcenterIds: scope.workcenterIds });
 });

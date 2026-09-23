@@ -1,8 +1,6 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
-import { authRequired } from "./middleware.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { userRequired } from "./middleware.js";
 import { gateway, datasource } from "../services/device/index.js";
 import { throwServiceError } from "./errors.js";
 
@@ -83,10 +81,9 @@ const datasourceListInputSchema = z.object({
 /**
  * Create a new gateway at a site
  */
-export const gatewayCreate = authRequired.input(gatewayCreateInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const gatewayCreate = userRequired.input(gatewayCreateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { site: input.siteId });
+  const { workspaceId } = context.current;
 
   const result = await gateway.create({ ...input, workspaceId });
   if (result.error !== undefined) throwServiceError(result);
@@ -96,27 +93,24 @@ export const gatewayCreate = authRequired.input(gatewayCreateInputSchema).handle
 /**
  * List gateways (optionally filtered by siteId)
  */
-export const gatewayList = authRequired.input(gatewayListInputSchema).handler(async ({ input, context }) => {
+export const gatewayList = userRequired.input(gatewayListInputSchema).handler(async ({ input, context }) => {
   if (input.unassigned) {
     // Workspace pool: claimed hardware awaiting site assignment — visible to
     // anyone who could assign it (MANAGE held somewhere).
-    const pool = grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "anySite" } }));
-    return gateway.list({ workspaceId: pool.workspaceId, unassigned: true });
+    context.access.requireSomewhere("MANAGE");
+    return gateway.list({ workspaceId: context.current.workspaceId, unassigned: true });
   }
 
-  const scope = grant(
-    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
-  );
-  return gateway.list(scopeFilter(scope));
+  const scope = context.access.list("VIEW", input.siteId);
+  return gateway.list({ workspaceId: context.current.workspaceId, siteId: scope.siteId });
 });
 
 /**
  * Get gateway by ID with details
  */
-export const gatewayGet = authRequired.input(gatewayIdInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { tier: "VIEW", scope: { kind: "gateway", id: input.id } }),
-  );
+export const gatewayGet = userRequired.input(gatewayIdInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { gateway: input.id });
+  const { workspaceId } = context.current;
 
   // gateway.getById only emits WORKSPACE_MISMATCH, which the shared table maps
   // to FORBIDDEN — same as the previous blanket FORBIDDEN here.
@@ -131,17 +125,13 @@ export const gatewayGet = authRequired.input(gatewayIdInputSchema).handler(async
 /**
  * Update gateway
  */
-export const gatewayUpdate = authRequired.input(gatewayUpdateInputSchema).handler(async ({ input, context }) => {
+export const gatewayUpdate = userRequired.input(gatewayUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
-  const { workspaceId } = grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "gateway", id } }));
+  await context.access.require("MANAGE", { gateway: id });
+  const { workspaceId } = context.current;
   if (input.siteId) {
     // Moving a gateway requires MANAGE at the TARGET site too.
-    grant(
-      await authorize(context.iam, {
-        tier: "MANAGE",
-        scope: { kind: "site", siteId: input.siteId },
-      }),
-    );
+    await context.access.require("MANAGE", { site: input.siteId });
   }
 
   const result = await gateway.update(id, { ...updateData, workspaceId });
@@ -152,10 +142,9 @@ export const gatewayUpdate = authRequired.input(gatewayUpdateInputSchema).handle
 /**
  * Delete gateway
  */
-export const gatewayDelete = authRequired.input(gatewayIdInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "gateway", id: input.id } }),
-  );
+export const gatewayDelete = userRequired.input(gatewayIdInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { gateway: input.id });
+  const { workspaceId } = context.current;
 
   const result = await gateway.remove(input.id, workspaceId);
   if (result.error !== undefined) throwServiceError(result);
@@ -169,10 +158,9 @@ export const gatewayDelete = authRequired.input(gatewayIdInputSchema).handler(as
 /**
  * Create a new datasource (always creates as DRAFT)
  */
-export const datasourceCreate = authRequired.input(datasourceCreateInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const datasourceCreate = userRequired.input(datasourceCreateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { site: input.siteId });
+  const { workspaceId } = context.current;
 
   const result = await datasource.create({ ...input, workspaceId });
   if ("error" in result) {
@@ -193,9 +181,10 @@ export const datasourceCreate = authRequired.input(datasourceCreateInputSchema).
  * - DRAFT: No connection validation (free editing)
  * - ACTIVE: Validates connection changes
  */
-export const datasourceUpdate = authRequired.input(datasourceUpdateInputSchema).handler(async ({ input, context }) => {
+export const datasourceUpdate = userRequired.input(datasourceUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
-  const { workspaceId } = grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "datasource", id } }));
+  await context.access.require("MANAGE", { datasource: id });
+  const { workspaceId } = context.current;
 
   const result = await datasource.update(id, updateData, workspaceId);
 
@@ -213,10 +202,9 @@ export const datasourceUpdate = authRequired.input(datasourceUpdateInputSchema).
 /**
  * Delete datasource
  */
-export const datasourceDelete = authRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "datasource", id: input.id } }),
-  );
+export const datasourceDelete = userRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { datasource: input.id });
+  const { workspaceId } = context.current;
 
   const result = await datasource.remove(input.id, workspaceId);
   if ("error" in result) {
@@ -234,10 +222,9 @@ export const datasourceDelete = authRequired.input(datasourceIdInputSchema).hand
  * Publish datasource (DRAFT -> ACTIVE)
  * Validates connection info exists and is valid against driver schema
  */
-export const datasourcePublish = authRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "datasource", id: input.id } }),
-  );
+export const datasourcePublish = userRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { datasource: input.id });
+  const { workspaceId } = context.current;
 
   const result = await datasource.publish(input.id, workspaceId);
   if ("error" in result) {
@@ -256,10 +243,9 @@ export const datasourcePublish = authRequired.input(datasourceIdInputSchema).han
  * Unpublish datasource (ACTIVE -> DRAFT)
  * Removes datasource from gateway sync
  */
-export const datasourceUnpublish = authRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "datasource", id: input.id } }),
-  );
+export const datasourceUnpublish = userRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { datasource: input.id });
+  const { workspaceId } = context.current;
 
   const result = await datasource.unpublish(input.id, workspaceId);
   if ("error" in result) {
@@ -277,22 +263,19 @@ export const datasourceUnpublish = authRequired.input(datasourceIdInputSchema).h
  * List datasources with filtering and pagination
  * Automatically filtered by workspace
  */
-export const datasourceList = authRequired.input(datasourceListInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
-  );
+export const datasourceList = userRequired.input(datasourceListInputSchema).handler(async ({ input, context }) => {
+  const scope = context.access.list("VIEW", input.siteId);
 
   // Filter by workspace via site relationship
-  return datasource.list({ ...input, ...scopeFilter(scope) });
+  return datasource.list({ ...input, siteId: scope.siteId });
 });
 
 /**
  * Get datasource by ID with related data
  */
-export const datasourceGet = authRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { tier: "VIEW", scope: { kind: "datasource", id: input.id } }),
-  );
+export const datasourceGet = userRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { datasource: input.id });
+  const { workspaceId } = context.current;
 
   const result = await datasource.getById(input.id);
   if (!result) {

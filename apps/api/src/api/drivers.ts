@@ -2,8 +2,6 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { driver } from "../services/device/index.js";
 import { errorSchema, idParamsSchema } from "./schemas.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { replyPolicyDenial } from "./authz.js";
 
 const driverSummarySchema = {
   type: "object",
@@ -65,9 +63,8 @@ export default async function drivers(fastify: FastifyTypedInstance) {
         200: listDriversResponseSchema,
       },
     },
-    handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { tier: "VIEW", scope: { kind: "anySite" } });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+    handler: async (request, _reply) => {
+      request.access.requireSomewhere("VIEW");
 
       const { name, version } = request.query;
       return driver.list({ name, version });
@@ -88,8 +85,7 @@ export default async function drivers(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { tier: "VIEW", scope: { kind: "anySite" } });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      request.access.requireSomewhere("VIEW");
 
       const { id } = request.params;
       const result = await driver.getById(id);
@@ -114,8 +110,7 @@ export default async function drivers(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { tier: "VIEW", scope: { kind: "anySite" } });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      request.access.requireSomewhere("VIEW");
 
       const { id } = request.params;
       const schemas = await driver.getSchemas(id);

@@ -120,7 +120,7 @@ function assertDisplayIdentity(requestedDisplayId: string, authenticatedDisplayI
  * Get the operator logon configuration for a display.
  */
 export const config = displayRequired.input(displayIdSchema).handler(async ({ input, context }) => {
-  assertDisplayIdentity(input.displayId, context.iam.displayId);
+  assertDisplayIdentity(input.displayId, context.current.display.id);
 
   const ctx = await resolveDisplayContext(input.displayId);
   if (!ctx) {
@@ -140,7 +140,7 @@ export const config = displayRequired.input(displayIdSchema).handler(async ({ in
  * Authenticate and log on an operator at the display's station.
  */
 export const operatorLogon = displayRequired.input(logonInputSchema).handler(async ({ input, context }) => {
-  assertDisplayIdentity(input.displayId, context.iam.displayId);
+  assertDisplayIdentity(input.displayId, context.current.display.id);
 
   const ctx = await resolveDisplayContext(input.displayId);
   if (!ctx) {
@@ -254,7 +254,7 @@ export const operatorLogon = displayRequired.input(logonInputSchema).handler(asy
  * Log off an operator from the display's station.
  */
 export const operatorLogoff = displayRequired.input(logoffInputSchema).handler(async ({ input, context }) => {
-  assertDisplayIdentity(input.displayId, context.iam.displayId);
+  assertDisplayIdentity(input.displayId, context.current.display.id);
 
   const result = await logon.logoff(input.sessionId, input.displayId);
   if (result.error !== undefined) {
@@ -271,7 +271,7 @@ export const operatorLogoff = displayRequired.input(logoffInputSchema).handler(a
  * Log off all operators from the display's station.
  */
 export const operatorLogoffAll = displayRequired.input(displayIdSchema).handler(async ({ input, context }) => {
-  assertDisplayIdentity(input.displayId, context.iam.displayId);
+  assertDisplayIdentity(input.displayId, context.current.display.id);
 
   const result = await logon.logoffAll(input.displayId);
   return { count: result.data.count, activeSessions: [] };
@@ -281,7 +281,7 @@ export const operatorLogoffAll = displayRequired.input(displayIdSchema).handler(
  * Get active logon sessions for the display's station.
  */
 export const activeSessions = displayRequired.input(displayIdSchema).handler(async ({ input, context }) => {
-  assertDisplayIdentity(input.displayId, context.iam.displayId);
+  assertDisplayIdentity(input.displayId, context.current.display.id);
 
   const result = await logon.getActiveSessions(input.displayId);
   return result.data;
@@ -297,7 +297,7 @@ const employeesInputSchema = z.object({
 });
 
 export const employees = displayRequired.input(employeesInputSchema).handler(async ({ input, context }) => {
-  assertDisplayIdentity(input.displayId, context.iam.displayId);
+  assertDisplayIdentity(input.displayId, context.current.display.id);
 
   const ctx = await resolveDisplayContext(input.displayId);
   if (!ctx) {

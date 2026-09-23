@@ -3,9 +3,7 @@
  */
 
 import { z } from "zod";
-import { authRequired, userOrDisplayRequired } from "./middleware.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { userRequired, userOrDisplayRequired } from "./middleware.js";
 import prisma from "@rw/db";
 import { Prisma } from "@rw/db";
 import {
@@ -104,7 +102,7 @@ const metricBucketLogSearchInputSchema = z.object({
 export const metricBucketLogSearch = userOrDisplayRequired
   .input(metricBucketLogSearchInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId: input.siteId } }));
+    await context.access.require("VIEW", { site: input.siteId });
 
     const where: Record<string, unknown> = {
       siteId: input.siteId,
@@ -271,7 +269,7 @@ const hourlyBucketSearchInputSchema = z.object({
 export const hourlyBucketSearch = userOrDisplayRequired
   .input(hourlyBucketSearchInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId: input.siteId } }));
+    await context.access.require("VIEW", { site: input.siteId });
 
     const where: Record<string, unknown> = {
       siteId: input.siteId,
@@ -354,10 +352,10 @@ const stationShiftSummaryInputSchema = z.object({
   shiftInstanceId: z.uuid(),
 });
 
-export const stationShiftSummary = authRequired
+export const stationShiftSummary = userRequired
   .input(stationShiftSummaryInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId: input.siteId } }));
+    await context.access.require("VIEW", { site: input.siteId });
 
     const where = {
       siteId: input.siteId,
@@ -435,10 +433,10 @@ const downtimeLogSearchInputSchema = z.object({
   offset: z.number().min(0).default(0),
 });
 
-export const downtimeLogSearch = authRequired
+export const downtimeLogSearch = userRequired
   .input(downtimeLogSearchInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId: input.siteId } }));
+    await context.access.require("VIEW", { site: input.siteId });
 
     // Resolve station IDs for the scope
     let stationIds: string[];
@@ -704,10 +702,10 @@ const dispositionLogSearchInputSchema = z.object({
   offset: z.number().min(0).default(0),
 });
 
-export const dispositionLogSearch = authRequired
+export const dispositionLogSearch = userRequired
   .input(dispositionLogSearchInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId: input.siteId } }));
+    await context.access.require("VIEW", { site: input.siteId });
 
     const where: Prisma.ItemDispositionLogWhereInput = {
       siteId: input.siteId,
@@ -867,10 +865,10 @@ const materialUsageSearchInputSchema = z.object({
   offset: z.number().min(0).default(0),
 });
 
-export const materialUsageSearch = authRequired
+export const materialUsageSearch = userRequired
   .input(materialUsageSearchInputSchema)
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId: input.siteId } }));
+    await context.access.require("VIEW", { site: input.siteId });
 
     // Resolve station scope — always build workcenter map for shift lookup
     let stationIds: string[] | undefined;
@@ -1122,8 +1120,8 @@ const CYCLE_FIELD_TO_SQL: Record<string, Prisma.Sql> = {
   amendmentId: Prisma.sql`"amendmentId"`,
 };
 
-export const cycleSearch = authRequired.input(cycleSearchInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId: input.siteId } }));
+export const cycleSearch = userRequired.input(cycleSearchInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { site: input.siteId });
 
   // Resolve station scope to a uuid[] we can ANY() in SQL.
   let stationIds: string[];
@@ -1362,8 +1360,8 @@ const logonLogSearchInputSchema = z.object({
   offset: z.number().min(0).default(0),
 });
 
-export const logonLogSearch = authRequired.input(logonLogSearchInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId: input.siteId } }));
+export const logonLogSearch = userRequired.input(logonLogSearchInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { site: input.siteId });
 
   const where: Prisma.StationLogonSessionWhereInput = {
     station: { siteId: input.siteId },
@@ -1511,8 +1509,8 @@ const partLogSearchInputSchema = z.object({
   offset: z.number().min(0).default(0),
 });
 
-export const partLogSearch = authRequired.input(partLogSearchInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId: input.siteId } }));
+export const partLogSearch = userRequired.input(partLogSearchInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { site: input.siteId });
 
   // Resolve station scope + workcenter map for shift lookup
   let stationIds: string[];

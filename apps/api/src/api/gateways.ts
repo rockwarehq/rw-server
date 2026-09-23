@@ -1,9 +1,8 @@
 import type { JSONSchema } from "json-schema-to-ts";
+import { currentUser } from "./authz.js";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { gateway } from "../services/device/index.js";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
-import { authorize, authorizeList, scopeFilter } from "@rw/auth/iam/policy";
-import { replyPolicyDenial } from "./authz.js";
 
 const siteSummarySchema = {
   type: "object",
@@ -231,12 +230,8 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "site", siteId: request.body.siteId },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
-      const workspaceId = auth.workspaceId;
+      await request.access.require("MANAGE", { site: request.body.siteId });
+      const workspaceId = currentUser(request).workspaceId;
 
       try {
         const result = await gateway.create({ ...request.body, workspaceId });
@@ -265,22 +260,16 @@ export default async function gateways(fastify: FastifyTypedInstance) {
         401: errorSchema,
       },
     },
-    handler: async (request, reply) => {
+    handler: async (request, _reply) => {
       if (request.query.unassigned) {
         // Workspace pool: claimed hardware awaiting site assignment.
-        const pool = await authorize(request.iam, { tier: "MANAGE", scope: { kind: "anySite" } });
-        if (!pool.ok) return replyPolicyDenial(reply, pool);
-        return gateway.list({ workspaceId: pool.workspaceId, unassigned: true });
+        request.access.requireSomewhere("MANAGE");
+        return gateway.list({ workspaceId: currentUser(request).workspaceId, unassigned: true });
       }
 
-      const scope = await authorizeList(request.iam, {
-        tier: "VIEW",
-        bucketKind: "PLANT",
-        requestedSiteId: request.query.siteId,
-      });
-      if (!scope.ok) return replyPolicyDenial(reply, scope);
+      const scope = request.access.list("VIEW", request.query.siteId);
 
-      return gateway.list(scopeFilter(scope));
+      return gateway.list({ workspaceId: currentUser(request).workspaceId, siteId: scope.siteId });
     },
   });
 
@@ -300,13 +289,9 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        tier: "VIEW",
-        scope: { kind: "gateway", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("VIEW", { gateway: request.params.id });
 
-      const result = await gateway.getById(request.params.id, auth.workspaceId);
+      const result = await gateway.getById(request.params.id);
       if (!result) {
         return reply.status(404).send({ error: "Gateway not found" });
       }
@@ -333,11 +318,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        tier: "VIEW",
-        scope: { kind: "gateway", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("VIEW", { gateway: request.params.id });
 
       const result = await gateway.getGatewaySpec(request.params.id);
       if (!result) {
@@ -366,20 +347,12 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "gateway", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { gateway: request.params.id });
       if (request.body.siteId) {
         // Moving a gateway requires MANAGE at the TARGET site too.
-        const target = await authorize(request.iam, {
-          tier: "MANAGE",
-          scope: { kind: "site", siteId: request.body.siteId },
-        });
-        if (!target.ok) return replyPolicyDenial(reply, target);
+        await request.access.require("MANAGE", { site: request.body.siteId });
       }
-      const workspaceId = auth.workspaceId;
+      const workspaceId = currentUser(request).workspaceId;
 
       const result = await gateway.update(request.params.id, { ...request.body, workspaceId });
       if ("error" in result) {
@@ -406,13 +379,9 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "gateway", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { gateway: request.params.id });
 
-      const result = await gateway.remove(request.params.id, auth.workspaceId);
+      const result = await gateway.remove(request.params.id);
       if ("error" in result) {
         // remove only returns GATEWAY_NOT_FOUND (404) or WORKSPACE_MISMATCH (401)
         const status = result.code === "WORKSPACE_MISMATCH" ? 401 : 404;
@@ -439,11 +408,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "gateway", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { gateway: request.params.id });
       const result = await gateway.tokens.create({
         gatewayId: request.params.id,
         name: request.body?.name,
@@ -469,11 +434,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "gateway", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { gateway: request.params.id });
 
       const result = await gateway.tokens.revoke(request.params.id, request.params.tokenId);
       if (!result) {
@@ -503,11 +464,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "gateway", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { gateway: request.params.id });
       const cmd = await gateway.commands.queue({
         gatewayId: request.params.id,
         command: request.body.command,
@@ -534,12 +491,8 @@ export default async function gateways(fastify: FastifyTypedInstance) {
         404: errorSchema,
       },
     },
-    handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        tier: "VIEW",
-        scope: { kind: "gateway", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+    handler: async (request, _reply) => {
+      await request.access.require("VIEW", { gateway: request.params.id });
       return gateway.commands.list(request.params.id, request.query);
     },
   });
@@ -560,11 +513,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        tier: "VIEW",
-        scope: { kind: "gateway", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("VIEW", { gateway: request.params.id });
 
       const cmd = await gateway.commands.getById(request.params.id, request.params.commandId);
       if (!cmd) {
@@ -591,11 +540,7 @@ export default async function gateways(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "gateway", id: request.params.id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { gateway: request.params.id });
 
       const result = await gateway.commands.cancel(request.params.id, request.params.commandId);
       if (result.error === "not_found") {

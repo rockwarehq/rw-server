@@ -1,8 +1,6 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
-import { authRequired, userOrDisplayRequired } from "./middleware.js";
-import { authorize, authorizeList } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { userRequired, userOrDisplayRequired } from "./middleware.js";
 import { dashboard } from "@rw/services/dashboard/index";
 import { throwServiceError } from "./errors.js";
 
@@ -46,10 +44,9 @@ const listInputSchema = z.object({
 /**
  * Create a new dashboard
  */
-export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }),
-  );
+export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { site: input.siteId });
+  const { workspaceId } = context.current;
 
   const result = await dashboard.create(input, workspaceId);
   if (result.error !== undefined) throwServiceError(result);
@@ -60,20 +57,17 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
  * List dashboards
  */
 export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
-  );
+  const scope = context.access.list("VIEW", input.siteId);
 
-  return dashboard.list({ ...input, siteId: scope.siteId }, scope.workspaceId);
+  return dashboard.list({ ...input, siteId: scope.siteId });
 });
 
 /**
  * Get dashboard by ID
  */
 export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { tier: "VIEW", scope: { kind: "dashboard", id: input.id } }),
-  );
+  await context.access.require("VIEW", { dashboard: input.id });
+  const { workspaceId } = context.current;
 
   const result = await dashboard.getById(input.id, workspaceId);
   if (!result) {
@@ -86,10 +80,9 @@ export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ i
 /**
  * Update dashboard
  */
-export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "dashboard", id: input.id } }),
-  );
+export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { dashboard: input.id });
+  const { workspaceId } = context.current;
 
   const { id, ...updateData } = input;
   const result = await dashboard.update(id, updateData, workspaceId);
@@ -100,10 +93,9 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 /**
  * Delete dashboard (soft delete)
  */
-export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const { workspaceId } = grant(
-    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "dashboard", id: input.id } }),
-  );
+export const remove = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { dashboard: input.id });
+  const { workspaceId } = context.current;
 
   const result = await dashboard.remove(input.id, workspaceId);
   if (result.error !== undefined) throwServiceError(result);

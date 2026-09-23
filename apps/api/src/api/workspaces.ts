@@ -1,10 +1,9 @@
+import { asUser } from "@rw/auth/context";
 import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { workspace } from "../services/account/index.js";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
-import { requireTier } from "../plugins/require-permission.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { replyPolicyDenial } from "./authz.js";
+import { ownerRequired } from "../plugins/require-owner.js";
 
 const workspaceSchema = {
   type: "object",
@@ -197,7 +196,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const userId = (request.iam as { id?: string } | undefined)?.id;
+      const userId = asUser(request.current)?.user.id;
       if (!userId) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
@@ -223,8 +222,8 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = (request.iam as { workspaceId?: string } | undefined)?.workspaceId;
-      const userId = (request.iam as { id?: string } | undefined)?.id;
+      const workspaceId = asUser(request.current)?.workspaceId;
+      const userId = asUser(request.current)?.user.id;
 
       if (!userId) {
         return reply.status(401).send({ error: "Unauthorized" });
@@ -237,12 +236,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       if (!workspaceId) {
         return reply.status(401).send({ error: "No workspace context" });
       }
-      const ownerCheck = await authorize(request.iam, {
-        tier: "ADMIN",
-        scope: { kind: "workspace" },
-        ownerOnly: true,
-      });
-      if (!ownerCheck.ok) {
+      if (!asUser(request.current)?.access.person.owner) {
         return reply.status(403).send({ error: "forbidden", required: "owner" });
       }
 
@@ -273,7 +267,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const userId = (request.iam as { id?: string } | undefined)?.id;
+      const userId = asUser(request.current)?.user.id;
       if (!userId) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
@@ -296,7 +290,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "PUT",
     url: "/:id",
-    preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "workspace", workspaceParam: "id" })],
+    preHandler: [fastify.verifyAccessToken, ownerRequired({ workspaceParam: "id" })],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -321,10 +315,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "DELETE",
     url: "/:id",
-    preHandler: [
-      fastify.verifyAccessToken,
-      requireTier("ADMIN", { scope: "workspace", workspaceParam: "id", ownerOnly: true }),
-    ],
+    preHandler: [fastify.verifyAccessToken, ownerRequired({ workspaceParam: "id", allowStaff: false })],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -362,7 +353,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const userId = (request.iam as { id?: string } | undefined)?.id;
+      const userId = asUser(request.current)?.user.id;
       if (!userId) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
@@ -371,8 +362,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       if (!isMember) {
         return reply.status(403).send({ error: "Not a member of this workspace" });
       }
-      const auth = await authorize(request.iam, { tier: "ADMIN", scope: { kind: "anySite" } });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      request.access.requireSomewhere("ADMIN");
 
       return workspace.listMembers(request.params.id);
     },
@@ -382,7 +372,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/members",
-    preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "workspace", workspaceParam: "id" })],
+    preHandler: [fastify.verifyAccessToken, ownerRequired({ workspaceParam: "id" })],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -431,20 +421,17 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const currentUserId = request.iam?.id;
-      const workspaceId = request.iam?.workspaceId;
-      if (!currentUserId || !workspaceId) {
-        return reply.status(401).send({ error: "Unauthorized" });
-      }
+      const me = asUser(request.current);
+      if (!me) return reply.status(401).send({ error: "Unauthorized" });
 
-      if (request.params.id !== workspaceId) {
+      if (request.params.id !== me.workspaceId) {
         return reply.status(403).send({ error: "Not in requested workspace context" });
       }
 
       const result = await workspace.updateAccess({
-        actorUserId: currentUserId,
+        actor: me.access,
         targetUserId: request.params.userId,
-        workspaceId,
+        workspaceId: me.workspaceId,
         set: request.body.set,
         remove: request.body.remove,
         workspaceRole: request.body.workspaceRole,
@@ -471,7 +458,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "DELETE",
     url: "/:id/members/:userId",
-    preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "workspace", workspaceParam: "id" })],
+    preHandler: [fastify.verifyAccessToken, ownerRequired({ workspaceParam: "id" })],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -485,7 +472,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const currentUserId = (request.iam as { id?: string } | undefined)?.id;
+      const currentUserId = asUser(request.current)?.user.id;
       if (!currentUserId) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
@@ -517,7 +504,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "DELETE",
     url: "/:id/members/:userId/site-access",
-    preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "site" })],
+    preHandler: [fastify.verifyAccessToken],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -531,14 +518,18 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const iam = request.iam as { id?: string; workspaceId?: string; siteId?: string } | undefined;
-      const currentUserId = iam?.id;
-      const siteId = iam?.siteId;
-      if (!currentUserId || !iam?.workspaceId || !siteId) {
+      const me = asUser(request.current);
+      const siteId = me?.siteId;
+      if (!me || !siteId) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
+      // ADMIN at the token's site plant.
+      if (!me.access.can("ADMIN", { site: siteId })) {
+        return reply.status(403).send({ error: "forbidden", required: "ADMIN" });
+      }
+      const currentUserId = me.user.id;
 
-      if (request.params.id !== iam.workspaceId) {
+      if (request.params.id !== me.workspaceId) {
         return reply.status(403).send({ error: "Not in requested workspace context" });
       }
 

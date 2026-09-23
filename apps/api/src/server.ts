@@ -87,7 +87,8 @@ export function createServer(options: IServerOptions) {
         prefix: "/rpc",
         context: {
           request: req,
-          iam: req.iam,
+          current: req.current,
+          access: req.access,
         },
       });
 

@@ -4,51 +4,33 @@
 import prisma from "@rw/db";
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
-import { authorize } from "@rw/auth/iam/policy";
+import { describeAccess, staffLabel } from "@rw/auth/iam/access";
 import { workspace as workspaceService } from "../services/account/index.js";
-import { authRequired } from "./middleware.js";
-import { grant } from "./authz.js";
+import { userRequired } from "./middleware.js";
 
 const tierSchema = z.enum(["VIEW", "MANAGE", "ADMIN"]);
 
 /** My buckets — the "plants and cells I'm in" screen. */
-export const list = authRequired.handler(async ({ context }) => {
-  const iam = context.iam;
-  if (!iam.workspaceId || !iam.id) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
-  const snapshot = iam.bucketSnapshot;
-  if (!snapshot) return { owner: false, staff: "NONE", buckets: [] };
-  if (snapshot.owner || snapshot.staff !== "NONE") {
-    return { owner: snapshot.owner, staff: snapshot.staff, buckets: [] };
-  }
-  const buckets = await prisma.bucket.findMany({
-    where: { id: { in: snapshot.entries.map((e) => e.bucketId) } },
-    select: { id: true, name: true, kind: true, siteId: true, workcenterId: true },
-  });
-  const byId = new Map(buckets.map((b) => [b.id, b]));
+export const list = userRequired.handler(async ({ context }) => {
+  const person = context.access.person;
+  const entries = await describeAccess(person);
   return {
-    owner: false,
-    staff: "NONE",
-    buckets: snapshot.entries
-      .map((e) => {
-        const bucket = byId.get(e.bucketId);
-        return bucket ? { ...bucket, tier: e.tier, via: e.via } : null;
-      })
-      .filter((b) => b !== null),
+    owner: person.owner,
+    staff: staffLabel(person),
+    buckets: entries.map(({ bucketId, ...entry }) => ({ id: bucketId, ...entry })),
   };
 });
 
 const membersInputSchema = z.object({ bucketId: z.uuid() });
 
 /** Who's in this bucket — reserved: plant ADMIN at the bucket's site. */
-export const members = authRequired.input(membersInputSchema).handler(async ({ input, context }) => {
+export const members = userRequired.input(membersInputSchema).handler(async ({ input, context }) => {
   const target = await prisma.bucket.findUnique({
     where: { id: input.bucketId },
     select: { siteId: true },
   });
   if (!target?.siteId) throw new ORPCError("NOT_FOUND", { message: "Bucket not found" });
-  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "site", siteId: target.siteId } }));
+  await context.access.require("ADMIN", { site: target.siteId });
 
   const accesses = await prisma.bucketAccess.findMany({
     where: { bucketId: input.bucketId },
@@ -69,14 +51,10 @@ const setAccessInputSchema = z.object({
 });
 
 /** Grant or change one member's access to one bucket. */
-export const setAccess = authRequired.input(setAccessInputSchema).handler(async ({ input, context }) => {
-  const iam = context.iam;
-  if (!iam.workspaceId || !iam.id) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+export const setAccess = userRequired.input(setAccessInputSchema).handler(async ({ input, context }) => {
   const result = await workspaceService.updateAccess({
-    workspaceId: iam.workspaceId,
-    actorUserId: iam.id,
+    workspaceId: context.current.workspaceId,
+    actor: context.access,
     targetUserId: input.userId,
     set: [{ bucketId: input.bucketId, tier: input.tier }],
   });
@@ -94,14 +72,10 @@ const removeAccessInputSchema = z.object({
 });
 
 /** Remove one member's access to one bucket. */
-export const removeAccess = authRequired.input(removeAccessInputSchema).handler(async ({ input, context }) => {
-  const iam = context.iam;
-  if (!iam.workspaceId || !iam.id) {
-    throw new ORPCError("BAD_REQUEST", { message: "Workspace context required" });
-  }
+export const removeAccess = userRequired.input(removeAccessInputSchema).handler(async ({ input, context }) => {
   const result = await workspaceService.updateAccess({
-    workspaceId: iam.workspaceId,
-    actorUserId: iam.id,
+    workspaceId: context.current.workspaceId,
+    actor: context.access,
     targetUserId: input.userId,
     remove: [input.bucketId],
   });

@@ -4,94 +4,29 @@ import createError from "http-errors";
 import { verifyAccessToken, isExpiredTokenError, type DecodedAccessToken } from "@rw/auth/tokens";
 import { API_TOKEN_PREFIX, touchApiToken, validateApiToken } from "@rw/auth/api-tokens";
 import {
-  type BucketSnapshot,
-  completeSnapshotEntries,
-  ownerSnapshot,
-  snapshotVisibleSites,
-  staffSnapshot,
-} from "@rw/auth/iam/index";
-import { Principal, type AppIAMContext, type IAMContext, type UnknownIAMContext } from "@rw/auth/context";
+  type Access,
+  AccessDenied,
+  DeviceAccess,
+  noAccess,
+  personSelect,
+  toPerson,
+  UserAccess,
+} from "@rw/auth/iam/access";
+import { replyAccessDenied } from "../api/authz.js";
+import type { AccessTokenPayload } from "@rw/auth/verify";
+import type { Current } from "@rw/auth/context";
 import prisma from "@rw/db";
+
+// Who is calling, worked out once per request (like Basecamp's `Current`):
+// request.current is the caller (null when anonymous or invalid), and
+// request.access answers "may they do this?" for handlers.
 
 const AUTH_HEADER_PREFIX = "Bearer ";
 
-interface LegacyDecodedUserAccessToken {
-  id: string;
-  email: string;
-  workspaceId?: string;
-  siteId?: string;
-  iat: number;
-  exp: number;
-}
-
-function isDisplayAccessToken(
-  decodedToken: DecodedAccessToken,
-): decodedToken is DecodedAccessToken & { principal: "DISPLAY" } {
-  return decodedToken.principal === Principal.DISPLAY;
-}
-
-async function resolveDisplayIAM(displayId: string): Promise<IAMContext> {
-  const iam: UnknownIAMContext = {
-    principal: Principal.UNKNOWN,
-    validToken: false,
-  };
-
-  const display = await prisma.display.findUnique({
-    where: { id: displayId },
-    select: {
-      id: true,
-      name: true,
-      status: true,
-      siteId: true,
-      dashboardId: true,
-      workcenterId: true,
-      stationId: true,
-      site: {
-        select: {
-          id: true,
-          workspaceId: true,
-          workspace: {
-            select: {
-              id: true,
-              name: true,
-              slug: true,
-            },
-          },
-        },
-      },
-    },
-  });
-
-  if (!display || display.status !== "CLAIMED" || !display.siteId || !display.site) {
-    return iam;
-  }
-
-  return {
-    principal: Principal.DISPLAY,
-    validToken: true,
-    displayId: display.id,
-    siteId: display.siteId,
-    workspaceId: display.site.workspaceId,
-    display: {
-      id: display.id,
-      name: display.name,
-      status: display.status,
-      siteId: display.siteId,
-      dashboardId: display.dashboardId,
-      workcenterId: display.workcenterId,
-      stationId: display.stationId,
-    },
-    workspace: {
-      id: display.site.workspace.id,
-      name: display.site.workspace.name,
-      slug: display.site.workspace.slug,
-    },
-  };
-}
-
 declare module "fastify" {
   interface FastifyRequest {
-    iam?: IAMContext;
+    current: Current | null;
+    access: Access;
   }
   interface FastifyInstance {
     verifyAccessToken: (
@@ -106,27 +41,17 @@ interface RequestLogger {
   warn: (objOrMsg: object | string, msg?: string) => void;
 }
 
-async function resolveIAM(authHeader: string, log?: RequestLogger): Promise<IAMContext> {
-  const iam: IAMContext = {
-    principal: Principal.UNKNOWN,
-    validToken: false,
-  };
-
-  if (!authHeader.startsWith(AUTH_HEADER_PREFIX)) {
-    return iam;
-  }
-
+export async function authenticate(authHeader: string, log?: RequestLogger): Promise<Current | null> {
+  if (!authHeader.startsWith(AUTH_HEADER_PREFIX)) return null;
   const token = authHeader.substring(AUTH_HEADER_PREFIX.length);
 
   // Opaque customer/app API tokens are routed by prefix before JWT decoding.
   // The prefix carries no authority — a forged one just fails the hash lookup.
-  if (token.startsWith(API_TOKEN_PREFIX)) {
-    return resolveAppIAM(token, log);
-  }
+  if (token.startsWith(API_TOKEN_PREFIX)) return authenticateApp(token, log);
 
-  let decodedToken: DecodedAccessToken;
+  let decoded: DecodedAccessToken;
   try {
-    decodedToken = verifyAccessToken(token);
+    decoded = verifyAccessToken(token);
   } catch (err) {
     // Distinguish an expired token (routine — client should refresh) from a
     // malformed/wrongly-signed one (potential attack). Never log the token.
@@ -135,22 +60,44 @@ async function resolveIAM(authHeader: string, log?: RequestLogger): Promise<IAMC
     } else {
       log?.warn("auth: rejected invalid access token");
     }
-    return iam;
+    return null;
   }
 
-  if (isDisplayAccessToken(decodedToken)) {
-    return resolveDisplayIAM(decodedToken.displayId);
-  }
-
-  return resolveUserIAM(decodedToken);
+  if (decoded.principal === "DISPLAY") return authenticateDisplay(decoded.displayId);
+  return authenticateUser(decoded);
 }
 
-async function resolveAppIAM(token: string, log?: RequestLogger): Promise<IAMContext> {
+async function authenticateDisplay(displayId: string): Promise<Current | null> {
+  const display = await prisma.display.findUnique({
+    where: { id: displayId },
+    select: {
+      id: true,
+      name: true,
+      status: true,
+      siteId: true,
+      dashboardId: true,
+      workcenterId: true,
+      stationId: true,
+      site: { select: { workspaceId: true } },
+    },
+  });
+  if (!display || display.status !== "CLAIMED" || !display.siteId || !display.site) return null;
+
+  return {
+    kind: "display",
+    display: { ...display, siteId: display.siteId },
+    workspaceId: display.site.workspaceId,
+    siteId: display.siteId,
+    access: new DeviceAccess("display", display.siteId),
+  };
+}
+
+async function authenticateApp(token: string, log?: RequestLogger): Promise<Current | null> {
   const validated = await validateApiToken(token);
   if (!validated) {
     // Unknown, revoked, and expired all look identical to the caller.
     log?.warn("auth: rejected invalid api token");
-    return { principal: Principal.UNKNOWN, validToken: false };
+    return null;
   }
 
   // Fire-and-forget by design, but never silently: a failing touch means
@@ -159,25 +106,23 @@ async function resolveAppIAM(token: string, log?: RequestLogger): Promise<IAMCon
     log?.warn({ err }, "auth: failed to touch api token last-used timestamp");
   });
 
-  const iam: AppIAMContext = {
-    principal: Principal.APP,
-    validToken: true,
-    apiTokenId: validated.id,
+  return {
+    kind: "app",
+    tokenId: validated.id,
+    scopes: validated.scopes,
     workspaceId: validated.workspaceId,
     siteId: validated.siteId,
-    scopes: validated.scopes,
+    access: new DeviceAccess("app", validated.siteId),
   };
-  return iam;
 }
 
-async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promise<IAMContext> {
-  const invalidIAM: UnknownIAMContext = {
-    principal: Principal.UNKNOWN,
-    validToken: false,
-  };
+async function authenticateUser(token: AccessTokenPayload): Promise<Current | null> {
+  const workspaceId = token.workspaceId;
+  if (!workspaceId) return null;
 
-  const userResult = await prisma.user.findUnique({
-    where: { id: decodedToken.id },
+  // One query: the user, their membership here, and their bucket rows.
+  const user = await prisma.user.findUnique({
+    where: { id: token.id },
     select: {
       id: true,
       email: true,
@@ -185,161 +130,71 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
       lastName: true,
       status: true,
       lockedUntil: true,
-      systemRole: true,
       mustChangePassword: true,
+      ...personSelect(workspaceId),
     },
   });
+  if (!user) return null;
 
-  if (!userResult) {
-    return invalidIAM;
+  // PENDING invitees (temp password not yet changed) get a context so they
+  // can reach the password-change allowlist; any other non-ACTIVE state -
+  // including PENDING with the flag somehow cleared - gets nothing.
+  const pendingInvitee = user.status === "PENDING" && user.mustChangePassword;
+  if (user.status !== "ACTIVE" && !pendingInvitee) return null;
+  if (user.lockedUntil && user.lockedUntil > new Date()) return null;
+
+  // Staff hold no memberships by design; everyone else needs one here.
+  const person = toPerson(user);
+  if (!person) return null;
+  if (person.staff) {
+    const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true } });
+    if (!workspace) return null;
   }
 
-  // PENDING invitees (temp password not yet changed) get an IAM context so
-  // they can reach the password-change allowlist; any other non-ACTIVE state
-  // - including PENDING with the flag somehow cleared - gets nothing.
-  const pendingInvitee = userResult.status === "PENDING" && userResult.mustChangePassword;
-  if (userResult.status !== "ACTIVE" && !pendingInvitee) {
-    return invalidIAM;
-  }
-
-  if (userResult.lockedUntil && userResult.lockedUntil > new Date()) {
-    return invalidIAM;
-  }
-
-  if (!decodedToken.workspaceId) {
-    return invalidIAM;
-  }
-
-  // System users (SUPPORT/ENGINEER staff) hold no memberships by design —
-  // their workspace context is validated directly against the workspace row.
-  let workspaceContext: { id: string; name: string; slug: string } | null;
-  let membershipRow: { id: string; workspaceRole: string } | null = null;
-  if (userResult.systemRole) {
-    workspaceContext = await prisma.workspace.findUnique({
-      where: { id: decodedToken.workspaceId },
-      select: { id: true, name: true, slug: true },
-    });
-  } else {
-    const membership = await prisma.workspaceMembership.findUnique({
-      where: {
-        userId_workspaceId: {
-          userId: decodedToken.id,
-          workspaceId: decodedToken.workspaceId,
-        },
-      },
-      select: {
-        id: true,
-        workspaceRole: true,
-        workspace: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-          },
-        },
-      },
-    });
-    workspaceContext = membership?.workspace ?? null;
-    membershipRow = membership ? { id: membership.id, workspaceRole: membership.workspaceRole } : null;
-  }
-
-  if (!workspaceContext) {
-    return invalidIAM;
-  }
-
-  // Resolve the bucket snapshot once; the site-claim check below and every
-  // downstream policy evaluation share it instead of re-querying.
-  let bucketSnapshot: BucketSnapshot;
-  if (userResult.systemRole) {
-    bucketSnapshot = staffSnapshot(userResult.systemRole);
-  } else if (!membershipRow) {
-    bucketSnapshot = { owner: false, staff: "NONE", entries: [] };
-  } else if (membershipRow.workspaceRole === "OWNER") {
-    bucketSnapshot = ownerSnapshot();
-  } else {
-    const accesses = await prisma.bucketAccess.findMany({
-      where: { membershipId: membershipRow.id },
-      select: {
-        tier: true,
-        bucket: { select: { id: true, kind: true, siteId: true, workcenterId: true } },
-      },
-    });
-    const direct = accesses.map((a) => ({
-      bucketId: a.bucket.id,
-      kind: a.bucket.kind as "PLANT" | "WORKCENTER",
-      siteId: a.bucket.siteId,
-      workcenterId: a.bucket.workcenterId,
-      tier: a.tier as "VIEW" | "MANAGE" | "ADMIN",
-    }));
-    const siteIds = [...new Set(direct.map((e) => e.siteId).filter((x): x is string => x !== null))];
-    const siteBuckets =
-      siteIds.length === 0
-        ? []
-        : await prisma.bucket.findMany({
-            where: { siteId: { in: siteIds } },
-            select: { id: true, kind: true, siteId: true, workcenterId: true },
-          });
-    bucketSnapshot = {
-      owner: false,
-      staff: "NONE",
-      entries: completeSnapshotEntries(
-        direct,
-        siteBuckets.map((b) => ({ ...b, kind: b.kind as "PLANT" | "WORKCENTER" })),
-      ),
-    };
-  }
-
-  if (decodedToken.siteId) {
-    // Visibility, not a tier: any bucket at the claimed site keeps the
-    // token valid.
-    const access = snapshotVisibleSites(bucketSnapshot);
-    if (access.all) {
-      // All-sites grants still require the claimed site to exist in the
-      // workspace (parity with the listAccessibleSites-based check).
-      const site = await prisma.site.findFirst({
-        where: { id: decodedToken.siteId, workspaceId: decodedToken.workspaceId },
-        select: { id: true },
-      });
-      if (!site) {
-        return invalidIAM;
-      }
-    } else if (!access.siteIds.includes(decodedToken.siteId)) {
-      return invalidIAM;
+  const siteId = token.siteId ?? null;
+  if (siteId) {
+    // The token's site must still be one the user can see.
+    const access = new UserAccess(person, siteId);
+    const sites = access.sites();
+    if (sites === "all") {
+      const site = await prisma.site.findFirst({ where: { id: siteId, workspaceId }, select: { id: true } });
+      if (!site) return null;
+    } else if (!sites.includes(siteId)) {
+      return null;
     }
   }
 
   return {
-    principal: Principal.USER,
-    validToken: true,
-    id: decodedToken.id,
-    email: userResult.email,
-    workspaceId: decodedToken.workspaceId,
-    siteId: decodedToken.siteId,
-    workspace: workspaceContext,
-    bucketSnapshot,
+    kind: "user",
     user: {
-      id: userResult.id,
-      email: userResult.email,
-      firstName: userResult.firstName,
-      lastName: userResult.lastName,
-      status: userResult.status,
-      mustChangePassword: userResult.mustChangePassword,
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      status: user.status,
+      mustChangePassword: user.mustChangePassword,
     },
+    workspaceId,
+    siteId,
+    access: new UserAccess(person, siteId),
   };
 }
 
-async function iamDecorator(request: FastifyRequest) {
-  if (request.headers.authorization) {
-    try {
-      request.iam = await resolveIAM(request.headers.authorization, request.log);
-    } catch {
-      // Swallow error, IAM will remain undefined/invalid
-    }
+async function currentDecorator(request: FastifyRequest) {
+  request.current = null;
+  request.access = noAccess;
+  if (!request.headers.authorization) return;
+  try {
+    request.current = await authenticate(request.headers.authorization, request.log);
+  } catch (err) {
+    // Treat as anonymous, but say why.
+    request.log.warn({ err }, "auth: failed to resolve caller");
   }
+  request.access = request.current?.access ?? noAccess;
 }
 
 async function verifyAccessTokenDecorator(request: FastifyRequest, _reply: FastifyReply) {
-  if (!request.iam?.validToken || request.iam.principal !== Principal.USER) {
+  if (request.current?.kind !== "user") {
     throw createError.Unauthorized();
   }
 }
@@ -356,8 +211,8 @@ const PASSWORD_CHANGE_ALLOWED_ROUTES = new Set([
 ]);
 
 async function enforcePasswordChange(request: FastifyRequest, reply: FastifyReply) {
-  const iam = request.iam;
-  if (!iam?.validToken || iam.principal !== Principal.USER || !iam.user?.mustChangePassword) {
+  const current = request.current;
+  if (current?.kind !== "user" || !current.user.mustChangePassword) {
     return;
   }
   const route = `${request.method} ${request.routeOptions?.url ?? request.url}`;
@@ -373,11 +228,23 @@ async function enforcePasswordChange(request: FastifyRequest, reply: FastifyRepl
 }
 
 async function authPluginImpl(server: FastifyInstance) {
-  // Add IAM resolution to every request
-  server.addHook("preHandler", iamDecorator);
+  server.decorateRequest("current", null);
+  server.decorateRequest("access", null as unknown as Access);
 
-  // Hooks run in registration order, so this sees the resolved IAM context
+  // Work out the caller on every request
+  server.addHook("preHandler", currentDecorator);
+
+  // Hooks run in registration order, so this sees the resolved caller
   server.addHook("preHandler", enforcePasswordChange);
+
+  // Access checks throw AccessDenied; answer them here once. Everything
+  // else goes to the handler that was in place before (Fastify's default),
+  // unchanged.
+  const fallbackErrorHandler = server.errorHandler;
+  server.setErrorHandler(function (error, request, reply) {
+    if (error instanceof AccessDenied) return replyAccessDenied(reply, error);
+    return fallbackErrorHandler.call(this, error, request, reply);
+  });
 
   // Decorate with verification function for protected routes
   server.decorate("verifyAccessToken", verifyAccessTokenDecorator);

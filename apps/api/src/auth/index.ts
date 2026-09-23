@@ -4,7 +4,7 @@
 export * as tokens from "@rw/auth/tokens";
 export * as session from "./session.js";
 export * as displaySession from "@rw/auth/display-session";
-export { Principal, type IAMContext, type PrincipalType } from "@rw/auth/context";
+export type { Current } from "@rw/auth/context";
 export { authPlugin } from "./plugin.js";
 
 // Re-export commonly used functions at top level for convenience

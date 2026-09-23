@@ -1,12 +1,5 @@
-import prisma from "@rw/db";
-import {
-  type BucketSnapshot,
-  type BucketTier,
-  loadBucketSnapshot,
-  snapshotPlantTier,
-  TIER_RANK,
-  tierAtLeast,
-} from "@rw/auth/iam/index";
+import prisma, { type Prisma } from "@rw/db";
+import type { Tier as BucketTier, UserAccess } from "@rw/auth/iam/access";
 
 // Workspace member management over the bucket model. A member's access is
 // their workspaceRole (OWNER is reserved ownership) plus their bucket
@@ -89,13 +82,56 @@ export async function listMembers(workspaceId: string) {
   }));
 }
 
-// ── Guards ───────────────────────────────────────────────────────────────
+// ── Shared by member management and invites ──────────────────────────────
 
-function actorAdminAt(snapshot: BucketSnapshot, siteId: string | null): boolean {
-  if (snapshot.owner || snapshot.staff === "FULL") return true;
-  if (!siteId) return false;
-  return tierAtLeast(snapshotPlantTier(snapshot, siteId), "ADMIN");
+/** ADMIN at the plant a bucket belongs to (owners and ENGINEER staff pass). */
+export function adminAt(actor: UserAccess, siteId: string | null): boolean {
+  return siteId !== null && actor.can("ADMIN", { site: siteId });
 }
+
+export type BucketCheck =
+  | { ok: true; buckets: Map<string, { kind: "PLANT" | "WORKCENTER"; siteId: string | null }> }
+  | { ok: false; code: "BUCKET_NOT_FOUND" | "INVALID_TIER"; error: string };
+
+/**
+ * The buckets exist in this workspace, and ADMIN is only asked of plant
+ * buckets. One query.
+ */
+export async function checkBuckets(
+  workspaceId: string,
+  bucketIds: string[],
+  tiers: Array<{ bucketId: string; tier: BucketTier }> = [],
+): Promise<BucketCheck> {
+  const rows = await prisma.bucket.findMany({
+    where: { id: { in: bucketIds } },
+    select: { id: true, kind: true, siteId: true, workspaceId: true },
+  });
+  const buckets = new Map(rows.filter((b) => b.workspaceId === workspaceId).map((b) => [b.id, b]));
+  if (bucketIds.some((id) => !buckets.has(id))) {
+    return { ok: false, code: "BUCKET_NOT_FOUND", error: "Bucket not found" };
+  }
+  if (tiers.some((t) => t.tier === "ADMIN" && buckets.get(t.bucketId)?.kind === "WORKCENTER")) {
+    return { ok: false, code: "INVALID_TIER", error: "ADMIN is a plant tier; workcenter buckets go up to MANAGE" };
+  }
+  return { ok: true, buckets };
+}
+
+/** Upsert a membership's accesses (inside the caller's transaction). */
+export async function writeAccesses(
+  tx: Prisma.TransactionClient,
+  membershipId: string,
+  accesses: Array<{ bucketId: string; tier: BucketTier }>,
+) {
+  for (const a of accesses) {
+    await tx.bucketAccess.upsert({
+      where: { bucketId_membershipId: { bucketId: a.bucketId, membershipId } },
+      update: { tier: a.tier },
+      create: { bucketId: a.bucketId, membershipId, tier: a.tier },
+    });
+  }
+}
+
+// ── Guards ───────────────────────────────────────────────────────────────
 
 /**
  * A plant must keep at least one member with ADMIN on its plant bucket so
@@ -129,7 +165,8 @@ export type UpdateAccessErrorCode =
 
 export interface UpdateAccessInput {
   workspaceId: string;
-  actorUserId: string;
+  /** The caller's access; ADMIN is checked at each touched plant. */
+  actor: UserAccess;
   targetUserId: string;
   /** Upsert these accesses. */
   set?: Array<{ bucketId: string; tier: BucketTier }>;
@@ -150,14 +187,11 @@ export async function updateAccess(input: UpdateAccessInput): Promise<UpdateAcce
   });
   if (!membership) return { success: false, code: "MEMBER_NOT_FOUND", error: "Member not found" };
 
-  const snapshot = await loadBucketSnapshot(input.actorUserId, input.workspaceId);
-  if (!snapshot) return { success: false, code: "FORBIDDEN", error: "Forbidden" };
-
   const set = input.set ?? [];
   const remove = input.remove ?? [];
 
   // Ownership changes are the owner's alone.
-  if (input.workspaceRole && !snapshot.owner) {
+  if (input.workspaceRole && !input.actor.person.owner) {
     return { success: false, code: "FORBIDDEN", error: "Ownership changes are reserved for the workspace owner" };
   }
   if (input.workspaceRole === "MEMBER" && membership.workspaceRole === "OWNER") {
@@ -168,32 +202,13 @@ export async function updateAccess(input: UpdateAccessInput): Promise<UpdateAcce
 
   // Validate buckets and the actor's authority at each touched site.
   const touched = [...set.map((s) => s.bucketId), ...remove];
-  const buckets = await prisma.bucket.findMany({
-    where: { id: { in: touched } },
-    select: { id: true, kind: true, siteId: true, workspaceId: true },
-  });
-  const byId = new Map(buckets.map((b) => [b.id, b]));
-  for (const id of touched) {
-    const bucket = byId.get(id);
-    if (!bucket || bucket.workspaceId !== input.workspaceId) {
-      return { success: false, code: "BUCKET_NOT_FOUND", error: "Bucket not found" };
-    }
-    if (!actorAdminAt(snapshot, bucket.siteId)) {
-      return { success: false, code: "FORBIDDEN", error: "Requires ADMIN access at this plant" };
-    }
+  const check = await checkBuckets(input.workspaceId, touched);
+  if (!check.ok) return { success: false, code: check.code, error: check.error };
+  if (touched.some((id) => !adminAt(input.actor, check.buckets.get(id)?.siteId ?? null))) {
+    return { success: false, code: "FORBIDDEN", error: "Requires ADMIN access at this plant" };
   }
-  for (const s of set) {
-    const bucket = byId.get(s.bucketId);
-    if (bucket?.kind === "WORKCENTER" && s.tier === "ADMIN") {
-      return {
-        success: false,
-        code: "INVALID_TIER",
-        error: "ADMIN is a plant tier; workcenter buckets go up to MANAGE",
-      };
-    }
-    if (!TIER_RANK[s.tier]) {
-      return { success: false, code: "INVALID_TIER", error: "Unknown tier" };
-    }
+  if (set.some((s) => s.tier === "ADMIN" && check.buckets.get(s.bucketId)?.kind === "WORKCENTER")) {
+    return { success: false, code: "INVALID_TIER", error: "ADMIN is a plant tier; workcenter buckets go up to MANAGE" };
   }
 
   // Last-plant-admin guard: removing or downgrading the final ADMIN access
@@ -219,13 +234,7 @@ export async function updateAccess(input: UpdateAccessInput): Promise<UpdateAcce
         data: { workspaceRole: input.workspaceRole },
       });
     }
-    for (const s of set) {
-      await tx.bucketAccess.upsert({
-        where: { bucketId_membershipId: { bucketId: s.bucketId, membershipId: membership.id } },
-        update: { tier: s.tier },
-        create: { bucketId: s.bucketId, membershipId: membership.id, tier: s.tier },
-      });
-    }
+    await writeAccesses(tx, membership.id, set);
     if (remove.length) {
       await tx.bucketAccess.deleteMany({ where: { membershipId: membership.id, bucketId: { in: remove } } });
     }
@@ -243,21 +252,12 @@ export async function addMember(
   userId: string,
   accesses: Array<{ bucketId: string; tier: BucketTier }>,
 ) {
-  const buckets = await prisma.bucket.findMany({
-    where: { id: { in: accesses.map((a) => a.bucketId) } },
-    select: { id: true, kind: true, workspaceId: true },
-  });
-  if (buckets.length !== new Set(accesses.map((a) => a.bucketId)).size) {
-    throw new Error("Bucket not found");
-  }
-  for (const b of buckets) {
-    if (b.workspaceId !== workspaceId) throw new Error("Bucket does not belong to this workspace");
-  }
-  for (const a of accesses) {
-    if (buckets.find((b) => b.id === a.bucketId)?.kind === "WORKCENTER" && a.tier === "ADMIN") {
-      throw new Error("ADMIN is a plant tier; workcenter buckets go up to MANAGE");
-    }
-  }
+  const check = await checkBuckets(
+    workspaceId,
+    accesses.map((a) => a.bucketId),
+    accesses,
+  );
+  if (!check.ok) throw new Error(check.error);
   return prisma.$transaction(async (tx) => {
     const membership = await tx.workspaceMembership.upsert({
       where: { userId_workspaceId: { userId, workspaceId } },
@@ -265,13 +265,7 @@ export async function addMember(
       create: { userId, workspaceId },
       select: { id: true },
     });
-    for (const a of accesses) {
-      await tx.bucketAccess.upsert({
-        where: { bucketId_membershipId: { bucketId: a.bucketId, membershipId: membership.id } },
-        update: { tier: a.tier },
-        create: { bucketId: a.bucketId, membershipId: membership.id, tier: a.tier },
-      });
-    }
+    await writeAccesses(tx, membership.id, accesses);
     return tx.workspaceMembership.findUniqueOrThrow({
       where: { id: membership.id },
       select: { id: true, workspaceRole: true, bucketAccesses: { select: ACCESS_SELECT } },

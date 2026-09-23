@@ -1,12 +1,11 @@
+import { asUser } from "@rw/auth/context";
 import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { user } from "../services/account/index.js";
 import { validHttpOrigin } from "@rw/services/email/index";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
 import { sensitiveRateLimit } from "../plugins/ratelimit.js";
-import { requireTier } from "../plugins/require-permission.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { replyPolicyDenial } from "./authz.js";
+import { ownerRequired } from "../plugins/require-owner.js";
 
 const userSchema = {
   type: "object",
@@ -312,12 +311,12 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const userId = request.iam?.id;
-      if (!userId) {
+      const me = asUser(request.current);
+      if (!me) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
 
-      const result = await user.getMe(userId, request.iam?.workspaceId, request.iam?.siteId);
+      const result = await user.getMe(me);
       if (!result) {
         return reply.status(401).send({ error: "User not found" });
       }
@@ -341,7 +340,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const userId = request.iam?.id;
+      const userId = asUser(request.current)?.user.id;
       if (!userId) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
@@ -367,7 +366,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const userId = request.iam?.id;
+      const userId = asUser(request.current)?.user.id;
       if (!userId) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
@@ -407,7 +406,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const userId = request.iam?.id;
+      const userId = asUser(request.current)?.user.id;
       if (!userId) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
@@ -435,7 +434,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const userId = request.iam?.id;
+      const userId = asUser(request.current)?.user.id;
       if (!userId) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
@@ -463,11 +462,10 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
         403: errorSchema,
       },
     },
-    handler: async (request, reply) => {
+    handler: async (request, _reply) => {
       // Roster reads align with RPC workspace.listMembers: user:read held at
       // any site suffices (site Plant Admins manage their people).
-      const auth = await authorize(request.iam, { tier: "ADMIN", scope: { kind: "anySite" } });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      request.access.requireSomewhere("ADMIN");
 
       return user.list(request.query);
     },
@@ -491,18 +489,15 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const workspaceId = request.iam?.workspaceId;
-      const inviterId = request.iam?.id;
-
-      if (!inviterId || !workspaceId) {
-        return reply.status(401).send({ error: "Unauthorized" });
-      }
+      const me = asUser(request.current);
+      if (!me) return reply.status(401).send({ error: "Unauthorized" });
 
       const { email, bucketAccesses, asOwner, firstName, lastName } = request.body;
       const result = await user.createInvite({
         email,
-        inviterId,
-        workspaceId,
+        inviterId: me.user.id,
+        actor: me.access,
+        workspaceId: me.workspaceId,
         bucketAccesses,
         asOwner,
         firstName,
@@ -545,16 +540,14 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const actorId = request.iam?.id;
-      const workspaceId = request.iam?.workspaceId;
-      if (!actorId || !workspaceId) {
-        return reply.status(401).send({ error: "Unauthorized" });
-      }
+      const me = asUser(request.current);
+      if (!me) return reply.status(401).send({ error: "Unauthorized" });
 
       const result = await user.revokeInvite({
         targetUserId: request.params.id,
-        actorId,
-        workspaceId,
+        actorId: me.user.id,
+        actor: me.access,
+        workspaceId: me.workspaceId,
         context: {
           ipAddress: request.ip,
           userAgent: request.headers["user-agent"],
@@ -673,8 +666,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { tier: "ADMIN", scope: { kind: "anySite" } });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      request.access.requireSomewhere("ADMIN");
 
       const result = await user.getById(request.params.id);
       if (!result) {
@@ -701,8 +693,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { tier: "ADMIN", scope: { kind: "anySite" } });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      request.access.requireSomewhere("ADMIN");
 
       const result = await user.getLockStatus(request.params.id);
       if (!result) {
@@ -716,7 +707,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "PUT",
     url: "/:id",
-    preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "workspace" })],
+    preHandler: [fastify.verifyAccessToken, ownerRequired()],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -741,7 +732,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/disable",
-    preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "workspace" })],
+    preHandler: [fastify.verifyAccessToken, ownerRequired()],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -755,7 +746,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const userId = request.iam?.id;
+      const userId = asUser(request.current)?.user.id;
       if (!userId) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
@@ -770,7 +761,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
 
       await user.disable(request.params.id, {
         actorId: userId,
-        workspaceId: request.iam?.workspaceId,
+        workspaceId: asUser(request.current)?.workspaceId,
         ipAddress: request.ip,
         userAgent: request.headers["user-agent"],
       });
@@ -782,7 +773,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/enable",
-    preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "workspace" })],
+    preHandler: [fastify.verifyAccessToken, ownerRequired()],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -795,7 +786,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const userId = request.iam?.id;
+      const userId = asUser(request.current)?.user.id;
       if (!userId) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
@@ -805,7 +796,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       }
       await user.enable(request.params.id, {
         actorId: userId,
-        workspaceId: request.iam?.workspaceId,
+        workspaceId: asUser(request.current)?.workspaceId,
         ipAddress: request.ip,
         userAgent: request.headers["user-agent"],
       });
@@ -817,7 +808,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/unlock",
-    preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "workspace" })],
+    preHandler: [fastify.verifyAccessToken, ownerRequired()],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -831,7 +822,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const userId = request.iam?.id;
+      const userId = asUser(request.current)?.user.id;
       if (!userId) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
@@ -857,7 +848,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/password",
-    preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "workspace" })],
+    preHandler: [fastify.verifyAccessToken, ownerRequired()],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -872,8 +863,8 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const actorId = request.iam?.id;
-      const workspaceId = request.iam?.workspaceId;
+      const actorId = asUser(request.current)?.user.id;
+      const workspaceId = asUser(request.current)?.workspaceId;
       if (!actorId || !workspaceId) {
         return reply.status(401).send({ error: "Unauthorized" });
       }

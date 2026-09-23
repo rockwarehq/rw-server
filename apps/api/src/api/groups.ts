@@ -2,8 +2,6 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { datasource } from "../services/device/index.js";
 import { errorWithDetailsSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
-import { authorize } from "@rw/auth/iam/policy";
-import { replyPolicyDenial } from "./authz.js";
 
 const pointProperties = {
   id: { type: "string", format: "uuid" },
@@ -93,11 +91,7 @@ export default async function groups(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { id } = request.params;
-      const auth = await authorize(request.iam, {
-        tier: "VIEW",
-        scope: { kind: "pointGroup", id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("VIEW", { pointGroup: id });
 
       const group = await datasource.groups.getById(id);
       if (!group) {
@@ -127,11 +121,7 @@ export default async function groups(fastify: FastifyTypedInstance) {
       const { id } = request.params;
       const body = request.body;
 
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "pointGroup", id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { pointGroup: id });
 
       const result = await datasource.groups.update(id, body);
       if ("error" in result) {
@@ -158,11 +148,7 @@ export default async function groups(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { id } = request.params;
-      const auth = await authorize(request.iam, {
-        tier: "MANAGE",
-        scope: { kind: "pointGroup", id },
-      });
-      if (!auth.ok) return replyPolicyDenial(reply, auth);
+      await request.access.require("MANAGE", { pointGroup: id });
 
       const result = await datasource.groups.remove(id);
       if ("error" in result) {

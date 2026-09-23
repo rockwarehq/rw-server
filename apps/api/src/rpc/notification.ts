@@ -1,7 +1,5 @@
 import { z } from "zod";
-import { authRequired } from "./middleware.js";
-import { authorize, authorizeList } from "@rw/auth/iam/policy";
-import { grant } from "./authz.js";
+import { userRequired } from "./middleware.js";
 import * as notification from "@rw/services/notification/index";
 import { throwServiceError, unwrap } from "./errors.js";
 
@@ -55,38 +53,26 @@ const listInputSchema = z.object({
 
 // ── Groups ───────────────────────────────────────────────────────────────
 
-export const groupCreate = authRequired.input(groupCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }));
+export const groupCreate = userRequired.input(groupCreateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { site: input.siteId });
 
   const result = await notification.createGroup(input);
   if ("error" in result) throwServiceError(result);
   return result.data;
 });
 
-export const groupList = authRequired.input(groupListInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
-  );
+export const groupList = userRequired.input(groupListInputSchema).handler(async ({ input, context }) => {
+  const scope = context.access.list("VIEW", input.siteId);
   return notification.listGroups({ ...input, siteId: scope.siteId });
 });
 
-export const groupGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, {
-      tier: "VIEW",
-      scope: { kind: "notificationGroup", id: input.id },
-    }),
-  );
+export const groupGet = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { notificationGroup: input.id });
   return unwrap(await notification.getGroupById(input.id), { notFoundMessage: "Notification group not found" });
 });
 
-export const groupUpdate = authRequired.input(groupUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, {
-      tier: "MANAGE",
-      scope: { kind: "notificationGroup", id: input.id },
-    }),
-  );
+export const groupUpdate = userRequired.input(groupUpdateInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { notificationGroup: input.id });
 
   const { id, ...data } = input;
   const result = await notification.updateGroup(id, data);
@@ -94,13 +80,8 @@ export const groupUpdate = authRequired.input(groupUpdateInputSchema).handler(as
   return result.data;
 });
 
-export const groupArchive = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, {
-      tier: "MANAGE",
-      scope: { kind: "notificationGroup", id: input.id },
-    }),
-  );
+export const groupArchive = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { notificationGroup: input.id });
 
   const result = await notification.archiveGroup(input.id);
   if ("error" in result) throwServiceError(result);
@@ -110,22 +91,25 @@ export const groupArchive = authRequired.input(idInputSchema).handler(async ({ i
 // ── Sending + delivery log ───────────────────────────────────────────────
 
 /** A person sending to groups and/or people from the UI (a test send or an ad-hoc message). */
-export const send = authRequired.input(sendInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }));
+export const send = userRequired.input(sendInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { site: input.siteId });
 
-  const result = await notification.send({ ...input, source: "MANUAL", sourceType: "user", sourceRef: context.iam.id });
+  const result = await notification.send({
+    ...input,
+    source: "MANUAL",
+    sourceType: "user",
+    sourceRef: context.current.user.id,
+  });
   if ("error" in result) throwServiceError(result);
   return result.data;
 });
 
-export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
-  );
+export const list = userRequired.input(listInputSchema).handler(async ({ input, context }) => {
+  const scope = context.access.list("VIEW", input.siteId);
   return notification.list({ ...input, siteId: scope.siteId });
 });
 
-export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "notification", id: input.id } }));
+export const get = userRequired.input(idInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { notification: input.id });
   return unwrap(await notification.getById(input.id), { notFoundMessage: "Notification not found" });
 });

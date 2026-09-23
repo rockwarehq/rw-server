@@ -1,96 +1,60 @@
 import { os, ORPCError } from "@orpc/server";
 import { timingSafeEqual } from "node:crypto";
+import { AccessDenied } from "@rw/auth/iam/access";
+import type { Current } from "@rw/auth/context";
 import { processorConfig } from "../config.js";
-import { Principal } from "../auth/index.js";
-import type {
-  DisplayAuthenticatedRPCContext,
-  GraphReadRPCContext,
-  PrincipalAuthenticatedRPCContext,
-  RPCContext,
-  UserAuthenticatedRPCContext,
-} from "./context.js";
+import type { CallerContext, RPCContext } from "./context.js";
 
-// Base procedure builder with context type
-export const publicProcedure = os.$context<RPCContext>();
+// Access denials keep their pre-policy wire codes (observable error codes
+// are API — ADR-0003): missing workspace context was BAD_REQUEST, missing
+// access FORBIDDEN.
+const DENIAL_CODES = {
+  UNAUTHENTICATED: "UNAUTHORIZED",
+  NO_WORKSPACE: "BAD_REQUEST",
+  NOT_FOUND: "NOT_FOUND",
+  FORBIDDEN: "FORBIDDEN",
+} as const;
 
-// User auth middleware - requires valid user authentication
-const userMiddleware = os.$context<RPCContext>().middleware(async ({ context, next }) => {
-  if (!context.iam?.validToken || context.iam.principal !== Principal.USER) {
-    throw new ORPCError("UNAUTHORIZED", { message: "Authentication required" });
+const mapAccessDenied = os.$context<RPCContext>().middleware(async ({ next }) => {
+  try {
+    return await next();
+  } catch (err) {
+    if (err instanceof AccessDenied) {
+      throw new ORPCError(DENIAL_CODES[err.code], { message: err.message });
+    }
+    throw err;
   }
-
-  return next({
-    context: {
-      iam: context.iam as UserAuthenticatedRPCContext["iam"],
-    },
-  });
 });
 
-// User or display principal. Explicit allowlist — APP (customer API token)
-// principals must NOT pass here; they are only admitted by the graph-read
-// middleware below.
-const principalMiddleware = os.$context<RPCContext>().middleware(async ({ context, next }) => {
-  if (
-    !context.iam?.validToken ||
-    (context.iam.principal !== Principal.USER && context.iam.principal !== Principal.DISPLAY)
-  ) {
-    throw new ORPCError("UNAUTHORIZED", { message: "Authentication required" });
-  }
+// Base procedure builder: every procedure starts here, so AccessDenied is
+// mapped once for all of them.
+export const publicProcedure = os.$context<RPCContext>().use(mapAccessDenied);
 
-  return next({
-    context: {
-      iam: context.iam as PrincipalAuthenticatedRPCContext["iam"],
-    },
+/**
+ * Admit only these kinds of caller. APP (customer API token) callers are
+ * admitted only on the graph read surface.
+ */
+function allow<K extends Current["kind"]>(kinds: readonly K[], message = "Authentication required") {
+  return publicProcedure.use(async ({ context, next }) => {
+    const current = context.current;
+    if (!current || !(kinds as readonly string[]).includes(current.kind)) {
+      throw new ORPCError("UNAUTHORIZED", { message });
+    }
+    return next({ context: context as CallerContext<K> });
   });
-});
+}
 
-// Graph read access: the only middleware that also admits APP principals
-// (site-scoped, read-only customer API tokens). Use exclusively on graph.*
-// read procedures.
-const graphReadPrincipalMiddleware = os.$context<RPCContext>().middleware(async ({ context, next }) => {
-  if (
-    !context.iam?.validToken ||
-    (context.iam.principal !== Principal.USER &&
-      context.iam.principal !== Principal.DISPLAY &&
-      context.iam.principal !== Principal.APP)
-  ) {
-    throw new ORPCError("UNAUTHORIZED", { message: "Authentication required" });
-  }
+// Signed-in users only
+export const userRequired = allow(["user"]);
 
-  return next({
-    context: {
-      iam: context.iam as GraphReadRPCContext["iam"],
-    },
-  });
-});
+// A user or a display
+export const userOrDisplayRequired = allow(["user", "display"]);
 
-// Display auth middleware - requires valid display authentication
-const displayMiddleware = os.$context<RPCContext>().middleware(async ({ context, next }) => {
-  if (!context.iam?.validToken || context.iam.principal !== Principal.DISPLAY) {
-    throw new ORPCError("UNAUTHORIZED", { message: "Display authentication required" });
-  }
+// A user, display, or API token — graph read procedures only
+export const graphReadRequired = allow(["user", "display", "app"]);
 
-  return next({
-    context: {
-      iam: context.iam as DisplayAuthenticatedRPCContext["iam"],
-    },
-  });
-});
-
-// Requires valid user authentication
-export const userRequired = publicProcedure.use(userMiddleware);
-
-// Backward-compatible alias for existing user-authenticated procedures
-export const authRequired = userRequired;
-
-// Requires a user or display principal
-export const userOrDisplayRequired = publicProcedure.use(principalMiddleware);
-
-// Requires a user, display, or app principal (graph read surface only)
-export const graphReadRequired = publicProcedure.use(graphReadPrincipalMiddleware);
-
-// Requires valid display authentication
-export const displayRequired = publicProcedure.use(displayMiddleware);
+// Displays only
+export const displayRequired = allow(["display"], "Display authentication required");
 
 function safeSecretEquals(expected: string, provided: string) {
   const expectedBuffer = Buffer.from(expected);
@@ -125,26 +89,3 @@ const processorMiddleware = os.$context<RPCContext>().middleware(async ({ contex
 
 // Requires valid processor shared secret
 export const processorRequired = publicProcedure.use(processorMiddleware);
-
-// Tier-gated middleware factory: the caller must hold the tier on their
-// current site's plant bucket (owners and staff bypass per the model).
-export const tierRequired = (tier: import("@rw/auth/iam/index").BucketTier) => {
-  const mw = os.$context<UserAuthenticatedRPCContext>().middleware(async ({ context, next }) => {
-    const { loadBucketSnapshot, snapshotPlantTier, tierAtLeast } = await import("@rw/auth/iam/index");
-    const userId = context.iam.id;
-    const workspaceId = context.iam.workspaceId;
-    if (!userId || !workspaceId) {
-      throw new ORPCError("UNAUTHORIZED", { message: "No workspace context" });
-    }
-    const snapshot = context.iam.bucketSnapshot ?? (await loadBucketSnapshot(userId, workspaceId));
-    const bypass =
-      snapshot && (snapshot.owner || snapshot.staff === "FULL" || (snapshot.staff === "READ" && tier === "VIEW"));
-    const siteId = context.iam.siteId;
-    const held = snapshot && siteId ? snapshotPlantTier(snapshot, siteId) : null;
-    if (!bypass && !tierAtLeast(held, tier)) {
-      throw new ORPCError("FORBIDDEN", { message: `Requires ${tier} access here` });
-    }
-    return next();
-  });
-  return userRequired.use(mw);
-};

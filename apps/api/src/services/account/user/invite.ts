@@ -1,20 +1,17 @@
 import prisma from "@rw/db";
 import { securityConfig } from "../../../config.js";
-import {
-  type BucketSnapshot,
-  type BucketTier,
-  loadBucketSnapshot,
-  snapshotPlantTier,
-  tierAtLeast,
-} from "@rw/auth/iam/index";
+import type { Tier as BucketTier, UserAccess } from "@rw/auth/iam/access";
 import { hashPassword } from "@rw/auth/password";
 import { sendInviteEmail } from "@rw/services/email/index";
 import { logEvent } from "@rw/services/audit/index";
 import { generateStrongPassword } from "./password.js";
+import { adminAt, checkBuckets, writeAccesses } from "../workspace/members.js";
 
 export interface CreateInviteInput {
   email: string;
   inviterId: string;
+  /** The inviter's access: ADMIN at each granted plant, owner to invite owners. */
+  actor: UserAccess;
   workspaceId: string;
   context?: InviteContext;
   /**
@@ -53,7 +50,7 @@ export interface InviteContext {
 }
 
 interface ResolvedInviteAccess {
-  accesses: Array<{ bucketId: string; tier: BucketTier; siteId: string | null; kind: string }>;
+  accesses: Array<{ bucketId: string; tier: BucketTier; siteId: string | null }>;
   asOwner: boolean;
 }
 
@@ -67,67 +64,35 @@ async function resolveInviteAccess(input: {
   if (wanted.length === 0 && !input.asOwner) {
     return { ok: false, error: "bucketAccesses or asOwner is required" };
   }
-
-  const accesses: ResolvedInviteAccess["accesses"] = [];
-  for (const a of wanted) {
-    const bucket = await prisma.bucket.findUnique({
-      where: { id: a.bucketId },
-      select: { id: true, kind: true, siteId: true, workspaceId: true },
-    });
-    if (!bucket) return { ok: false, error: "Bucket not found" };
-    if (bucket.workspaceId !== input.workspaceId) {
-      return { ok: false, error: "Bucket does not belong to this workspace" };
-    }
-    if (bucket.kind === "WORKCENTER" && a.tier === "ADMIN") {
-      return { ok: false, error: "ADMIN is a plant tier; workcenter buckets go up to MANAGE" };
-    }
-    accesses.push({ bucketId: bucket.id, tier: a.tier, siteId: bucket.siteId, kind: bucket.kind });
-  }
-
+  const check = await checkBuckets(
+    input.workspaceId,
+    wanted.map((a) => a.bucketId),
+    wanted,
+  );
+  if (!check.ok) return { ok: false, error: check.error };
+  const accesses = wanted.map((a) => ({ ...a, siteId: check.buckets.get(a.bucketId)?.siteId ?? null }));
   return { ok: true, access: { accesses, asOwner: input.asOwner === true } };
 }
 
-/** ADMIN at a site's plant (owner/staff bypass included). */
-function actorAdminAt(snapshot: BucketSnapshot, siteId: string | null): boolean {
-  if (snapshot.owner || snapshot.staff === "FULL") return true;
-  if (!siteId) return false;
-  return tierAtLeast(snapshotPlantTier(snapshot, siteId), "ADMIN");
-}
-
-function actorAdminAnywhere(snapshot: BucketSnapshot): boolean {
-  if (snapshot.owner || snapshot.staff === "FULL") return true;
-  return snapshot.entries.some((e) => e.kind === "PLANT" && tierAtLeast(e.tier, "ADMIN"));
-}
-
-async function canInviteAccess(inviterId: string, workspaceId: string, access: ResolvedInviteAccess) {
-  const snapshot = await loadBucketSnapshot(inviterId, workspaceId);
-  if (!snapshot) return false;
-  // Handing out ownership is reserved for owners, strictly.
-  if (access.asOwner && !snapshot.owner) return false;
-  for (const a of access.accesses) {
-    if (!actorAdminAt(snapshot, a.siteId)) return false;
-  }
-  return true;
+/** Handing out ownership is the owner's alone; buckets need ADMIN at their plant. */
+function canInviteAccess(actor: UserAccess, access: ResolvedInviteAccess): boolean {
+  if (access.asOwner && !actor.person.owner) return false;
+  return access.accesses.every((a) => adminAt(actor, a.siteId));
 }
 
 /**
  * Resend/revoke authority: ADMIN at any site the pending member has access
  * at; owner-memberships are owner-managed only.
  */
-async function canManagePendingInvite(
-  actorId: string,
-  workspaceId: string,
+function canManagePendingInvite(
+  actor: UserAccess,
   target: { workspaceRole: string; accessSiteIds: Array<string | null> },
-): Promise<boolean> {
-  const snapshot = await loadBucketSnapshot(actorId, workspaceId);
-  if (!snapshot) return false;
-  if (target.workspaceRole === "OWNER") return snapshot.owner;
+): boolean {
+  if (target.workspaceRole === "OWNER") return actor.person.owner;
   const siteIds = target.accessSiteIds.filter((s): s is string => s !== null);
-  if (siteIds.length === 0) {
-    // Orphaned invite with no access context — plant admins may clean up.
-    return actorAdminAnywhere(snapshot);
-  }
-  return siteIds.some((siteId) => actorAdminAt(snapshot, siteId));
+  // Orphaned invite with no access context — plant admins may clean up.
+  if (siteIds.length === 0) return actor.canSomewhere("ADMIN");
+  return siteIds.some((siteId) => adminAt(actor, siteId));
 }
 
 async function inviteEmailContext(inviterId: string, workspaceId: string) {
@@ -210,7 +175,7 @@ export async function createInvite(
       mode = "resent";
       // Resend refreshes invite delivery only. Access changes are explicit
       // member-management actions and are not hidden in resend.
-      const canResend = await canManagePendingInvite(inviterId, workspaceId, {
+      const canResend = canManagePendingInvite(input.actor, {
         workspaceRole: membership.workspaceRole,
         accessSiteIds: membership.bucketAccesses.map((a) => a.bucket.siteId),
       });
@@ -236,7 +201,7 @@ export async function createInvite(
       }
       const access = resolveResult.access;
 
-      if (!(await canInviteAccess(inviterId, workspaceId, access))) {
+      if (!canInviteAccess(input.actor, access)) {
         return { success: false, error: "Forbidden" };
       }
       auditAccess = auditFromAccess(access);
@@ -260,13 +225,7 @@ export async function createInvite(
             select: { id: true },
           });
 
-          for (const a of access.accesses) {
-            await tx.bucketAccess.upsert({
-              where: { bucketId_membershipId: { bucketId: a.bucketId, membershipId: adoptedMembership.id } },
-              update: { tier: a.tier },
-              create: { bucketId: a.bucketId, membershipId: adoptedMembership.id, tier: a.tier },
-            });
-          }
+          await writeAccesses(tx, adoptedMembership.id, access.accesses);
 
           return updated;
         });
@@ -283,7 +242,7 @@ export async function createInvite(
     }
     const access = resolveResult.access;
 
-    if (!(await canInviteAccess(inviterId, workspaceId, access))) {
+    if (!canInviteAccess(input.actor, access)) {
       return { success: false, error: "Forbidden" };
     }
     auditAccess = auditFromAccess(access);
@@ -308,15 +267,7 @@ export async function createInvite(
           select: { id: true },
         });
 
-        if (access.accesses.length) {
-          await tx.bucketAccess.createMany({
-            data: access.accesses.map((a) => ({
-              bucketId: a.bucketId,
-              membershipId: membership.id,
-              tier: a.tier,
-            })),
-          });
-        }
+        await writeAccesses(tx, membership.id, access.accesses);
 
         return createdUser;
       });
@@ -367,6 +318,7 @@ export type RevokeInviteError = "USER_NOT_FOUND" | "NOT_PENDING" | "SELF_REVOKE"
 export async function revokeInvite(input: {
   targetUserId: string;
   actorId: string;
+  actor: UserAccess;
   workspaceId: string;
   context?: InviteContext;
 }): Promise<{ success: true } | { success: false; error: RevokeInviteError }> {
@@ -408,7 +360,7 @@ export async function revokeInvite(input: {
     return { success: false, error: "NOT_PENDING" };
   }
 
-  const canRevoke = await canManagePendingInvite(actorId, workspaceId, {
+  const canRevoke = canManagePendingInvite(input.actor, {
     workspaceRole: target.memberships[0].workspaceRole,
     accessSiteIds: target.memberships[0].bucketAccesses.map((a) => a.bucket.siteId),
   });

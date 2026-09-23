@@ -1,3 +1,4 @@
+import { asUser } from "@rw/auth/context";
 import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import * as auth from "../auth/index.js";
@@ -293,7 +294,7 @@ export default async function authRoutes(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { workspaceId } = request.body;
-      const userId = request.iam?.id;
+      const userId = asUser(request.current)?.user.id;
 
       if (!userId) {
         return reply.status(401).send({ error: "Unauthorized" });
@@ -326,7 +327,7 @@ export default async function authRoutes(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { siteId } = request.body;
-      const userId = request.iam?.id;
+      const userId = asUser(request.current)?.user.id;
 
       if (!userId) {
         return reply.status(401).send({ error: "Unauthorized" });
