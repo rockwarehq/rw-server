@@ -293,20 +293,19 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("workcenter grant authorization 
       expect(access.workcenterGrants).toHaveLength(1);
       const grant = access.workcenterGrants[0];
       expect(grant).toMatchObject({ workcenterId: wcGranted.id, siteId: siteA.id, access: "READ" });
-      // Scoped perms live on the grant, never in the flat list.
-      expect(grant.permissions).toEqual(expect.arrayContaining(["status:read", "calls:read", "job:read"]));
-      expect(grant.permissions).not.toContain("status:write");
-      expect(access.permissions).toContain("job:read");
-      expect(access.permissions).not.toContain("status:read");
+      // Scoped perms live on the grant; the flat list stays empty for a
+      // grant-only member — grants confer nothing site-wide.
+      expect(grant.permissions).toContain("production:read");
+      expect(grant.permissions).not.toContain("production:write");
+      expect(access.permissions).not.toContain("production:read");
     });
 
     it("WRITE grants expose scoped writes per grant only", async () => {
       const access = await getMeAccess(writeToken);
       const grant = access.workcenterGrants[0];
       expect(grant.access).toBe("WRITE");
-      expect(grant.permissions).toEqual(expect.arrayContaining(["status:write", "calls:write", "facility:write"]));
-      expect(access.permissions).toContain("job:write");
-      for (const scoped of ["status:write", "calls:write", "facility:write"]) {
+      expect(grant.permissions).toEqual(expect.arrayContaining(["production:read", "production:write"]));
+      for (const scoped of ["production:read", "production:write"]) {
         expect(access.permissions).not.toContain(scoped);
       }
     });
@@ -355,12 +354,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("workcenter grant authorization 
       // read-tier role holding both floor vocabularies.
       const plantMemberRole = await prisma.role.upsert({
         where: { workspaceId_name_scope: { workspaceId, name: "wcgrant-policy-floor", scope: "SITE" } },
-        update: { permissions: ["facility:read", "job:read", "status:read", "calls:read", "modes:read", "production:read"] },
+        update: { permissions: ["planning:read", "production:read"] },
         create: {
           workspaceId,
           name: "wcgrant-policy-floor",
           scope: "SITE",
-          permissions: ["facility:read", "job:read", "status:read", "calls:read", "modes:read", "production:read"],
+          permissions: ["planning:read", "production:read"],
         },
         select: { id: true },
       });
@@ -409,8 +408,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("workcenter grant authorization 
 
     it("under ALL (default) floor reads are site-wide", async () => {
       const access = await meAccess(roleOnlyToken);
-      expect(access.permissions).toContain("status:read");
-      expect(access.permissions).toContain("calls:read");
+      expect(access.permissions).toContain("production:read");
       const calls = await rpcCall(server, "call/listActive", { siteId: siteB.id }, roleOnlyToken);
       expect(calls.statusCode).toBe(200);
     });
@@ -426,17 +424,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("workcenter grant authorization 
 
       // Same tokens, no re-login: floor reads gone from the flat list…
       const roleOnly = await meAccess(roleOnlyToken);
-      expect(roleOnly.permissions).not.toContain("status:read");
-      expect(roleOnly.permissions).not.toContain("calls:read");
-      expect(roleOnly.permissions).toContain("facility:read");
-      expect(roleOnly.permissions).toContain("job:read");
+      expect(roleOnly.permissions).not.toContain("production:read");
+      expect(roleOnly.permissions).toContain("planning:read");
 
       // …but a grant keeps them per workcenter.
       const withGrant = await meAccess(roleGrantToken);
-      expect(withGrant.permissions).not.toContain("status:read");
+      expect(withGrant.permissions).not.toContain("production:read");
       expect(withGrant.workcenterGrants).toHaveLength(1);
-      expect(withGrant.workcenterGrants[0]?.permissions).toContain("status:read");
-      expect(withGrant.workcenterGrants[0]?.permissions).toContain("calls:read");
+      expect(withGrant.workcenterGrants[0]?.permissions).toContain("production:read");
 
       // Floor list endpoints: FORBIDDEN without a grant, narrowed 200 with one.
       const denied = await rpcCall(server, "call/listActive", { siteId: siteB.id }, roleOnlyToken);

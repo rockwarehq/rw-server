@@ -2,22 +2,10 @@ import prisma from "@rw/db";
 import type { SystemRole } from "@rw/db";
 
 export const RESOURCES = [
-  "facility", // sites, stations, workcenters, gateways, datasources, displays
-  "schedule", // shift patterns, definitions, assignments, instances
-  "job", // jobs, work orders, cycles, dispositions
-  "status", // status reasons + categories (downtime taxonomy)
-  "calls", // shop-floor call definitions + call lifecycle
-  "modes", // production mode catalog + station force/clear
-  "notifications", // notification groups + send/delivery log
-  "tool", // tools
-  "product", // products, materials, process types
-  "dashboard", // dashboards (saved views)
-  "entity", // user-defined object schemas and instances
-  "graph", // graph nodes, properties, and dependency definitions
-  "user", // workspace users + memberships
-  "employee", // employee roster (shop-floor identities)
-  "billing", // invoices, payment method, subscription, plan changes
-  "settings", // general workspace config + ownership transfer
+  "production", // live floor work, inventory, catalog/references, reports
+  "planning", // orders, customers, scheduling, shift calendars
+  "configuration", // equipment, data models, dashboards, integrations
+  "plant", // people, access and plant administration
 ] as const;
 
 export const ACTIONS = ["read", "write", "admin"] as const;
@@ -28,12 +16,11 @@ export type Resource = (typeof RESOURCES)[number];
 export type Action = (typeof ACTIONS)[number];
 export type ReservedPermission = (typeof RESERVED_PERMISSIONS)[number];
 
-// ── Customer permission catalog (target model) ──────────────────────────
-// The catalog is shrinking to eight responsibility-based keys. During the
-// transition BOTH vocabularies are valid: the legacy `resource:action`
-// strings above stay in the Permission union (and role rows carry both key
-// sets) until every call site checks the new keys, after which the legacy
-// half of the union and the legacy data are removed together.
+// ── Customer permission catalog ──────────────────────────────────────────
+// Eight responsibility-based keys. Write implies read; production:admin
+// implies write. plant:admin and owner:all are independent capabilities,
+// not wildcards. Not every resource×action pair exists — the explicit
+// tuple below is the catalog.
 
 export const CUSTOMER_PERMISSIONS = [
   "production:read",
@@ -47,8 +34,7 @@ export const CUSTOMER_PERMISSIONS = [
 ] as const;
 
 export type CustomerPermission = (typeof CUSTOMER_PERMISSIONS)[number];
-export type LegacyPermission = `${Resource}:${Action}`;
-export type Permission = LegacyPermission | CustomerPermission | ReservedPermission;
+export type Permission = CustomerPermission | ReservedPermission;
 
 export interface PermissionDefinition {
   label: string;
@@ -117,11 +103,7 @@ export function expandPermissions(input: Iterable<string>): Set<Permission> {
   return out;
 }
 
-export const ALL_PERMISSIONS: Permission[] = [
-  ...RESOURCES.flatMap((r) => ACTIONS.map((a) => `${r}:${a}` as Permission)),
-  ...CUSTOMER_PERMISSIONS,
-  ...RESERVED_PERMISSIONS,
-];
+export const ALL_PERMISSIONS: Permission[] = [...CUSTOMER_PERMISSIONS, ...RESERVED_PERMISSIONS];
 
 const ALL_PERMISSIONS_SET: ReadonlySet<Permission> = new Set(ALL_PERMISSIONS);
 
@@ -150,8 +132,8 @@ export function validatePermissions(input: readonly string[]): Permission[] {
 // cannot influence these; Rockware cannot grant them through the product UI.
 
 export const SYSTEM_ROLE_PERMISSIONS: Record<SystemRole, ReadonlySet<Permission>> = {
-  SUPPORT: new Set(ALL_PERMISSIONS.filter((p) => p.endsWith(":read") && !p.startsWith("billing:"))),
-  ENGINEER: new Set(ALL_PERMISSIONS.filter((p) => p !== OWNER_PERMISSION)),
+  SUPPORT: new Set(CUSTOMER_PERMISSIONS.filter((p) => p.endsWith(":read"))),
+  ENGINEER: new Set(CUSTOMER_PERMISSIONS),
 };
 
 // ── Workcenter grants ────────────────────────────────────────────────────
@@ -162,56 +144,21 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<SystemRole, ReadonlySet<Permission>
 
 export type WorkcenterAccessLevel = "READ" | "WRITE";
 
-// A grant confers these SITE-WIDE — data that is global in nature (jobs,
-// schedules, tools…), which anyone working a workcenter needs to see and,
-// with WRITE, update. Employee stays read-only even for WRITE.
-const WC_READ_GLOBAL: readonly Permission[] = [
-  "facility:read",
-  "job:read",
-  "schedule:read",
-  "tool:read",
-  "product:read",
-  "entity:read",
-  "graph:read",
-  "dashboard:read",
-  "employee:read",
-];
-
-// No new-vocabulary keys here on purpose: in the target model a workcenter
-// grant confers production access only, so the legacy global reads/writes
-// below simply disappear at the contract step instead of being renamed.
+/**
+ * @deprecated A workcenter grant confers production access at its own
+ * workcenter only — nothing site-wide. Kept (empty) so the evaluator and
+ * wire shapes stay stable; remove with the next breaking cleanup.
+ */
 export const WC_GRANT_GLOBAL_PERMISSIONS: Record<WorkcenterAccessLevel, readonly Permission[]> = {
-  READ: WC_READ_GLOBAL,
-  WRITE: [
-    ...WC_READ_GLOBAL,
-    "job:write",
-    "schedule:write",
-    "tool:write",
-    "product:write",
-    "entity:write",
-    "graph:write",
-    "dashboard:write",
-  ],
+  READ: [],
+  WRITE: [],
 };
 
-// A grant confers these ONLY at the granted workcenter — status, calls,
-// production modes (force/clear act on stations), and facility config
-// (stations, workcenter setup) are the workcenter's own.
-// settings/user/billing/notifications appear in neither map: those stay
-// with plant admins.
+// A grant confers these ONLY at the granted workcenter. Planning,
+// configuration and plant administration are never grant-conferred.
 export const WC_GRANT_SCOPED_PERMISSIONS: Record<WorkcenterAccessLevel, readonly Permission[]> = {
-  READ: ["status:read", "calls:read", "modes:read", "production:read"],
-  WRITE: [
-    "status:read",
-    "status:write",
-    "calls:read",
-    "calls:write",
-    "modes:read",
-    "modes:write",
-    "facility:write",
-    "production:read",
-    "production:write",
-  ],
+  READ: ["production:read"],
+  WRITE: ["production:read", "production:write"],
 };
 
 function workcenterAccessPermissions(access: string): {
@@ -238,18 +185,12 @@ function workcenterAccessPermissions(access: string): {
 export const BASE_WORKCENTER_ACCESS_KEY = "baseWorkcenterAccess" as const;
 export type BaseWorkcenterAccess = "ALL" | "GRANTS_REQUIRED";
 
-// production:read is the new-vocabulary floor read; production:write/admin
-// mark management tier the way status:write does for legacy arrays. The
-// floor is dropped from the RAW role array BEFORE implication expansion, so
-// a stripped role cannot imply its way back to floor visibility (exempt
-// roles are never stripped in the first place).
-const POLICY_FLOOR_PERMISSIONS: ReadonlySet<Permission> = new Set([
-  "status:read",
-  "calls:read",
-  "modes:read",
-  "production:read",
-]);
-const POLICY_EXEMPT_MARKERS: ReadonlySet<string> = new Set(["status:write", "production:write", "production:admin"]);
+// The floor read is production:read; production:write/admin mark the
+// management tier. The floor is dropped from the RAW role array BEFORE
+// implication expansion, so a stripped role cannot imply its way back to
+// floor visibility (exempt roles are never stripped in the first place).
+const POLICY_FLOOR_PERMISSIONS: ReadonlySet<Permission> = new Set(["production:read"]);
+const POLICY_EXEMPT_MARKERS: ReadonlySet<string> = new Set(["production:write", "production:admin"]);
 
 function assignmentDropsFloor(
   assignment: { siteId: string | null; permissions: string[] },
@@ -545,25 +486,46 @@ export async function listAccessibleSites(
   });
 }
 
-// ── Legacy → new mapping rules (MIGRATION DATA, never runtime) ───────────
-// The audited old→new translation, consumed only by the vocabulary data
-// migrations and their tests — the runtime evaluator never reads this. Each
-// rule names the COMPLETE legacy bundle a single role must hold to gain the
-// new key; there is no union across roles, and legacy write never implied
-// read, so bundles list reads explicitly. The expand migration
+// ── Legacy → new mapping rules (HISTORICAL MIGRATION DATA) ───────────────
+// The audited old→new translation used by the retired 49-key vocabulary's
+// data migrations — never read by the runtime evaluator. Each rule names
+// the COMPLETE legacy bundle a single role had to hold to gain a new key;
+// no union across roles, and legacy write never implied read, so bundles
+// list reads explicitly. The expand migration
 // (20260922190000_expand_permission_vocabulary) embeds these rules verbatim
 // as JSON; permissions.migration.test.ts asserts the two copies match.
 //
 // Deliberate choices:
 // - planning:write is RELAXED (no job:admin/schedule:admin): the old
-//   planning delete gates collapse into :write at the call sites, so
-//   requiring the admin keys would strip creation/editing from plain
-//   writer roles.
+//   planning delete gates collapsed into :write at the call sites.
 // - production:write is STRICT (facility:admin and product:admin
-//   required): those old admin delete gates fold into production:write,
-//   so a writer-without-admin custom role must not gain them silently.
-// - production:admin requires the entire legacy catalog: privileged
-//   production actions are new authority.
+//   required): those old admin delete gates folded into production:write.
+// - production:admin required the entire legacy catalog: privileged
+//   production actions were new authority.
+
+// The retired vocabulary, kept as plain data for the rules and their tests.
+const LEGACY_RESOURCES = [
+  "facility",
+  "schedule",
+  "job",
+  "status",
+  "calls",
+  "modes",
+  "notifications",
+  "tool",
+  "product",
+  "dashboard",
+  "entity",
+  "graph",
+  "user",
+  "employee",
+  "billing",
+  "settings",
+] as const;
+const LEGACY_ACTIONS = ["read", "write", "admin"] as const;
+export const LEGACY_PERMISSION_CATALOG: readonly string[] = LEGACY_RESOURCES.flatMap((r) =>
+  LEGACY_ACTIONS.map((a) => `${r}:${a}`),
+);
 
 export interface LegacyPermissionRule {
   permission: CustomerPermission;
@@ -572,8 +534,10 @@ export interface LegacyPermissionRule {
   explanation: string;
 }
 
-const legacyBundle = (resources: readonly Resource[], actions: readonly Action[]): string[] =>
-  resources.flatMap((resource) => actions.map((action) => `${resource}:${action}`));
+const legacyBundle = (
+  resources: readonly (typeof LEGACY_RESOURCES)[number][],
+  actions: readonly (typeof LEGACY_ACTIONS)[number][],
+): string[] => resources.flatMap((resource) => actions.map((action) => `${resource}:${action}`));
 
 const PRODUCTION_LEGACY_READS = legacyBundle(
   [
@@ -593,7 +557,7 @@ const PRODUCTION_LEGACY_READS = legacyBundle(
   ["read"],
 );
 
-const CONFIGURATION_LEGACY_RESOURCES: readonly Resource[] = [
+const CONFIGURATION_LEGACY_RESOURCES: readonly (typeof LEGACY_RESOURCES)[number][] = [
   "facility",
   "job",
   "status",
@@ -631,7 +595,7 @@ export const LEGACY_PERMISSION_RULES: readonly LegacyPermissionRule[] = [
   },
   {
     permission: "production:admin",
-    requiredPermissions: legacyBundle([...RESOURCES], [...ACTIONS]),
+    requiredPermissions: LEGACY_PERMISSION_CATALOG,
     explanation: "Privileged production actions are new authority: only the entire legacy catalog qualifies.",
   },
   {
@@ -651,12 +615,12 @@ export const LEGACY_PERMISSION_RULES: readonly LegacyPermissionRule[] = [
   },
   {
     permission: "configuration:write",
-    requiredPermissions: legacyBundle(CONFIGURATION_LEGACY_RESOURCES, [...ACTIONS]),
+    requiredPermissions: legacyBundle(CONFIGURATION_LEGACY_RESOURCES, [...LEGACY_ACTIONS]),
     explanation: "Complete configuration read/write/admin bundles, including every old configuration delete gate.",
   },
   {
     permission: "plant:admin",
-    requiredPermissions: legacyBundle(["user", "employee", "settings"], [...ACTIONS]),
+    requiredPermissions: legacyBundle(["user", "employee", "settings"], [...LEGACY_ACTIONS]),
     explanation: "Complete user, employee and settings administration; never workspace ownership.",
   },
 ];

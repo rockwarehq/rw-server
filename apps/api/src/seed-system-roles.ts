@@ -1,84 +1,26 @@
 import prisma from "@rw/db";
 import type { RoleScope } from "@rw/db";
-import {
-  ACTIONS,
-  ALL_PERMISSIONS,
-  CUSTOMER_PERMISSIONS,
-  type RESOURCES,
-  type Permission,
-} from "@rw/auth/iam/permissions";
+import { ALL_PERMISSIONS, type Permission } from "@rw/auth/iam/permissions";
 
-const all = (resource: (typeof RESOURCES)[number]): Permission[] =>
-  ACTIONS.map((action) => `${resource}:${action}` as Permission);
+// Built-in role presets over the eight-key catalog. Write implies read and
+// production:admin implies write (the evaluator closes over implications),
+// so bundles list only their top tiers.
 
-// TRANSITION NOTE: built-in bundles carry BOTH permission vocabularies while
-// call sites migrate from the 49 legacy keys to the eight new ones. The
-// legacy halves below are deleted (and the bundles become new-key-only) by
-// the contract step. Planner and Plant Engineer are new roles with no legacy
-// history, so they are new-key-only from birth.
-
-// ALL_PERMISSIONS already spans both vocabularies plus owner:all.
+// Every capability plus reserved company ownership.
 const COMPANY_ADMINISTRATOR_PERMISSIONS: readonly Permission[] = [...ALL_PERMISSIONS];
 
-const PLANT_ADMIN_PERMISSIONS: readonly Permission[] = [
-  ...all("facility"),
-  ...all("schedule"),
-  ...all("job"),
-  ...all("status"),
-  ...all("calls"),
-  ...all("modes"),
-  ...all("notifications"),
-  ...all("tool"),
-  ...all("product"),
-  ...all("dashboard"),
-  ...all("entity"),
-  ...all("graph"),
-  ...all("employee"),
-  "user:read",
-  "user:write",
-  // user:admin at SITE scope unlocks site-scoped member removal
-  // (DELETE /workspaces/:id/members/:userId/site-access). Workspace-level
-  // user administration (org-wide removal, admin password resets, disable)
-  // stays behind scope:"workspace" checks that a site grant cannot satisfy.
-  "user:admin",
-  "settings:read",
-  "settings:write",
-  // Plant Admin is the site-level superuser ("admin gets everything"):
-  // settings:admin and billing round out the full set. Only owner:all stays
-  // off — the workspace-ownership marker belongs to Company Administrator.
-  // Site-scoped assignment still bounds the blast radius: workspace-level
-  // actions sit behind scope:"workspace" checks a SITE assignment cannot
-  // satisfy.
-  "settings:admin",
-  ...all("billing"),
-  // New vocabulary: the full eight-key set (still never owner:all).
-  ...CUSTOMER_PERMISSIONS,
-];
+const PLANT_ENGINEER_PERMISSIONS: readonly Permission[] = ["production:admin", "planning:write", "configuration:write"];
 
-// Target model: Plant Member is planning visibility only — production
-// visibility comes from workcenter grants, not from the base membership
-// tier. The legacy reads keep today's behavior alive until the old checks
-// are gone; deliberately NO production:read here.
-const PLANT_MEMBER_PERMISSIONS: readonly Permission[] = [
-  "facility:read",
-  "product:read",
-  "job:read",
-  "status:read",
-  "calls:read",
-  "modes:read",
-  "notifications:read",
-  "tool:read",
-  "schedule:read",
-  "dashboard:read",
-  "entity:read",
-  "graph:read",
-  "employee:read",
-  "planning:read",
-];
+// Engineer authority plus people/access administration. Site-scoped
+// assignment still bounds the blast radius: workspace-level actions sit
+// behind scope:"workspace" checks a SITE assignment cannot satisfy.
+const PLANT_ADMIN_PERMISSIONS: readonly Permission[] = [...PLANT_ENGINEER_PERMISSIONS, "plant:admin"];
+
+// The base membership tier: planning visibility only. Production visibility
+// comes from workcenter grants, never from base membership.
+const PLANT_MEMBER_PERMISSIONS: readonly Permission[] = ["planning:read"];
 
 const PLANNER_PERMISSIONS: readonly Permission[] = ["planning:write"];
-
-const PLANT_ENGINEER_PERMISSIONS: readonly Permission[] = ["production:admin", "planning:write", "configuration:write"];
 
 interface SystemRoleSpec {
   name: string;
@@ -90,7 +32,7 @@ interface SystemRoleSpec {
 export const SYSTEM_ROLE_SPECS: readonly SystemRoleSpec[] = [
   {
     name: "Company Administrator",
-    description: "Company-level administrator with billing visibility and full operational access across all sites.",
+    description: "Company-level administrator with full operational access and reserved ownership across all sites.",
     scope: "WORKSPACE",
     permissions: COMPANY_ADMINISTRATOR_PERMISSIONS,
   },
@@ -101,13 +43,8 @@ export const SYSTEM_ROLE_SPECS: readonly SystemRoleSpec[] = [
     permissions: PLANT_ADMIN_PERMISSIONS,
   },
   {
-    // The base membership tier (GitHub's "Member"): read access site-wide,
-    // with floor visibility (status/calls) subject to the site's
-    // baseWorkcenterAccess policy — under GRANTS_REQUIRED those come only
-    // from workcenter grants. The policy lives in the evaluator, not here.
     name: "Plant Member",
-    description:
-      "Base plant membership with read access to plant data. Workcenter access can be granted per workcenter.",
+    description: "Base plant membership with planning visibility. Production access can be granted per workcenter.",
     scope: "SITE",
     permissions: PLANT_MEMBER_PERMISSIONS,
   },

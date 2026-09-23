@@ -1,5 +1,4 @@
 import prisma from "@rw/db";
-import { CUSTOMER_PERMISSIONS } from "@rw/auth/iam/index";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { SYSTEM_ROLE_SPECS, seedSystemRoles } from "../src/seed-system-roles.js";
 
@@ -23,7 +22,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("seedSystemRoles (Tier 2)", () =
   it("seeds all five built-ins, except where a customer role owns the name", async () => {
     // A customer made their own "Planner" before the built-in existed.
     const customPlanner = await prisma.role.create({
-      data: { workspaceId, name: "Planner", scope: "SITE", permissions: ["job:read"], isSystem: false },
+      data: { workspaceId, name: "Planner", scope: "SITE", permissions: ["planning:read"], isSystem: false },
     });
 
     await seedSystemRoles(workspaceId);
@@ -33,7 +32,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("seedSystemRoles (Tier 2)", () =
     expect(planner).toHaveLength(1);
     expect(planner[0].id).toBe(customPlanner.id);
     expect(planner[0].isSystem).toBe(false);
-    expect(planner[0].permissions).toEqual(["job:read"]);
+    expect(planner[0].permissions).toEqual(["planning:read"]);
 
     // The other four built-ins exist as system roles.
     for (const spec of SYSTEM_ROLE_SPECS.filter((s) => s.name !== "Planner")) {
@@ -52,20 +51,18 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("seedSystemRoles (Tier 2)", () =
     expect(roles).toHaveLength(5);
   });
 
-  it("transition bundles carry both vocabularies where the role predates the new keys", async () => {
+  it("built-in bundles match the target model exactly", async () => {
     const member = await prisma.role.findUniqueOrThrow({
       where: { workspaceId_name_scope: { workspaceId, name: "Plant Member", scope: "SITE" } },
     });
-    expect(member.permissions).toContain("status:read"); // legacy half
-    expect(member.permissions).toContain("planning:read"); // new half
-    // Deliberately NOT production:read: member production visibility comes
-    // from workcenter grants in the target model.
-    expect(member.permissions).not.toContain("production:read");
+    // Planning visibility only: member production visibility comes from
+    // workcenter grants in the target model.
+    expect(member.permissions).toEqual(["planning:read"]);
 
     const admin = await prisma.role.findUniqueOrThrow({
       where: { workspaceId_name_scope: { workspaceId, name: "Plant Admin", scope: "SITE" } },
     });
-    for (const p of CUSTOMER_PERMISSIONS) expect(admin.permissions).toContain(p);
+    expect([...admin.permissions].sort()).toEqual(["configuration:write", "planning:write", "plant:admin", "production:admin"]);
     expect(admin.permissions).not.toContain("owner:all");
 
     const engineer = await prisma.role.findUniqueOrThrow({

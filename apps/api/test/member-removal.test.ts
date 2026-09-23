@@ -155,7 +155,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
         workspaceId,
         name: HYBRID_WS_ROLE,
         scope: "WORKSPACE",
-        permissions: ["dashboard:read"],
+        permissions: ["production:read"],
         isSystem: false,
       },
     });
@@ -208,7 +208,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
     const role = await prisma.role.findFirstOrThrow({
       where: { workspaceId, name: "Plant Admin", scope: "SITE", isSystem: true },
     });
-    expect(role.permissions).toContain("user:admin");
+    expect(role.permissions).toContain("plant:admin");
   });
 
   it("factory admin removes a site-only member; membership cascades away", async () => {
