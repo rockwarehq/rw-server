@@ -15,7 +15,9 @@
 --   Plant Admin (plant:admin)                       -> PLANT ADMIN
 --   WorkcenterGrant READ / WRITE                    -> WC VIEW / MANAGE
 --   Company Administrator (owner:all)               -> workspaceRole OWNER
--- Custom roles compile by the same key mapping. Role, RoleAssignment and
+-- Custom roles compile by the same key mapping, reading archived legacy
+-- keys too (step 4 explains why). Workspace-wide assignments compile to
+-- every plant in the workspace. Role, RoleAssignment and
 -- WorkcenterGrant tables are KEPT as a frozen audit/rollback archive; all
 -- code paths to them are deleted in this release.
 
@@ -80,17 +82,72 @@ WHERE EXISTS (
 );
 
 -- ── 4. Compile role assignments and grants into bucket accesses ──────────
+--
+-- A role's tier comes from its current keys OR its archived pre-transition
+-- keys (Role.legacyPermissions, written by the expand step). The expand
+-- step never touched built-in roles and the contract step emptied them, so
+-- on a database that goes straight from the legacy vocabulary to buckets a
+-- built-in Plant Admin holds only legacy keys; reading "permissions" alone
+-- would compile every Plant Admin to VIEW. The legacy bundles below are the
+-- expand step's own rules for plant:admin, planning:write and
+-- configuration:write (production:write/admin contain the planning:write
+-- bundle, so they need no rule of their own).
+--
+-- Workspace-wide assignments (siteId NULL) applied at every site, so they
+-- compile to every plant in the membership's workspace.
 
-WITH site_roles AS (
-  SELECT ra."membershipId", ra."siteId", r."permissions"
-  FROM "RoleAssignment" ra JOIN "Role" r ON r."id" = ra."roleId"
-  WHERE ra."siteId" IS NOT NULL AND NOT r."permissions" @> ARRAY['owner:all']
+WITH legacy_rules(tier, required) AS (
+  VALUES
+    ('ADMIN', ARRAY[
+      'user:read', 'user:write', 'user:admin',
+      'employee:read', 'employee:write', 'employee:admin',
+      'settings:read', 'settings:write', 'settings:admin']),
+    ('MANAGE', ARRAY['job:read', 'job:write', 'schedule:read', 'schedule:write']),
+    ('MANAGE', ARRAY[
+      'facility:read', 'facility:write', 'facility:admin',
+      'job:read', 'job:write', 'job:admin',
+      'status:read', 'status:write', 'status:admin',
+      'calls:read', 'calls:write', 'calls:admin',
+      'modes:read', 'modes:write', 'modes:admin',
+      'notifications:read', 'notifications:write', 'notifications:admin',
+      'dashboard:read', 'dashboard:write', 'dashboard:admin',
+      'entity:read', 'entity:write', 'entity:admin',
+      'graph:read', 'graph:write', 'graph:admin',
+      'settings:read', 'settings:write', 'settings:admin'])
+),
+roles AS (
+  SELECT r."id", r."permissions",
+         ARRAY(SELECT jsonb_array_elements_text(COALESCE(r."legacyPermissions", '[]'::jsonb))) AS legacy
+  FROM "Role" r
+  WHERE NOT r."permissions" @> ARRAY['owner:all']
+),
+role_tiers AS (
+  SELECT r."id" AS role_id,
+         CASE
+           WHEN r."permissions" && ARRAY['plant:admin']
+             OR EXISTS (SELECT 1 FROM legacy_rules lr WHERE lr.tier = 'ADMIN' AND r.legacy @> lr.required)
+             THEN 'ADMIN'
+           WHEN r."permissions" && ARRAY['planning:write','production:write','production:admin','configuration:write']
+             OR EXISTS (SELECT 1 FROM legacy_rules lr WHERE lr.tier = 'MANAGE' AND r.legacy @> lr.required)
+             THEN 'MANAGE'
+           ELSE 'VIEW'
+         END AS tier
+  FROM roles r
+),
+site_roles AS (
+  SELECT ra."membershipId", ra."siteId", rt.tier
+  FROM "RoleAssignment" ra JOIN role_tiers rt ON rt.role_id = ra."roleId"
+  WHERE ra."siteId" IS NOT NULL
+  UNION ALL
+  SELECT ra."membershipId", s."id", rt.tier
+  FROM "RoleAssignment" ra
+  JOIN role_tiers rt ON rt.role_id = ra."roleId"
+  JOIN "WorkspaceMember" m ON m."id" = ra."membershipId"
+  JOIN "Site" s ON s."workspaceId" = m."workspaceId"
+  WHERE ra."siteId" IS NULL
 ),
 wanted AS (
-  SELECT sr."membershipId", b."id" AS bucket_id,
-         CASE WHEN sr."permissions" && ARRAY['plant:admin'] THEN 'ADMIN'
-              WHEN sr."permissions" && ARRAY['planning:write','production:write','production:admin','configuration:write'] THEN 'MANAGE'
-              ELSE 'VIEW' END AS tier
+  SELECT sr."membershipId", b."id" AS bucket_id, sr.tier
   FROM site_roles sr JOIN "Bucket" b ON b."siteId" = sr."siteId" AND b."kind" = 'PLANT'
   UNION ALL
   SELECT g."membershipId", b."id",
