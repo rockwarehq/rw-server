@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import createError from "http-errors";
 import { verifyAccessToken, isExpiredTokenError, type DecodedAccessToken } from "@rw/auth/tokens";
 import { API_TOKEN_PREFIX, touchApiToken, validateApiToken } from "@rw/auth/api-tokens";
-import { BASE_WORKCENTER_ACCESS_KEY, type PermissionSnapshot, snapshotAccessibleSites } from "@rw/auth/iam/index";
+import { BASE_WORKCENTER_ACCESS_KEY, type PermissionSnapshot, snapshotVisibleSites } from "@rw/auth/iam/index";
 import { Principal, type AppIAMContext, type IAMContext, type UnknownIAMContext } from "@rw/auth/context";
 import prisma from "@rw/db";
 
@@ -274,7 +274,10 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
   }
 
   if (decodedToken.siteId) {
-    const access = snapshotAccessibleSites(permissionSnapshot, "facility:read");
+    // Visibility, not a specific permission: any assignment or grant at the
+    // claimed site keeps the token valid. Roles are no longer guaranteed to
+    // carry facility:read as call sites migrate to the new permission keys.
+    const access = snapshotVisibleSites(permissionSnapshot);
     if (access.all) {
       // All-sites grants still require the claimed site to exist in the
       // workspace (parity with the listAccessibleSites-based check).

@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  CUSTOMER_PERMISSIONS,
   type PermissionSnapshot,
+  SYSTEM_ROLE_PERMISSIONS,
+  expandPermissions,
   snapshotAccessibleSites,
   snapshotEffectivePermissions,
   snapshotHasPermission,
+  snapshotVisibleSites,
   snapshotWorkcentersWithPermission,
 } from "./permissions.js";
 
@@ -252,5 +256,156 @@ describe("base workcenter access policy (GRANTS_REQUIRED)", () => {
     expect(snapshotEffectivePermissions(legacy, SITE_A).has("status:read")).toBe(true);
     const support = snapshotEffectivePermissions(snap([], "SUPPORT", undefined, [SITE_A]), SITE_A);
     expect(support.has("status:read")).toBe(true);
+  });
+});
+
+// ── New eight-key catalog (transition) ───────────────────────────────────
+// Role rows may hold legacy keys, new keys, or both during the transition;
+// the evaluator treats each string literally (no runtime mapping between
+// vocabularies — the expand/contract data migrations own that).
+
+describe("expandPermissions (implication closure)", () => {
+  it("closes admin → write → read transitively in one call", () => {
+    expect(expandPermissions(["production:admin"])).toEqual(
+      new Set(["production:admin", "production:write", "production:read"]),
+    );
+  });
+
+  it("write implies read within each group", () => {
+    expect(expandPermissions(["planning:write"])).toEqual(new Set(["planning:write", "planning:read"]));
+    expect(expandPermissions(["configuration:write"])).toEqual(new Set(["configuration:write", "configuration:read"]));
+  });
+
+  it("plant:admin and owner:all are not wildcards", () => {
+    expect(expandPermissions(["plant:admin"])).toEqual(new Set(["plant:admin"]));
+    expect(expandPermissions(["owner:all"])).toEqual(new Set(["owner:all"]));
+  });
+
+  it("legacy keys pass through without implication; unknown strings are dropped", () => {
+    expect(expandPermissions(["job:write", "bogus:verb"])).toEqual(new Set(["job:write"]));
+  });
+});
+
+describe("explicit new-key roles", () => {
+  it("new keys in a role array evaluate directly, with implications", () => {
+    const s = snap([{ siteId: SITE_A, permissions: ["production:write", "plant:admin"] }]);
+    expect(snapshotHasPermission(s, "production:write", SITE_A)).toBe(true);
+    expect(snapshotHasPermission(s, "production:read", SITE_A)).toBe(true);
+    expect(snapshotHasPermission(s, "plant:admin", SITE_A)).toBe(true);
+    expect(snapshotHasPermission(s, "production:admin", SITE_A)).toBe(false);
+  });
+
+  it("mixed-vocabulary arrays (transition data) evaluate both key sets literally", () => {
+    const s = snap([{ siteId: SITE_A, permissions: ["job:read", "schedule:read", "planning:read"] }]);
+    expect(snapshotHasPermission(s, "planning:read", SITE_A)).toBe(true);
+    expect(snapshotHasPermission(s, "job:read", SITE_A)).toBe(true);
+    // Literal evaluation only: legacy keys never satisfy new checks or
+    // vice versa without the key being present.
+    expect(snapshotHasPermission(s, "production:read", SITE_A)).toBe(false);
+    expect(snapshotHasPermission(s, "planning:write", SITE_A)).toBe(false);
+  });
+
+  it("snapshotAccessibleSites sees implied keys, workspace-wide included", () => {
+    const writer = snap([{ siteId: SITE_A, permissions: ["production:write"] }]);
+    expect(snapshotAccessibleSites(writer, "production:read")).toEqual({ all: false, siteIds: [SITE_A] });
+    const workspace = snap([{ siteId: null, permissions: ["production:write"] }]);
+    expect(snapshotAccessibleSites(workspace, "production:read")).toEqual({ all: true });
+  });
+});
+
+describe("floor policy × new keys (GRANTS_REQUIRED)", () => {
+  it("an explicit production:read is stripped at a strict site like the legacy floor reads", () => {
+    const s = snap([{ siteId: SITE_A, permissions: ["production:read", "planning:read"] }], null, undefined, [SITE_A]);
+    expect(snapshotHasPermission(s, "production:read", SITE_A)).toBe(false);
+    // Non-floor keys are untouched.
+    expect(snapshotHasPermission(s, "planning:read", SITE_A)).toBe(true);
+  });
+
+  it("production:write and production:admin roles are management-tier exempt", () => {
+    const writer = snap([{ siteId: SITE_A, permissions: ["production:write"] }], null, undefined, [SITE_A]);
+    expect(snapshotHasPermission(writer, "production:read", SITE_A)).toBe(true);
+    const admin = snap([{ siteId: SITE_A, permissions: ["production:admin"] }], null, undefined, [SITE_A]);
+    expect(snapshotHasPermission(admin, "production:read", SITE_A)).toBe(true);
+  });
+
+  it("a grant re-adds production:read only at its workcenter at a strict site", () => {
+    const s = snap(
+      [{ siteId: SITE_A, permissions: ["production:read"] }],
+      null,
+      [{ workcenterId: WC_1, siteId: SITE_A, access: "READ" }],
+      [SITE_A],
+    );
+    expect(snapshotHasPermission(s, "production:read", SITE_A)).toBe(false);
+    expect(snapshotHasPermission(s, "production:read", SITE_A, WC_2)).toBe(false);
+    expect(snapshotHasPermission(s, "production:read", SITE_A, WC_1)).toBe(true);
+  });
+});
+
+describe("workcenter grants × new keys", () => {
+  it("READ confers production:read at the granted workcenter only, nothing site-wide", () => {
+    const s = snap([], null, [{ workcenterId: WC_1, siteId: SITE_A, access: "READ" }]);
+    expect(snapshotHasPermission(s, "production:read", SITE_A, WC_1)).toBe(true);
+    expect(snapshotHasPermission(s, "production:read", SITE_A, WC_2)).toBe(false);
+    expect(snapshotHasPermission(s, "production:read", SITE_A)).toBe(false);
+    expect(snapshotHasPermission(s, "production:write", SITE_A, WC_1)).toBe(false);
+    // Grants never confer the planning group (target model: production only).
+    expect(snapshotHasPermission(s, "planning:read", SITE_A)).toBe(false);
+  });
+
+  it("WRITE confers production:write at the granted workcenter, never plant-wide authority", () => {
+    const s = snap([], null, [{ workcenterId: WC_1, siteId: SITE_A, access: "WRITE" }]);
+    expect(snapshotHasPermission(s, "production:write", SITE_A, WC_1)).toBe(true);
+    expect(snapshotHasPermission(s, "production:write", SITE_A, WC_2)).toBe(false);
+    expect(snapshotHasPermission(s, "planning:write", SITE_A)).toBe(false);
+    expect(snapshotHasPermission(s, "plant:admin", SITE_A, WC_1)).toBe(false);
+    expect(snapshotHasPermission(s, "configuration:write", SITE_A, WC_1)).toBe(false);
+    expect(snapshotHasPermission(s, "production:admin", SITE_A, WC_1)).toBe(false);
+  });
+
+  it("grant workcenters are listable by the new keys", () => {
+    const s = snap([], null, [{ workcenterId: WC_1, siteId: SITE_A, access: "WRITE" }]);
+    expect(snapshotWorkcentersWithPermission(s, "production:write", SITE_A)).toEqual([WC_1]);
+    expect(snapshotWorkcentersWithPermission(s, "production:read", SITE_A)).toEqual([WC_1]);
+  });
+});
+
+describe("system roles × new keys", () => {
+  it("SUPPORT gains the new read keys, nothing more", () => {
+    expect(SYSTEM_ROLE_PERMISSIONS.SUPPORT.has("production:read")).toBe(true);
+    expect(SYSTEM_ROLE_PERMISSIONS.SUPPORT.has("planning:read")).toBe(true);
+    expect(SYSTEM_ROLE_PERMISSIONS.SUPPORT.has("configuration:read")).toBe(true);
+    expect(SYSTEM_ROLE_PERMISSIONS.SUPPORT.has("production:write")).toBe(false);
+    expect(SYSTEM_ROLE_PERMISSIONS.SUPPORT.has("plant:admin")).toBe(false);
+  });
+
+  it("ENGINEER carries every new key but never owner:all", () => {
+    for (const p of CUSTOMER_PERMISSIONS) expect(SYSTEM_ROLE_PERMISSIONS.ENGINEER.has(p)).toBe(true);
+    expect(SYSTEM_ROLE_PERMISSIONS.ENGINEER.has("owner:all")).toBe(false);
+  });
+});
+
+describe("snapshotVisibleSites", () => {
+  it("any workspace-wide assignment makes every site visible", () => {
+    expect(snapshotVisibleSites(snap([{ siteId: null, permissions: [] }]))).toEqual({ all: true });
+  });
+
+  it("site assignments and grants make their sites visible regardless of permissions", () => {
+    const s = snap([{ siteId: SITE_A, permissions: ["planning:read"] }], null, [
+      { workcenterId: WC_1, siteId: SITE_B, access: "READ" },
+    ]);
+    const visible = snapshotVisibleSites(s);
+    expect(visible.all).toBe(false);
+    if (!visible.all) expect(new Set(visible.siteIds)).toEqual(new Set([SITE_A, SITE_B]));
+  });
+
+  it("fails closed with no assignments or grants; system roles see everything", () => {
+    expect(snapshotVisibleSites(snap([]))).toEqual({ all: false, siteIds: [] });
+    expect(snapshotVisibleSites(snap([], "SUPPORT"))).toEqual({ all: true });
+    expect(snapshotVisibleSites(snap([], "NOT_A_ROLE"))).toEqual({ all: false, siteIds: [] });
+  });
+
+  it("ignores grants with unknown access levels", () => {
+    const s = snap([], null, [{ workcenterId: WC_1, siteId: SITE_A, access: "OWNER" }]);
+    expect(snapshotVisibleSites(s)).toEqual({ all: false, siteIds: [] });
   });
 });
