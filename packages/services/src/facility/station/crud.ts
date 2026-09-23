@@ -52,6 +52,12 @@ export interface ListStationsFilter {
   workspaceId?: string;
   siteId?: string;
   workcenterId?: string;
+  /**
+   * Crew narrowing from the access policy: rows must belong to one of
+   * these workcenters — or carry none at all (site-level rows are plant
+   * things, and every crew member is a plant member).
+   */
+  workcenterIds?: string[];
   /** Only return stations that have at least one of these labels. */
   labelIds?: string[];
   name?: string;
@@ -269,7 +275,7 @@ export async function create(input: CreateStationInput) {
  * List stations with optional filtering
  */
 export async function list(filter: ListStationsFilter = {}) {
-  const { workspaceId, siteId, workcenterId, labelIds, name, limit = 50, offset = 0 } = filter;
+  const { workspaceId, siteId, workcenterId, workcenterIds, labelIds, name, limit = 50, offset = 0 } = filter;
 
   const where: Record<string, unknown> = {};
 
@@ -279,6 +285,10 @@ export async function list(filter: ListStationsFilter = {}) {
 
   if (siteId) {
     where.siteId = siteId;
+  }
+
+  if (workcenterIds) {
+    where.AND = [{ OR: [{ workcenterId: { in: workcenterIds } }, { workcenterId: null }] }];
   }
 
   if (workcenterId) {

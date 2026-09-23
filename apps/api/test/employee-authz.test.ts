@@ -1,22 +1,25 @@
 import prisma from "@rw/db";
-import { hashPassword } from "@rw/auth/password";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ensurePlantBucket, makeUser } from "./helpers/access.js";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
 import { rpcCall } from "./helpers/rpc-call.js";
 
 const SCOPED_EMAIL = "emp-authz-scoped@test.local";
+const MANAGER_EMAIL = "emp-authz-manager@test.local";
 const NOROLE_EMAIL = "emp-authz-norole@test.local";
 const PASSWORD = "emp-authz-password-1";
 
-// Tier 2: people-domain enforcement, especially the anySite rule — employees
-// have no site column, so get/update/delete grant when employee:* is held at
-// ANY site, while list/create enforce the literal site.
+// Tier 2: people-domain enforcement. Employees are the ADMIN shelf now —
+// roster reads AND writes require plant ADMIN. Employees have no site
+// column, so get/update/delete grant when ADMIN is held at ANY site, while
+// list/create enforce the literal site.
 describe.skipIf(!process.env.TEST_DATABASE_URL)("employee domain authorization (Tier 2)", () => {
   let server: TestServer;
   let siteA: { id: string };
   let siteB: { id: string };
   let employee: { id: string };
   let scopedToken: string;
+  let managerToken: string;
   let noroleToken: string;
 
   beforeAll(async () => {
@@ -35,62 +38,54 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("employee domain authorization (
       create: { name: "EmpAuthZ Site B", workspaceId },
       select: { id: true },
     });
+    await ensurePlantBucket(workspaceId, siteB.id, "EmpAuthZ Site B");
 
     // Employee is a versioned model — the base row only needs a workspaceId.
     employee = await prisma.employee.create({ data: { workspaceId }, select: { id: true } });
 
-    const faRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId, name: "Plant Admin", scope: "SITE" } },
-      select: { id: true },
-    });
-    const passwordHash = await hashPassword(PASSWORD);
-    for (const { email, roleId } of [
-      { email: SCOPED_EMAIL, roleId: faRole.id },
-      { email: NOROLE_EMAIL, roleId: undefined },
-    ]) {
-      const u = await prisma.user.upsert({
-        where: { email },
-        update: {},
-        create: { email, passwordHash, firstName: "EmpAuthZ", status: "ACTIVE" },
-      });
-      const membership = await prisma.workspaceMembership.upsert({
-        where: { userId_workspaceId: { userId: u.id, workspaceId } },
-        update: {},
-        create: { userId: u.id, workspaceId },
-      });
-      if (roleId) {
-        const existing = await prisma.roleAssignment.findFirst({
-          where: { membershipId: membership.id, roleId, siteId: siteA.id },
-        });
-        if (!existing) {
-          await prisma.roleAssignment.create({ data: { membershipId: membership.id, roleId, siteId: siteA.id } });
-        }
-      }
-    }
+    // Bucket-era fixtures. Employee CRUD actors need plant ADMIN (the
+    // scoped user was "Plant Admin" at site A); the manager holds plant
+    // MANAGE to prove the people shelf is out of a manager's reach.
+    await makeUser(workspaceId, SCOPED_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, tier: "ADMIN" }] });
+    await makeUser(workspaceId, MANAGER_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, tier: "MANAGE" }] });
+    await makeUser(workspaceId, NOROLE_EMAIL, PASSWORD);
 
     scopedToken = (await loginAs(server, SCOPED_EMAIL, PASSWORD)).accessToken;
+    managerToken = (await loginAs(server, MANAGER_EMAIL, PASSWORD)).accessToken;
     noroleToken = (await loginAs(server, NOROLE_EMAIL, PASSWORD)).accessToken;
   }, 30_000);
 
   afterAll(async () => {
-    await prisma.user.deleteMany({ where: { email: { in: [SCOPED_EMAIL, NOROLE_EMAIL] } } });
+    await prisma.user.deleteMany({ where: { email: { in: [SCOPED_EMAIL, MANAGER_EMAIL, NOROLE_EMAIL] } } });
     await prisma.employee.deleteMany({ where: { id: employee.id } });
     await prisma.site.deleteMany({ where: { name: "EmpAuthZ Site B" } });
     await server.close();
   });
 
-  it("anySite: a site-scoped employee:read grant allows employee.get", async () => {
+  it("anySite: plant ADMIN at one site allows employee.get", async () => {
     const res = await rpcCall(server, "employee/get", { id: employee.id }, scopedToken);
     expect(res.statusCode).toBe(200);
   });
 
-  it("anySite: zero-grant members are denied on employee.get/update/delete", async () => {
+  it("anySite: zero-access members are denied on employee.get/update/delete", async () => {
     const get = await rpcCall(server, "employee/get", { id: employee.id }, noroleToken);
     expect(get.statusCode).toBe(403);
     const update = await rpcCall(server, "employee/update", { id: employee.id, firstName: "X" }, noroleToken);
     expect(update.statusCode).toBe(403);
     const del = await rpcCall(server, "employee/delete", { id: employee.id }, noroleToken);
     expect(del.statusCode).toBe(403);
+  });
+
+  it("plant MANAGE is denied on the employee roster: people are the ADMIN shelf", async () => {
+    // FLIP from the key model: a site writer could read employees; under
+    // buckets, roster READS require plant ADMIN too — MANAGE gets 403.
+    const get = await rpcCall(server, "employee/get", { id: employee.id }, managerToken);
+    expect(get.statusCode).toBe(403);
+    const list = await rpcCall(server, "employee/list", { siteId: siteA.id }, managerToken);
+    expect(list.statusCode).toBe(403);
+    // Writes were never a manager's — still denied.
+    const update = await rpcCall(server, "employee/update", { id: employee.id, firstName: "X" }, managerToken);
+    expect(update.statusCode).toBe(403);
   });
 
   it("list/create enforce the literal site: site B is out of scope", async () => {
@@ -107,8 +102,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("employee domain authorization (
     expect(allowed.statusCode).toBe(200);
   });
 
-  it("employee roles require employee:admin at the target site", async () => {
-    const res = await rpcCall(server, "employeeRole/create", { siteId: siteB.id, name: "emp-authz-x" }, scopedToken);
-    expect(res.statusCode).toBe(403);
+  it("employee-role management requires plant ADMIN at the target site", async () => {
+    const denied = await rpcCall(server, "employeeRole/create", { siteId: siteB.id, name: "emp-authz-x" }, scopedToken);
+    expect(denied.statusCode).toBe(403);
+    // Plant MANAGE at the right site is still not enough — ADMIN only.
+    const manager = await rpcCall(
+      server,
+      "employeeRole/create",
+      { siteId: siteA.id, name: "emp-authz-x" },
+      managerToken,
+    );
+    expect(manager.statusCode).toBe(403);
   });
 });

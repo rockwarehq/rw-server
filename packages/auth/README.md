@@ -14,7 +14,7 @@ import { verifyAccessToken } from "@rw/auth/verify";
 
 - **One workspace per deployment.** The policy layer enforces permission + **site** scope only; workspace containment is vacuously true and costs zero queries.
 - **`authorize` never throws.** Every check returns a verified grant or a typed denial; transports decide how a denial becomes an HTTP/oRPC error.
-- **Token claims are never trusted for authorization.** The API auth plugin loads a per-request `PermissionSnapshot`, so every policy check in a request is query-free.
+- **Token claims are never trusted for authorization.** The API auth plugin loads a per-request `BucketSnapshot`, so every policy check in a request is query-free.
 - **JWT verification is DB-free.** `@rw/auth/verify` has no `@rw/db` import, so services with their own Prisma pool (e.g. livestore) can verify tokens without opening a second connection pool.
 
 ## Module map
@@ -22,9 +22,8 @@ import { verifyAccessToken } from "@rw/auth/verify";
 | Subpath | Purpose |
 | --- | --- |
 | `iam/policy` | `authorize` / `authorizeList` / `authorizeAccessibleSites` — the authorization decision point |
-| `iam/permissions` | Permission catalog, `PermissionSnapshot`, system-role (staff) permissions |
-| `iam/policy-resolvers` | `RESOLVERS` table — derives a resource's site from its id (~50 kinds) |
-| `iam/index` | `roles` and `assignments` services (DB-backed role bundles) |
+| `iam/buckets` | The bucket model: `BucketSnapshot`, hook + cascade, pure tier evaluators |
+| `iam/policy-resolvers` | `RESOLVERS` table — derives a row's site/workcenter from its id (~50 kinds) |
 | `verify` | HS256 access-token sign/verify, per-audience HKDF keys, 15-min expiry |
 | `tokens` | Rotating 7-day refresh tokens with reuse-theft detection (user + display) |
 | `display-session` | Kiosk/display login, refresh, logout |
@@ -36,10 +35,10 @@ import { verifyAccessToken } from "@rw/auth/verify";
 
 ## Authorization
 
-One call per protected operation: authorize a **permission** against a **scope**, producing a verified grant or a typed denial.
+One call per protected operation: authorize a **tier** against a **scope**. The row's workcenter stamp picks its bucket — workcenter-stamped rows live in that cell's bucket, everything else is a plant thing.
 
 ```ts
-authorize(iam, { permission: "job:read", scope: { kind: "customer", id: input.id } });
+authorize(iam, { tier: "VIEW", scope: { kind: "customer", id: input.id } });
 // → SiteGrant | WorkspaceGrant | PolicyDenial
 ```
 
@@ -47,12 +46,12 @@ authorize(iam, { permission: "job:read", scope: { kind: "customer", id: input.id
 
 | Scope | Meaning |
 | --- | --- |
-| `{ kind: "workspace" }` | Workspace-level action (e.g. site.create) |
-| `{ kind: "anySite" }` | Permission held workspace-wide or at ≥1 site |
-| `{ kind: "site", siteId }` | A literal site id from input/params |
-| `{ kind: "order", id }`, … | A resource ref — its site is resolved via `RESOLVERS` |
+| `{ kind: "workspace" }` | Ownership-level action (workspace owners; staff unless `ownerOnly`) |
+| `{ kind: "anySite" }` | VIEW: any visible site; higher tiers: held at ≥1 plant |
+| `{ kind: "site", siteId, workcenterId? }` | Literal ids from input/params (workcenterId routes to that cell's bucket) |
+| `{ kind: "order", id }`, … | A resource ref — its site/workcenter is resolved via `RESOLVERS` |
 
-Denials carry a code, never an exception: `UNAUTHENTICATED`, `NO_WORKSPACE`, `NOT_FOUND`, `FORBIDDEN`. Resource resolution runs **before** the permission check, so a nonexistent id is `NOT_FOUND` and existence is never disclosed to an unauthorized caller.
+Denials carry a code, never an exception: `UNAUTHENTICATED`, `NO_WORKSPACE`, `NOT_FOUND`, `FORBIDDEN`. Resource resolution runs **before** the tier check, so a nonexistent id is `NOT_FOUND` and existence is never disclosed to an unauthorized caller.
 
 ### In an oRPC handler
 
@@ -60,18 +59,20 @@ The `grant()` adapter (`apps/api/src/rpc/authz.ts`) unwraps a grant or throws th
 
 ```ts
 export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "job:read", scope: { kind: "customer", id: input.id } }));
+  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "customer", id: input.id } }));
   return unwrap(await customerService.getById(input.id));
 });
 ```
 
 ### List queries — single-site by design
 
-A user works within one site, so list queries are never cross-site. `authorizeList` scopes to the requested site or, absent one, the token's active site; `scopeFilter`/`scopeWhere` apply the proven scope to the query:
+A user works within one site, so list queries are never cross-site. `authorizeList` scopes to the requested site or, absent one, the token's active site. `bucketKind` says where the listed rows live: `"PLANT"` lists need plant membership at the tier; `"WORKCENTER"` (floor) lists give plant managers the whole floor and narrow the crew to their cells via `scope.workcenterIds` + `scopeWorkcenterWhere` (site-level rows stay readable — they are plant things):
 
 ```ts
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "job:read", requestedSiteId: input.siteId }));
+  const scope = grant(
+    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
+  );
   return customerService.list({ ...input, ...scopeFilter(scope) });
 });
 ```
@@ -84,22 +85,21 @@ if (!scope.ok) return replyPolicyDenial(reply, scope);
 return site.list({ ...request.query, workspaceId: scope.workspaceId, siteIds: scope.siteIds });
 ```
 
-## Permission model
+## Access model — buckets
 
-The catalog is eight responsibility-based keys plus one reserved marker:
+Rows live in containers; your access is the containers you are in. There is no permission vocabulary.
 
-| Responsibility | Keys |
-| --- | --- |
-| Production (live floor work, inventory, shared references) | `production:read`, `production:write`, `production:admin` |
-| Planning (orders, customers, scheduling) | `planning:read`, `planning:write` |
-| Technical setup (equipment, data models, integrations) | `configuration:read`, `configuration:write` |
-| People/access and plant administration | `plant:admin` |
+| Container | Tier | Meaning |
+| --- | --- | --- |
+| **Plant** (one per site) | VIEW | member: read all the common plant things (orders, catalogs, schedules, dashboards, equipment lists) |
+| | MANAGE | write the plant and everything in it — cascades to every workcenter |
+| | ADMIN | the reserved shelf: people, access administration, dangerous settings |
+| **Workcenter** (one per cell) | VIEW | watch the cell's floor |
+| | MANAGE | operate and configure the cell |
 
-Write implies read, and `production:admin` implies write (closed over by `expandPermissions`). `plant:admin` and the reserved `owner:all` are independent capabilities, not wildcards. Workcenter grants confer `production:read`/`production:write` at their own workcenter only.
+Two rules complete it: **any workcenter access makes you a plant member** (the hook), and **plant MANAGE implies MANAGE on every cell** (the cascade). Above the buckets sit exactly two bypasses, like Basecamp account roles: `WorkspaceMembership.workspaceRole = OWNER` (reserved ownership) and Rockware staff (SUPPORT reads everywhere, ENGINEER manages everywhere).
 
-The **catalog is hardcoded** — it is the type-safe contract the whole codebase compiles against. **Roles and assignments live in the DB** (workspace-owned bundles of permissions, assignable workspace-wide or per site). Rockware-staff permissions (`SUPPORT`, `ENGINEER`) live in `SYSTEM_ROLE_PERMISSIONS` in code, so customer data can never influence them.
-
-`loadPermissionSnapshot(userId, workspaceId)` captures a user's system role and role assignments in two queries; the pure evaluators (`snapshotHasPermission`, `snapshotAccessibleSites`) run against it without touching the DB.
+Buckets are DB rows born with their sites and workcenters; accesses are `BucketAccess` rows (membership ↔ bucket ↔ tier). `loadBucketSnapshot(userId, workspaceId)` captures ownership/staff standing and all accesses (hook and cascade applied) in three queries; the pure evaluators (`snapshotPlantTier`, `snapshotWorkcenterTier`, `snapshotVisibleSites`, `snapshotWorkcenterIds`) run against it without touching the DB. Displays and app tokens stay outside the model: simple site-bound token auth, unchanged.
 
 ## Tokens & sessions
 

@@ -6,8 +6,8 @@ import * as label from "@rw/services/label/index";
 import { throwServiceError, unwrap } from "./errors.js";
 
 // The site's shared list of labels. Only admins manage the list itself:
-// create/update/delete need configuration:write. Putting an existing label ON a
-// record only needs permission to edit that record (production:write etc.), so
+// create/update/delete are plant MANAGE. Putting an existing label ON a
+// record only needs the access to edit that record., so
 // office users can tag things but can't invent or rename labels.
 
 const createInputSchema = z.object({

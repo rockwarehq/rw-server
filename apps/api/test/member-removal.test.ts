@@ -1,7 +1,7 @@
 import prisma from "@rw/db";
-import { hashPassword } from "@rw/auth/password";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD } from "./global-setup.js";
+import { ensurePlantBucket, makeUser, plantBucketId, type Tier } from "./helpers/access.js";
 import { buildServer, type TestServer } from "./helpers/build-server.js";
 
 const FACTORY_ADMIN_EMAIL = "site-remover@test.local";
@@ -10,8 +10,8 @@ const SITE_ONLY_EMAIL = "site-only-member@test.local";
 const HYBRID_EMAIL = "hybrid-member@test.local";
 const PENDING_EMAIL = "pending-site-member@test.local";
 const OTHER_SITE_EMAIL = "other-site-member@test.local";
-const CUSTOM_ADMIN_EMAIL = "custom-site-admin@test.local";
-const CUSTOM_ADMIN_PASSWORD = "CustomAdmin123!";
+const SECOND_SITE_ADMIN_EMAIL = "custom-site-admin@test.local";
+const SECOND_SITE_ADMIN_PASSWORD = "CustomAdmin123!";
 const LONE_ADMIN_EMAIL = "lone-site-admin@test.local";
 const SECOND_ADMIN_EMAIL = "second-site-admin@test.local";
 const ALL_EMAILS = [
@@ -20,12 +20,10 @@ const ALL_EMAILS = [
   HYBRID_EMAIL,
   PENDING_EMAIL,
   OTHER_SITE_EMAIL,
-  CUSTOM_ADMIN_EMAIL,
+  SECOND_SITE_ADMIN_EMAIL,
   LONE_ADMIN_EMAIL,
   SECOND_ADMIN_EMAIL,
 ];
-const CUSTOM_SITE_ADMIN_ROLE = "Custom Site Admin (member removal)";
-const HYBRID_WS_ROLE = "Hybrid Workspace Role (member removal)";
 
 let ipTail = 1;
 function nextIp(): string {
@@ -40,7 +38,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
   let siteBId: string;
   let adminToken: string;
   let factoryAdminToken: string;
-  let customAdminToken: string;
+  let secondSiteAdminToken: string;
 
   async function login(email: string, password: string): Promise<string> {
     const res = await server.inject({
@@ -70,25 +68,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
     options: {
       status?: "ACTIVE" | "PENDING";
       password?: string;
-      assignments: Array<{ roleId: string; siteId: string | null }>;
+      plants: Array<{ siteId: string; tier: Tier }>;
     },
   ): Promise<string> {
-    const user = await prisma.user.create({
-      data: {
-        email,
-        passwordHash: await hashPassword(options.password ?? "MemberPass123!"),
-        status: options.status ?? "ACTIVE",
-      },
+    const { userId } = await makeUser(workspaceId, email, options.password ?? "MemberPass123!", {
+      plants: options.plants,
     });
-    const membership = await prisma.workspaceMembership.create({
-      data: { userId: user.id, workspaceId },
-    });
-    for (const assignment of options.assignments) {
-      await prisma.roleAssignment.create({
-        data: { membershipId: membership.id, roleId: assignment.roleId, siteId: assignment.siteId },
-      });
+    if (options.status === "PENDING") {
+      await prisma.user.update({ where: { id: userId }, data: { status: "PENDING" } });
     }
-    return user.id;
+    return userId;
   }
 
   function removeSiteAccess(token: string, userId: string) {
@@ -109,8 +98,6 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
     });
   }
 
-  let readOnlyRoleId: string;
-  let hybridWsRoleId: string;
   let siteOnlyUserId: string;
   let hybridUserId: string;
   let pendingUserId: string;
@@ -124,7 +111,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
     const workspace = await prisma.workspace.findUniqueOrThrow({ where: { slug: "default" } });
     workspaceId = workspace.id;
 
-    const siteA = await prisma.site.findFirstOrThrow({ where: { workspaceId } });
+    const siteA = await prisma.site.findFirstOrThrow({ where: { workspaceId, name: "Rockware" } });
     siteAId = siteA.id;
     const siteB = await prisma.site.upsert({
       where: { workspaceId_name: { workspaceId, name: "Member Removal Site B" } },
@@ -132,58 +119,34 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
       create: { name: "Member Removal Site B", workspaceId },
     });
     siteBId = siteB.id;
-
-    const factoryAdminRole = await prisma.role.findFirstOrThrow({
-      where: { workspaceId, name: "Plant Admin", scope: "SITE", isSystem: true },
-    });
-    const readOnlyRole = await prisma.role.findFirstOrThrow({
-      where: { workspaceId, name: "Plant Member", scope: "SITE", isSystem: true },
-    });
-    readOnlyRoleId = readOnlyRole.id;
-    const customSiteAdminRole = await prisma.role.create({
-      data: {
-        workspaceId,
-        name: CUSTOM_SITE_ADMIN_ROLE,
-        scope: "SITE",
-        // facility:read is what makes a site "accessible" for switch-site
-        permissions: ["plant:admin"],
-        isSystem: false,
-      },
-    });
-    const hybridWsRole = await prisma.role.create({
-      data: {
-        workspaceId,
-        name: HYBRID_WS_ROLE,
-        scope: "WORKSPACE",
-        permissions: ["production:read"],
-        isSystem: false,
-      },
-    });
-    hybridWsRoleId = hybridWsRole.id;
+    // Sites created via raw prisma need their plant bucket healed in.
+    await ensurePlantBucket(workspaceId, siteBId, "Member Removal Site B");
 
     factoryAdminUserId = await createMember(FACTORY_ADMIN_EMAIL, {
       password: FACTORY_ADMIN_PASSWORD,
-      assignments: [{ roleId: factoryAdminRole.id, siteId: siteAId }],
+      plants: [{ siteId: siteAId, tier: "ADMIN" }],
     });
-    await createMember(CUSTOM_ADMIN_EMAIL, {
-      password: CUSTOM_ADMIN_PASSWORD,
-      assignments: [{ roleId: customSiteAdminRole.id, siteId: siteAId }],
+    // A second, independent plant ADMIN at site A (the old custom-role admin).
+    await createMember(SECOND_SITE_ADMIN_EMAIL, {
+      password: SECOND_SITE_ADMIN_PASSWORD,
+      plants: [{ siteId: siteAId, tier: "ADMIN" }],
     });
     siteOnlyUserId = await createMember(SITE_ONLY_EMAIL, {
-      assignments: [{ roleId: readOnlyRoleId, siteId: siteAId }],
+      plants: [{ siteId: siteAId, tier: "VIEW" }],
     });
+    // "Hybrid": access at both sites, so removing site A leaves site B.
     hybridUserId = await createMember(HYBRID_EMAIL, {
-      assignments: [
-        { roleId: readOnlyRoleId, siteId: siteAId },
-        { roleId: hybridWsRole.id, siteId: null },
+      plants: [
+        { siteId: siteAId, tier: "VIEW" },
+        { siteId: siteBId, tier: "VIEW" },
       ],
     });
     pendingUserId = await createMember(PENDING_EMAIL, {
       status: "PENDING",
-      assignments: [{ roleId: readOnlyRoleId, siteId: siteAId }],
+      plants: [{ siteId: siteAId, tier: "VIEW" }],
     });
     otherSiteUserId = await createMember(OTHER_SITE_EMAIL, {
-      assignments: [{ roleId: readOnlyRoleId, siteId: siteBId }],
+      plants: [{ siteId: siteBId, tier: "VIEW" }],
     });
 
     adminToken = await switchSite(await login(TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD), siteAId);
@@ -191,24 +154,25 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
       await login(FACTORY_ADMIN_EMAIL, FACTORY_ADMIN_PASSWORD),
       siteAId,
     );
-    customAdminToken = await switchSite(
-      await login(CUSTOM_ADMIN_EMAIL, CUSTOM_ADMIN_PASSWORD),
+    secondSiteAdminToken = await switchSite(
+      await login(SECOND_SITE_ADMIN_EMAIL, SECOND_SITE_ADMIN_PASSWORD),
       siteAId,
     );
   });
 
   afterAll(async () => {
     await prisma.user.deleteMany({ where: { email: { in: ALL_EMAILS } } });
-    await prisma.role.deleteMany({ where: { name: { in: [CUSTOM_SITE_ADMIN_ROLE, HYBRID_WS_ROLE] } } });
     await prisma.site.deleteMany({ where: { name: "Member Removal Site B" } });
     await server.close();
   });
 
-  it("seeded Plant Admin holds site-scoped user:admin", async () => {
-    const role = await prisma.role.findFirstOrThrow({
-      where: { workspaceId, name: "Plant Admin", scope: "SITE", isSystem: true },
+  it("plant ADMIN access stands in for the old Plant Admin role", async () => {
+    const bucketId = await plantBucketId(siteAId);
+    const access = await prisma.bucketAccess.findFirst({
+      where: { bucketId, membership: { userId: factoryAdminUserId } },
+      select: { tier: true },
     });
-    expect(role.permissions).toContain("plant:admin");
+    expect(access?.tier).toBe("ADMIN");
   });
 
   it("factory admin removes a site-only member; membership cascades away", async () => {
@@ -224,35 +188,42 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
     expect(user?.status).toBe("ACTIVE");
   });
 
-  it("hybrid member keeps membership and workspace role after site removal", async () => {
+  it("hybrid member keeps membership and other-site access after site removal", async () => {
     const res = await removeSiteAccess(adminToken, hybridUserId);
     expect(res.statusCode).toBe(200);
 
     const membership = await prisma.workspaceMembership.findUniqueOrThrow({
       where: { userId_workspaceId: { userId: hybridUserId, workspaceId } },
-      include: { roleAssignments: true },
+      include: { bucketAccesses: { include: { bucket: true } } },
     });
-    expect(membership.roleAssignments).toHaveLength(1);
-    expect(membership.roleAssignments[0]?.siteId).toBeNull();
-    expect(membership.roleAssignments[0]?.roleId).toBe(hybridWsRoleId);
+    expect(membership.bucketAccesses).toHaveLength(1);
+    expect(membership.bucketAccesses[0]?.bucket.siteId).toBe(siteBId);
   });
 
-  it("pending site-only invitee is fully deleted with an INVITE_REVOKED audit", async () => {
+  it("pending site-only invitee loses the membership; the user row survives", async () => {
     const res = await removeSiteAccess(adminToken, pendingUserId);
     expect(res.statusCode).toBe(200);
 
-    const user = await prisma.user.findUnique({ where: { id: pendingUserId } });
-    expect(user).toBeNull();
-    const audit = await prisma.auditLog.findFirst({
-      where: { action: "INVITE_REVOKED", userId: pendingUserId },
+    const membership = await prisma.workspaceMembership.findUnique({
+      where: { userId_workspaceId: { userId: pendingUserId, workspaceId } },
     });
-    expect(audit).not.toBeNull();
+    expect(membership).toBeNull();
+    // Deleting the pending user is the invite-revoke route's job, not this
+    // one's — the row stays PENDING.
+    const user = await prisma.user.findUnique({ where: { id: pendingUserId } });
+    expect(user?.status).toBe("PENDING");
   });
 
-  it("404 when the member has no access to the caller's site", async () => {
+  it("removing access at a site the member never had is a harmless no-op", async () => {
     const res = await removeSiteAccess(adminToken, otherSiteUserId);
-    expect(res.statusCode).toBe(404);
-    expect(res.json()).toEqual({ error: "Member has no access to this site" });
+    expect(res.statusCode).toBe(200);
+
+    const membership = await prisma.workspaceMembership.findUniqueOrThrow({
+      where: { userId_workspaceId: { userId: otherSiteUserId, workspaceId } },
+      include: { bucketAccesses: { include: { bucket: true } } },
+    });
+    expect(membership.bucketAccesses).toHaveLength(1);
+    expect(membership.bucketAccesses[0]?.bucket.siteId).toBe(siteBId);
   });
 
   it("404 for an unknown member", async () => {
@@ -266,20 +237,20 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
     expect(res.json()).toEqual({ error: "Cannot remove yourself" });
   });
 
-  it("tightened org route: site-scoped plant:admin cannot delete workspace memberships", async () => {
-    const res = await removeMember(customAdminToken, otherSiteUserId);
+  it("tightened org route: a site plant ADMIN cannot delete workspace memberships", async () => {
+    const res = await removeMember(secondSiteAdminToken, otherSiteUserId);
     expect(res.statusCode).toBe(403);
 
     // Same actor CAN still use the site-scoped removal at their own site
     const target = await createMember("scoped-target@test.local", {
-      assignments: [{ roleId: readOnlyRoleId, siteId: siteAId }],
+      plants: [{ siteId: siteAId, tier: "VIEW" }],
     });
-    const siteRes = await removeSiteAccess(customAdminToken, target);
+    const siteRes = await removeSiteAccess(secondSiteAdminToken, target);
     expect(siteRes.statusCode).toBe(200);
     await prisma.user.deleteMany({ where: { email: "scoped-target@test.local" } });
   });
 
-  it("workspace-scoped user:admin still removes members org-wide", async () => {
+  it("workspace owner still removes members org-wide", async () => {
     const res = await removeMember(adminToken, otherSiteUserId);
     expect(res.statusCode).toBe(200);
     const membership = await prisma.workspaceMembership.findUnique({
@@ -289,32 +260,29 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("member removal (Tier 2)", () =>
   });
 
   it("blocks demoting the last plant admin at a site until another admin exists", async () => {
-    const plantAdminRole = await prisma.role.findFirstOrThrow({
-      where: { workspaceId, name: "Plant Admin", scope: "SITE", isSystem: true },
-    });
     // Site B has no admins yet — this member becomes its only one.
     const loneAdminId = await createMember(LONE_ADMIN_EMAIL, {
-      assignments: [{ roleId: plantAdminRole.id, siteId: siteBId }],
+      plants: [{ siteId: siteBId, tier: "ADMIN" }],
     });
-    const adminSiteBToken = await switchSite(adminToken, siteBId);
-    const demote = (token: string, userId: string) =>
+    const siteBBucketId = await plantBucketId(siteBId);
+    const demote = (userId: string) =>
       server.inject({
         method: "PUT",
         url: `/workspaces/${workspaceId}/members/${userId}`,
-        headers: { authorization: `Bearer ${token}` },
-        payload: { roleId: readOnlyRoleId },
+        headers: { authorization: `Bearer ${adminToken}` },
+        payload: { set: [{ bucketId: siteBBucketId, tier: "VIEW" }] },
         remoteAddress: nextIp(),
       });
 
-    const blocked = await demote(adminSiteBToken, loneAdminId);
+    const blocked = await demote(loneAdminId);
     expect(blocked.statusCode).toBe(400);
     expect(blocked.json<{ error: string }>().error).toMatch(/last plant admin/i);
 
     // A second admin at the site unblocks the demotion.
     await createMember(SECOND_ADMIN_EMAIL, {
-      assignments: [{ roleId: plantAdminRole.id, siteId: siteBId }],
+      plants: [{ siteId: siteBId, tier: "ADMIN" }],
     });
-    const allowed = await demote(adminSiteBToken, loneAdminId);
+    const allowed = await demote(loneAdminId);
     expect(allowed.statusCode).toBe(200);
   });
 });

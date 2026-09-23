@@ -212,7 +212,7 @@ export const list = userOrDisplayRequired.input(listInputSchema).handler(async (
   const scope = grant(
     await authorizeList(context.iam, { tier: "VIEW", bucketKind: "WORKCENTER", requestedSiteId: input.siteId }),
   );
-  return station.list({ ...input, ...scopeFilter(scope) });
+  return station.list({ ...input, ...scopeFilter(scope), workcenterIds: scope.workcenterIds });
 });
 
 /**

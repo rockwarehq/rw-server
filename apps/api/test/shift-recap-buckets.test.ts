@@ -58,8 +58,9 @@ describe("shift recap metric buckets", () => {
     expect(mocks.metricBucket.findMany.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.metricBucketLog.findMany.mock.invocationCallOrder[0],
     );
+    // Bucket model: reads check the VIEW tier at the site's plant bucket.
     expect(mocks.authorize).toHaveBeenCalledWith(context.iam, {
-      permission: "production:read",
+      tier: "VIEW",
       scope: { kind: "site", siteId: input.siteId },
     });
     expect(mocks.station.findMany).toHaveBeenCalledWith({

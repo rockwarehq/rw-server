@@ -9,8 +9,8 @@ const SUPPORT_EMAIL = "sys-authz-support@test.local";
 const PASSWORD = "sys-authz-password-1";
 
 // Tier 2: Rockware-staff (system-role) users — no WorkspaceMembership by
-// design, permissions resolved from code. These logins were previously
-// impossible (the session layer was membership-centric).
+// design, standing resolved from code: SUPPORT reads everywhere, ENGINEER
+// manages everywhere, neither reaches ownership-only actions.
 describe.skipIf(!process.env.TEST_DATABASE_URL)("system-role user authentication & access (Tier 2)", () => {
   let server: TestServer;
   let siteA: { id: string };
@@ -53,6 +53,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("system-role user authentication
   afterAll(async () => {
     await prisma.user.deleteMany({ where: { email: { in: [ENGINEER_EMAIL, SUPPORT_EMAIL] } } });
     await prisma.station.deleteMany({ where: { id: stationA.id } });
+    await prisma.workspace.deleteMany({ where: { name: "sys-authz-ws-never" } });
     await server.close();
   });
 
@@ -66,12 +67,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("system-role user authentication
     const body = me.json() as {
       workspace: { id: string } | null;
       sites: unknown[];
-      access: { roles: Array<{ name: string }>; permissions: string[] };
+      access: { workspaceRole: string; staff: string; buckets: unknown[] };
     };
     expect(body.workspace).not.toBeNull();
     expect(body.sites.length).toBeGreaterThan(0);
-    expect(body.access.permissions).toContain("production:read");
-    expect(body.access.roles[0]?.name).toContain("ENGINEER");
+    expect(body.access.staff).toBe("FULL");
+    expect(body.access.workspaceRole).toBe("MEMBER");
+    expect(body.access.buckets).toEqual([]);
   });
 
   it("ENGINEER can read and write at any site", async () => {
@@ -95,14 +97,24 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("system-role user authentication
     expect(write.statusCode).toBe(403);
   });
 
-  it("neither staff tier reaches settings:admin surfaces", async () => {
-    const res = await rpcCall(
+  it("staff bypasses stop where they should: SUPPORT at MANAGE, ENGINEER at ownership", async () => {
+    const supportDelete = await rpcCall(
       server,
       "integration/delete",
       { id: "00000000-0000-4000-8000-000000000042", siteId: siteA.id },
       supportToken,
     );
-    expect(res.statusCode).toBe(403);
+    expect(supportDelete.statusCode).toBe(403);
+
+    // Ownership-only actions (workspace create/delete, ownership transfer)
+    // reject even ENGINEER.
+    const createWorkspace = await server.inject({
+      method: "POST",
+      url: "/workspaces",
+      headers: { authorization: `Bearer ${engineerToken}` },
+      payload: { name: "sys-authz-ws-never" },
+    });
+    expect(createWorkspace.statusCode).toBe(403);
   });
 
   it("system users are hidden from the customer roster", async () => {
@@ -122,14 +134,51 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("system-role user authentication
     expect(emails).not.toContain(SUPPORT_EMAIL);
   });
 
-  it("role assignments to system users remain rejected", async () => {
-    const engineer = await prisma.user.findUniqueOrThrow({ where: { email: ENGINEER_EMAIL }, select: { id: true } });
-    const { assignments } = await import("@rw/auth/iam/index");
-    const rockware = await prisma.site.findFirstOrThrow({ where: { name: "Rockware" }, select: { workspaceId: true } });
-    const role = await prisma.role.findFirstOrThrow({
-      where: { workspaceId: rockware.workspaceId, name: "Plant Member" },
+  it("system users hold no memberships or bucket accesses; standing comes from code", async () => {
+    // No membership rows exist, so bucket accesses (which hang off a
+    // membership) are impossible to grant to a system user.
+    const memberships = await prisma.workspaceMembership.count({
+      where: { user: { email: { in: [ENGINEER_EMAIL, SUPPORT_EMAIL] } } },
+    });
+    expect(memberships).toBe(0);
+
+    const supportMe = await server.inject({
+      method: "GET",
+      url: "/users/me",
+      headers: { authorization: `Bearer ${supportToken}` },
+    });
+    expect(supportMe.statusCode).toBe(200);
+    const supportAccess = (supportMe.json() as { access: { staff: string; buckets: unknown[] } }).access;
+    expect(supportAccess.staff).toBe("READ");
+    expect(supportAccess.buckets).toEqual([]);
+
+    // ENGINEER acts everywhere: the admin-gated roster answers.
+    const engineerRoster = await server.inject({
+      method: "GET",
+      url: "/users",
+      headers: { authorization: `Bearer ${engineerToken}` },
+    });
+    expect(engineerRoster.statusCode).toBe(200);
+
+    // SUPPORT is read-only: the roster is an ADMIN surface (403), and
+    // mutations like inviting are denied.
+    const supportRoster = await server.inject({
+      method: "GET",
+      url: "/users",
+      headers: { authorization: `Bearer ${supportToken}` },
+    });
+    expect(supportRoster.statusCode).toBe(403);
+
+    const bucket = await prisma.bucket.findFirstOrThrow({
+      where: { siteId: siteA.id, kind: "PLANT" },
       select: { id: true },
     });
-    await expect(assignments.assign({ userId: engineer.id, roleId: role.id, siteId: siteA.id })).rejects.toThrow();
+    const invite = await server.inject({
+      method: "POST",
+      url: "/users/invite",
+      headers: { authorization: `Bearer ${supportToken}` },
+      payload: { email: "sys-authz-nope@test.local", bucketAccesses: [{ bucketId: bucket.id, tier: "VIEW" }] },
+    });
+    expect(invite.statusCode).toBe(403);
   });
 });

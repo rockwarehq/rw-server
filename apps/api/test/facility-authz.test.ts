@@ -1,33 +1,43 @@
 import prisma from "@rw/db";
-import { hashPassword } from "@rw/auth/password";
 import { workcenter } from "@rw/services/facility/index";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ensurePlantBucket, ensureWorkcenterBucket, makeUser, setWorkcenterAccess } from "./helpers/access.js";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
 import { rpcCall } from "./helpers/rpc-call.js";
 
 const FA_EMAIL = "authz-fa@test.local";
 const READER_EMAIL = "authz-reader@test.local";
+const MEMBER_EMAIL = "authz-member@test.local";
 const NOROLE_EMAIL = "authz-norole@test.local";
 const ADMIN_EMAIL = "authz-admin@test.local";
 const PASSWORD = "authz-password-123";
-const EMAILS = [FA_EMAIL, READER_EMAIL, NOROLE_EMAIL, ADMIN_EMAIL];
+const EMAILS = [FA_EMAIL, READER_EMAIL, MEMBER_EMAIL, NOROLE_EMAIL, ADMIN_EMAIL];
 
 const NONEXISTENT_ID = "00000000-0000-4000-8000-000000000000";
 
-// Tier 2: site-scope and permission enforcement through the policy layer,
-// on both the RPC and REST surfaces, for the three migrated resources.
+// Tier 2: site-scope and tier enforcement through the policy layer, on both
+// the RPC and REST surfaces, under the bucket model.
 // Fixtures live in the single default workspace: the seeded "Rockware" site
-// (site A) plus a second site B; the FA and reader users are scoped to A.
+// (site A) plus a second site B. Bucket-era cast:
+//   fa      plant ADMIN at site A (was the "Plant Admin" role)
+//   reader  crew VIEW at workcenter A — floor visibility is crew
+//           membership now (was a custom production:read role)
+//   member  plant VIEW at site A — a plain plant member
+//   admin   workspace OWNER (was "Company Administrator")
+//   norole  membership with no bucket accesses at all
 describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)", () => {
   let server: TestServer;
   let siteA: { id: string };
   let siteB: { id: string };
+  let wcA: { id: string };
   let wcB: { id: string };
   let stationA: { id: string };
   let stationB: { id: string };
   let downEntryB: { id: string };
+  let memberMembershipId: string;
   let faToken: string;
   let readerToken: string;
+  let memberToken: string;
   let noroleToken: string;
   let adminToken: string;
 
@@ -50,13 +60,17 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
       create: { name: "AuthZ Site B", workspaceId: workspace.id },
       select: { id: true },
     });
+    await ensurePlantBucket(workspace.id, siteB.id, "AuthZ Site B");
 
     const findOrCreateWorkcenter = async (siteId: string, name: string) => {
       const existing = await prisma.workcenter.findFirst({ where: { siteId, name }, select: { id: true } });
       return existing ?? prisma.workcenter.create({ data: { name, siteId }, select: { id: true } });
     };
-    const wcA = await findOrCreateWorkcenter(siteA.id, "authz-wc-a");
+    wcA = await findOrCreateWorkcenter(siteA.id, "authz-wc-a");
     wcB = await findOrCreateWorkcenter(siteB.id, "authz-wc-b");
+    // Raw-prisma workcenters bypass the service hook — heal their buckets.
+    await ensureWorkcenterBucket(workspace.id, siteA.id, wcA.id, "authz-wc-a");
+    await ensureWorkcenterBucket(workspace.id, siteB.id, wcB.id, "authz-wc-b");
     stationA = await prisma.station.upsert({
       where: { siteId_name: { siteId: siteA.id, name: "authz-st-a" } },
       update: {},
@@ -80,64 +94,21 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
       select: { id: true },
     });
 
-    const faRole = await prisma.role.findUniqueOrThrow({
-      where: { workspaceId_name_scope: { workspaceId: workspace.id, name: "Plant Admin", scope: "SITE" } },
-      select: { id: true },
+    await makeUser(workspace.id, FA_EMAIL, PASSWORD, { plants: [{ siteId: siteA.id, tier: "ADMIN" }] });
+    await makeUser(workspace.id, READER_EMAIL, PASSWORD, { workcenters: [{ workcenterId: wcA.id, tier: "VIEW" }] });
+    const member = await makeUser(workspace.id, MEMBER_EMAIL, PASSWORD, {
+      plants: [{ siteId: siteA.id, tier: "VIEW" }],
     });
-    // Station visibility is production data now: the read tier is a custom
-    // production:read role (Plant Member's base tier no longer includes it).
-    const readerRole = await prisma.role.upsert({
-      where: { workspaceId_name_scope: { workspaceId: workspace.id, name: "facility-authz-viewer", scope: "SITE" } },
-      update: { permissions: ["production:read"] },
-      create: {
-        workspaceId: workspace.id,
-        name: "facility-authz-viewer",
-        scope: "SITE",
-        permissions: ["production:read"],
-      },
-      select: { id: true },
-    });
-    const adminRole = await prisma.role.findUniqueOrThrow({
-      where: {
-        workspaceId_name_scope: { workspaceId: workspace.id, name: "Company Administrator", scope: "WORKSPACE" },
-      },
-      select: { id: true },
-    });
-
-    const passwordHash = await hashPassword(PASSWORD);
-    const grants: Array<{ email: string; roleId?: string; siteId?: string | null }> = [
-      { email: FA_EMAIL, roleId: faRole.id, siteId: siteA.id },
-      { email: READER_EMAIL, roleId: readerRole.id, siteId: siteA.id },
-      { email: ADMIN_EMAIL, roleId: adminRole.id, siteId: null },
-      { email: NOROLE_EMAIL },
-    ];
-    for (const { email, roleId, siteId } of grants) {
-      const user = await prisma.user.upsert({
-        where: { email },
-        update: {},
-        create: { email, passwordHash, firstName: "AuthZ", status: "ACTIVE" },
-      });
-      const membership = await prisma.workspaceMembership.upsert({
-        where: { userId_workspaceId: { userId: user.id, workspaceId: workspace.id } },
-        update: {},
-        create: { userId: user.id, workspaceId: workspace.id },
-      });
-      if (roleId) {
-        const existing = await prisma.roleAssignment.findFirst({
-          where: { membershipId: membership.id, roleId, siteId: siteId ?? null },
-        });
-        if (!existing) {
-          await prisma.roleAssignment.create({
-            data: { membershipId: membership.id, roleId, siteId: siteId ?? null },
-          });
-        }
-      }
-    }
+    memberMembershipId = member.membershipId;
+    await makeUser(workspace.id, ADMIN_EMAIL, PASSWORD, { owner: true });
+    await makeUser(workspace.id, NOROLE_EMAIL, PASSWORD);
 
     // One login per user for the whole suite — the sensitive-endpoint rate
-    // limiter allows 5/min/IP and every inject comes from 127.0.0.1.
+    // limiter allows 5/min/IP and every inject comes from 127.0.0.1. Five
+    // users is exactly the budget; add a sixth and this beforeAll gets 429s.
     faToken = (await loginAs(server, FA_EMAIL, PASSWORD)).accessToken;
     readerToken = (await loginAs(server, READER_EMAIL, PASSWORD)).accessToken;
+    memberToken = (await loginAs(server, MEMBER_EMAIL, PASSWORD)).accessToken;
     noroleToken = (await loginAs(server, NOROLE_EMAIL, PASSWORD)).accessToken;
     adminToken = (await loginAs(server, ADMIN_EMAIL, PASSWORD)).accessToken;
   }, 30_000);
@@ -164,7 +135,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
       expect((filtered.json as { data: Array<{ id: string }> }).data).toEqual([]);
     });
 
-    it("site.list includes the other site for the workspace admin", async () => {
+    it("site.list includes the other site for the workspace owner", async () => {
       const res = await rpcCall(server, "site/list", { name: "AuthZ" }, adminToken);
       expect(res.statusCode).toBe(200);
       const ids = (res.json as { data: Array<{ id: string }> }).data.map((s) => s.id);
@@ -193,7 +164,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
       expect(workcenters.statusCode).toBe(403);
     });
 
-    it("a member with no role assignments sees an empty site directory and no site context", async () => {
+    it("a member with no bucket accesses sees an empty site directory and no site context", async () => {
       // The site directory (picker) stays reachable and empty…
       const res = await rpcCall(server, "site/list", {}, noroleToken);
       expect(res.statusCode).toBe(200);
@@ -230,8 +201,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
     });
   });
 
-  describe("permission tiers within the granted site", () => {
-    it("read-only user can read but not write stations", async () => {
+  describe("tiers within the granted site", () => {
+    it("a crew VIEW member can watch the floor but not write stations", async () => {
       const read = await rpcCall(server, "station/get", { id: stationA.id }, readerToken);
       expect(read.statusCode).toBe(200);
       const write = await rpcCall(server, "station/update", { id: stationA.id, description: "nope" }, readerToken);
@@ -240,12 +211,55 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
       expect(remove.statusCode).toBe(403);
     });
 
-    it("factory administrator can write stations in their site", async () => {
+    it("crew access grants automatic plant membership (common plant reads)", async () => {
+      // Any workcenter access makes the user a member of the site's plant
+      // bucket, so plant-level reads like site.get and workcenter.list work.
+      const site = await rpcCall(server, "site/get", { id: siteA.id }, readerToken);
+      expect(site.statusCode).toBe(200);
+      const wcs = await rpcCall(server, "workcenter/list", { name: "authz-wc" }, readerToken);
+      expect(wcs.statusCode).toBe(200);
+    });
+
+    it("plant VIEW members canNOT read the floor: stations are crew territory", async () => {
+      // FLIP from the key model: plant membership no longer implies floor
+      // visibility — station reads require crew membership (or plant MANAGE
+      // via the cascade).
+      const get = await rpcCall(server, "station/get", { id: stationA.id }, memberToken);
+      expect(get.statusCode).toBe(403);
+      const list = await rpcCall(server, "station/list", { name: "authz-st" }, memberToken);
+      expect(list.statusCode).toBe(403);
+      // The common plant things stay member-readable.
+      const wcs = await rpcCall(server, "workcenter/list", { name: "authz-wc" }, memberToken);
+      expect(wcs.statusCode).toBe(200);
+    });
+
+    it("station update by the cell's crew MANAGE member succeeds", async () => {
+      // FLIP from the key model: a workcenter WRITE grant could not update
+      // stations; crew MANAGE = operate AND configure the cell.
+      // The bucket snapshot is resolved per request, so upgrading the
+      // member's crew access takes effect without a new login.
+      await setWorkcenterAccess(memberMembershipId, wcA.id, "MANAGE");
+      try {
+        const res = await rpcCall(
+          server,
+          "station/update",
+          { id: stationA.id, description: "authz crew manage" },
+          memberToken,
+        );
+        expect(res.statusCode).toBe(200);
+      } finally {
+        await prisma.bucketAccess.deleteMany({
+          where: { membershipId: memberMembershipId, bucket: { workcenterId: wcA.id } },
+        });
+      }
+    });
+
+    it("plant ADMIN can write stations in their site (MANAGE cascades to every cell)", async () => {
       const res = await rpcCall(server, "station/update", { id: stationA.id, description: "authz test" }, faToken);
       expect(res.statusCode).toBe(200);
     });
 
-    it("site-scoped roles cannot create sites (workspace-level action)", async () => {
+    it("plant-scoped tiers cannot create sites (owner-level action)", async () => {
       const res = await rpcCall(server, "site/create", { name: "authz-should-not-exist" }, faToken);
       expect(res.statusCode).toBe(403);
     });
@@ -284,6 +298,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
         data: { siteId: siteA.id, name: "authz-wc-legacy-child", parentId: parent.id },
         select: { id: true },
       });
+      // Raw-prisma workcenter: heal its bucket so the plant-MANAGE cascade
+      // has a container to land on (no bucket = no access, even cascaded).
+      const workspace = await prisma.site.findUniqueOrThrow({
+        where: { id: siteA.id },
+        select: { workspaceId: true },
+      });
+      await ensureWorkcenterBucket(workspace.workspaceId, siteA.id, child.id, "authz-wc-legacy-child");
       const flattened = await rpcCall(server, "workcenter/move", { id: child.id, parentId: null }, faToken);
       expect(flattened.statusCode).toBe(200);
       const after = await prisma.workcenter.findUniqueOrThrow({ where: { id: child.id }, select: { parentId: true } });
@@ -303,13 +324,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("facility authorization (Tier 2)
       expect(stateLogs.statusCode).toBe(403);
     });
 
-    it("changeJob requires job:write", async () => {
+    it("changeJob requires MANAGE at the station's cell", async () => {
       const res = await rpcCall(server, "station/changeJob", { stationId: stationA.id, jobId: null }, readerToken);
       expect(res.statusCode).toBe(403);
     });
 
-    it("assignDowntimeReason resolves the entry's site and enforces status:write scope", async () => {
-      // Entry belongs to site B; the FA grant covers site A only.
+    it("assignDowntimeReason resolves the entry's cell and requires MANAGE there", async () => {
+      // Entry belongs to site B; the plant ADMIN grant covers site A only.
       const outOfScope = await rpcCall(
         server,
         "station/assignDowntimeReason",

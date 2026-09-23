@@ -79,13 +79,13 @@ describe("REST authorization coverage", () => {
       const preHandlers = Array.isArray(route.preHandler) ? route.preHandler : route.preHandler ? [route.preHandler] : [];
       const hasAccessTokenGuard = preHandlers.some((fn) => fn === server.verifyAccessToken);
       const handlerSource = typeof route.handler === "function" ? route.handler.toString() : "";
-      // requirePermission preHandlers are anonymous closures over hasPermission;
+      // requireTier preHandlers are closures over the bucket snapshot;
       // policy-based handlers contain authorize()/replyPolicyDenial() calls.
       const hasPermissionGuard =
-        preHandlers.some((fn) => /hasPermission|requirePermission/.test(fn.toString())) ||
+        preHandlers.some((fn) => /snapshotPlantTier|requireTier|loadBucketSnapshot/.test(fn.toString())) ||
         POLICY_CALL.test(handlerSource) ||
         /\breplyPolicyDenial\b/.test(handlerSource) ||
-        /\bhasPermission\b/.test(handlerSource);
+        /\bloadBucketSnapshot\b/.test(handlerSource);
       for (const method of methods) {
         if (method === "HEAD" || method === "OPTIONS") continue;
         routes.push({ method, url: route.url, hasAccessTokenGuard, hasPermissionGuard });
