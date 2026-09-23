@@ -3,14 +3,14 @@ import { z } from "zod";
 import { countActiveApiTokens, createApiToken, listApiTokens, revokeApiToken } from "@rw/auth/api-tokens";
 import { logEvent } from "@rw/services/audit/index";
 
-import { permissionRequired } from "./middleware.js";
+import { tierRequired } from "./middleware.js";
 import { authorize } from "@rw/auth/iam/policy";
 import { grant } from "./authz.js";
 
 // Workspace integration credentials are settings-level configuration, so token
 // management rides the existing settings:admin permission rather than a new
 // resource (revisit if tokens grow scopes beyond graph:read).
-const apiTokenAdminRequired = permissionRequired("plant:admin");
+const apiTokenAdminRequired = tierRequired("ADMIN");
 
 // Flooding guard: per-procedure rate limits don't apply inside the single oRPC
 // route, so cap standing inventory instead.
@@ -34,7 +34,7 @@ export const create = apiTokenAdminRequired.input(createInputSchema).handler(asy
   const workspaceId = requireWorkspaceId(context.iam);
   // The middleware checks settings:admin at the caller's own site; the token
   // grants access to input.siteId, so require settings:admin THERE as well.
-  grant(await authorize(context.iam, { permission: "plant:admin", scope: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "site", siteId: input.siteId } }));
 
   const activeCount = await countActiveApiTokens(workspaceId);
   if (activeCount >= MAX_ACTIVE_TOKENS_PER_WORKSPACE) {
@@ -67,14 +67,14 @@ export const create = apiTokenAdminRequired.input(createInputSchema).handler(asy
 });
 
 export const list = apiTokenAdminRequired.handler(async ({ context }) => {
-  grant(await authorize(context.iam, { permission: "plant:admin", scope: { kind: "workspace" } }));
+  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "workspace" } }));
 
   const workspaceId = requireWorkspaceId(context.iam);
   return listApiTokens(workspaceId);
 });
 
 export const revoke = apiTokenAdminRequired.input(revokeInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "plant:admin", scope: { kind: "workspace" } }));
+  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "workspace" } }));
 
   const workspaceId = requireWorkspaceId(context.iam);
 

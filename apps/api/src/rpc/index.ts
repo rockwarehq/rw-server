@@ -1,7 +1,7 @@
 import * as device from "./device.js";
 import * as site from "./site.js";
 import * as workcenter from "./workcenter.js";
-import * as workcenterGrant from "./workcenter-grant.js";
+import * as bucket from "./bucket.js";
 import * as label from "./label.js";
 import * as station from "./station.js";
 import * as events from "./events.js";
@@ -49,7 +49,7 @@ export const router = {
   },
   workspace: {
     listMembers: workspace.listMembers,
-    listUserRoles: workspace.listUserRoles,
+    listBuckets: workspace.listBuckets,
   },
   entity: {
     catalog: {
@@ -197,10 +197,11 @@ export const router = {
     move: workcenter.move,
     delete: workcenter.remove,
   },
-  workcenterGrant: {
-    list: workcenterGrant.list,
-    upsert: workcenterGrant.upsert,
-    remove: workcenterGrant.remove,
+  bucket: {
+    list: bucket.list,
+    members: bucket.members,
+    setAccess: bucket.setAccess,
+    removeAccess: bucket.removeAccess,
   },
   label: {
     create: label.create,

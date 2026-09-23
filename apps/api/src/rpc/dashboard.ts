@@ -48,7 +48,7 @@ const listInputSchema = z.object({
  */
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
+    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }),
   );
 
   const result = await dashboard.create(input, workspaceId);
@@ -61,7 +61,7 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
  */
 export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
   );
 
   return dashboard.list({ ...input, siteId: scope.siteId }, scope.workspaceId);
@@ -72,7 +72,7 @@ export const list = userOrDisplayRequired.input(listInputSchema).handler(async (
  */
 export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "production:read", scope: { kind: "dashboard", id: input.id } }),
+    await authorize(context.iam, { tier: "VIEW", scope: { kind: "dashboard", id: input.id } }),
   );
 
   const result = await dashboard.getById(input.id, workspaceId);
@@ -88,7 +88,7 @@ export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ i
  */
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "dashboard", id: input.id } }),
+    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "dashboard", id: input.id } }),
   );
 
   const { id, ...updateData } = input;
@@ -102,7 +102,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
  */
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "dashboard", id: input.id } }),
+    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "dashboard", id: input.id } }),
   );
 
   const result = await dashboard.remove(input.id, workspaceId);

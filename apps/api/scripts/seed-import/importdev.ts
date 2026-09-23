@@ -2,8 +2,7 @@ import "dotenv/config";
 import { createInterface } from "node:readline/promises";
 import prisma from "@rw/db";
 import { hashPassword } from "@rw/auth/password";
-import { findSystemRole } from "@rw/auth/iam/roles";
-import { seedSystemRoles } from "./systemRoles.js";
+import { ensureBuckets } from "./systemRoles.js";
 import config from "./config.js";
 import { IdMap, setDataFile, setDevSeed } from "./utils.js";
 import { importLabels } from "./importLabels.js";
@@ -26,13 +25,11 @@ import * as gatewaySvc from "@rw/services/device/gateway/index";
 
 const DEFAULT_ROLES = ["Operator", "Supervisor", "Lead", "Quality", "Maintenance", "Contractor", "Engineer", "Manager"];
 
-type SystemRoleName = "Company Administrator" | "Plant Admin" | "Plant Member" | "Planner" | "Plant Engineer";
 type SiteKey = "primary" | "secondary";
 
-interface RoleAssignmentSpec {
-  roleName: SystemRoleName;
-  scope: "WORKSPACE" | "SITE";
-  site?: SiteKey;
+interface PlantAccessSpec {
+  site: SiteKey;
+  tier: "VIEW" | "MANAGE" | "ADMIN";
 }
 
 interface CustomerDevUser {
@@ -43,7 +40,8 @@ interface CustomerDevUser {
   description: string;
   status?: "ACTIVE" | "DISABLED";
   createMembership?: boolean;
-  assignments: readonly RoleAssignmentSpec[];
+  owner?: boolean;
+  accesses: readonly PlantAccessSpec[];
 }
 
 const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
@@ -53,48 +51,40 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     lastName: "Admin",
     persona: "Plant Admin",
     description: "Plant administrator with full access to all plant data, settings, and user management.",
-    assignments: [{ roleName: "Plant Admin", scope: "SITE", site: "primary" }],
+    accesses: [{ site: "primary", tier: "ADMIN" }],
   },
   {
     email: "readonly@example.com",
     firstName: "Plant",
     lastName: "User",
     persona: "Plant Member",
-    description: "Plant member with read access to all plant data.",
-    assignments: [{ roleName: "Plant Member", scope: "SITE", site: "primary" }],
+    description: "Plant member: reads the plant's common things, no floor access without a cell bucket.",
+    accesses: [{ site: "primary", tier: "VIEW" }],
   },
   {
     email: "planner@example.com",
     firstName: "Order",
     lastName: "Planner",
-    persona: "Planner",
-    description: "Manages orders, customers and scheduling. Production visibility follows workcenter access.",
-    assignments: [{ roleName: "Planner", scope: "SITE", site: "primary" }],
-  },
-  {
-    email: "plantengineer@example.com",
-    firstName: "Plant",
-    lastName: "Engineer",
-    persona: "Plant Engineer",
-    description: "Full production, planning and technical setup authority for the primary plant.",
-    assignments: [{ roleName: "Plant Engineer", scope: "SITE", site: "primary" }],
+    persona: "Plant Manager",
+    description: "Manages the plant and everything in it — planning, catalogs, equipment, every cell.",
+    accesses: [{ site: "primary", tier: "MANAGE" }],
   },
   {
     email: "coadmin@example.com",
     firstName: "Co",
     lastName: "Administrator",
-    persona: "Co-Administrator",
-    description: "Second workspace-level admin for testing multi-admin scenarios (mutual disable, ownership transfer).",
-    assignments: [{ roleName: "Company Administrator", scope: "WORKSPACE" }],
+    persona: "Co-Owner",
+    description: "Second workspace owner for testing multi-owner scenarios (mutual disable, ownership transfer).",
+    owner: true,
+    accesses: [],
   },
   {
     email: "norole@example.com",
     firstName: "No",
     lastName: "Role",
-    persona: "Member without Role",
-    description:
-      "Active workspace member with no role assignment — verifies permission denial for half-onboarded users.",
-    assignments: [],
+    persona: "Member without Access",
+    description: "Active workspace member with no bucket access — verifies denial for half-onboarded users.",
+    accesses: [],
   },
   {
     email: "nomember@example.com",
@@ -103,7 +93,7 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     persona: "User without Membership",
     description: "Active user with no workspace membership — verifies login rejection at the membership check.",
     createMembership: false,
-    assignments: [],
+    accesses: [],
   },
   {
     email: "disabled@example.com",
@@ -113,7 +103,7 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     description:
       "Plant user with DISABLED status — verifies login rejection and session revocation for disabled accounts.",
     status: "DISABLED",
-    assignments: [{ roleName: "Plant Member", scope: "SITE", site: "primary" }],
+    accesses: [{ site: "primary", tier: "VIEW" }],
   },
   {
     email: "engineer@example.com",
@@ -121,7 +111,7 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     lastName: "User",
     persona: "Site B Plant Admin",
     description: "Plant admin on the secondary site only — verifies cross-site isolation.",
-    assignments: [{ roleName: "Plant Admin", scope: "SITE", site: "secondary" }],
+    accesses: [{ site: "secondary", tier: "ADMIN" }],
   },
   {
     email: "mixed@example.com",
@@ -129,10 +119,10 @@ const CUSTOMER_DEV_USERS: readonly CustomerDevUser[] = [
     lastName: "Roles",
     persona: "Multi-site User",
     description:
-      "Plant Admin on the primary site and Plant Member on the secondary site — tests per-site role differentiation.",
-    assignments: [
-      { roleName: "Plant Admin", scope: "SITE", site: "primary" },
-      { roleName: "Plant Member", scope: "SITE", site: "secondary" },
+      "Plant admin on the primary site and plain member on the secondary site — tests per-site differentiation.",
+    accesses: [
+      { site: "primary", tier: "ADMIN" },
+      { site: "secondary", tier: "VIEW" },
     ],
   },
 ];
@@ -166,37 +156,28 @@ async function upsertSeedUser(input: {
   });
 }
 
-async function setRoleAssignments(input: {
+async function setBucketAccesses(input: {
   membershipId: string;
-  workspaceId: string;
   siteIds: Record<SiteKey, string>;
-  assignments: readonly RoleAssignmentSpec[];
+  accesses: readonly PlantAccessSpec[];
 }) {
-  await prisma.roleAssignment.deleteMany({ where: { membershipId: input.membershipId } });
-  for (const a of input.assignments) {
-    if (a.scope === "SITE" && !a.site) {
-      throw new Error(`${a.roleName} requires a site key`);
-    }
-    const role = await findSystemRole(input.workspaceId, a.roleName, a.scope);
-    if (!role) {
-      throw new Error(`${a.roleName} system role missing for workspace ${input.workspaceId}`);
-    }
-    await prisma.roleAssignment.create({
-      data: {
-        membershipId: input.membershipId,
-        roleId: role.id,
-        siteId: a.scope === "SITE" ? input.siteIds[a.site as SiteKey] : null,
-      },
+  await prisma.bucketAccess.deleteMany({ where: { membershipId: input.membershipId } });
+  for (const a of input.accesses) {
+    const plant = await prisma.bucket.findFirstOrThrow({
+      where: { siteId: input.siteIds[a.site], kind: "PLANT" },
+      select: { id: true },
+    });
+    await prisma.bucketAccess.create({
+      data: { bucketId: plant.id, membershipId: input.membershipId, tier: a.tier },
     });
   }
 }
 
 function describeAssignments(spec: CustomerDevUser): string {
   if (spec.createMembership === false) return "No workspace membership";
-  if (spec.assignments.length === 0) return "Member, no role";
-  const parts = spec.assignments.map((a) =>
-    a.scope === "WORKSPACE" ? `Workspace ${a.roleName}` : `Site ${a.site} ${a.roleName}`,
-  );
+  if (spec.owner) return "Workspace owner";
+  if (spec.accesses.length === 0) return "Member, no access";
+  const parts = spec.accesses.map((a) => `Site ${a.site} ${a.tier}`);
   const summary = parts.join(" + ");
   return spec.status === "DISABLED" ? `${summary} (DISABLED)` : summary;
 }
@@ -215,22 +196,16 @@ async function seedDevAccess(
     firstName: "Company",
     lastName: "Administrator",
   });
-  const adminMembership = await prisma.workspaceMembership.upsert({
+  await prisma.workspaceMembership.upsert({
     where: { userId_workspaceId: { userId: admin.id, workspaceId } },
-    update: {},
-    create: { userId: admin.id, workspaceId },
-  });
-  await setRoleAssignments({
-    membershipId: adminMembership.id,
-    workspaceId,
-    siteIds,
-    assignments: [{ roleName: "Company Administrator", scope: "WORKSPACE" }],
+    update: { workspaceRole: "OWNER" },
+    create: { userId: admin.id, workspaceId, workspaceRole: "OWNER" },
   });
   seededUsers.push({
     email: admin.email,
-    persona: "Company Administrator",
-    description: "Company-level administrator with billing visibility and full operational access across all sites.",
-    access: "Workspace Company Administrator",
+    persona: "Workspace Owner",
+    description: "Reserved ownership: bypasses buckets, holds ownership-only operations.",
+    access: "Workspace owner",
   });
 
   for (const userSpec of CUSTOMER_DEV_USERS) {
@@ -247,14 +222,13 @@ async function seedDevAccess(
     } else {
       const membership = await prisma.workspaceMembership.upsert({
         where: { userId_workspaceId: { userId: user.id, workspaceId } },
-        update: {},
-        create: { userId: user.id, workspaceId },
+        update: { workspaceRole: userSpec.owner ? "OWNER" : "MEMBER" },
+        create: { userId: user.id, workspaceId, workspaceRole: userSpec.owner ? "OWNER" : "MEMBER" },
       });
-      await setRoleAssignments({
+      await setBucketAccesses({
         membershipId: membership.id,
-        workspaceId,
         siteIds,
-        assignments: userSpec.assignments,
+        accesses: userSpec.accesses,
       });
     }
 
@@ -294,7 +268,7 @@ async function bootstrap() {
   });
   console.log(`  Workspace: ${workspace.name} (${workspace.id})`);
 
-  await seedSystemRoles(workspace.id);
+  await ensureBuckets();
 
   const adminEmail = process.env.ADMIN_EMAIL || "admin@example.com";
   const devUserPassword = process.env.DEV_USER_PASSWORD || process.env.ADMIN_PASSWORD || "changeme123";

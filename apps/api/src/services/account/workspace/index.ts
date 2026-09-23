@@ -23,16 +23,17 @@ export {
   addMember,
   removeMember,
   removeSiteAccess,
-  updateRole,
+  updateAccess,
   listMembers,
   getUserWorkspaces,
   getUserAccess,
+  getWorkspaceAccessSummaries,
   isMember,
   countMembers,
-  findSystemRoleOrThrow,
-  type UpdateRoleInput,
-  type UpdateRoleResult,
-  type WorkspaceMembership,
+  type MemberAccessSummary,
+  type MemberBucketAccess,
+  type UpdateAccessInput,
+  type UpdateAccessResult,
 } from "./members.js";
 
 export {

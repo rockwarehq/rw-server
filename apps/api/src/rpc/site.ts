@@ -34,12 +34,6 @@ const updateSettingsInputSchema = z.object({
   id: z.uuid(),
   settings: z.object({
     orderAutoComplete: z.boolean().optional(),
-    // Gated (like the rest of settings) on configuration:write — gating this one
-    // key on configuration:write would be theater while the generic site.update
-    // writes arbitrary attrs under configuration:write. WRITE workcenter grants
-    // confer configuration:write only workcenter-scoped, so grant holders cannot
-    // flip it.
-    baseWorkcenterAccess: z.enum(["ALL", "GRANTS_REQUIRED"]).optional(),
   }),
 });
 
@@ -57,9 +51,7 @@ const listInputSchema = z.object({
  * Create a new site
  */
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "workspace" } }),
-  );
+  const scope = grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "workspace" } }));
 
   const result = await site.create({ ...input, workspaceId: scope.workspaceId });
   return unwrap(result);
@@ -83,16 +75,7 @@ export const list = authRequired.input(listInputSchema).handler(async ({ input, 
  * Get site by ID
  */
 export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  // Shared reference read: production OR planning visibility both qualify.
-  const production = await authorize(context.iam, {
-    permission: "production:read",
-    scope: { kind: "site", siteId: input.id },
-  });
-  const scope = grant(
-    production.ok
-      ? production
-      : await authorize(context.iam, { permission: "planning:read", scope: { kind: "site", siteId: input.id } }),
-  );
+  const scope = grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId: input.id } }));
 
   const result = await site.getById(input.id, scope.workspaceId);
   if (!result) {
@@ -120,7 +103,7 @@ export const tree = userOrDisplayRequired.input(treeInputSchema).handler(async (
 
     const scope = grant(
       await authorize(context.iam, {
-        permission: "production:read",
+        tier: "VIEW",
         scope: { kind: "site", siteId: input.siteId ?? ownSiteId },
       }),
     );
@@ -135,16 +118,7 @@ export const tree = userOrDisplayRequired.input(treeInputSchema).handler(async (
 
   // If siteId provided, return single site tree
   if (input.siteId) {
-    // Shared reference read: production OR planning visibility both qualify.
-    const production = await authorize(context.iam, {
-      permission: "production:read",
-      scope: { kind: "site", siteId: input.siteId },
-    });
-    const scope = grant(
-      production.ok
-        ? production
-        : await authorize(context.iam, { permission: "planning:read", scope: { kind: "site", siteId: input.siteId } }),
-    );
+    const scope = grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId: input.siteId } }));
     const result = await site.getSiteTree(input.siteId, scope.workspaceId);
     if (result.error !== undefined) throwServiceError(result);
     return result.data;
@@ -159,16 +133,7 @@ export const tree = userOrDisplayRequired.input(treeInputSchema).handler(async (
  * Read the typed site settings (fulfillment automation, …).
  */
 export const getSettings = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  // Shared reference read: production OR planning visibility both qualify.
-  const production = await authorize(context.iam, {
-    permission: "production:read",
-    scope: { kind: "site", siteId: input.id },
-  });
-  grant(
-    production.ok
-      ? production
-      : await authorize(context.iam, { permission: "planning:read", scope: { kind: "site", siteId: input.id } }),
-  );
+  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId: input.id } }));
 
   return unwrap(await site.getSiteSettings(input.id));
 });
@@ -177,10 +142,7 @@ export const getSettings = authRequired.input(idInputSchema).handler(async ({ in
  * Update typed site settings — merges only known keys into Site.attrs.
  */
 export const updateSettings = authRequired.input(updateSettingsInputSchema).handler(async ({ input, context }) => {
-  // baseWorkcenterAccess is an ACCESS-CONTROL policy (who sees the floor),
-  // so changing it is plant administration, not technical setup.
-  const permission = input.settings.baseWorkcenterAccess !== undefined ? "plant:admin" : "configuration:write";
-  grant(await authorize(context.iam, { permission, scope: { kind: "site", siteId: input.id } }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.id } }));
 
   return unwrap(await site.updateSiteSettings(input.id, input.settings));
 });
@@ -190,9 +152,7 @@ export const updateSettings = authRequired.input(updateSettingsInputSchema).hand
  */
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
-  const scope = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: id } }),
-  );
+  const scope = grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: id } }));
 
   const result = await site.update(id, updateData, scope.workspaceId);
   if (result.error !== undefined) throwServiceError(result);
@@ -203,9 +163,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
  * Delete site
  */
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.id } }),
-  );
+  const scope = grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.id } }));
 
   const result = await site.remove(input.id, scope.workspaceId);
   // HAS_WORKCENTERS / HAS_GATEWAYS / HAS_DATASOURCES map to CONFLICT via the shared table
@@ -235,7 +193,7 @@ const uploadLogoInputSchema = z.object({
  */
 export const uploadLogo = authRequired.input(uploadLogoInputSchema).handler(async ({ input, context }) => {
   const { id, ...upload } = input;
-  const scope = grant(await authorize(context.iam, { permission: "plant:admin", scope: { kind: "site", siteId: id } }));
+  const scope = grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "site", siteId: id } }));
 
   return unwrap(await site.createLogoUpload(id, upload, scope.workspaceId));
 });
@@ -244,9 +202,7 @@ export const uploadLogo = authRequired.input(uploadLogoInputSchema).handler(asyn
  * Remove the site logo (idempotent)
  */
 export const removeLogo = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "plant:admin", scope: { kind: "site", siteId: input.id } }),
-  );
+  const scope = grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "site", siteId: input.id } }));
 
   return unwrap(await site.removeLogo(input.id, scope.workspaceId));
 });
@@ -260,9 +216,7 @@ const siteIdInputSchema = z.object({
  * Returns all gateways with their assigned datasources (all statuses)
  */
 export const deviceTree = authRequired.input(siteIdInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "configuration:read", scope: { kind: "site", siteId: input.siteId } }),
-  );
+  const scope = grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await site.getDeviceTree(input.siteId, scope.workspaceId);
   if (result.error !== undefined) throwServiceError(result);

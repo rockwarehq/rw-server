@@ -338,7 +338,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const body = request.body;
       const auth = await authorize(request.iam, {
-        permission: "configuration:write",
+        tier: "MANAGE",
         scope: { kind: "site", siteId: request.body.siteId },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -365,7 +365,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const { gatewayId, siteId, driver, type, status, name, unassigned, limit = 50, offset = 0 } = request.query;
-      const scope = await authorizeList(request.iam, { permission: "configuration:read", requestedSiteId: siteId });
+      const scope = await authorizeList(request.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: siteId });
       if (!scope.ok) return replyPolicyDenial(reply, scope);
 
       return datasource.list({
@@ -398,7 +398,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const { id } = request.params;
       const auth = await authorize(request.iam, {
-        permission: "configuration:read",
+        tier: "VIEW",
         scope: { kind: "datasource", id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -431,7 +431,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const { id } = request.params;
       const body = request.body;
       const auth = await authorize(request.iam, {
-        permission: "configuration:write",
+        tier: "MANAGE",
         scope: { kind: "datasource", id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -462,7 +462,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const { id } = request.params;
       const auth = await authorize(request.iam, {
-        permission: "configuration:write",
+        tier: "MANAGE",
         scope: { kind: "datasource", id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -495,14 +495,14 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const { id } = request.params;
       const { gatewayId } = request.body;
       const auth = await authorize(request.iam, {
-        permission: "configuration:write",
+        tier: "MANAGE",
         scope: { kind: "datasource", id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
       if (gatewayId) {
-        // Attaching to a gateway requires configuration:write for the gateway's site too.
+        // Attaching to a gateway requires MANAGE for the gateway's site too.
         const target = await authorize(request.iam, {
-          permission: "configuration:write",
+          tier: "MANAGE",
           scope: { kind: "gateway", id: gatewayId },
         });
         if (!target.ok) return replyPolicyDenial(reply, target);
@@ -541,7 +541,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const body = request.body;
 
       const auth = await authorize(request.iam, {
-        permission: "configuration:write",
+        tier: "MANAGE",
         scope: { kind: "datasource", id: datasourceId },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -574,7 +574,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const { datasourceId } = request.params;
       const auth = await authorize(request.iam, {
-        permission: "configuration:read",
+        tier: "VIEW",
         scope: { kind: "datasource", id: datasourceId },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -612,7 +612,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const body = request.body;
 
       const auth = await authorize(request.iam, {
-        permission: "configuration:write",
+        tier: "MANAGE",
         scope: { kind: "datasource", id: datasourceId },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -648,7 +648,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const { groupId, ungrouped } = request.query;
 
       const auth = await authorize(request.iam, {
-        permission: "configuration:read",
+        tier: "VIEW",
         scope: { kind: "datasource", id: datasourceId },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -682,7 +682,7 @@ export default async function datasources(fastify: FastifyTypedInstance) {
       const { points } = request.body;
 
       const auth = await authorize(request.iam, {
-        permission: "configuration:write",
+        tier: "MANAGE",
         scope: { kind: "datasource", id: datasourceId },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);

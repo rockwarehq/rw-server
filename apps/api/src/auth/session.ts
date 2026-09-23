@@ -12,7 +12,7 @@ import {
   REFRESH_REUSE_GRACE_MS,
   type AccessTokenPayload,
 } from "@rw/auth/tokens";
-import { listAccessibleSites } from "@rw/auth/iam/index";
+import { loadBucketSnapshot, snapshotVisibleSites } from "@rw/auth/iam/index";
 
 export interface LoginResult {
   [x: string]: unknown;
@@ -110,7 +110,14 @@ async function createUserAccessTokenForContext(
 
   tokenPayload.workspaceId = workspaceId;
 
-  const sites = await listAccessibleSites(user.id, workspaceId);
+  // Membership visibility: the sites where the user holds any bucket.
+  const snapshot = await loadBucketSnapshot(user.id, workspaceId);
+  const visible = snapshot ? snapshotVisibleSites(snapshot) : { all: false as const, siteIds: [] };
+  const sites = await prisma.site.findMany({
+    where: { workspaceId, ...(visible.all ? {} : { id: { in: visible.siteIds } }) },
+    select: { id: true, name: true },
+    orderBy: { name: "asc" },
+  });
   if (options.siteId) {
     const site = sites.find((item) => item.id === options.siteId);
     if (!site) {

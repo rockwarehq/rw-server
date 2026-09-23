@@ -85,7 +85,7 @@ const datasourceListInputSchema = z.object({
  */
 export const gatewayCreate = authRequired.input(gatewayCreateInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
+    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }),
   );
 
   const result = await gateway.create({ ...input, workspaceId });
@@ -99,13 +99,13 @@ export const gatewayCreate = authRequired.input(gatewayCreateInputSchema).handle
 export const gatewayList = authRequired.input(gatewayListInputSchema).handler(async ({ input, context }) => {
   if (input.unassigned) {
     // Workspace pool: claimed hardware awaiting site assignment — visible to
-    // anyone who could assign it (configuration:write held somewhere).
-    const pool = grant(await authorize(context.iam, { permission: "configuration:write", scope: { kind: "anySite" } }));
+    // anyone who could assign it (MANAGE held somewhere).
+    const pool = grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "anySite" } }));
     return gateway.list({ workspaceId: pool.workspaceId, unassigned: true });
   }
 
   const scope = grant(
-    await authorizeList(context.iam, { permission: "configuration:read", requestedSiteId: input.siteId }),
+    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
   );
   return gateway.list(scopeFilter(scope));
 });
@@ -115,7 +115,7 @@ export const gatewayList = authRequired.input(gatewayListInputSchema).handler(as
  */
 export const gatewayGet = authRequired.input(gatewayIdInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "configuration:read", scope: { kind: "gateway", id: input.id } }),
+    await authorize(context.iam, { tier: "VIEW", scope: { kind: "gateway", id: input.id } }),
   );
 
   // gateway.getById only emits WORKSPACE_MISMATCH, which the shared table maps
@@ -133,14 +133,12 @@ export const gatewayGet = authRequired.input(gatewayIdInputSchema).handler(async
  */
 export const gatewayUpdate = authRequired.input(gatewayUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
-  const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "gateway", id } }),
-  );
+  const { workspaceId } = grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "gateway", id } }));
   if (input.siteId) {
-    // Moving a gateway requires configuration:write at the TARGET site too.
+    // Moving a gateway requires MANAGE at the TARGET site too.
     grant(
       await authorize(context.iam, {
-        permission: "configuration:write",
+        tier: "MANAGE",
         scope: { kind: "site", siteId: input.siteId },
       }),
     );
@@ -156,7 +154,7 @@ export const gatewayUpdate = authRequired.input(gatewayUpdateInputSchema).handle
  */
 export const gatewayDelete = authRequired.input(gatewayIdInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "gateway", id: input.id } }),
+    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "gateway", id: input.id } }),
   );
 
   const result = await gateway.remove(input.id, workspaceId);
@@ -173,7 +171,7 @@ export const gatewayDelete = authRequired.input(gatewayIdInputSchema).handler(as
  */
 export const datasourceCreate = authRequired.input(datasourceCreateInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
+    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }),
   );
 
   const result = await datasource.create({ ...input, workspaceId });
@@ -197,9 +195,7 @@ export const datasourceCreate = authRequired.input(datasourceCreateInputSchema).
  */
 export const datasourceUpdate = authRequired.input(datasourceUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, ...updateData } = input;
-  const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "datasource", id } }),
-  );
+  const { workspaceId } = grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "datasource", id } }));
 
   const result = await datasource.update(id, updateData, workspaceId);
 
@@ -219,7 +215,7 @@ export const datasourceUpdate = authRequired.input(datasourceUpdateInputSchema).
  */
 export const datasourceDelete = authRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "datasource", id: input.id } }),
+    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "datasource", id: input.id } }),
   );
 
   const result = await datasource.remove(input.id, workspaceId);
@@ -240,7 +236,7 @@ export const datasourceDelete = authRequired.input(datasourceIdInputSchema).hand
  */
 export const datasourcePublish = authRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "datasource", id: input.id } }),
+    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "datasource", id: input.id } }),
   );
 
   const result = await datasource.publish(input.id, workspaceId);
@@ -262,7 +258,7 @@ export const datasourcePublish = authRequired.input(datasourceIdInputSchema).han
  */
 export const datasourceUnpublish = authRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "datasource", id: input.id } }),
+    await authorize(context.iam, { tier: "MANAGE", scope: { kind: "datasource", id: input.id } }),
   );
 
   const result = await datasource.unpublish(input.id, workspaceId);
@@ -283,7 +279,7 @@ export const datasourceUnpublish = authRequired.input(datasourceIdInputSchema).h
  */
 export const datasourceList = authRequired.input(datasourceListInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorizeList(context.iam, { permission: "configuration:read", requestedSiteId: input.siteId }),
+    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
   );
 
   // Filter by workspace via site relationship
@@ -295,7 +291,7 @@ export const datasourceList = authRequired.input(datasourceListInputSchema).hand
  */
 export const datasourceGet = authRequired.input(datasourceIdInputSchema).handler(async ({ input, context }) => {
   const { workspaceId } = grant(
-    await authorize(context.iam, { permission: "configuration:read", scope: { kind: "datasource", id: input.id } }),
+    await authorize(context.iam, { tier: "VIEW", scope: { kind: "datasource", id: input.id } }),
   );
 
   const result = await datasource.getById(input.id);

@@ -56,6 +56,8 @@ export async function create(input: CreateWorkcenterInput) {
       description,
       attrs: attrs ?? {},
       siteId,
+      // The cell's access container is born with the cell.
+      bucket: { create: { workspaceId: site.workspaceId, siteId, kind: "WORKCENTER", name } },
     },
     include: {
       site: {

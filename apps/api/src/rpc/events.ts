@@ -189,9 +189,9 @@ export const stream = authRequired
   .output(eventIterator(streamEventSchema))
   .handler(async function* ({ context, input, signal }) {
     // The event envelope carries no siteId, so the stream is gated on
-    // holding facility:read somewhere; authorization happens at subscribe
+    // holding VIEW somewhere; authorization happens at subscribe
     // time only (no mid-stream re-check — known limitation).
-    const scope = grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "anySite" } }));
+    const scope = grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "anySite" } }));
     const workspaceId = scope.workspaceId;
 
     const requestedTypes = new Set(input.types ?? STREAM_EVENT_TYPES);

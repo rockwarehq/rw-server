@@ -185,9 +185,7 @@ const listItemsInputSchema = z.object({
  * Create a new tool
  */
 export const toolCreate = authRequired.input(toolCreateInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:write", scope: { kind: "site", siteId: input.siteId } }),
-  );
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }));
 
   return unwrap(await tool.create(input));
 });
@@ -197,7 +195,7 @@ export const toolCreate = authRequired.input(toolCreateInputSchema).handler(asyn
  */
 export const toolList = authRequired.input(toolListInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
   );
 
   return tool.list({ ...input, ...scopeFilter(scope) });
@@ -207,7 +205,7 @@ export const toolList = authRequired.input(toolListInputSchema).handler(async ({
  * Get tool by ID
  */
 export const toolGet = authRequired.input(toolIdInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "tool", id: input.id } }));
+  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "tool", id: input.id } }));
 
   return unwrap(await tool.getById(input.id), { notFoundMessage: "Tool not found" });
 });
@@ -216,7 +214,7 @@ export const toolGet = authRequired.input(toolIdInputSchema).handler(async ({ in
  * Update tool (creates new version version)
  */
 export const toolUpdate = authRequired.input(toolUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:write", scope: { kind: "tool", id: input.id } }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "tool", id: input.id } }));
 
   const { id, ...updateData } = input;
   return unwrap(await tool.update(id, updateData), { overrides: jobOverrides });
@@ -226,7 +224,7 @@ export const toolUpdate = authRequired.input(toolUpdateInputSchema).handler(asyn
  * Delete tool (soft delete)
  */
 export const toolRemove = authRequired.input(toolIdInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:admin", scope: { kind: "tool", id: input.id } }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "tool", id: input.id } }));
 
   const result = await tool.remove(input.id);
   if (result.error) throwServiceError(result, jobOverrides);
@@ -241,7 +239,7 @@ export const toolRemove = authRequired.input(toolIdInputSchema).handler(async ({
  * Add a cavity to a tool
  */
 export const toolAddCavity = authRequired.input(addCavityInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:write", scope: { kind: "tool", id: input.toolId } }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "tool", id: input.toolId } }));
 
   return unwrap(await tool.addCavity(input));
 });
@@ -250,9 +248,7 @@ export const toolAddCavity = authRequired.input(addCavityInputSchema).handler(as
  * Update a cavity (creates new version version)
  */
 export const toolUpdateCavity = authRequired.input(updateCavityInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:write", scope: { kind: "toolCavity", id: input.cavityId } }),
-  );
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "toolCavity", id: input.cavityId } }));
 
   const { cavityId, ...updateData } = input;
   return unwrap(await tool.updateCavity(cavityId, updateData), { overrides: jobOverrides });
@@ -262,9 +258,7 @@ export const toolUpdateCavity = authRequired.input(updateCavityInputSchema).hand
  * Remove a cavity (soft delete)
  */
 export const toolRemoveCavity = authRequired.input(cavityIdInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:write", scope: { kind: "toolCavity", id: input.cavityId } }),
-  );
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "toolCavity", id: input.cavityId } }));
 
   const result = await tool.removeCavity(input.cavityId);
   if (result.error) throwServiceError(result, jobOverrides);
@@ -275,7 +269,7 @@ export const toolRemoveCavity = authRequired.input(cavityIdInputSchema).handler(
  * List cavities for a tool
  */
 export const toolListCavities = authRequired.input(listCavitiesInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "tool", id: input.toolId } }));
+  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "tool", id: input.toolId } }));
 
   return unwrap(await tool.listCavities(input.toolId));
 });
@@ -288,9 +282,7 @@ export const toolListCavities = authRequired.input(listCavitiesInputSchema).hand
  * Create a new job
  */
 export const create = authRequired.input(jobCreateInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:write", scope: { kind: "site", siteId: input.siteId } }),
-  );
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }));
 
   return unwrap(await job.create(input));
 });
@@ -300,7 +292,7 @@ export const create = authRequired.input(jobCreateInputSchema).handler(async ({ 
  */
 export const list = userOrDisplayRequired.input(jobListInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
   );
 
   return job.list({ ...input, ...scopeFilter(scope) });
@@ -310,7 +302,7 @@ export const list = userOrDisplayRequired.input(jobListInputSchema).handler(asyn
  * Get job by ID
  */
 export const get = userOrDisplayRequired.input(jobIdInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "job", id: input.id } }));
+  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "job", id: input.id } }));
 
   return unwrap(await job.getById(input.id), { notFoundMessage: "Job not found" });
 });
@@ -319,7 +311,7 @@ export const get = userOrDisplayRequired.input(jobIdInputSchema).handler(async (
  * Update job (creates new version version)
  */
 export const update = authRequired.input(jobUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:write", scope: { kind: "job", id: input.id } }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "job", id: input.id } }));
 
   const { id, ...updateData } = input;
   return unwrap(await job.update(id, updateData), { overrides: jobOverrides });
@@ -329,7 +321,7 @@ export const update = authRequired.input(jobUpdateInputSchema).handler(async ({ 
  * Delete job (soft delete)
  */
 export const remove = authRequired.input(jobIdInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:admin", scope: { kind: "job", id: input.id } }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "job", id: input.id } }));
 
   const result = await job.remove(input.id);
   if (result.error) throwServiceError(result);
@@ -344,7 +336,7 @@ export const remove = authRequired.input(jobIdInputSchema).handler(async ({ inpu
  * Add a tool to a job
  */
 export const addTool = authRequired.input(addToolInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:write", scope: { kind: "job", id: input.jobId } }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "job", id: input.jobId } }));
 
   return unwrap(await job.addTool(input));
 });
@@ -353,7 +345,7 @@ export const addTool = authRequired.input(addToolInputSchema).handler(async ({ i
  * Remove a tool from a job
  */
 export const removeTool = authRequired.input(removeToolInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:write", scope: { kind: "job", id: input.jobId } }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "job", id: input.jobId } }));
 
   const result = await job.removeTool(input.jobId, input.toolId);
   if (result.error) throwServiceError(result);
@@ -364,7 +356,7 @@ export const removeTool = authRequired.input(removeToolInputSchema).handler(asyn
  * List tools linked to a job
  */
 export const listTools = userOrDisplayRequired.input(listToolsInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "job", id: input.jobId } }));
+  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "job", id: input.jobId } }));
 
   return unwrap(await job.listTools(input.jobId));
 });
@@ -377,7 +369,7 @@ export const listTools = userOrDisplayRequired.input(listToolsInputSchema).handl
  * Add a product (item) to a job
  */
 export const addItem = authRequired.input(addItemInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:write", scope: { kind: "job", id: input.jobId } }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "job", id: input.jobId } }));
 
   return unwrap(await job.addItem(input));
 });
@@ -386,9 +378,7 @@ export const addItem = authRequired.input(addItemInputSchema).handler(async ({ i
  * Update a job item
  */
 export const updateItem = authRequired.input(updateItemInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:write", scope: { kind: "jobProduct", id: input.itemId } }),
-  );
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "jobProduct", id: input.itemId } }));
 
   const { itemId, ...updateData } = input;
   return unwrap(await job.updateItem(itemId, updateData), { overrides: jobOverrides });
@@ -398,9 +388,7 @@ export const updateItem = authRequired.input(updateItemInputSchema).handler(asyn
  * Remove a job item (soft delete)
  */
 export const removeItem = authRequired.input(itemIdInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:write", scope: { kind: "jobProduct", id: input.itemId } }),
-  );
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "jobProduct", id: input.itemId } }));
 
   const result = await job.removeItem(input.itemId);
   if (result.error) throwServiceError(result);
@@ -411,7 +399,7 @@ export const removeItem = authRequired.input(itemIdInputSchema).handler(async ({
  * List items for a job
  */
 export const listItems = userOrDisplayRequired.input(listItemsInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "job", id: input.jobId } }));
+  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "job", id: input.jobId } }));
 
   return unwrap(await job.listItems(input.jobId));
 });
@@ -425,7 +413,7 @@ const jobsByProductIdsInputSchema = z.object({
 });
 
 export const jobsByProductIds = authRequired.input(jobsByProductIdsInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "production:read", scope: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await job.jobsByProductIds(input.siteId, input.productIds);
   return result.data;

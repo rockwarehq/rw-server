@@ -1,11 +1,11 @@
 import "dotenv/config";
 import prisma from "@rw/db";
 import { hashPassword } from "@rw/auth/password";
-import { findSystemRole } from "@rw/auth/iam/roles";
-import { seedSystemRoles } from "./seed-system-roles.js";
+import { ensureBuckets } from "./seed-buckets.js";
 
-// Bootstrap a tenant database with the default workspace, RBAC system roles,
-// a Company Administrator user, and the default site + employee roles.
+// Bootstrap a tenant database with the default workspace, an owner user,
+// and the default site + employee roles. Access buckets are created with
+// their sites/workcenters; there are no role bundles to seed.
 
 // Every site gets exactly one system "Scrap" disposition: seeded, protected
 // (no rename/removal — see inventory/disposition.ts), and resolved by the
@@ -43,21 +43,15 @@ async function seed() {
   // tenant DB has been seeded — only an empty DB gets bootstrapped.
   const existingUsers = await prisma.user.count();
   if (existingUsers > 0) {
-    // Role bundles are code-owned: refresh them for every workspace on every
-    // deploy so bundle changes reach live tenants (idempotent upserts). The
-    // Scrap disposition is likewise guaranteed per site. Only the rest of the
-    // bootstrap (admin user, site, employee roles) is skipped.
-    const workspaces = await prisma.workspace.findMany({ select: { id: true, name: true } });
-    for (const ws of workspaces) {
-      await seedSystemRoles(ws.id);
-    }
+    // Buckets and the Scrap disposition are guaranteed on every deploy. The
+    // rest of the bootstrap (owner user, site, employee roles) is skipped.
+    await ensureBuckets();
     const allSites = await prisma.site.findMany({ select: { id: true } });
     for (const site of allSites) {
       await ensureScrapDisposition(site.id);
     }
     console.log(
-      `Seed: refreshed system roles for ${workspaces.length} workspace(s) and ` +
-        `Scrap dispositions for ${allSites.length} site(s); ` +
+      `Seed: ensured Scrap dispositions for ${allSites.length} site(s); ` +
         `${existingUsers} user(s) already exist — skipping bootstrap.`,
     );
     return;
@@ -93,10 +87,6 @@ async function seed() {
 
   console.log(`Created workspace: ${workspace.name} (${workspace.id})`);
 
-  // Seed RBAC system roles for the workspace.
-  await seedSystemRoles(workspace.id);
-  console.log(`Seeded RBAC system roles for ${workspace.name}`);
-
   // Create admin user
   const adminEmail = process.env.ADMIN_EMAIL || "admin@example.com";
   const adminPassword = process.env.ADMIN_PASSWORD || "changeme123";
@@ -116,31 +106,15 @@ async function seed() {
 
   console.log(`Created admin user: ${admin.email} (${admin.id})`);
 
-  // Add admin as a workspace member + grant the Company Administrator RoleAssignment.
-  // Upserts so seed can re-run safely.
-  const membership = await prisma.workspaceMembership.upsert({
+  // Add admin as the workspace OWNER (reserved ownership; bypasses
+  // buckets). Upserts so seed can re-run safely.
+  await prisma.workspaceMembership.upsert({
     where: { userId_workspaceId: { userId: admin.id, workspaceId: workspace.id } },
-    update: {},
-    create: { userId: admin.id, workspaceId: workspace.id },
+    update: { workspaceRole: "OWNER" },
+    create: { userId: admin.id, workspaceId: workspace.id, workspaceRole: "OWNER" },
   });
 
-  console.log(`Added ${admin.email} as Company Administrator of ${workspace.name}`);
-
-  const companyAdministratorRole = await findSystemRole(workspace.id, "Company Administrator", "WORKSPACE");
-  if (!companyAdministratorRole) {
-    throw new Error(`Company Administrator system role missing for workspace ${workspace.id}`);
-  }
-  const existingAssignment = await prisma.roleAssignment.findFirst({
-    where: { membershipId: membership.id, siteId: null },
-  });
-  if (existingAssignment && existingAssignment.roleId !== companyAdministratorRole.id) {
-    await prisma.roleAssignment.delete({ where: { id: existingAssignment.id } });
-  }
-  if (!existingAssignment || existingAssignment.roleId !== companyAdministratorRole.id) {
-    await prisma.roleAssignment.create({
-      data: { membershipId: membership.id, roleId: companyAdministratorRole.id, siteId: null },
-    });
-  }
+  console.log(`Added ${admin.email} as owner of ${workspace.name}`);
 
   // Create default site
   const rockwareSite = await prisma.site.upsert({
@@ -178,6 +152,8 @@ async function seed() {
     await ensureScrapDisposition(site.id);
     console.log(`Seeded ${defaultRoles.length} employee roles for site: ${site.name}`);
   }
+
+  await ensureBuckets();
 
   // NOTE: never log adminPassword — in production this output goes to fly
   // deploy logs. The operator already knows the password they set.

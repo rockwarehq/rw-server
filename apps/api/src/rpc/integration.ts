@@ -55,39 +55,29 @@ const scopedIdInputSchema = idInputSchema.extend({ siteId: z.uuid() });
 
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...rest } = input;
-  const scope = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId } }),
-  );
+  const scope = grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId } }));
   return unwrap(await integrations.create(rest, scope));
 });
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...filter } = input;
-  const scope = grant(
-    await authorize(context.iam, { permission: "configuration:read", scope: { kind: "site", siteId } }),
-  );
+  const scope = grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId } }));
   return integrations.list(filter, scope);
 });
 
 export const get = authRequired.input(scopedIdInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "configuration:read", scope: { kind: "site", siteId: input.siteId } }),
-  );
+  const scope = grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId: input.siteId } }));
   return unwrap(await integrations.getById(input.id, scope));
 });
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   const { id, siteId, ...updates } = input;
-  const scope = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId } }),
-  );
+  const scope = grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId } }));
   return unwrap(await integrations.update(id, updates, scope));
 });
 
 export const remove = authRequired.input(scopedIdInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
-  );
+  const scope = grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }));
   return unwrap(await integrations.remove(input.id, scope));
 });
 
@@ -109,9 +99,7 @@ const runListInputSchema = z.object({
 
 export const runList = authRequired.input(runListInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...filter } = input;
-  const scope = grant(
-    await authorize(context.iam, { permission: "configuration:read", scope: { kind: "site", siteId } }),
-  );
+  const scope = grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId } }));
   return integrationRuns.list(filter, scope);
 });
 
@@ -126,9 +114,7 @@ const executeInputSchema = z.object({
 // Manual run — doubles as "test connection". The action outcome rides the run
 // row (SUCCEEDED/FAILED); only scope/config problems become transport errors.
 export const execute = authRequired.input(executeInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
-  );
+  const scope = grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }));
   unwrap(await integrations.getById(input.id, scope));
   const record = unwrap(await integrations.loadForExecution(input.id));
 
@@ -201,38 +187,28 @@ const triggerListInputSchema = z.object({
 
 export const triggerCreate = authRequired.input(triggerCreateInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...rest } = input;
-  const scope = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId } }),
-  );
+  const scope = grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId } }));
   return unwrap(await graph.triggers.create(rest, scope));
 });
 
 export const triggerList = authRequired.input(triggerListInputSchema).handler(async ({ input, context }) => {
   const { siteId, ...filter } = input;
-  const scope = grant(
-    await authorize(context.iam, { permission: "configuration:read", scope: { kind: "site", siteId } }),
-  );
+  const scope = grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId } }));
   return graph.triggers.list(filter, scope);
 });
 
 export const triggerGet = authRequired.input(scopedIdInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "configuration:read", scope: { kind: "site", siteId: input.siteId } }),
-  );
+  const scope = grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "site", siteId: input.siteId } }));
   return unwrap(await graph.triggers.getById(input.id, scope));
 });
 
 export const triggerUpdate = authRequired.input(triggerUpdateInputSchema).handler(async ({ input, context }) => {
   const { id, siteId, ...updates } = input;
-  const scope = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId } }),
-  );
+  const scope = grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId } }));
   return unwrap(await graph.triggers.update(id, updates, scope));
 });
 
 export const triggerDelete = authRequired.input(scopedIdInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
-  );
+  const scope = grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }));
   return unwrap(await graph.triggers.remove(input.id, scope));
 });

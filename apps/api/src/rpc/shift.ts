@@ -30,7 +30,7 @@ const currentInputSchema = z.object({
 });
 
 export const current = userOrDisplayRequired.input(currentInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "planning:read", scope: siteScope(input.siteId) }));
+  grant(await authorize(context.iam, { tier: "VIEW", scope: siteScope(input.siteId) }));
 
   const result = await shift.current.getCurrentShift(input.siteId, input.workCenterId);
   return unwrap(result);
@@ -138,7 +138,7 @@ const assignmentListInputSchema = z.object({
 // ============================================================================
 
 export const patternCreate = authRequired.input(patternCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "planning:write", scope: siteScope(input.siteId) }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: siteScope(input.siteId) }));
 
   const result = await shift.pattern.create(input);
   if (result.error !== undefined) throwServiceError(result);
@@ -153,19 +153,21 @@ const MS_PER_DAY = 86_400_000;
 const siteScope = (siteId: string) => ({ kind: "site", siteId }) as const;
 
 export const patternList = authRequired.input(patternListInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "planning:read", requestedSiteId: input.siteId }));
+  const scope = grant(
+    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
+  );
   return shift.pattern.list({ ...input, ...scopeFilter(scope) });
 });
 
 export const patternGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "planning:read", scope: { kind: "shiftPattern", id: input.id } }));
+  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "shiftPattern", id: input.id } }));
 
   const result = await shift.pattern.getById(input.id);
   return unwrap(result, { notFoundMessage: "Shift pattern not found" });
 });
 
 export const patternUpdate = authRequired.input(patternUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "planning:write", scope: { kind: "shiftPattern", id: input.id } }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "shiftPattern", id: input.id } }));
 
   const { id, ...updateData } = input;
   const result = await shift.pattern.update(id, updateData);
@@ -174,7 +176,7 @@ export const patternUpdate = authRequired.input(patternUpdateInputSchema).handle
 });
 
 export const patternDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "planning:write", scope: { kind: "shiftPattern", id: input.id } }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "shiftPattern", id: input.id } }));
 
   const result = await shift.pattern.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
@@ -182,7 +184,7 @@ export const patternDelete = authRequired.input(idInputSchema).handler(async ({ 
 });
 
 export const patternDuplicate = authRequired.input(duplicateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "planning:write", scope: { kind: "shiftPattern", id: input.id } }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "shiftPattern", id: input.id } }));
 
   const result = await shift.pattern.duplicate(input.id, input.name);
   if (result.error !== undefined) throwServiceError(result);
@@ -196,7 +198,7 @@ export const patternDuplicate = authRequired.input(duplicateInputSchema).handler
 export const definitionCreate = authRequired.input(definitionCreateInputSchema).handler(async ({ input, context }) => {
   grant(
     await authorize(context.iam, {
-      permission: "planning:write",
+      tier: "MANAGE",
       scope: { kind: "shiftPattern", id: input.patternId },
     }),
   );
@@ -207,26 +209,20 @@ export const definitionCreate = authRequired.input(definitionCreateInputSchema).
 });
 
 export const definitionList = authRequired.input(definitionListInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "planning:read", scope: { kind: "shiftPattern", id: input.patternId } }),
-  );
+  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "shiftPattern", id: input.patternId } }));
 
   return shift.definition.list(input);
 });
 
 export const definitionGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "planning:read", scope: { kind: "shiftDefinition", id: input.id } }),
-  );
+  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "shiftDefinition", id: input.id } }));
 
   const result = await shift.definition.getById(input.id);
   return unwrap(result, { notFoundMessage: "Shift definition not found" });
 });
 
 export const definitionUpdate = authRequired.input(definitionUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "planning:write", scope: { kind: "shiftDefinition", id: input.id } }),
-  );
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "shiftDefinition", id: input.id } }));
 
   const { id, ...updateData } = input;
   const result = await shift.definition.update(id, updateData);
@@ -235,9 +231,7 @@ export const definitionUpdate = authRequired.input(definitionUpdateInputSchema).
 });
 
 export const definitionDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "planning:write", scope: { kind: "shiftDefinition", id: input.id } }),
-  );
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "shiftDefinition", id: input.id } }));
 
   const result = await shift.definition.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
@@ -249,7 +243,7 @@ export const definitionDelete = authRequired.input(idInputSchema).handler(async 
 // ============================================================================
 
 export const assignmentCreate = authRequired.input(assignmentCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "planning:write", scope: siteScope(input.siteId) }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: siteScope(input.siteId) }));
 
   const result = await shift.assignment.create(input);
   if (result.error !== undefined) throwServiceError(result, ASSIGNMENT_CREATE_OVERRIDES);
@@ -257,23 +251,21 @@ export const assignmentCreate = authRequired.input(assignmentCreateInputSchema).
 });
 
 export const assignmentList = authRequired.input(assignmentListInputSchema).handler(async ({ input, context }) => {
-  const scope = grant(await authorizeList(context.iam, { permission: "planning:read", requestedSiteId: input.siteId }));
+  const scope = grant(
+    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
+  );
   return shift.assignment.list({ ...input, ...scopeFilter(scope) });
 });
 
 export const assignmentGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "planning:read", scope: { kind: "shiftAssignment", id: input.id } }),
-  );
+  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "shiftAssignment", id: input.id } }));
 
   const result = await shift.assignment.getById(input.id);
   return unwrap(result, { notFoundMessage: "Shift assignment not found" });
 });
 
 export const assignmentUpdate = authRequired.input(assignmentUpdateInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "planning:write", scope: { kind: "shiftAssignment", id: input.id } }),
-  );
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "shiftAssignment", id: input.id } }));
 
   const { id, ...updateData } = input;
   const result = await shift.assignment.update(id, updateData);
@@ -291,9 +283,7 @@ const assignmentPreviewInputSchema = z.object({
 export const assignmentPreview = authRequired
   .input(assignmentPreviewInputSchema)
   .handler(async ({ input, context }) => {
-    grant(
-      await authorize(context.iam, { permission: "planning:read", scope: { kind: "shiftAssignment", id: input.id } }),
-    );
+    grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "shiftAssignment", id: input.id } }));
     const from = new Date(`${input.from}T00:00:00Z`);
     const to = new Date(`${input.to}T00:00:00Z`);
     if (to < from || to.getTime() - from.getTime() > MAX_PREVIEW_DAYS * MS_PER_DAY) {
@@ -306,9 +296,7 @@ export const assignmentPreview = authRequired
   });
 
 export const assignmentUnpublish = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "planning:write", scope: { kind: "shiftAssignment", id: input.id } }),
-  );
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "shiftAssignment", id: input.id } }));
 
   const result = await shift.assignment.unpublish(input.id);
   if (result.error !== undefined) throwServiceError(result);
@@ -353,32 +341,32 @@ async function loadOverride(id: string) {
 }
 
 export const overrideCreate = authRequired.input(overrideCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "planning:write", scope: siteScope(input.siteId) }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: siteScope(input.siteId) }));
 
   return unwrap(await shift.override.create(input));
 });
 
 export const overrideList = authRequired.input(overrideListInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "planning:read", scope: siteScope(input.siteId) }));
+  grant(await authorize(context.iam, { tier: "VIEW", scope: siteScope(input.siteId) }));
   return shift.override.list(input);
 });
 
 export const overrideGet = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const override = await loadOverride(input.id);
-  grant(await authorize(context.iam, { permission: "planning:read", scope: siteScope(override.siteId) }));
+  grant(await authorize(context.iam, { tier: "VIEW", scope: siteScope(override.siteId) }));
   return override;
 });
 
 export const overrideUpdate = authRequired.input(overrideUpdateInputSchema).handler(async ({ input, context }) => {
   const override = await loadOverride(input.id);
-  grant(await authorize(context.iam, { permission: "planning:write", scope: siteScope(override.siteId) }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: siteScope(override.siteId) }));
   const { id, ...updateData } = input;
   return unwrap(await shift.override.update(id, updateData));
 });
 
 export const overrideDelete = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const override = await loadOverride(input.id);
-  grant(await authorize(context.iam, { permission: "planning:write", scope: siteScope(override.siteId) }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: siteScope(override.siteId) }));
   const result = await shift.override.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
   return { success: true };
@@ -398,23 +386,23 @@ async function loadAmendment(id: string) {
 }
 
 export const amendmentCreate = authRequired.input(amendmentCreateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "planning:write", scope: siteScope(input.siteId) }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: siteScope(input.siteId) }));
   return unwrap(await shift.amend.amendShift({ ...input, actorUserId: context.iam.id }));
 });
 
 export const amendmentList = authRequired.input(overrideListInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "planning:read", scope: siteScope(input.siteId) }));
+  grant(await authorize(context.iam, { tier: "VIEW", scope: siteScope(input.siteId) }));
   return shift.amend.listShiftAmendments(input);
 });
 
 export const amendmentUndo = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const amendment = await loadAmendment(input.id);
-  grant(await authorize(context.iam, { permission: "planning:write", scope: siteScope(amendment.siteId) }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: siteScope(amendment.siteId) }));
   return unwrap(await shift.amend.undoShiftAmendment(input.id, context.iam.id));
 });
 
 export const amendmentRetry = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   const amendment = await loadAmendment(input.id);
-  grant(await authorize(context.iam, { permission: "planning:write", scope: siteScope(amendment.siteId) }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: siteScope(amendment.siteId) }));
   return unwrap(await shift.amend.retryShiftAmendment(input.id));
 });

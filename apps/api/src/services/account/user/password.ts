@@ -2,7 +2,6 @@ import { randomInt } from "node:crypto";
 import prisma from "@rw/db";
 import { hashToken, safeEqual } from "@rw/auth/secrets";
 import { hashPassword, comparePassword } from "@rw/auth/password";
-import { hasPermission, OWNER_PERMISSION } from "@rw/auth/iam/index";
 import { securityConfig } from "../../../config.js";
 import { sendPasswordResetEmail } from "@rw/services/email/index";
 import { logEvent } from "@rw/services/audit/index";
@@ -437,30 +436,18 @@ export async function adminSetPassword(
   }
 
   // Resetting an owner's password is a takeover vector, so it needs the
-  // owner permission — same rule as changing an owner's role.
+  // ownership — same rule as changing an owner's access.
   const targetIsOwner = await prisma.workspaceMembership.findFirst({
-    where: {
-      workspaceId: input.workspaceId,
-      userId: input.targetUserId,
-      roleAssignments: {
-        some: {
-          siteId: null,
-          role: {
-            isSystem: true,
-            scope: "WORKSPACE",
-            permissions: { has: OWNER_PERMISSION },
-          },
-        },
-      },
-    },
+    where: { workspaceId: input.workspaceId, userId: input.targetUserId, workspaceRole: "OWNER" },
     select: { id: true },
   });
 
   if (targetIsOwner) {
-    const actorIsOwner = await hasPermission(input.actorId, OWNER_PERMISSION, {
-      workspaceId: input.workspaceId,
+    const actorMembership = await prisma.workspaceMembership.findFirst({
+      where: { workspaceId: input.workspaceId, userId: input.actorId, workspaceRole: "OWNER" },
+      select: { id: true },
     });
-    if (!actorIsOwner) {
+    if (!actorMembership) {
       return { success: false, error: "OWNER_PERMISSION_REQUIRED" };
     }
   }

@@ -1,12 +1,6 @@
 import prisma from "@rw/db";
 import type { UserStatus } from "@rw/db";
-import {
-  getEffectivePermissions,
-  listAccessibleSites,
-  loadPermissionSnapshot,
-  snapshotEffectivePermissions,
-  type Permission,
-} from "@rw/auth/iam/index";
+import { loadBucketSnapshot, snapshotVisibleSites, staffSnapshot } from "@rw/auth/iam/index";
 import { logEvent } from "@rw/services/audit/index";
 import { getWorkspaceAccessSummaries } from "../workspace/members.js";
 import { resolveAvatarUrl } from "./avatar.js";
@@ -37,10 +31,6 @@ export interface ListUsersFilter {
   search?: string;
   limit?: number;
   offset?: number;
-}
-
-function sortPermissions(permissions: Iterable<Permission>): Permission[] {
-  return [...permissions].sort();
 }
 
 export async function create(input: CreateUserInput) {
@@ -126,19 +116,21 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
     avatarUrl: await resolveAvatarUrl(user.avatarKey),
   };
 
-  // Rockware-staff users hold no memberships: build the view from the token's
-  // workspace context and the code-resolved permission bundle.
+  // Rockware-staff users hold no memberships: build the view from the
+  // token's workspace context and the code-resolved staff standing.
   if (user.systemRole && workspaceId) {
     const workspace = await prisma.workspace.findUnique({
       where: { id: workspaceId },
       select: { id: true, name: true, slug: true },
     });
-    const sites = workspace ? await listAccessibleSites(userId, workspaceId) : [];
+    const sites = workspace
+      ? await prisma.site.findMany({
+          where: { workspaceId },
+          select: { id: true, name: true },
+          orderBy: { name: "asc" },
+        })
+      : [];
     const site = siteId ? (sites.find((item) => item.id === siteId) ?? null) : null;
-    const permissions = await getEffectivePermissions(userId, {
-      workspaceId,
-      ...(site ? { siteId: site.id } : {}),
-    });
     return {
       user: userView,
       employee: null,
@@ -146,9 +138,9 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
       site,
       sites,
       access: {
-        roles: [{ id: `system:${user.systemRole}`, name: `System ${user.systemRole}`, scope: "WORKSPACE" as const }],
-        permissions: sortPermissions(permissions),
-        workcenterGrants: [],
+        workspaceRole: "MEMBER" as const,
+        staff: staffSnapshot(user.systemRole).staff,
+        buckets: [],
       },
     };
   }
@@ -171,12 +163,6 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
           },
         },
       },
-      roleAssignments: {
-        include: {
-          role: { select: { id: true, name: true, scope: true, permissions: true } },
-        },
-        orderBy: { createdAt: "asc" },
-      },
     },
     orderBy: { joinedAt: "asc" },
   });
@@ -188,35 +174,40 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
       workspace: null,
       site: null,
       sites: [],
-      access: { roles: [], permissions: [], workcenterGrants: [] },
+      access: { workspaceRole: "MEMBER" as const, staff: "NONE" as const, buckets: [] },
     };
   }
 
-  const sites = await listAccessibleSites(userId, membership.workspaceId);
+  // One snapshot serves the whole access view: the member's buckets (hook
+  // and cascade entries included, labeled by `via`) and site visibility.
+  const snapshot = await loadBucketSnapshot(userId, membership.workspaceId);
+  const visible = snapshot ? snapshotVisibleSites(snapshot) : { all: false as const, siteIds: [] };
+  const sites = await prisma.site.findMany({
+    where: {
+      workspaceId: membership.workspaceId,
+      ...(visible.all ? {} : { id: { in: visible.siteIds } }),
+    },
+    select: { id: true, name: true },
+    orderBy: { name: "asc" },
+  });
   const site = siteId ? (sites.find((item) => item.id === siteId) ?? null) : null;
-  // One snapshot serves both the flat site-context permission list and the
-  // per-grant permission sets. The flat list intentionally EXCLUDES
-  // workcenter-scoped grant permissions (no workcenterId passed) — clients
-  // gate site-level chrome on it; per-workcenter abilities ride on each
-  // grant's own `permissions` below.
-  const snapshot = await loadPermissionSnapshot(userId, membership.workspaceId);
-  const permissions = snapshot ? snapshotEffectivePermissions(snapshot, site?.id) : new Set<Permission>();
-  const workcenterGrants = snapshot
-    ? (snapshot.workcenterGrants ?? []).map((grant) => ({
-        workcenterId: grant.workcenterId,
-        siteId: grant.siteId,
-        access: grant.access,
-        permissions: sortPermissions(snapshotEffectivePermissions(snapshot, grant.siteId, grant.workcenterId)),
-      }))
-    : [];
 
-  const roles = membership.roleAssignments
-    .filter((assignment) => assignment.siteId === null || (site !== null && assignment.siteId === site.id))
-    .map((assignment) => ({
-      id: assignment.role.id,
-      name: assignment.role.name,
-      scope: assignment.role.scope,
-    }));
+  const bucketRows = snapshot
+    ? await prisma.bucket.findMany({
+        where: { id: { in: snapshot.entries.map((e) => e.bucketId) } },
+        select: { id: true, name: true },
+      })
+    : [];
+  const bucketNames = new Map(bucketRows.map((b) => [b.id, b.name]));
+  const buckets = (snapshot?.entries ?? []).map((e) => ({
+    bucketId: e.bucketId,
+    kind: e.kind,
+    siteId: e.siteId,
+    workcenterId: e.workcenterId,
+    name: bucketNames.get(e.bucketId) ?? "",
+    tier: e.tier,
+    via: e.via,
+  }));
 
   return {
     user: userView,
@@ -234,9 +225,9 @@ export async function getMe(userId: string, workspaceId?: string, siteId?: strin
     site,
     sites,
     access: {
-      roles,
-      permissions: sortPermissions(permissions),
-      workcenterGrants,
+      workspaceRole: snapshot?.owner ? ("OWNER" as const) : ("MEMBER" as const),
+      staff: "NONE" as const,
+      buckets,
     },
   };
 }

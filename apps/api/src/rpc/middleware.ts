@@ -126,24 +126,23 @@ const processorMiddleware = os.$context<RPCContext>().middleware(async ({ contex
 // Requires valid processor shared secret
 export const processorRequired = publicProcedure.use(processorMiddleware);
 
-// Permission-gated middleware factory. Uses the RBAC `hasPermission` check
-// against the caller's workspaceId from the auth token.
-//
-// Replaces the old `adminRequired` / `ownerRequired` enum-based gates.
-export const permissionRequired = (permission: import("@rw/auth/iam/index").Permission) => {
+// Tier-gated middleware factory: the caller must hold the tier on their
+// current site's plant bucket (owners and staff bypass per the model).
+export const tierRequired = (tier: import("@rw/auth/iam/index").BucketTier) => {
   const mw = os.$context<UserAuthenticatedRPCContext>().middleware(async ({ context, next }) => {
-    const { hasPermission } = await import("@rw/auth/iam/index");
+    const { loadBucketSnapshot, snapshotPlantTier, tierAtLeast } = await import("@rw/auth/iam/index");
     const userId = context.iam.id;
     const workspaceId = context.iam.workspaceId;
     if (!userId || !workspaceId) {
       throw new ORPCError("UNAUTHORIZED", { message: "No workspace context" });
     }
-    const ok = await hasPermission(userId, permission, {
-      workspaceId,
-      ...(context.iam.siteId ? { siteId: context.iam.siteId } : {}),
-    });
-    if (!ok) {
-      throw new ORPCError("FORBIDDEN", { message: `Missing permission: ${permission}` });
+    const snapshot = context.iam.bucketSnapshot ?? (await loadBucketSnapshot(userId, workspaceId));
+    const bypass =
+      snapshot && (snapshot.owner || snapshot.staff === "FULL" || (snapshot.staff === "READ" && tier === "VIEW"));
+    const siteId = context.iam.siteId;
+    const held = snapshot && siteId ? snapshotPlantTier(snapshot, siteId) : null;
+    if (!bypass && !tierAtLeast(held, tier)) {
+      throw new ORPCError("FORBIDDEN", { message: `Requires ${tier} access here` });
     }
     return next();
   });

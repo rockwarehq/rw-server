@@ -1,55 +1,46 @@
-// IAM — role-based access control for the User principal tier.
+// IAM — bucket-based access control for the User principal tier.
 //
-// Permissions are the eight responsibility keys defined in code
-// (permissions.ts), plus reserved owner:all. Roles are DB rows owned by a
-// Workspace, carrying an array of those strings. A RoleAssignment links a
-// WorkspaceMembership to a Role, optionally narrowed to one Site.
-//
-// See /Users/michaellindenau/.claude/plans/user-invites-are-not-parallel-abelson.md
-// for the full RFC.
-
-export * as roles from "./roles.js";
-export * as assignments from "./assignments.js";
-export * as workcenterGrants from "./workcenter-grants.js";
+// Rows live in containers (a PLANT bucket per site, a WORKCENTER bucket
+// per cell); access is membership in the container with a tier
+// (VIEW < MANAGE < ADMIN). Workspace owners and Rockware staff bypass.
+// See iam/buckets.ts for the model and policy.ts for the call-site gate.
 
 export {
-  RESOURCES,
-  ACTIONS,
-  ALL_PERMISSIONS,
-  CUSTOMER_PERMISSIONS,
-  PERMISSION_DEFINITIONS,
-  OWNER_PERMISSION,
-  RESERVED_PERMISSIONS,
-  SYSTEM_ROLE_PERMISSIONS,
-  hasOwnerPermission,
-  isPermission,
-  validatePermissions,
-  expandPermissions,
-  getEffectivePermissions,
-  hasPermission,
-  hasAnyPermission,
-  getAccessibleSites,
-  getVisibleSites,
-  listAccessibleSites,
-  loadPermissionSnapshot,
-  snapshotEffectivePermissions,
-  snapshotHasPermission,
-  snapshotAccessibleSites,
+  TIER_RANK,
+  tierAtLeast,
+  completeSnapshotEntries,
+  loadBucketSnapshot,
+  ownerSnapshot,
+  staffSnapshot,
+  snapshotTierInBucket,
+  snapshotPlantTier,
+  snapshotWorkcenterTier,
   snapshotVisibleSites,
-  BASE_WORKCENTER_ACCESS_KEY,
-  type BaseWorkcenterAccess,
-  type PermissionSnapshot,
-  type Resource,
-  type Action,
-  type ReservedPermission,
-  type Permission,
-  type CustomerPermission,
-  type PermissionDefinition,
-  type PermissionContext,
-  type AccessibleSites,
-  type AccessibleSiteRef,
-} from "./permissions.js";
+  snapshotWorkcenterIds,
+  type BucketKind,
+  type BucketTier,
+  type BucketAccessVia,
+  type BucketEntry,
+  type BucketSnapshot,
+  type VisibleSites,
+} from "./buckets.js";
 
-export { findSystemRole } from "./roles.js";
-
-export { ScopeMismatchError, SystemUserAssignmentError } from "./assignments.js";
+export {
+  authorize,
+  authorizeList,
+  authorizeAccessibleSites,
+  createPolicy,
+  scopeFilter,
+  scopeWhere,
+  scopeWorkcenterWhere,
+  type AuthorizeFn,
+  type ListPolicyResult,
+  type ListScope,
+  type PolicyDenial,
+  type PolicyDeps,
+  type PolicyResult,
+  type ScopeRef,
+  type SiteDirectoryScope,
+  type SiteGrant,
+  type WorkspaceGrant,
+} from "./policy.js";

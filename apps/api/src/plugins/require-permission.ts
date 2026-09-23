@@ -1,47 +1,39 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import type { Permission } from "@rw/auth/iam/index";
-import { hasPermission } from "@rw/auth/iam/index";
+import { type BucketTier, loadBucketSnapshot, snapshotPlantTier, tierAtLeast } from "@rw/auth/iam/index";
 
 /**
- * Fastify preHandler that enforces a single RBAC permission.
+ * Fastify preHandler that enforces a bucket tier.
  *
- * Usage — implicit workspace from the auth token:
- *   preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin")]
+ * Usage — ADMIN at the request's site plant:
+ *   preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "site" })]
  *
- * Usage — route URL carries `:workspaceId` or another param name:
- *   preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { workspaceParam: "id" })]
+ * Usage — workspace-level (owner or Rockware staff), URL carries the
+ * workspace id:
+ *   preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "workspace", workspaceParam: "id" })]
  *
- * Usage — workspace-level check that must ignore token site context:
- *   preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { scope: "workspace" })]
+ * Usage — ownership-only (owner, no staff bypass):
+ *   preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "workspace", ownerOnly: true })]
  *
  * Returns:
  *   - 401 if the request is unauthenticated or has no workspace context.
  *   - 403 `{ error: "forbidden", required }` if the check fails.
  */
-export interface RequirePermissionOptions {
+export interface RequireTierOptions {
   /**
-   * Permission context scope. Default preserves legacy behavior by including
-   * route/token site context when present. Use "workspace" for workspace-level
-   * actions like user administration where site-scoped roles must not apply.
+   * "workspace" — reserved for workspace owners (staff FULL passes unless
+   * ownerOnly). "site" (default) — the tier must be held on the plant
+   * bucket of the route/token site.
    */
   scope?: "workspace" | "site";
-  /**
-   * Route-param name that holds the workspace id. Default: none (use the
-   * workspace id attached to the auth token via `request.iam.workspaceId`).
-   *
-   * Supply this for routes like `POST /workspaces/:id/members` where the
-   * workspace being acted on is in the URL, not the caller's session.
-   */
+  /** Owner strictly; Rockware staff cannot substitute. Workspace scope only. */
+  ownerOnly?: boolean;
+  /** Route-param name that holds the workspace id (default: token workspace). */
   workspaceParam?: string;
-  /**
-   * Route-param name that holds the site id, for site-scoped checks.
-   * Default: `"siteId"` when present. Set `scope: "workspace"` if you don't
-   * want site scope to influence the check.
-   */
+  /** Route-param name that holds the site id (default `"siteId"`, else token site). */
   siteParam?: string;
 }
 
-export function requirePermission(permission: Permission, opts: RequirePermissionOptions = {}) {
+export function requireTier(tier: BucketTier, opts: RequireTierOptions = {}) {
   return async (req: FastifyRequest, reply: FastifyReply) => {
     const userId = req.iam?.id;
     if (!userId) {
@@ -54,17 +46,38 @@ export function requirePermission(permission: Permission, opts: RequirePermissio
     if (!workspaceId) {
       return reply.status(401).send({ error: "No workspace context" });
     }
-
-    const siteKey = opts.siteParam ?? "siteId";
-    const siteId = opts.scope === "workspace" ? undefined : (params?.[siteKey] ?? req.iam?.siteId);
-
-    if (opts.scope === "site" && !siteId) {
-      return reply.status(401).send({ error: "No site context" });
+    // A URL-supplied workspace must match the caller's session workspace.
+    if (opts.workspaceParam && req.iam?.workspaceId && workspaceId !== req.iam.workspaceId) {
+      return reply.status(403).send({ error: "forbidden", required: tier });
     }
 
-    const ok = await hasPermission(userId, permission, { workspaceId, siteId });
-    if (!ok) {
-      return reply.status(403).send({ error: "forbidden", required: permission });
+    const snapshot =
+      req.iam?.bucketSnapshot && req.iam.workspaceId === workspaceId
+        ? req.iam.bucketSnapshot
+        : await loadBucketSnapshot(userId, workspaceId);
+    if (!snapshot) {
+      return reply.status(403).send({ error: "forbidden", required: tier });
+    }
+
+    if (opts.scope === "workspace") {
+      const ok = snapshot.owner || (!opts.ownerOnly && snapshot.staff === "FULL");
+      if (!ok) {
+        return reply.status(403).send({ error: "forbidden", required: tier });
+      }
+      return;
+    }
+
+    if (snapshot.owner || snapshot.staff === "FULL" || (snapshot.staff === "READ" && tier === "VIEW")) {
+      return;
+    }
+
+    const siteKey = opts.siteParam ?? "siteId";
+    const siteId = params?.[siteKey] ?? req.iam?.siteId;
+    if (!siteId) {
+      return reply.status(401).send({ error: "No site context" });
+    }
+    if (!tierAtLeast(snapshotPlantTier(snapshot, siteId), tier)) {
+      return reply.status(403).send({ error: "forbidden", required: tier });
     }
   };
 }

@@ -94,7 +94,7 @@ export default async function groups(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const { id } = request.params;
       const auth = await authorize(request.iam, {
-        permission: "configuration:read",
+        tier: "VIEW",
         scope: { kind: "pointGroup", id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -128,7 +128,7 @@ export default async function groups(fastify: FastifyTypedInstance) {
       const body = request.body;
 
       const auth = await authorize(request.iam, {
-        permission: "configuration:write",
+        tier: "MANAGE",
         scope: { kind: "pointGroup", id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -159,7 +159,7 @@ export default async function groups(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       const { id } = request.params;
       const auth = await authorize(request.iam, {
-        permission: "configuration:write",
+        tier: "MANAGE",
         scope: { kind: "pointGroup", id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);

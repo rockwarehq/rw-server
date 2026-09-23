@@ -3,7 +3,13 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import createError from "http-errors";
 import { verifyAccessToken, isExpiredTokenError, type DecodedAccessToken } from "@rw/auth/tokens";
 import { API_TOKEN_PREFIX, touchApiToken, validateApiToken } from "@rw/auth/api-tokens";
-import { BASE_WORKCENTER_ACCESS_KEY, type PermissionSnapshot, snapshotVisibleSites } from "@rw/auth/iam/index";
+import {
+  type BucketSnapshot,
+  completeSnapshotEntries,
+  ownerSnapshot,
+  snapshotVisibleSites,
+  staffSnapshot,
+} from "@rw/auth/iam/index";
 import { Principal, type AppIAMContext, type IAMContext, type UnknownIAMContext } from "@rw/auth/context";
 import prisma from "@rw/db";
 
@@ -207,6 +213,7 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
   // System users (SUPPORT/ENGINEER staff) hold no memberships by design —
   // their workspace context is validated directly against the workspace row.
   let workspaceContext: { id: string; name: string; slug: string } | null;
+  let membershipRow: { id: string; workspaceRole: string } | null = null;
   if (userResult.systemRole) {
     workspaceContext = await prisma.workspace.findUnique({
       where: { id: decodedToken.workspaceId },
@@ -221,6 +228,8 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
         },
       },
       select: {
+        id: true,
+        workspaceRole: true,
         workspace: {
           select: {
             id: true,
@@ -231,53 +240,59 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
       },
     });
     workspaceContext = membership?.workspace ?? null;
+    membershipRow = membership ? { id: membership.id, workspaceRole: membership.workspaceRole } : null;
   }
 
   if (!workspaceContext) {
     return invalidIAM;
   }
 
-  // Resolve the role/permission snapshot once; the site-claim check below
-  // and every downstream policy evaluation share it instead of re-querying.
-  let permissionSnapshot: PermissionSnapshot;
+  // Resolve the bucket snapshot once; the site-claim check below and every
+  // downstream policy evaluation share it instead of re-querying.
+  let bucketSnapshot: BucketSnapshot;
   if (userResult.systemRole) {
-    permissionSnapshot = { systemRole: userResult.systemRole, assignments: [] };
+    bucketSnapshot = staffSnapshot(userResult.systemRole);
+  } else if (!membershipRow) {
+    bucketSnapshot = { owner: false, staff: "NONE", entries: [] };
+  } else if (membershipRow.workspaceRole === "OWNER") {
+    bucketSnapshot = ownerSnapshot();
   } else {
-    const membershipWhere = { userId: decodedToken.id, workspaceId: decodedToken.workspaceId };
-    const [assignments, workcenterGrants, policySites] = await Promise.all([
-      prisma.roleAssignment.findMany({
-        where: { membership: membershipWhere },
-        select: { siteId: true, role: { select: { permissions: true } } },
-      }),
-      prisma.workcenterGrant.findMany({
-        where: { membership: membershipWhere },
-        select: { workcenterId: true, access: true, workcenter: { select: { siteId: true } } },
-      }),
-      prisma.site.findMany({
-        where: {
-          workspaceId: decodedToken.workspaceId,
-          attrs: { path: [BASE_WORKCENTER_ACCESS_KEY], equals: "GRANTS_REQUIRED" },
-        },
-        select: { id: true },
-      }),
-    ]);
-    permissionSnapshot = {
-      systemRole: null,
-      assignments: assignments.map((a) => ({ siteId: a.siteId, permissions: a.role.permissions })),
-      workcenterGrants: workcenterGrants.map((g) => ({
-        workcenterId: g.workcenterId,
-        siteId: g.workcenter.siteId,
-        access: g.access,
-      })),
-      grantsRequiredSiteIds: policySites.map((s) => s.id),
+    const accesses = await prisma.bucketAccess.findMany({
+      where: { membershipId: membershipRow.id },
+      select: {
+        tier: true,
+        bucket: { select: { id: true, kind: true, siteId: true, workcenterId: true } },
+      },
+    });
+    const direct = accesses.map((a) => ({
+      bucketId: a.bucket.id,
+      kind: a.bucket.kind as "PLANT" | "WORKCENTER",
+      siteId: a.bucket.siteId,
+      workcenterId: a.bucket.workcenterId,
+      tier: a.tier as "VIEW" | "MANAGE" | "ADMIN",
+    }));
+    const siteIds = [...new Set(direct.map((e) => e.siteId).filter((x): x is string => x !== null))];
+    const siteBuckets =
+      siteIds.length === 0
+        ? []
+        : await prisma.bucket.findMany({
+            where: { siteId: { in: siteIds } },
+            select: { id: true, kind: true, siteId: true, workcenterId: true },
+          });
+    bucketSnapshot = {
+      owner: false,
+      staff: "NONE",
+      entries: completeSnapshotEntries(
+        direct,
+        siteBuckets.map((b) => ({ ...b, kind: b.kind as "PLANT" | "WORKCENTER" })),
+      ),
     };
   }
 
   if (decodedToken.siteId) {
-    // Visibility, not a specific permission: any assignment or grant at the
-    // claimed site keeps the token valid. Roles are no longer guaranteed to
-    // carry facility:read as call sites migrate to the new permission keys.
-    const access = snapshotVisibleSites(permissionSnapshot);
+    // Visibility, not a tier: any bucket at the claimed site keeps the
+    // token valid.
+    const access = snapshotVisibleSites(bucketSnapshot);
     if (access.all) {
       // All-sites grants still require the claimed site to exist in the
       // workspace (parity with the listAccessibleSites-based check).
@@ -301,7 +316,7 @@ async function resolveUserIAM(decodedToken: LegacyDecodedUserAccessToken): Promi
     workspaceId: decodedToken.workspaceId,
     siteId: decodedToken.siteId,
     workspace: workspaceContext,
-    permissionSnapshot,
+    bucketSnapshot,
     user: {
       id: userResult.id,
       email: userResult.email,

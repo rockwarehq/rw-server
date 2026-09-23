@@ -1,740 +1,389 @@
 import prisma from "@rw/db";
-import { Prisma, type Role } from "@rw/db";
 import {
-  hasAnyPermission,
-  hasOwnerPermission,
-  hasPermission,
-  OWNER_PERMISSION,
-  type Permission,
+  type BucketSnapshot,
+  type BucketTier,
+  loadBucketSnapshot,
+  snapshotPlantTier,
+  TIER_RANK,
+  tierAtLeast,
 } from "@rw/auth/iam/index";
-import { findSystemRole } from "@rw/auth/iam/roles";
-import { logEvent } from "@rw/services/audit/index";
 
-const USER_ROLE_ASSIGNMENT_PERMISSIONS: readonly Permission[] = ["plant:admin"];
+// Workspace member management over the bucket model. A member's access is
+// their workspaceRole (OWNER is reserved ownership) plus their bucket
+// accesses; there is nothing else to administer.
 
-export interface RoleRef {
-  [x: string]: unknown;
-  id: string;
-  name: string;
-  isSystem: boolean;
-}
-
-export interface RoleAssignmentRef {
-  [x: string]: unknown;
-  id: string;
+export type MemberBucketAccess = {
+  bucketId: string;
+  kind: "PLANT" | "WORKCENTER";
   siteId: string | null;
-  site: { id: string; name: string } | null;
-  role: RoleRef & {
-    scope: "WORKSPACE" | "SITE";
-    permissions: string[];
-  };
-}
-
-export interface SitePermissionSummary {
-  [x: string]: unknown;
-  siteId: string;
-  site: { id: string; name: string } | null;
-  permissions: Permission[];
-}
-
-export interface WorkcenterGrantRef {
-  [x: string]: unknown;
-  id: string;
-  workcenterId: string;
-  access: "READ" | "WRITE";
-  workcenter: { id: string; name: string; siteId: string };
-}
-
-export interface WorkspaceAccessSummary {
-  roles: RoleRef[];
-  roleAssignments: RoleAssignmentRef[];
-  workcenterGrants: WorkcenterGrantRef[];
-  access: {
-    workspacePermissions: Permission[];
-    sitePermissions: SitePermissionSummary[];
-    sites: { all: boolean; siteIds: string[] };
-  };
-}
-
-interface EmployeeProfileSummary {
-  [x: string]: unknown;
-  id: string;
-  status: "ACTIVE" | "INACTIVE";
-  version: {
-    id: string;
-    version: number;
-    firstName: string;
-    lastName: string;
-    employeeNumber: string | null;
-    badgeNumber: string | null;
-  } | null;
-}
-
-export interface WorkspaceMembership {
-  [x: string]: unknown;
-  id: string;
+  workcenterId: string | null;
   name: string;
-  slug: string;
-  description: string | null;
-  joinedAt: Date;
-  // Role names this user holds at workspace scope in this workspace. May be
-  // empty for members whose access comes only from workcenter grants.
-  employee: EmployeeProfileSummary | null;
-  roles: RoleRef[];
-  roleAssignments: RoleAssignmentRef[];
-  workcenterGrants: WorkcenterGrantRef[];
-  access: WorkspaceAccessSummary["access"];
-}
+  tier: BucketTier;
+};
 
-export interface UpdateRoleInput {
-  actorUserId: string;
-  targetUserId: string;
-  workspaceId: string;
-  siteId?: string;
-  roleId: string;
-}
+export type MemberAccessSummary = {
+  workspaceRole: "OWNER" | "MEMBER";
+  buckets: MemberBucketAccess[];
+  /** Sites where the member holds any bucket — what the member UI shows. */
+  siteIds: string[];
+};
 
-export type UpdateRoleErrorCode =
-  | "FORBIDDEN"
-  | "ROLE_NOT_FOUND"
-  | "ROLE_WORKSPACE_MISMATCH"
-  | "MEMBER_NOT_FOUND"
-  | "SITE_CONTEXT_REQUIRED"
-  | "SITE_NOT_FOUND"
-  | "SITE_WORKSPACE_MISMATCH"
-  | "OWNER_PERMISSION_RESERVED"
-  | "OWNER_PERMISSION_REQUIRED"
-  | "LAST_OWNER"
-  | "LAST_SITE_ADMIN";
+const ACCESS_SELECT = {
+  tier: true,
+  bucket: { select: { id: true, kind: true, siteId: true, workcenterId: true, name: true } },
+} as const;
 
-export type UpdateRoleResult =
-  | { success: true; data: { [x: string]: unknown } }
-  | { success: false; code: UpdateRoleErrorCode; error: string };
+type AccessRow = {
+  tier: string;
+  bucket: { id: string; kind: string; siteId: string | null; workcenterId: string | null; name: string };
+};
 
-function updateRoleError(code: UpdateRoleErrorCode, error: string): UpdateRoleResult {
-  return { success: false, code, error };
-}
-
-function isOwnerRole(role: Pick<Role, "isSystem" | "scope" | "permissions">): boolean {
-  return role.isSystem && role.scope === "WORKSPACE" && hasOwnerPermission(role.permissions);
-}
-
-function hasReservedOwnerPermission(role: Pick<Role, "isSystem" | "scope" | "permissions">): boolean {
-  return hasOwnerPermission(role.permissions) && !isOwnerRole(role);
-}
-
-function sortPermissions(permissions: Iterable<Permission>): Permission[] {
-  return [...permissions].sort();
-}
-
-function buildWorkspaceAccessSummary(
-  assignments: Array<{
-    id: string;
-    siteId: string | null;
-    site: { id: string; name: string } | null;
-    role: {
-      id: string;
-      name: string;
-      isSystem: boolean;
-      scope: "WORKSPACE" | "SITE";
-      permissions: string[];
-    };
-  }>,
-  workcenterGrants: Array<{
-    id: string;
-    workcenterId: string;
-    access: "READ" | "WRITE";
-    workcenter: { id: string; name: string; siteId: string };
-  }> = [],
-): WorkspaceAccessSummary {
-  const workspacePermissions = new Set<Permission>();
-  const sitePermissions = new Map<
-    string,
-    { site: { id: string; name: string } | null; permissions: Set<Permission> }
-  >();
-
-  for (const assignment of assignments) {
-    if (assignment.siteId === null) {
-      for (const permission of assignment.role.permissions) {
-        workspacePermissions.add(permission as Permission);
-      }
-      continue;
-    }
-
-    const summary = sitePermissions.get(assignment.siteId) ?? {
-      site: assignment.site,
-      permissions: new Set<Permission>(),
-    };
-    for (const permission of assignment.role.permissions) {
-      summary.permissions.add(permission as Permission);
-    }
-    sitePermissions.set(assignment.siteId, summary);
-  }
-
-  const roles = assignments
-    .filter((assignment) => assignment.siteId === null)
-    .map((assignment) => ({
-      id: assignment.role.id,
-      name: assignment.role.name,
-      isSystem: assignment.role.isSystem,
-    }));
-
-  const sitePermissionSummaries = [...sitePermissions.entries()].map(([siteId, summary]) => ({
-    siteId,
-    site: summary.site,
-    permissions: sortPermissions(summary.permissions),
+function summarize(workspaceRole: string, accesses: AccessRow[]): MemberAccessSummary {
+  const buckets = accesses.map((a) => ({
+    bucketId: a.bucket.id,
+    kind: a.bucket.kind as "PLANT" | "WORKCENTER",
+    siteId: a.bucket.siteId,
+    workcenterId: a.bucket.workcenterId,
+    name: a.bucket.name,
+    tier: a.tier as BucketTier,
   }));
-
-  // Membership visibility: any workspace-scoped role sees every site; a
-  // site shows up when the member holds any role or grant there. Roles are
-  // no longer guaranteed to carry one particular read key.
-  const allSites = workspacePermissions.size > 0;
-  const siteIds = allSites
-    ? []
-    : [
-        ...new Set([
-          ...sitePermissionSummaries
-            .filter((summary) => summary.permissions.length > 0)
-            .map((summary) => summary.siteId),
-          // Grant-only members surface under their plant in the UI.
-          ...workcenterGrants.map((grantRow) => grantRow.workcenter.siteId),
-        ]),
-      ];
-
   return {
-    roles,
-    roleAssignments: assignments.map((assignment) => ({
-      id: assignment.id,
-      siteId: assignment.siteId,
-      site: assignment.site,
-      role: assignment.role,
-    })),
-    workcenterGrants: workcenterGrants.map((grantRow) => ({
-      id: grantRow.id,
-      workcenterId: grantRow.workcenterId,
-      access: grantRow.access,
-      workcenter: grantRow.workcenter,
-    })),
-    access: {
-      workspacePermissions: sortPermissions(workspacePermissions),
-      sitePermissions: sitePermissionSummaries,
-      sites: { all: allSites, siteIds },
-    },
+    workspaceRole: workspaceRole as "OWNER" | "MEMBER",
+    buckets,
+    siteIds: [...new Set(buckets.map((b) => b.siteId).filter((s): s is string => s !== null))],
   };
 }
 
+/** Per-user access summaries for a set of users (member list, /users). */
 export async function getWorkspaceAccessSummaries(
-  userId: string,
-  workspaceIds: string[],
-): Promise<Map<string, WorkspaceAccessSummary>> {
-  const memberships = workspaceIds.length
-    ? await prisma.workspaceMembership.findMany({
-        where: { userId, workspaceId: { in: workspaceIds } },
-        select: {
-          workspaceId: true,
-          roleAssignments: {
-            include: {
-              site: { select: { id: true, name: true } },
-              role: {
-                select: {
-                  id: true,
-                  name: true,
-                  isSystem: true,
-                  scope: true,
-                  permissions: true,
-                },
-              },
-            },
-            orderBy: { createdAt: "asc" },
-          },
-          workcenterGrants: {
-            include: { workcenter: { select: { id: true, name: true, siteId: true } } },
-            orderBy: { createdAt: "asc" },
-          },
-        },
-      })
-    : [];
+  workspaceId: string,
+  userIds: string[],
+): Promise<Map<string, MemberAccessSummary>> {
+  if (userIds.length === 0) return new Map();
+  const memberships = await prisma.workspaceMembership.findMany({
+    where: { workspaceId, userId: { in: userIds } },
+    select: { userId: true, workspaceRole: true, bucketAccesses: { select: ACCESS_SELECT } },
+  });
+  return new Map(memberships.map((m) => [m.userId, summarize(m.workspaceRole, m.bucketAccesses)]));
+}
 
-  const byWorkspace = new Map<string, (typeof memberships)[number]>();
-  for (const membership of memberships) {
-    byWorkspace.set(membership.workspaceId, membership);
-  }
+export async function listMembers(workspaceId: string) {
+  const memberships = await prisma.workspaceMembership.findMany({
+    where: { workspaceId },
+    select: {
+      id: true,
+      joinedAt: true,
+      workspaceRole: true,
+      employeeId: true,
+      user: { select: { id: true, email: true, firstName: true, lastName: true, status: true } },
+      bucketAccesses: { select: ACCESS_SELECT },
+    },
+    orderBy: { joinedAt: "asc" },
+  });
+  return memberships.map((m) => ({
+    membershipId: m.id,
+    joinedAt: m.joinedAt,
+    employeeId: m.employeeId,
+    user: m.user,
+    access: summarize(m.workspaceRole, m.bucketAccesses),
+  }));
+}
 
-  return new Map(
-    workspaceIds.map((workspaceId) => {
-      const membership = byWorkspace.get(workspaceId);
-      return [
-        workspaceId,
-        buildWorkspaceAccessSummary(membership?.roleAssignments ?? [], membership?.workcenterGrants ?? []),
-      ];
-    }),
-  );
+// ── Guards ───────────────────────────────────────────────────────────────
+
+function actorAdminAt(snapshot: BucketSnapshot, siteId: string | null): boolean {
+  if (snapshot.owner || snapshot.staff === "FULL") return true;
+  if (!siteId) return false;
+  return tierAtLeast(snapshotPlantTier(snapshot, siteId), "ADMIN");
 }
 
 /**
- * Add a user to a workspace and grant them the given workspace-scoped role.
- *
- * `roleId` must point at a Role with scope=WORKSPACE that belongs to this
- * workspace. RoleAssignment rows belong to the WorkspaceMembership and are the
- * source of truth for authority.
+ * A plant must keep at least one member with ADMIN on its plant bucket so
+ * the site stays self-administrable without owner intervention.
  */
-export async function addMember(workspaceId: string, userId: string, roleId: string) {
-  const role = await resolveWorkspaceRole(workspaceId, roleId);
-
-  return prisma.$transaction(async (tx) => {
-    const member = await tx.workspaceMembership.create({
-      data: { workspaceId, userId },
-      include: {
-        user: {
-          select: { id: true, email: true, firstName: true, lastName: true },
-        },
-        workspace: {
-          select: { id: true, name: true, slug: true },
-        },
-      },
-    });
-
-    await tx.roleAssignment.create({
-      data: { membershipId: member.id, roleId: role.id, siteId: null },
-    });
-
-    return member;
+async function wouldRemoveLastPlantAdmin(bucketId: string, membershipId: string): Promise<boolean> {
+  const bucket = await prisma.bucket.findUnique({ where: { id: bucketId }, select: { kind: true } });
+  if (bucket?.kind !== "PLANT") return false;
+  const remaining = await prisma.bucketAccess.count({
+    where: { bucketId, tier: "ADMIN", membershipId: { not: membershipId } },
   });
+  return remaining === 0;
 }
 
-export type RemoveMemberError = "MEMBER_NOT_FOUND" | "LAST_OWNER";
+async function isLastOwner(workspaceId: string, membershipId: string): Promise<boolean> {
+  const otherOwners = await prisma.workspaceMembership.count({
+    where: { workspaceId, workspaceRole: "OWNER", id: { not: membershipId } },
+  });
+  return otherOwners === 0;
+}
+
+// ── Mutations ────────────────────────────────────────────────────────────
+
+export type UpdateAccessErrorCode =
+  | "MEMBER_NOT_FOUND"
+  | "BUCKET_NOT_FOUND"
+  | "INVALID_TIER"
+  | "FORBIDDEN"
+  | "LAST_OWNER"
+  | "LAST_PLANT_ADMIN";
+
+export interface UpdateAccessInput {
+  workspaceId: string;
+  actorUserId: string;
+  targetUserId: string;
+  /** Upsert these accesses. */
+  set?: Array<{ bucketId: string; tier: BucketTier }>;
+  /** Remove access to these buckets. */
+  remove?: string[];
+  /** Change the member's workspace role — owners only, last-owner guarded. */
+  workspaceRole?: "OWNER" | "MEMBER";
+}
+
+export type UpdateAccessResult =
+  | { success: true; access: MemberAccessSummary }
+  | { success: false; code: UpdateAccessErrorCode; error: string };
+
+export async function updateAccess(input: UpdateAccessInput): Promise<UpdateAccessResult> {
+  const membership = await prisma.workspaceMembership.findUnique({
+    where: { userId_workspaceId: { userId: input.targetUserId, workspaceId: input.workspaceId } },
+    select: { id: true, workspaceRole: true },
+  });
+  if (!membership) return { success: false, code: "MEMBER_NOT_FOUND", error: "Member not found" };
+
+  const snapshot = await loadBucketSnapshot(input.actorUserId, input.workspaceId);
+  if (!snapshot) return { success: false, code: "FORBIDDEN", error: "Forbidden" };
+
+  const set = input.set ?? [];
+  const remove = input.remove ?? [];
+
+  // Ownership changes are the owner's alone.
+  if (input.workspaceRole && !snapshot.owner) {
+    return { success: false, code: "FORBIDDEN", error: "Ownership changes are reserved for the workspace owner" };
+  }
+  if (input.workspaceRole === "MEMBER" && membership.workspaceRole === "OWNER") {
+    if (await isLastOwner(input.workspaceId, membership.id)) {
+      return { success: false, code: "LAST_OWNER", error: "Cannot remove the last workspace owner" };
+    }
+  }
+
+  // Validate buckets and the actor's authority at each touched site.
+  const touched = [...set.map((s) => s.bucketId), ...remove];
+  const buckets = await prisma.bucket.findMany({
+    where: { id: { in: touched } },
+    select: { id: true, kind: true, siteId: true, workspaceId: true },
+  });
+  const byId = new Map(buckets.map((b) => [b.id, b]));
+  for (const id of touched) {
+    const bucket = byId.get(id);
+    if (!bucket || bucket.workspaceId !== input.workspaceId) {
+      return { success: false, code: "BUCKET_NOT_FOUND", error: "Bucket not found" };
+    }
+    if (!actorAdminAt(snapshot, bucket.siteId)) {
+      return { success: false, code: "FORBIDDEN", error: "Requires ADMIN access at this plant" };
+    }
+  }
+  for (const s of set) {
+    const bucket = byId.get(s.bucketId);
+    if (bucket?.kind === "WORKCENTER" && s.tier === "ADMIN") {
+      return {
+        success: false,
+        code: "INVALID_TIER",
+        error: "ADMIN is a plant tier; workcenter buckets go up to MANAGE",
+      };
+    }
+    if (!TIER_RANK[s.tier]) {
+      return { success: false, code: "INVALID_TIER", error: "Unknown tier" };
+    }
+  }
+
+  // Last-plant-admin guard: removing or downgrading the final ADMIN access
+  // on a plant bucket orphans the site.
+  const existing = await prisma.bucketAccess.findMany({
+    where: { membershipId: membership.id, bucketId: { in: touched } },
+    select: { bucketId: true, tier: true },
+  });
+  const existingById = new Map(existing.map((e) => [e.bucketId, e.tier as BucketTier]));
+  for (const id of touched) {
+    const had = existingById.get(id);
+    if (had !== "ADMIN") continue;
+    const now = remove.includes(id) ? null : set.find((s) => s.bucketId === id)?.tier;
+    if (now !== "ADMIN" && (await wouldRemoveLastPlantAdmin(id, membership.id))) {
+      return { success: false, code: "LAST_PLANT_ADMIN", error: "Cannot remove the last plant admin" };
+    }
+  }
+
+  await prisma.$transaction(async (tx) => {
+    if (input.workspaceRole) {
+      await tx.workspaceMembership.update({
+        where: { id: membership.id },
+        data: { workspaceRole: input.workspaceRole },
+      });
+    }
+    for (const s of set) {
+      await tx.bucketAccess.upsert({
+        where: { bucketId_membershipId: { bucketId: s.bucketId, membershipId: membership.id } },
+        update: { tier: s.tier },
+        create: { bucketId: s.bucketId, membershipId: membership.id, tier: s.tier },
+      });
+    }
+    if (remove.length) {
+      await tx.bucketAccess.deleteMany({ where: { membershipId: membership.id, bucketId: { in: remove } } });
+    }
+  });
+
+  const fresh = await prisma.workspaceMembership.findUniqueOrThrow({
+    where: { id: membership.id },
+    select: { workspaceRole: true, bucketAccesses: { select: ACCESS_SELECT } },
+  });
+  return { success: true, access: summarize(fresh.workspaceRole, fresh.bucketAccesses) };
+}
+
+export async function addMember(
+  workspaceId: string,
+  userId: string,
+  accesses: Array<{ bucketId: string; tier: BucketTier }>,
+) {
+  const buckets = await prisma.bucket.findMany({
+    where: { id: { in: accesses.map((a) => a.bucketId) } },
+    select: { id: true, kind: true, workspaceId: true },
+  });
+  if (buckets.length !== new Set(accesses.map((a) => a.bucketId)).size) {
+    throw new Error("Bucket not found");
+  }
+  for (const b of buckets) {
+    if (b.workspaceId !== workspaceId) throw new Error("Bucket does not belong to this workspace");
+  }
+  for (const a of accesses) {
+    if (buckets.find((b) => b.id === a.bucketId)?.kind === "WORKCENTER" && a.tier === "ADMIN") {
+      throw new Error("ADMIN is a plant tier; workcenter buckets go up to MANAGE");
+    }
+  }
+  return prisma.$transaction(async (tx) => {
+    const membership = await tx.workspaceMembership.upsert({
+      where: { userId_workspaceId: { userId, workspaceId } },
+      update: {},
+      create: { userId, workspaceId },
+      select: { id: true },
+    });
+    for (const a of accesses) {
+      await tx.bucketAccess.upsert({
+        where: { bucketId_membershipId: { bucketId: a.bucketId, membershipId: membership.id } },
+        update: { tier: a.tier },
+        create: { bucketId: a.bucketId, membershipId: membership.id, tier: a.tier },
+      });
+    }
+    return tx.workspaceMembership.findUniqueOrThrow({
+      where: { id: membership.id },
+      select: { id: true, workspaceRole: true, bucketAccesses: { select: ACCESS_SELECT } },
+    });
+  });
+}
 
 export async function removeMember(
   workspaceId: string,
   userId: string,
-  opts?: { actorId?: string; ipAddress?: string; userAgent?: string },
-): Promise<{ success: true } | { success: false; error: RemoveMemberError }> {
+  context?: { actorId?: string; ipAddress?: string; userAgent?: string },
+) {
   const membership = await prisma.workspaceMembership.findUnique({
     where: { userId_workspaceId: { userId, workspaceId } },
-    select: {
-      id: true,
-      user: { select: { id: true, email: true, status: true } },
-      roleAssignments: {
-        where: { siteId: null },
-        select: { role: { select: { isSystem: true, scope: true, permissions: true } } },
-      },
-    },
+    select: { id: true, workspaceRole: true },
   });
-
   if (!membership) {
-    return { success: false, error: "MEMBER_NOT_FOUND" };
+    return { success: false as const, error: "MEMBER_NOT_FOUND" as const };
+  }
+  if (membership.workspaceRole === "OWNER" && (await isLastOwner(workspaceId, membership.id))) {
+    return { success: false as const, error: "LAST_OWNER" as const };
   }
 
-  // Removing the last owner would strand the workspace (same guard as
-  // updateRole).
-  const targetIsOwner = membership.roleAssignments.some((assignment) => isOwnerRole(assignment.role));
-  if (targetIsOwner) {
-    const remainingOwner = await prisma.workspaceMembership.findFirst({
-      where: {
-        workspaceId,
-        userId: { not: userId },
-        user: { status: "ACTIVE", systemRole: null },
-        roleAssignments: {
-          some: {
-            siteId: null,
-            role: {
-              isSystem: true,
-              scope: "WORKSPACE",
-              permissions: { has: OWNER_PERMISSION },
-            },
-          },
-        },
-      },
-      select: { id: true },
-    });
-    if (!remainingOwner) {
-      return { success: false, error: "LAST_OWNER" };
-    }
-  }
+  await prisma.workspaceMembership.delete({ where: { id: membership.id } });
+  void context;
 
-  // A pending invitee whose only membership this is has never had an account
-  // outside the invite - removing them here is revoking the invite, so delete
-  // the user entirely and free the email for re-invites.
-  if (membership.user.status === "PENDING") {
-    const otherMemberships = await prisma.workspaceMembership.count({
-      where: { userId, workspaceId: { not: workspaceId } },
-    });
-    if (otherMemberships === 0) {
-      await prisma.user.delete({ where: { id: userId } });
-      await logEvent({
-        action: "INVITE_REVOKED",
-        userId,
-        actorId: opts?.actorId,
-        workspaceId,
-        ipAddress: opts?.ipAddress,
-        userAgent: opts?.userAgent,
-        metadata: { email: membership.user.email, via: "removeMember" },
-      });
-      return { success: true };
-    }
-  }
-
-  await prisma.workspaceMembership.delete({
-    where: { userId_workspaceId: { userId, workspaceId } },
-  });
-  return { success: true };
+  return { success: true as const };
 }
 
-export type RemoveSiteAccessError = "MEMBER_NOT_FOUND" | "NO_SITE_ACCESS" | "LAST_OWNER";
-
 /**
- * Remove a member's access to a single site by deleting their site-scoped
- * role assignments there. If that would leave the membership with no role
- * assignments at all, the whole membership is removed instead (an orphaned
- * membership is invisible in every members view and, for ACTIVE users,
- * unrecoverable — invites reject existing ACTIVE emails). Owner roles are
- * workspace-scoped (siteId null) assignments, so they always survive a
- * site-only removal and the cascade can never hit an owner.
+ * Remove a member's access at ONE site (all bucket accesses on that site's
+ * buckets). A membership left with no accesses at all — and no ownership —
+ * is removed entirely.
  */
 export async function removeSiteAccess(
   workspaceId: string,
   userId: string,
   siteId: string,
-  opts?: { actorId?: string; ipAddress?: string; userAgent?: string },
-): Promise<{ success: true; membershipRemoved: boolean } | { success: false; error: RemoveSiteAccessError }> {
+  context?: { actorId?: string; ipAddress?: string; userAgent?: string },
+) {
   const membership = await prisma.workspaceMembership.findUnique({
     where: { userId_workspaceId: { userId, workspaceId } },
+    select: { id: true, workspaceRole: true },
+  });
+  if (!membership) {
+    return { success: false as const, error: "MEMBER_NOT_FOUND" as const };
+  }
+
+  // The site must keep one plant admin.
+  const plantBucket = await prisma.bucket.findFirst({
+    where: { siteId, kind: "PLANT" },
+    select: { id: true },
+  });
+  if (plantBucket) {
+    const targetAdmin = await prisma.bucketAccess.findFirst({
+      where: { bucketId: plantBucket.id, membershipId: membership.id, tier: "ADMIN" },
+      select: { id: true },
+    });
+    if (targetAdmin && (await wouldRemoveLastPlantAdmin(plantBucket.id, membership.id))) {
+      return { success: false as const, error: "LAST_PLANT_ADMIN" as const };
+    }
+  }
+
+  await prisma.bucketAccess.deleteMany({
+    where: { membershipId: membership.id, bucket: { siteId } },
+  });
+
+  let membershipRemoved = false;
+  if (membership.workspaceRole !== "OWNER") {
+    const remaining = await prisma.bucketAccess.count({ where: { membershipId: membership.id } });
+    if (remaining === 0) {
+      await prisma.workspaceMembership.delete({ where: { id: membership.id } });
+      membershipRemoved = true;
+    }
+  }
+
+  void context;
+
+  return { success: true as const, membershipRemoved };
+}
+
+// ── Reads used across the account surface ────────────────────────────────
+
+export async function getUserWorkspaces(userId: string) {
+  return prisma.workspaceMembership.findMany({
+    where: { userId },
     select: {
       id: true,
-      roleAssignments: { select: { id: true, siteId: true } },
-      workcenterGrants: { select: { id: true, workcenter: { select: { siteId: true } } } },
+      joinedAt: true,
+      workspaceRole: true,
+      workspace: { select: { id: true, name: true, slug: true } },
     },
   });
-
-  if (!membership) {
-    return { success: false, error: "MEMBER_NOT_FOUND" };
-  }
-
-  const siteAssignments = membership.roleAssignments.filter((assignment) => assignment.siteId === siteId);
-  const siteGrants = membership.workcenterGrants.filter((grantRow) => grantRow.workcenter.siteId === siteId);
-  if (siteAssignments.length === 0 && siteGrants.length === 0) {
-    return { success: false, error: "NO_SITE_ACCESS" };
-  }
-
-  const remaining =
-    membership.roleAssignments.length - siteAssignments.length + membership.workcenterGrants.length - siteGrants.length;
-  if (remaining === 0) {
-    // Membership grants cascade-delete with the membership row.
-    const result = await removeMember(workspaceId, userId, opts);
-    if (!result.success) {
-      return result;
-    }
-    return { success: true, membershipRemoved: true };
-  }
-
-  await prisma.$transaction([
-    prisma.roleAssignment.deleteMany({ where: { membershipId: membership.id, siteId } }),
-    prisma.workcenterGrant.deleteMany({ where: { membershipId: membership.id, workcenter: { siteId } } }),
-  ]);
-  return { success: true, membershipRemoved: false };
 }
 
-/**
- * Replace a member's role assignment in the caller's IAM context.
- * Workspace roles replace only the workspace-scoped assignment; site roles
- * replace only the assignment for the caller's current site.
- */
-export async function updateRole(input: UpdateRoleInput): Promise<UpdateRoleResult> {
-  const siteId = input.siteId;
-  const role = await prisma.role.findUnique({ where: { id: input.roleId } });
-
-  if (!role) return updateRoleError("ROLE_NOT_FOUND", `Role ${input.roleId} not found`);
-  if (role.workspaceId !== input.workspaceId) {
-    return updateRoleError("ROLE_WORKSPACE_MISMATCH", `Role ${input.roleId} does not belong to this workspace`);
-  }
-  if (hasReservedOwnerPermission(role)) {
-    return updateRoleError("OWNER_PERMISSION_RESERVED", `${OWNER_PERMISSION} is reserved for workspace system roles`);
-  }
-  if (role.scope === "SITE" && !siteId) {
-    return updateRoleError("SITE_CONTEXT_REQUIRED", "Site context is required to assign a site role");
-  }
-
-  const permissionContext =
-    role.scope === "SITE" ? { workspaceId: input.workspaceId, siteId } : { workspaceId: input.workspaceId };
-
-  const canAssignRoles = await hasAnyPermission(input.actorUserId, USER_ROLE_ASSIGNMENT_PERMISSIONS, permissionContext);
-
-  if (!canAssignRoles) {
-    return updateRoleError("FORBIDDEN", "Missing user-management permission");
-  }
-
-  const actorHasOwnerPermission = await hasPermission(input.actorUserId, OWNER_PERMISSION, {
-    workspaceId: input.workspaceId,
-  });
-  const targetIsOwnerRole = isOwnerRole(role);
-
-  if (targetIsOwnerRole && !actorHasOwnerPermission) {
-    return updateRoleError("OWNER_PERMISSION_REQUIRED", `Missing permission: ${OWNER_PERMISSION}`);
-  }
-
-  return prisma.$transaction(
-    async (tx) => {
-      if (role.scope === "SITE") {
-        const site = await tx.site.findUnique({
-          where: { id: siteId },
-          select: { workspaceId: true },
-        });
-        if (!site) return updateRoleError("SITE_NOT_FOUND", "Site not found");
-        if (site.workspaceId !== input.workspaceId) {
-          return updateRoleError("SITE_WORKSPACE_MISMATCH", "Site does not belong to this workspace");
-        }
-      }
-
-      const membership = await tx.workspaceMembership.findUnique({
-        where: {
-          userId_workspaceId: {
-            userId: input.targetUserId,
-            workspaceId: input.workspaceId,
-          },
-        },
-        select: { id: true },
-      });
-      if (!membership) return updateRoleError("MEMBER_NOT_FOUND", "Member not found");
-
-      const assignmentSiteId = role.scope === "SITE" ? siteId : null;
-      const currentAssignments = await tx.roleAssignment.findMany({
-        where: { membershipId: membership.id, siteId: assignmentSiteId },
-        include: { role: true },
-      });
-      const currentHasOwnerRole = currentAssignments.some((assignment) => isOwnerRole(assignment.role));
-
-      if (currentHasOwnerRole && !actorHasOwnerPermission) {
-        return updateRoleError("OWNER_PERMISSION_REQUIRED", `Missing permission: ${OWNER_PERMISSION}`);
-      }
-
-      if (currentHasOwnerRole && !targetIsOwnerRole) {
-        const remainingOwner = await tx.workspaceMembership.findFirst({
-          where: {
-            workspaceId: input.workspaceId,
-            userId: { not: input.targetUserId },
-            user: { status: "ACTIVE", systemRole: null },
-            roleAssignments: {
-              some: {
-                siteId: null,
-                role: {
-                  isSystem: true,
-                  scope: "WORKSPACE",
-                  permissions: { has: OWNER_PERMISSION },
-                },
-              },
-            },
-          },
-          select: { id: true },
-        });
-        if (!remainingOwner) {
-          return updateRoleError("LAST_OWNER", "Cannot remove the last workspace owner");
-        }
-      }
-
-      // Site-level analog of the last-owner guard: a plant must keep at
-      // least one member whose SITE role carries plant:admin (Plant Admin
-      // or a custom admin role), so the site stays self-administrable
-      // without Company Administrator intervention.
-      const SITE_ADMIN_MARKER = "plant:admin";
-      const currentIsSiteAdmin =
-        role.scope === "SITE" &&
-        currentAssignments.some(
-          (assignment) => assignment.role.scope === "SITE" && assignment.role.permissions.includes(SITE_ADMIN_MARKER),
-        );
-      const targetIsSiteAdmin = role.permissions.includes(SITE_ADMIN_MARKER);
-      if (currentIsSiteAdmin && !targetIsSiteAdmin) {
-        const remainingAdmin = await tx.workspaceMembership.findFirst({
-          where: {
-            workspaceId: input.workspaceId,
-            userId: { not: input.targetUserId },
-            user: { status: "ACTIVE", systemRole: null },
-            roleAssignments: {
-              some: {
-                siteId: assignmentSiteId,
-                role: { scope: "SITE", permissions: { has: SITE_ADMIN_MARKER } },
-              },
-            },
-          },
-          select: { id: true },
-        });
-        if (!remainingAdmin) {
-          return updateRoleError("LAST_SITE_ADMIN", "Cannot change the role of the last plant admin at this site");
-        }
-      }
-
-      await tx.roleAssignment.deleteMany({
-        where: { membershipId: membership.id, siteId: assignmentSiteId },
-      });
-      await tx.roleAssignment.create({
-        data: {
-          membershipId: membership.id,
-          roleId: role.id,
-          siteId: assignmentSiteId,
-        },
-      });
-
-      const updated = await tx.workspaceMembership.findUniqueOrThrow({
-        where: { id: membership.id },
-        include: {
-          user: {
-            select: { id: true, email: true, firstName: true, lastName: true },
-          },
-        },
-      });
-
-      return {
-        success: true as const,
-        data: updated as { [x: string]: unknown },
-      };
-    },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-  );
-}
-
-async function resolveWorkspaceRole(workspaceId: string, roleId: string): Promise<Role> {
-  const role = await prisma.role.findUnique({ where: { id: roleId } });
-  if (!role) throw new Error(`Role ${roleId} not found`);
-  if (role.workspaceId !== workspaceId) {
-    throw new Error(`Role ${roleId} does not belong to workspace ${workspaceId}`);
-  }
-  if (role.scope !== "WORKSPACE") {
-    throw new Error(`Role ${roleId} is site-scoped; cannot be assigned as workspace membership`);
-  }
-  return role;
-}
-
-export async function listMembers(workspaceId: string) {
-  // Defense in depth — system users can't hold WorkspaceMembership rows per the
-  // RBAC invariants, but we filter them here regardless.
-  const members = await prisma.workspaceMembership.findMany({
-    where: { workspaceId, user: { systemRole: null } },
-    include: {
-      user: {
-        select: {
-          id: true,
-          email: true,
-          firstName: true,
-          lastName: true,
-          status: true,
-          lastLoginAt: true,
-          invitedBy: true,
-          invitedAt: true,
-          inviteTokenExpiry: true,
-          mustChangePassword: true,
-        },
-      },
-      roleAssignments: {
-        include: {
-          site: { select: { id: true, name: true } },
-          role: {
-            select: {
-              id: true,
-              name: true,
-              isSystem: true,
-              scope: true,
-              permissions: true,
-            },
-          },
-        },
-        orderBy: { createdAt: "asc" },
-      },
-      workcenterGrants: {
-        include: { workcenter: { select: { id: true, name: true, siteId: true } } },
-        orderBy: { createdAt: "asc" },
-      },
-    },
-    orderBy: { joinedAt: "asc" },
-  });
-
-  return members.map((m) => {
-    const { inviteTokenExpiry, ...userRest } = m.user;
-    return {
-      ...m,
-      user: { ...userRest, inviteExpiry: inviteTokenExpiry },
-      roles: m.roleAssignments.map((assignment) => assignment.role),
-    };
-  });
-}
-
-export async function getUserWorkspaces(userId: string): Promise<WorkspaceMembership[]> {
-  const memberships = await prisma.workspaceMembership.findMany({
-    where: { userId },
-    include: {
-      workspace: {
-        select: { id: true, name: true, slug: true, description: true },
-      },
-      employee: {
-        select: {
-          id: true,
-          status: true,
-          version: {
-            select: {
-              id: true,
-              version: true,
-              firstName: true,
-              lastName: true,
-              employeeNumber: true,
-              badgeNumber: true,
-            },
-          },
-        },
-      },
-      roleAssignments: {
-        include: {
-          site: { select: { id: true, name: true } },
-          role: {
-            select: {
-              id: true,
-              name: true,
-              isSystem: true,
-              scope: true,
-              permissions: true,
-            },
-          },
-        },
-        orderBy: { createdAt: "asc" },
-      },
-      workcenterGrants: {
-        include: { workcenter: { select: { id: true, name: true, siteId: true } } },
-        orderBy: { createdAt: "asc" },
-      },
-    },
-    orderBy: { joinedAt: "asc" },
-  });
-
-  return memberships.map((m) => ({
-    id: m.workspace.id,
-    name: m.workspace.name,
-    slug: m.workspace.slug,
-    description: m.workspace.description,
-    joinedAt: m.joinedAt,
-    employee: m.employee,
-    ...buildWorkspaceAccessSummary(m.roleAssignments, m.workcenterGrants),
-  }));
-}
-
-export async function getUserAccess(workspaceId: string, userId: string) {
-  return prisma.workspaceMembership.findUnique({
+export async function getUserAccess(workspaceId: string, userId: string): Promise<MemberAccessSummary | null> {
+  const membership = await prisma.workspaceMembership.findUnique({
     where: { userId_workspaceId: { userId, workspaceId } },
+    select: { workspaceRole: true, bucketAccesses: { select: ACCESS_SELECT } },
   });
+  if (!membership) return null;
+  return summarize(membership.workspaceRole, membership.bucketAccesses);
 }
 
 export async function isMember(workspaceId: string, userId: string): Promise<boolean> {
-  const membership = await getUserAccess(workspaceId, userId);
-  return !!membership;
+  const membership = await prisma.workspaceMembership.findUnique({
+    where: { userId_workspaceId: { userId, workspaceId } },
+    select: { id: true },
+  });
+  return membership !== null;
 }
 
 export async function countMembers(workspaceId: string): Promise<number> {
   return prisma.workspaceMembership.count({ where: { workspaceId } });
-}
-
-/**
- * Look up a seeded workspace-scoped system role by name in a workspace.
- */
-export async function findSystemRoleOrThrow(workspaceId: string, name: "Company Administrator"): Promise<Role> {
-  const role = await findSystemRole(workspaceId, name, "WORKSPACE");
-  if (!role) {
-    throw new Error(`System role "${name}" missing for workspace ${workspaceId}`);
-  }
-  return role;
 }

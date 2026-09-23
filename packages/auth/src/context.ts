@@ -10,16 +10,21 @@ export const Principal = {
 export type PrincipalType = (typeof Principal)[keyof typeof Principal];
 
 /**
- * Role/permission state resolved once per request by the auth plugin.
- * Structural twin of PermissionSnapshot in iam/permissions.ts (kept
- * import-free here); lets policy checks evaluate without re-querying.
+ * Bucket-access state resolved once per request by the auth plugin.
+ * Structural twin of BucketSnapshot in iam/buckets.ts (kept import-free
+ * here); lets policy checks evaluate without re-querying.
  */
-export interface IAMPermissionSnapshot {
-  systemRole: string | null;
-  assignments: Array<{ siteId: string | null; permissions: string[] }>;
-  workcenterGrants?: Array<{ workcenterId: string; siteId: string; access: string }>;
-  /** Sites whose baseWorkcenterAccess policy is GRANTS_REQUIRED (absent = ALL). */
-  grantsRequiredSiteIds?: string[];
+export interface IAMBucketSnapshot {
+  owner: boolean;
+  staff: "NONE" | "READ" | "FULL";
+  entries: Array<{
+    bucketId: string;
+    kind: "PLANT" | "WORKCENTER";
+    siteId: string | null;
+    workcenterId: string | null;
+    tier: "VIEW" | "MANAGE" | "ADMIN";
+    via: "direct" | "member" | "cascade";
+  }>;
 }
 
 interface BaseIAMContext {
@@ -35,7 +40,7 @@ interface BaseIAMContext {
     name: string;
     slug: string;
   };
-  permissionSnapshot?: IAMPermissionSnapshot;
+  bucketSnapshot?: IAMBucketSnapshot;
 }
 
 export interface IAMContext extends BaseIAMContext {

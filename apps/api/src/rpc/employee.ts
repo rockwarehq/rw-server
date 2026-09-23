@@ -60,26 +60,26 @@ const setSmsConsentInputSchema = z.object({
 // ============================================================================
 
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "plant:admin", scope: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await crud.create(input);
   return result.data;
 });
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "plant:admin", scope: { kind: "site", siteId: input.siteId } }));
+  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "site", siteId: input.siteId } }));
 
   return crud.list(input);
 });
 
 export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "plant:admin", scope: { kind: "anySite" } }));
+  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "anySite" } }));
 
   return unwrap(await crud.getById(input.id), { notFoundMessage: "Employee not found" });
 });
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "plant:admin", scope: { kind: "anySite" } }));
+  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "anySite" } }));
 
   const { id, ...updateData } = input;
   const result = await crud.update(id, updateData);
@@ -90,7 +90,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 });
 
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "plant:admin", scope: { kind: "anySite" } }));
+  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "anySite" } }));
 
   const result = await crud.remove(input.id);
   if (result.error !== undefined) throwServiceError(result);
@@ -98,13 +98,13 @@ export const remove = authRequired.input(idInputSchema).handler(async ({ input, 
 });
 
 export const setSmsConsent = authRequired.input(setSmsConsentInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "plant:admin", scope: { kind: "anySite" } }));
+  grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "anySite" } }));
   return unwrap(await smsConsent.set({ ...input, actorUserId: context.iam.id }));
 });
 
 export const smsConsentHistory = authRequired
   .input(z.object({ employeeId: z.uuid() }))
   .handler(async ({ input, context }) => {
-    grant(await authorize(context.iam, { permission: "plant:admin", scope: { kind: "anySite" } }));
+    grant(await authorize(context.iam, { tier: "ADMIN", scope: { kind: "anySite" } }));
     return unwrap(await smsConsent.history(input.employeeId));
   });

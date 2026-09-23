@@ -204,7 +204,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { permission: "configuration:write", scope: { kind: "workspace" } });
+      const auth = await authorize(request.iam, { tier: "ADMIN", scope: { kind: "workspace" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await site.create({ ...request.body, workspaceId: auth.workspaceId });
@@ -275,17 +275,10 @@ export default async function sites(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const production = await authorize(request.iam, {
-        permission: "production:read",
+      const auth = await authorize(request.iam, {
+        tier: "VIEW",
         scope: { kind: "site", siteId: request.params.id },
       });
-      // Shared reference read: production OR planning visibility both qualify.
-      const auth = production.ok
-        ? production
-        : await authorize(request.iam, {
-            permission: "planning:read",
-            scope: { kind: "site", siteId: request.params.id },
-          });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await site.getById(request.params.id, auth.workspaceId);
@@ -317,7 +310,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "configuration:write",
+        tier: "MANAGE",
         scope: { kind: "site", siteId: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
@@ -351,7 +344,7 @@ export default async function sites(fastify: FastifyTypedInstance) {
     },
     handler: async (request, reply) => {
       const auth = await authorize(request.iam, {
-        permission: "configuration:write",
+        tier: "MANAGE",
         scope: { kind: "site", siteId: request.params.id },
       });
       if (!auth.ok) return replyPolicyDenial(reply, auth);

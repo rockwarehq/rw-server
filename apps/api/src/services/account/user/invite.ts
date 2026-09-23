@@ -1,6 +1,12 @@
 import prisma from "@rw/db";
 import { securityConfig } from "../../../config.js";
-import { hasOwnerPermission, hasPermission, OWNER_PERMISSION } from "@rw/auth/iam/index";
+import {
+  type BucketSnapshot,
+  type BucketTier,
+  loadBucketSnapshot,
+  snapshotPlantTier,
+  tierAtLeast,
+} from "@rw/auth/iam/index";
 import { hashPassword } from "@rw/auth/password";
 import { sendInviteEmail } from "@rw/services/email/index";
 import { logEvent } from "@rw/services/audit/index";
@@ -12,17 +18,13 @@ export interface CreateInviteInput {
   workspaceId: string;
   context?: InviteContext;
   /**
-   * Role id to assign to new invitees. New invites (and adoptions of
-   * orphaned pending users) need a roleId, workcenterGrants, or both;
-   * resending an existing pending invite needs neither. Workspace roles
-   * assign at workspace scope; site roles assign to `siteId` or the
-   * caller's site fallback.
+   * Bucket accesses for new invitees (and adoptions of orphaned pending
+   * users). New invites need bucketAccesses or asOwner; resending an
+   * existing pending invite needs neither.
    */
-  roleId?: string;
-  siteId?: string;
-  fallbackSiteId?: string;
-  /** Workcenter grants to create for the invitee (GitHub-collaborator style). */
-  workcenterGrants?: Array<{ workcenterId: string; access: "READ" | "WRITE" }>;
+  bucketAccesses?: Array<{ bucketId: string; tier: BucketTier }>;
+  /** Invite as workspace owner — reserved; only an owner may do this. */
+  asOwner?: boolean;
   firstName?: string;
   lastName?: string;
   /** Validated http(s) origin of the inviting client, used in the email link. */
@@ -50,161 +52,82 @@ export interface InviteContext {
   userAgent?: string;
 }
 
-interface InviteAssignment {
-  roleId: string;
-  siteId: string | null;
-  scope: "WORKSPACE" | "SITE";
-  isOwner: boolean;
+interface ResolvedInviteAccess {
+  accesses: Array<{ bucketId: string; tier: BucketTier; siteId: string | null; kind: string }>;
+  asOwner: boolean;
 }
 
-interface InviteGrant {
-  workcenterId: string;
-  siteId: string;
-  access: "READ" | "WRITE";
-}
-
-interface InviteAccess {
-  assignment: InviteAssignment | null;
-  grants: InviteGrant[];
-}
-
-/** Resolve and validate the invite's access: a role, workcenter grants, or both. */
+/** Resolve and validate the invite's access: bucket accesses, ownership, or both. */
 async function resolveInviteAccess(input: {
   workspaceId: string;
-  roleId?: string;
-  siteId?: string;
-  fallbackSiteId?: string;
-  workcenterGrants?: Array<{ workcenterId: string; access: "READ" | "WRITE" }>;
-}): Promise<{ ok: true; access: InviteAccess } | { ok: false; error: string }> {
-  const grantInputs = input.workcenterGrants ?? [];
-  if (!input.roleId && grantInputs.length === 0) {
-    return { ok: false, error: "roleId or workcenterGrants is required" };
+  bucketAccesses?: Array<{ bucketId: string; tier: BucketTier }>;
+  asOwner?: boolean;
+}): Promise<{ ok: true; access: ResolvedInviteAccess } | { ok: false; error: string }> {
+  const wanted = input.bucketAccesses ?? [];
+  if (wanted.length === 0 && !input.asOwner) {
+    return { ok: false, error: "bucketAccesses or asOwner is required" };
   }
 
-  let assignment: InviteAssignment | null = null;
-  if (input.roleId) {
-    const resolved = await resolveInviteAssignment(input);
-    if (!resolved.ok) return resolved;
-    assignment = resolved.assignment;
-  }
-
-  const grants: InviteGrant[] = [];
-  for (const grantInput of grantInputs) {
-    const workcenter = await prisma.workcenter.findUnique({
-      where: { id: grantInput.workcenterId },
-      select: { id: true, site: { select: { id: true, workspaceId: true } } },
+  const accesses: ResolvedInviteAccess["accesses"] = [];
+  for (const a of wanted) {
+    const bucket = await prisma.bucket.findUnique({
+      where: { id: a.bucketId },
+      select: { id: true, kind: true, siteId: true, workspaceId: true },
     });
-    if (!workcenter) return { ok: false, error: "Workcenter not found" };
-    if (workcenter.site.workspaceId !== input.workspaceId) {
-      return { ok: false, error: "Workcenter does not belong to this workspace" };
+    if (!bucket) return { ok: false, error: "Bucket not found" };
+    if (bucket.workspaceId !== input.workspaceId) {
+      return { ok: false, error: "Bucket does not belong to this workspace" };
     }
-    grants.push({ workcenterId: workcenter.id, siteId: workcenter.site.id, access: grantInput.access });
-  }
-
-  return { ok: true, access: { assignment, grants } };
-}
-
-async function resolveInviteAssignment(input: {
-  workspaceId: string;
-  roleId?: string;
-  siteId?: string;
-  fallbackSiteId?: string;
-}): Promise<{ ok: true; assignment: InviteAssignment } | { ok: false; error: string }> {
-  if (!input.roleId) {
-    return { ok: false, error: "roleId is required" };
-  }
-
-  const role = await prisma.role.findUnique({
-    where: { id: input.roleId },
-    select: { id: true, name: true, scope: true, workspaceId: true, isSystem: true, permissions: true },
-  });
-  if (!role) return { ok: false, error: "Role not found" };
-  if (role.workspaceId !== input.workspaceId) {
-    return { ok: false, error: "Role does not belong to this workspace" };
-  }
-
-  const isOwner = hasOwnerPermission(role.permissions);
-  if (isOwner && (!role.isSystem || role.scope !== "WORKSPACE")) {
-    return { ok: false, error: `${OWNER_PERMISSION} is reserved for workspace system roles` };
-  }
-
-  if (role.scope === "WORKSPACE") {
-    if (input.siteId) {
-      return { ok: false, error: "siteId cannot be used with a workspace-scoped role" };
+    if (bucket.kind === "WORKCENTER" && a.tier === "ADMIN") {
+      return { ok: false, error: "ADMIN is a plant tier; workcenter buckets go up to MANAGE" };
     }
-    return { ok: true, assignment: { roleId: role.id, siteId: null, scope: "WORKSPACE", isOwner } };
+    accesses.push({ bucketId: bucket.id, tier: a.tier, siteId: bucket.siteId, kind: bucket.kind });
   }
 
-  const siteId = input.siteId ?? input.fallbackSiteId;
-  if (!siteId) {
-    return { ok: false, error: "siteId is required for site-scoped invite roles" };
-  }
-
-  const site = await prisma.site.findUnique({
-    where: { id: siteId },
-    select: { workspaceId: true },
-  });
-  if (!site) return { ok: false, error: "Site not found" };
-  if (site.workspaceId !== input.workspaceId) {
-    return { ok: false, error: "Site does not belong to this workspace" };
-  }
-
-  return { ok: true, assignment: { roleId: role.id, siteId, scope: "SITE", isOwner: false } };
+  return { ok: true, access: { accesses, asOwner: input.asOwner === true } };
 }
 
-async function canInviteAssignment(inviterId: string, workspaceId: string, assignment: InviteAssignment) {
-  if (assignment.isOwner) {
-    return hasPermission(inviterId, OWNER_PERMISSION, { workspaceId });
-  }
-
-  return hasPermission(inviterId, "plant:admin", {
-    workspaceId,
-    ...(assignment.siteId ? { siteId: assignment.siteId } : {}),
-  });
+/** ADMIN at a site's plant (owner/staff bypass included). */
+function actorAdminAt(snapshot: BucketSnapshot, siteId: string | null): boolean {
+  if (snapshot.owner || snapshot.staff === "FULL") return true;
+  if (!siteId) return false;
+  return tierAtLeast(snapshotPlantTier(snapshot, siteId), "ADMIN");
 }
 
-async function canInviteAccess(inviterId: string, workspaceId: string, access: InviteAccess): Promise<boolean> {
-  if (access.assignment && !(await canInviteAssignment(inviterId, workspaceId, access.assignment))) {
-    return false;
-  }
-  // Every granted workcenter's site needs the inviter to hold user:write.
-  for (const grantRow of access.grants) {
-    const ok = await hasPermission(inviterId, "plant:admin", { workspaceId, siteId: grantRow.siteId });
-    if (!ok) return false;
+function actorAdminAnywhere(snapshot: BucketSnapshot): boolean {
+  if (snapshot.owner || snapshot.staff === "FULL") return true;
+  return snapshot.entries.some((e) => e.kind === "PLANT" && tierAtLeast(e.tier, "ADMIN"));
+}
+
+async function canInviteAccess(inviterId: string, workspaceId: string, access: ResolvedInviteAccess) {
+  const snapshot = await loadBucketSnapshot(inviterId, workspaceId);
+  if (!snapshot) return false;
+  // Handing out ownership is reserved for owners, strictly.
+  if (access.asOwner && !snapshot.owner) return false;
+  for (const a of access.accesses) {
+    if (!actorAdminAt(snapshot, a.siteId)) return false;
   }
   return true;
 }
 
-type ExistingAssignment = { siteId: string | null; role: { permissions: string[] } };
-
+/**
+ * Resend/revoke authority: ADMIN at any site the pending member has access
+ * at; owner-memberships are owner-managed only.
+ */
 async function canManagePendingInvite(
   actorId: string,
   workspaceId: string,
-  assignments: ExistingAssignment[],
-  grantSiteIds: string[] = [],
+  target: { workspaceRole: string; accessSiteIds: Array<string | null> },
 ): Promise<boolean> {
-  if (assignments.length === 0 && grantSiteIds.length === 0) {
-    // Orphaned invite with no role context - require workspace-level rights
-    return hasPermission(actorId, "plant:admin", { workspaceId });
+  const snapshot = await loadBucketSnapshot(actorId, workspaceId);
+  if (!snapshot) return false;
+  if (target.workspaceRole === "OWNER") return snapshot.owner;
+  const siteIds = target.accessSiteIds.filter((s): s is string => s !== null);
+  if (siteIds.length === 0) {
+    // Orphaned invite with no access context — plant admins may clean up.
+    return actorAdminAnywhere(snapshot);
   }
-
-  if (assignments.some((assignment) => hasOwnerPermission(assignment.role.permissions))) {
-    return hasPermission(actorId, OWNER_PERMISSION, { workspaceId });
-  }
-
-  for (const assignment of assignments) {
-    const ok = await hasPermission(actorId, "plant:admin", {
-      workspaceId,
-      ...(assignment.siteId ? { siteId: assignment.siteId } : {}),
-    });
-    if (ok) return true;
-  }
-  for (const siteId of grantSiteIds) {
-    const ok = await hasPermission(actorId, "plant:admin", { workspaceId, siteId });
-    if (ok) return true;
-  }
-
-  return false;
+  return siteIds.some((siteId) => actorAdminAt(snapshot, siteId));
 }
 
 async function inviteEmailContext(inviterId: string, workspaceId: string) {
@@ -212,7 +135,6 @@ async function inviteEmailContext(inviterId: string, workspaceId: string) {
     prisma.user.findUnique({ where: { id: inviterId }, select: { firstName: true, lastName: true } }),
     prisma.workspace.findUnique({ where: { id: workspaceId }, select: { name: true } }),
   ]);
-
   return {
     inviterName: inviter ? [inviter.firstName, inviter.lastName].filter(Boolean).join(" ") || undefined : undefined,
     workspaceName: workspace?.name,
@@ -259,46 +181,39 @@ export async function createInvite(
 
   let user: { id: string; email: string; status: string; firstName: string | null; lastName: string | null };
   let mode: "resent" | "adopted" | "new";
-  let auditAssignment: {
-    roleId?: string;
-    siteId?: string | null;
-    workcenterGrants?: Array<{ workcenterId: string; access: string }>;
+  let auditAccess: {
+    asOwner?: boolean;
+    bucketAccesses?: Array<{ bucketId: string; tier: string }>;
   } = {};
 
-  const auditFromAccess = (access: InviteAccess): typeof auditAssignment => ({
-    ...(access.assignment ? { roleId: access.assignment.roleId, siteId: access.assignment.siteId } : {}),
-    ...(access.grants.length
-      ? { workcenterGrants: access.grants.map((g) => ({ workcenterId: g.workcenterId, access: g.access })) }
+  const auditFromAccess = (access: ResolvedInviteAccess): typeof auditAccess => ({
+    ...(access.asOwner ? { asOwner: true } : {}),
+    ...(access.accesses.length
+      ? { bucketAccesses: access.accesses.map((a) => ({ bucketId: a.bucketId, tier: a.tier })) }
       : {}),
   });
 
   if (existingUser) {
-    // PENDING user - either a straight resend or adoption of an orphan
-    // (missing membership, or zero role assignments AND zero workcenter
-    // grants - the states the old flow left permanently uninvitable).
+    // PENDING user — either a straight resend or adoption of an orphan
+    // (missing membership, or zero bucket accesses and not an owner: the
+    // states the old flow left permanently uninvitable).
     const membership = await prisma.workspaceMembership.findUnique({
       where: { userId_workspaceId: { userId: existingUser.id, workspaceId } },
       select: {
         id: true,
-        roleAssignments: {
-          select: { siteId: true, role: { select: { permissions: true } } },
-        },
-        workcenterGrants: {
-          select: { workcenter: { select: { siteId: true } } },
-        },
+        workspaceRole: true,
+        bucketAccesses: { select: { bucket: { select: { siteId: true } } } },
       },
     });
 
-    if (membership && (membership.roleAssignments.length > 0 || membership.workcenterGrants.length > 0)) {
+    if (membership && (membership.bucketAccesses.length > 0 || membership.workspaceRole === "OWNER")) {
       mode = "resent";
-      // Resend refreshes invite delivery only. Role/membership changes are
-      // explicit member-management actions and are not hidden in resend.
-      const canResend = await canManagePendingInvite(
-        inviterId,
-        workspaceId,
-        membership.roleAssignments,
-        membership.workcenterGrants.map((g) => g.workcenter.siteId),
-      );
+      // Resend refreshes invite delivery only. Access changes are explicit
+      // member-management actions and are not hidden in resend.
+      const canResend = await canManagePendingInvite(inviterId, workspaceId, {
+        workspaceRole: membership.workspaceRole,
+        accessSiteIds: membership.bucketAccesses.map((a) => a.bucket.siteId),
+      });
       if (!canResend) {
         return { success: false, error: "Forbidden" };
       }
@@ -324,7 +239,7 @@ export async function createInvite(
       if (!(await canInviteAccess(inviterId, workspaceId, access))) {
         return { success: false, error: "Forbidden" };
       }
-      auditAssignment = auditFromAccess(access);
+      auditAccess = auditFromAccess(access);
 
       try {
         user = await prisma.$transaction(async (tx) => {
@@ -336,34 +251,20 @@ export async function createInvite(
 
           const adoptedMembership = await tx.workspaceMembership.upsert({
             where: { userId_workspaceId: { userId: existingUser.id, workspaceId } },
-            update: {},
-            create: { workspaceId, userId: existingUser.id },
+            update: { ...(access.asOwner ? { workspaceRole: "OWNER" as const } : {}) },
+            create: {
+              workspaceId,
+              userId: existingUser.id,
+              ...(access.asOwner ? { workspaceRole: "OWNER" as const } : {}),
+            },
             select: { id: true },
           });
 
-          if (access.assignment) {
-            await tx.roleAssignment.create({
-              data: {
-                membershipId: adoptedMembership.id,
-                roleId: access.assignment.roleId,
-                siteId: access.assignment.siteId,
-              },
-            });
-          }
-          for (const grantRow of access.grants) {
-            await tx.workcenterGrant.upsert({
-              where: {
-                membershipId_workcenterId: {
-                  membershipId: adoptedMembership.id,
-                  workcenterId: grantRow.workcenterId,
-                },
-              },
-              update: { access: grantRow.access },
-              create: {
-                membershipId: adoptedMembership.id,
-                workcenterId: grantRow.workcenterId,
-                access: grantRow.access,
-              },
+          for (const a of access.accesses) {
+            await tx.bucketAccess.upsert({
+              where: { bucketId_membershipId: { bucketId: a.bucketId, membershipId: adoptedMembership.id } },
+              update: { tier: a.tier },
+              create: { bucketId: a.bucketId, membershipId: adoptedMembership.id, tier: a.tier },
             });
           }
 
@@ -385,7 +286,7 @@ export async function createInvite(
     if (!(await canInviteAccess(inviterId, workspaceId, access))) {
       return { success: false, error: "Forbidden" };
     }
-    auditAssignment = auditFromAccess(access);
+    auditAccess = auditFromAccess(access);
 
     try {
       user = await prisma.$transaction(async (tx) => {
@@ -399,21 +300,20 @@ export async function createInvite(
         });
 
         const membership = await tx.workspaceMembership.create({
-          data: { workspaceId, userId: createdUser.id },
+          data: {
+            workspaceId,
+            userId: createdUser.id,
+            ...(access.asOwner ? { workspaceRole: "OWNER" as const } : {}),
+          },
           select: { id: true },
         });
 
-        if (access.assignment) {
-          await tx.roleAssignment.create({
-            data: { membershipId: membership.id, roleId: access.assignment.roleId, siteId: access.assignment.siteId },
-          });
-        }
-        if (access.grants.length) {
-          await tx.workcenterGrant.createMany({
-            data: access.grants.map((grantRow) => ({
+        if (access.accesses.length) {
+          await tx.bucketAccess.createMany({
+            data: access.accesses.map((a) => ({
+              bucketId: a.bucketId,
               membershipId: membership.id,
-              workcenterId: grantRow.workcenterId,
-              access: grantRow.access,
+              tier: a.tier,
             })),
           });
         }
@@ -447,7 +347,7 @@ export async function createInvite(
     metadata: {
       mode,
       emailSent: emailResult.success,
-      ...auditAssignment,
+      ...auditAccess,
     },
   });
 
@@ -487,12 +387,8 @@ export async function revokeInvite(input: {
         where: { workspaceId },
         select: {
           id: true,
-          roleAssignments: {
-            select: { siteId: true, role: { select: { permissions: true } } },
-          },
-          workcenterGrants: {
-            select: { workcenter: { select: { siteId: true } } },
-          },
+          workspaceRole: true,
+          bucketAccesses: { select: { bucket: { select: { siteId: true } } } },
         },
       },
     },
@@ -512,17 +408,15 @@ export async function revokeInvite(input: {
     return { success: false, error: "NOT_PENDING" };
   }
 
-  const canRevoke = await canManagePendingInvite(
-    actorId,
-    workspaceId,
-    target.memberships[0].roleAssignments,
-    target.memberships[0].workcenterGrants.map((g) => g.workcenter.siteId),
-  );
+  const canRevoke = await canManagePendingInvite(actorId, workspaceId, {
+    workspaceRole: target.memberships[0].workspaceRole,
+    accessSiteIds: target.memberships[0].bucketAccesses.map((a) => a.bucket.siteId),
+  });
   if (!canRevoke) {
     return { success: false, error: "FORBIDDEN" };
   }
 
-  // Memberships, role assignments, and refresh tokens all cascade
+  // Memberships, bucket accesses, and refresh tokens all cascade
   await prisma.user.delete({ where: { id: target.id } });
 
   await logEvent({

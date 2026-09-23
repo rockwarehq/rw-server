@@ -40,51 +40,34 @@ const listInputSchema = z.object({
 });
 
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
-  );
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }));
 
   return unwrap(await label.create(input));
 });
 
 export const list = authRequired.input(listInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    // Shared reference read: production OR planning visibility both qualify.
-    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }).then(
-      async (production) =>
-        production.ok
-          ? production
-          : await authorizeList(context.iam, { permission: "planning:read", requestedSiteId: input.siteId }),
-    ),
+    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
   );
 
   return label.list({ ...input, ...scopeFilter(scope) });
 });
 
 export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  // Shared reference read: production OR planning visibility both qualify.
-  const production = await authorize(context.iam, {
-    permission: "production:read",
-    scope: { kind: "label", id: input.id },
-  });
-  grant(
-    production.ok
-      ? production
-      : await authorize(context.iam, { permission: "planning:read", scope: { kind: "label", id: input.id } }),
-  );
+  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "label", id: input.id } }));
 
   return unwrap(await label.getById(input.id), { notFoundMessage: "Label not found" });
 });
 
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "configuration:write", scope: { kind: "label", id: input.id } }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "label", id: input.id } }));
 
   const { id, ...updateData } = input;
   return unwrap(await label.update(id, updateData));
 });
 
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(await authorize(context.iam, { permission: "configuration:write", scope: { kind: "label", id: input.id } }));
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "label", id: input.id } }));
 
   const result = await label.remove(input.id);
   if (result.error) throwServiceError(result);

@@ -21,7 +21,10 @@ model Workspace {
   // Employee profiles owned by this workspace
   employees Employee[]
 
-  // RBAC
+  // Access-control containers
+  buckets Bucket[]
+
+  // ARCHIVED (pre-bucket model)
   roles Role[]
 
   // Shared object schemas owned by this workspace
@@ -34,7 +37,15 @@ model Workspace {
   smsConsents SmsConsent[]
 }
 
-/// Membership: links a User to a Workspace and owns that user's role assignments.
+/// The workspace-level standing of a member. OWNER is the reserved
+/// Basecamp-account-owner analog: bypasses buckets, holds ownership-only
+/// operations (workspace create/delete, ownership transfer).
+enum WorkspaceRole {
+  OWNER
+  MEMBER
+}
+
+/// Membership: links a User to a Workspace and owns that user's bucket accesses.
 model WorkspaceMembership {
   id String @id @default(uuid()) @db.Uuid
 
@@ -50,6 +61,11 @@ model WorkspaceMembership {
   employeeId String?   @db.Uuid
   employee   Employee? @relation(fields: [employeeId], references: [id], onDelete: SetNull)
 
+  workspaceRole WorkspaceRole @default(MEMBER)
+
+  bucketAccesses BucketAccess[]
+
+  // ARCHIVED relations (pre-bucket model; no code paths).
   roleAssignments  RoleAssignment[]
   workcenterGrants WorkcenterGrant[]
 
@@ -112,6 +128,7 @@ model Site {
   productStockAdjustments ProductStockAdjustment[]
   shiftComments           ShiftComment[]
   shiftSignoffs      ShiftSignoff[]
+  buckets                 Bucket[]
   roleAssignments         RoleAssignment[]
   materialLedgerEntries   MaterialLedgerEntry[]
   materialShiftUsage      MaterialShiftUsage[]

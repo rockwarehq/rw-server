@@ -2,8 +2,7 @@ import type { JSONSchema } from "json-schema-to-ts";
 import type { FastifyTypedInstance } from "../types/fastify.js";
 import { workspace } from "../services/account/index.js";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
-import { requirePermission } from "../plugins/require-permission.js";
-import { hasPermission } from "@rw/auth/iam/index";
+import { requireTier } from "../plugins/require-permission.js";
 import { authorize } from "@rw/auth/iam/policy";
 import { replyPolicyDenial } from "./authz.js";
 
@@ -27,12 +26,15 @@ const workspaceSchema = {
   },
 } as const satisfies JSONSchema;
 
-const roleRefSchema = {
+const bucketAccessSchema = {
   type: "object",
   properties: {
-    id: { type: "string", format: "uuid" },
+    bucketId: { type: "string", format: "uuid" },
+    kind: { type: "string", enum: ["PLANT", "WORKCENTER"] },
+    siteId: { type: ["string", "null"], format: "uuid" },
+    workcenterId: { type: ["string", "null"], format: "uuid" },
     name: { type: "string" },
-    isSystem: { type: "boolean" },
+    tier: { type: "string", enum: ["VIEW", "MANAGE", "ADMIN"] },
   },
 } as const satisfies JSONSchema;
 
@@ -55,85 +57,21 @@ const employeeProfileSchema = {
   },
 } as const satisfies JSONSchema;
 
-const roleAssignmentSchema = {
-  type: "object",
-  properties: {
-    id: { type: "string", format: "uuid" },
-    siteId: { type: ["string", "null"], format: "uuid" },
-    site: {
-      type: ["object", "null"],
-      properties: {
-        id: { type: "string", format: "uuid" },
-        name: { type: "string" },
-      },
-    },
-    role: {
-      type: "object",
-      properties: {
-        id: { type: "string", format: "uuid" },
-        name: { type: "string" },
-        isSystem: { type: "boolean" },
-        scope: { type: "string", enum: ["WORKSPACE", "SITE"] },
-        permissions: { type: "array", items: { type: "string" } },
-      },
-    },
-  },
-} as const satisfies JSONSchema;
-
 const accessSchema = {
   type: "object",
   properties: {
-    workspacePermissions: { type: "array", items: { type: "string" } },
-    sitePermissions: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          siteId: { type: "string", format: "uuid" },
-          site: {
-            type: ["object", "null"],
-            properties: {
-              id: { type: "string", format: "uuid" },
-              name: { type: "string" },
-            },
-          },
-          permissions: { type: "array", items: { type: "string" } },
-        },
-      },
-    },
-    sites: {
-      type: "object",
-      properties: {
-        all: { type: "boolean" },
-        siteIds: { type: "array", items: { type: "string", format: "uuid" } },
-      },
-    },
-  },
-} as const satisfies JSONSchema;
-
-// Grant rows as the members/workspaces services return them (WorkcenterGrantRef).
-const workcenterGrantSchema = {
-  type: "object",
-  properties: {
-    id: { type: "string", format: "uuid" },
-    workcenterId: { type: "string", format: "uuid" },
-    access: { type: "string", enum: ["READ", "WRITE"] },
-    workcenter: {
-      type: "object",
-      properties: {
-        id: { type: "string", format: "uuid" },
-        name: { type: "string" },
-        siteId: { type: "string", format: "uuid" },
-      },
-    },
+    workspaceRole: { type: "string", enum: ["OWNER", "MEMBER"] },
+    buckets: { type: "array", items: bucketAccessSchema },
+    siteIds: { type: "array", items: { type: "string", format: "uuid" } },
   },
 } as const satisfies JSONSchema;
 
 const memberSchema = {
   type: "object",
   properties: {
-    id: { type: "string", format: "uuid" },
+    membershipId: { type: "string", format: "uuid" },
     joinedAt: { type: "string", format: "date-time" },
+    employeeId: { type: ["string", "null"], format: "uuid" },
     user: {
       type: "object",
       properties: {
@@ -149,9 +87,7 @@ const memberSchema = {
         mustChangePassword: { type: "boolean" },
       },
     },
-    roles: { type: "array", items: roleRefSchema },
-    roleAssignments: { type: "array", items: roleAssignmentSchema },
-    workcenterGrants: { type: "array", items: workcenterGrantSchema },
+    access: accessSchema,
   },
 } as const satisfies JSONSchema;
 
@@ -181,9 +117,20 @@ const addMemberBodySchema = {
   type: "object",
   properties: {
     userId: { type: "string", format: "uuid" },
-    roleId: { type: "string", format: "uuid" },
+    bucketAccesses: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        properties: {
+          bucketId: { type: "string", format: "uuid" },
+          tier: { type: "string", enum: ["VIEW", "MANAGE", "ADMIN"] },
+        },
+        required: ["bucketId", "tier"],
+      },
+    },
   },
-  required: ["userId", "roleId"],
+  required: ["userId", "bucketAccesses"],
 } as const satisfies JSONSchema;
 
 const memberParamsSchema = {
@@ -195,12 +142,23 @@ const memberParamsSchema = {
   required: ["id", "userId"],
 } as const satisfies JSONSchema;
 
-const updateRoleBodySchema = {
+const updateAccessBodySchema = {
   type: "object",
   properties: {
-    roleId: { type: "string", format: "uuid" },
+    set: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          bucketId: { type: "string", format: "uuid" },
+          tier: { type: "string", enum: ["VIEW", "MANAGE", "ADMIN"] },
+        },
+        required: ["bucketId", "tier"],
+      },
+    },
+    remove: { type: "array", items: { type: "string", format: "uuid" } },
+    workspaceRole: { type: "string", enum: ["OWNER", "MEMBER"] },
   },
-  required: ["roleId"],
 } as const satisfies JSONSchema;
 
 const listWorkspacesResponseSchema = {
@@ -214,10 +172,7 @@ const listWorkspacesResponseSchema = {
       description: { type: "string", nullable: true },
       joinedAt: { type: "string", format: "date-time" },
       employee: employeeProfileSchema,
-      roles: { type: "array", items: roleRefSchema },
-      roleAssignments: { type: "array", items: roleAssignmentSchema },
-      workcenterGrants: { type: "array", items: workcenterGrantSchema },
-      access: accessSchema,
+      workspaceRole: { type: "string", enum: ["OWNER", "MEMBER"] },
     },
   },
 } as const satisfies JSONSchema;
@@ -282,9 +237,13 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       if (!workspaceId) {
         return reply.status(401).send({ error: "No workspace context" });
       }
-      const ok = await hasPermission(userId, "owner:all", { workspaceId });
-      if (!ok) {
-        return reply.status(403).send({ error: "forbidden", required: "owner:all" });
+      const ownerCheck = await authorize(request.iam, {
+        tier: "ADMIN",
+        scope: { kind: "workspace" },
+        ownerOnly: true,
+      });
+      if (!ownerCheck.ok) {
+        return reply.status(403).send({ error: "forbidden", required: "owner" });
       }
 
       if (request.body.slug && (await workspace.slugExists(request.body.slug))) {
@@ -337,7 +296,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "PUT",
     url: "/:id",
-    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { workspaceParam: "id" })],
+    preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "workspace", workspaceParam: "id" })],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -362,7 +321,10 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "DELETE",
     url: "/:id",
-    preHandler: [fastify.verifyAccessToken, requirePermission("owner:all", { workspaceParam: "id" })],
+    preHandler: [
+      fastify.verifyAccessToken,
+      requireTier("ADMIN", { scope: "workspace", workspaceParam: "id", ownerOnly: true }),
+    ],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -409,7 +371,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       if (!isMember) {
         return reply.status(403).send({ error: "Not a member of this workspace" });
       }
-      const auth = await authorize(request.iam, { permission: "plant:admin", scope: { kind: "anySite" } });
+      const auth = await authorize(request.iam, { tier: "ADMIN", scope: { kind: "anySite" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       return workspace.listMembers(request.params.id);
@@ -420,7 +382,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/members",
-    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { workspaceParam: "id" })],
+    preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "workspace", workspaceParam: "id" })],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -441,10 +403,10 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       }
 
       try {
-        const member = await workspace.addMember(request.params.id, request.body.userId, request.body.roleId);
+        const member = await workspace.addMember(request.params.id, request.body.userId, request.body.bucketAccesses);
         return reply.status(201).send(member);
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Invalid role";
+        const message = err instanceof Error ? err.message : "Invalid bucket access";
         return reply.status(400).send({ error: message });
       }
     },
@@ -459,7 +421,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
       params: memberParamsSchema,
-      body: updateRoleBodySchema,
+      body: updateAccessBodySchema,
       response: {
         200: memberSchema,
         400: errorSchema,
@@ -479,25 +441,24 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
         return reply.status(403).send({ error: "Not in requested workspace context" });
       }
 
-      const result = await workspace.updateRole({
+      const result = await workspace.updateAccess({
         actorUserId: currentUserId,
         targetUserId: request.params.userId,
         workspaceId,
-        siteId: request.iam?.siteId,
-        roleId: request.body.roleId,
+        set: request.body.set,
+        remove: request.body.remove,
+        workspaceRole: request.body.workspaceRole,
       });
 
       if (result.success) {
-        return result.data;
+        return result.access;
       }
 
       switch (result.code) {
         case "FORBIDDEN":
-        case "OWNER_PERMISSION_REQUIRED":
           return reply.status(403).send({ error: result.error });
         case "MEMBER_NOT_FOUND":
-        case "ROLE_NOT_FOUND":
-        case "SITE_NOT_FOUND":
+        case "BUCKET_NOT_FOUND":
           return reply.status(404).send({ error: result.error });
         default:
           return reply.status(400).send({ error: result.error });
@@ -510,10 +471,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "DELETE",
     url: "/:id/members/:userId",
-    preHandler: [
-      fastify.verifyAccessToken,
-      requirePermission("plant:admin", { workspaceParam: "id", scope: "workspace" }),
-    ],
+    preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "workspace", workspaceParam: "id" })],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -559,7 +517,7 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "DELETE",
     url: "/:id/members/:userId/site-access",
-    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { scope: "site" })],
+    preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "site" })],
     schema: {
       tags: ["workspaces"],
       security: [{ bearerAuth: [] }],
@@ -600,10 +558,8 @@ export default async function workspaceRoutes(fastify: FastifyTypedInstance) {
       switch (result.error) {
         case "MEMBER_NOT_FOUND":
           return reply.status(404).send({ error: "Member not found" });
-        case "NO_SITE_ACCESS":
-          return reply.status(404).send({ error: "Member has no access to this site" });
-        case "LAST_OWNER":
-          return reply.status(400).send({ error: "Cannot remove the last workspace owner" });
+        case "LAST_PLANT_ADMIN":
+          return reply.status(400).send({ error: "Cannot remove the last plant admin" });
       }
     },
   });

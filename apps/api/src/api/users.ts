@@ -4,7 +4,7 @@ import { user } from "../services/account/index.js";
 import { validHttpOrigin } from "@rw/services/email/index";
 import { errorSchema, idParamsSchema, successResponseSchema } from "./schemas.js";
 import { sensitiveRateLimit } from "../plugins/ratelimit.js";
-import { requirePermission } from "../plugins/require-permission.js";
+import { requireTier } from "../plugins/require-permission.js";
 import { authorize } from "@rw/auth/iam/policy";
 import { replyPolicyDenial } from "./authz.js";
 
@@ -71,23 +71,21 @@ const inviteBodySchema = {
   type: "object",
   properties: {
     email: { type: "string", format: "email" },
-    // Role id for new invites. New invites need a roleId, workcenterGrants,
-    // or both; resending an existing pending invite needs neither.
-    roleId: { type: "string", format: "uuid" },
-    // Required for site-scoped roles unless the caller's token has site context.
-    siteId: { type: "string", format: "uuid" },
-    // Workcenter grants for the invitee (GitHub-collaborator style).
-    workcenterGrants: {
+    // Bucket accesses for new invites. New invites need bucketAccesses or
+    // asOwner; resending an existing pending invite needs neither.
+    bucketAccesses: {
       type: "array",
       items: {
         type: "object",
         properties: {
-          workcenterId: { type: "string", format: "uuid" },
-          access: { type: "string", enum: ["READ", "WRITE"] },
+          bucketId: { type: "string", format: "uuid" },
+          tier: { type: "string", enum: ["VIEW", "MANAGE", "ADMIN"] },
         },
-        required: ["workcenterId", "access"],
+        required: ["bucketId", "tier"],
       },
     },
+    // Invite as workspace owner — reserved; only an owner may do this.
+    asOwner: { type: "boolean" },
     firstName: { type: "string" },
     lastName: { type: "string" },
   },
@@ -192,15 +190,6 @@ const currentSiteSchema = {
   nullable: true,
 } as const satisfies JSONSchema;
 
-const accessRoleSchema = {
-  type: "object",
-  properties: {
-    id: { type: "string", format: "uuid" },
-    name: { type: "string" },
-    scope: { type: "string", enum: ["WORKSPACE", "SITE"] },
-  },
-} as const satisfies JSONSchema;
-
 const getMeResponseSchema = {
   type: "object",
   properties: {
@@ -226,20 +215,22 @@ const getMeResponseSchema = {
     access: {
       type: "object",
       properties: {
-        roles: { type: "array", items: accessRoleSchema },
-        permissions: { type: "array", items: { type: "string" } },
-        // Per-workcenter grants with their server-computed effective
-        // permission sets (roles ∪ grant global ∪ grant scoped at that
-        // workcenter) — clients never expand the grant maps themselves.
-        workcenterGrants: {
+        workspaceRole: { type: "string", enum: ["OWNER", "MEMBER"] },
+        staff: { type: "string", enum: ["NONE", "READ", "FULL"] },
+        // The member's buckets, hook and cascade entries included (`via`
+        // says how each entry arose) — the whole access story in one list.
+        buckets: {
           type: "array",
           items: {
             type: "object",
             properties: {
-              workcenterId: { type: "string", format: "uuid" },
-              siteId: { type: "string", format: "uuid" },
-              access: { type: "string", enum: ["READ", "WRITE"] },
-              permissions: { type: "array", items: { type: "string" } },
+              bucketId: { type: "string", format: "uuid" },
+              kind: { type: "string", enum: ["PLANT", "WORKCENTER"] },
+              siteId: { type: "string", format: "uuid", nullable: true },
+              workcenterId: { type: "string", format: "uuid", nullable: true },
+              name: { type: "string" },
+              tier: { type: "string", enum: ["VIEW", "MANAGE", "ADMIN"] },
+              via: { type: "string", enum: ["direct", "member", "cascade"] },
             },
           },
         },
@@ -475,7 +466,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       // Roster reads align with RPC workspace.listMembers: user:read held at
       // any site suffices (site Plant Admins manage their people).
-      const auth = await authorize(request.iam, { permission: "plant:admin", scope: { kind: "anySite" } });
+      const auth = await authorize(request.iam, { tier: "ADMIN", scope: { kind: "anySite" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       return user.list(request.query);
@@ -507,15 +498,13 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
         return reply.status(401).send({ error: "Unauthorized" });
       }
 
-      const { email, roleId, siteId, workcenterGrants, firstName, lastName } = request.body;
+      const { email, bucketAccesses, asOwner, firstName, lastName } = request.body;
       const result = await user.createInvite({
         email,
         inviterId,
         workspaceId,
-        roleId,
-        siteId,
-        workcenterGrants,
-        fallbackSiteId: request.iam?.siteId,
+        bucketAccesses,
+        asOwner,
         firstName,
         lastName,
         // Safe here because this route is authenticated: the origin comes
@@ -684,7 +673,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { permission: "plant:admin", scope: { kind: "anySite" } });
+      const auth = await authorize(request.iam, { tier: "ADMIN", scope: { kind: "anySite" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await user.getById(request.params.id);
@@ -712,7 +701,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { permission: "plant:admin", scope: { kind: "anySite" } });
+      const auth = await authorize(request.iam, { tier: "ADMIN", scope: { kind: "anySite" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await user.getLockStatus(request.params.id);
@@ -727,7 +716,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "PUT",
     url: "/:id",
-    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { scope: "workspace" })],
+    preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "workspace" })],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -752,7 +741,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/disable",
-    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { scope: "workspace" })],
+    preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "workspace" })],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -793,7 +782,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/enable",
-    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { scope: "workspace" })],
+    preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "workspace" })],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -828,7 +817,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/unlock",
-    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { scope: "workspace" })],
+    preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "workspace" })],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -868,7 +857,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/password",
-    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { scope: "workspace" })],
+    preHandler: [fastify.verifyAccessToken, requireTier("ADMIN", { scope: "workspace" })],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],

@@ -37,6 +37,8 @@ export async function create(input: CreateSiteInput) {
       description,
       attrs: attrs ?? {},
       workspaceId,
+      // The plant's access container is born with the plant.
+      buckets: { create: { workspaceId, kind: "PLANT", name } },
     },
     include: {
       _count: {

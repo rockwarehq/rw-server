@@ -35,9 +35,7 @@ const listInputSchema = z.object({
 // ============================================================================
 
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
-  );
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await statusCategory.create(input);
   if (result.error !== undefined) throwServiceError(result);
@@ -46,15 +44,13 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
 
 export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
   );
   return statusCategory.list({ ...input, ...scopeFilter(scope) });
 });
 
 export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:read", scope: { kind: "statusCategory", id: input.id } }),
-  );
+  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "statusCategory", id: input.id } }));
 
   const result = await statusCategory.getById(input.id);
   return unwrap(result, { notFoundMessage: "Status category not found" });
@@ -63,7 +59,7 @@ export const get = authRequired.input(idInputSchema).handler(async ({ input, con
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   grant(
     await authorize(context.iam, {
-      permission: "configuration:write",
+      tier: "MANAGE",
       scope: { kind: "statusCategory", id: input.id },
     }),
   );
@@ -77,7 +73,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 export const remove = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   grant(
     await authorize(context.iam, {
-      permission: "configuration:write",
+      tier: "MANAGE",
       scope: { kind: "statusCategory", id: input.id },
     }),
   );

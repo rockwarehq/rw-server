@@ -71,9 +71,7 @@ const listLogsInputSchema = z.object({
 // ============================================================================
 
 export const create = authRequired.input(createInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "configuration:write", scope: { kind: "site", siteId: input.siteId } }),
-  );
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "site", siteId: input.siteId } }));
 
   const result = await productionMode.create(input);
   if ("error" in result) throwServiceError(result);
@@ -82,15 +80,13 @@ export const create = authRequired.input(createInputSchema).handler(async ({ inp
 
 export const list = userOrDisplayRequired.input(listInputSchema).handler(async ({ input, context }) => {
   const scope = grant(
-    await authorizeList(context.iam, { permission: "production:read", requestedSiteId: input.siteId }),
+    await authorizeList(context.iam, { tier: "VIEW", bucketKind: "PLANT", requestedSiteId: input.siteId }),
   );
   return productionMode.list({ ...input, ...scopeFilter(scope) });
 });
 
 export const get = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:read", scope: { kind: "productionMode", id: input.id } }),
-  );
+  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "productionMode", id: input.id } }));
 
   const result = await productionMode.getById(input.id);
   return unwrap(result, { notFoundMessage: "Production mode not found" });
@@ -99,7 +95,7 @@ export const get = authRequired.input(idInputSchema).handler(async ({ input, con
 export const update = authRequired.input(updateInputSchema).handler(async ({ input, context }) => {
   grant(
     await authorize(context.iam, {
-      permission: "configuration:write",
+      tier: "MANAGE",
       scope: { kind: "productionMode", id: input.id },
     }),
   );
@@ -113,7 +109,7 @@ export const update = authRequired.input(updateInputSchema).handler(async ({ inp
 export const archive = authRequired.input(idInputSchema).handler(async ({ input, context }) => {
   grant(
     await authorize(context.iam, {
-      permission: "configuration:write",
+      tier: "MANAGE",
       scope: { kind: "productionMode", id: input.id },
     }),
   );
@@ -128,14 +124,12 @@ export const archive = authRequired.input(idInputSchema).handler(async ({ input,
 // ============================================================================
 
 export const force = userOrDisplayRequired.input(forceInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:write", scope: { kind: "station", id: input.stationId } }),
-  );
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "station", id: input.stationId } }));
 
-  // production:admin bypasses mode role restrictions so an office supervisor can
-  // always change a station's mode (quiet check — no throw).
+  // MANAGE bypasses mode role restrictions so a cell manager or plant manager
+  // can always change a station's mode (quiet check — no throw).
   const admin = await authorize(context.iam, {
-    permission: "production:admin",
+    tier: "MANAGE",
     scope: { kind: "station", id: input.stationId },
   });
 
@@ -151,12 +145,10 @@ export const force = userOrDisplayRequired.input(forceInputSchema).handler(async
 });
 
 export const clear = userOrDisplayRequired.input(clearInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:write", scope: { kind: "station", id: input.stationId } }),
-  );
+  grant(await authorize(context.iam, { tier: "MANAGE", scope: { kind: "station", id: input.stationId } }));
 
   const admin = await authorize(context.iam, {
-    permission: "production:admin",
+    tier: "MANAGE",
     scope: { kind: "station", id: input.stationId },
   });
 
@@ -171,8 +163,6 @@ export const clear = userOrDisplayRequired.input(clearInputSchema).handler(async
 });
 
 export const listLogs = userOrDisplayRequired.input(listLogsInputSchema).handler(async ({ input, context }) => {
-  grant(
-    await authorize(context.iam, { permission: "production:read", scope: { kind: "station", id: input.stationId } }),
-  );
+  grant(await authorize(context.iam, { tier: "VIEW", scope: { kind: "station", id: input.stationId } }));
   return productionMode.listLogs(input);
 });
