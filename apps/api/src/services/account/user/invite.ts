@@ -157,7 +157,7 @@ async function canInviteAssignment(inviterId: string, workspaceId: string, assig
     return hasPermission(inviterId, OWNER_PERMISSION, { workspaceId });
   }
 
-  return hasPermission(inviterId, "user:write", {
+  return hasPermission(inviterId, "plant:admin", {
     workspaceId,
     ...(assignment.siteId ? { siteId: assignment.siteId } : {}),
   });
@@ -169,7 +169,7 @@ async function canInviteAccess(inviterId: string, workspaceId: string, access: I
   }
   // Every granted workcenter's site needs the inviter to hold user:write.
   for (const grantRow of access.grants) {
-    const ok = await hasPermission(inviterId, "user:write", { workspaceId, siteId: grantRow.siteId });
+    const ok = await hasPermission(inviterId, "plant:admin", { workspaceId, siteId: grantRow.siteId });
     if (!ok) return false;
   }
   return true;
@@ -185,7 +185,7 @@ async function canManagePendingInvite(
 ): Promise<boolean> {
   if (assignments.length === 0 && grantSiteIds.length === 0) {
     // Orphaned invite with no role context - require workspace-level rights
-    return hasPermission(actorId, "user:write", { workspaceId });
+    return hasPermission(actorId, "plant:admin", { workspaceId });
   }
 
   if (assignments.some((assignment) => hasOwnerPermission(assignment.role.permissions))) {
@@ -193,14 +193,14 @@ async function canManagePendingInvite(
   }
 
   for (const assignment of assignments) {
-    const ok = await hasPermission(actorId, "user:write", {
+    const ok = await hasPermission(actorId, "plant:admin", {
       workspaceId,
       ...(assignment.siteId ? { siteId: assignment.siteId } : {}),
     });
     if (ok) return true;
   }
   for (const siteId of grantSiteIds) {
-    const ok = await hasPermission(actorId, "user:write", { workspaceId, siteId });
+    const ok = await hasPermission(actorId, "plant:admin", { workspaceId, siteId });
     if (ok) return true;
   }
 

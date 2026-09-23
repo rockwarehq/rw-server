@@ -125,7 +125,7 @@ function kpiFact(
     description:
       `Aggregated KPI buckets per ${entityType.toLowerCase()} and time window. ` +
       "Defaults to SHIFT-granularity buckets; filter granularity = HOUR (with hourly date bucketing) or DAY to change grain.",
-    permission: "job:read",
+    permission: "production:read",
     source: kpiSource(entityType),
     dateColumn: "businessDate",
     timeColumn: "startTime",
@@ -170,7 +170,13 @@ function kpiFact(
         numerator: "runSeconds",
         denominator: "elapsedPlannedProductionSeconds",
       },
-      performance: { kind: "ratio", format: "percent", label: "Performance", numerator: "idealCycleSeconds", denominator: "runSeconds" },
+      performance: {
+        kind: "ratio",
+        format: "percent",
+        label: "Performance",
+        numerator: "idealCycleSeconds",
+        denominator: "runSeconds",
+      },
       avgCycleSeconds: {
         kind: "ratio",
         format: "seconds",
@@ -178,7 +184,13 @@ function kpiFact(
         numerator: "totalCycleSeconds",
         denominator: "totalCycles",
       },
-      quality: { kind: "ratio", format: "percent", label: "Quality", numerator: "goodItems", denominator: "totalItems" },
+      quality: {
+        kind: "ratio",
+        format: "percent",
+        label: "Quality",
+        numerator: "goodItems",
+        denominator: "totalItems",
+      },
       oee: {
         kind: "ratio",
         format: "percent",
@@ -201,7 +213,7 @@ export const FACTS: Record<string, FactDef> = {
   cycles: {
     label: "Cycles",
     description: "One row per completed machine cycle recorded at a station.",
-    permission: "job:read",
+    permission: "production:read",
     table: "Cycle",
     baseFilter: `f."deletedAt" IS NULL`,
     // Cycles count when they END: in-progress rows (open/close stations keep
@@ -255,7 +267,13 @@ export const FACTS: Record<string, FactDef> = {
         format: "seconds",
         description: "Standard seconds earned by completed cycles.",
       },
-      goodCycleRate: { kind: "ratio", format: "percent", label: "Good cycle rate", numerator: "goodCycles", denominator: "cycles" },
+      goodCycleRate: {
+        kind: "ratio",
+        format: "percent",
+        label: "Good cycle rate",
+        numerator: "goodCycles",
+        denominator: "cycles",
+      },
       amendedCycles: { kind: "sum", label: "Amended cycles", expr: amendedRow, description: AMENDED_DESCRIPTION },
     },
     dimensions: {
@@ -274,7 +292,7 @@ export const FACTS: Record<string, FactDef> = {
   items: {
     label: "Produced items",
     description: "One row per product produced by a cycle; quantity is the produced amount.",
-    permission: "product:read",
+    permission: "production:read",
     table: "InventoryItem",
     baseFilter: `f."deletedAt" IS NULL`,
     dateColumn: "businessDate",
@@ -309,7 +327,7 @@ export const FACTS: Record<string, FactDef> = {
   dispositions: {
     label: "Scrap & dispositions",
     description: "One row per item disposition (scrap) entry.",
-    permission: "product:read",
+    permission: "production:read",
     table: "ItemDispositionLog",
     baseFilter: `f."deletedAt" IS NULL`,
     dateColumn: "businessDate",
@@ -347,7 +365,7 @@ export const FACTS: Record<string, FactDef> = {
     description:
       "One row per station status stretch per shift (period model). A stretch that crosses a shift boundary is cut there; blocks count each stretch once.",
     // Parity with logs.downtimeSearch, which gates the same data.
-    permission: "status:read",
+    permission: "production:read",
     table: "StationStateLog",
     baseFilter: `f."deletedAt" IS NULL`,
     dateColumn: "businessDate",
@@ -372,7 +390,12 @@ export const FACTS: Record<string, FactDef> = {
         expr: firstPieceOfBlock("StationStateLog", ` AND p."deletedAt" IS NULL`),
         description: "Physical stretches, counted in the shift they started in.",
       },
-      durationSeconds: { kind: "sum", label: "Duration (s)", expr: periodSeconds("startTime", "endTime"), format: "seconds" },
+      durationSeconds: {
+        kind: "sum",
+        label: "Duration (s)",
+        expr: periodSeconds("startTime", "endTime"),
+        format: "seconds",
+      },
       avgDurationSeconds: {
         kind: "avg",
         label: "Avg duration (s)",
@@ -424,7 +447,7 @@ export const FACTS: Record<string, FactDef> = {
     description:
       "One row per stretch a station spent in a production mode. " +
       "Not yet cut at shift boundaries: a stretch crossing one counts in the shift it started in.",
-    permission: "job:read",
+    permission: "production:read",
     table: "StationModeLog",
     dateColumn: "businessDate",
     timeColumn: "startTime",
@@ -433,8 +456,18 @@ export const FACTS: Record<string, FactDef> = {
     fields: periodFields("startTime", "endTime"),
     measures: {
       periods: { kind: "count", label: "Periods" },
-      durationSeconds: { kind: "sum", label: "Duration (s)", expr: periodSeconds("startTime", "endTime"), format: "seconds" },
-      avgDurationSeconds: { kind: "avg", label: "Avg duration (s)", expr: periodSeconds("startTime", "endTime"), format: "seconds" },
+      durationSeconds: {
+        kind: "sum",
+        label: "Duration (s)",
+        expr: periodSeconds("startTime", "endTime"),
+        format: "seconds",
+      },
+      avgDurationSeconds: {
+        kind: "avg",
+        label: "Avg duration (s)",
+        expr: periodSeconds("startTime", "endTime"),
+        format: "seconds",
+      },
     },
     dimensions: {
       businessDate: businessDateDim(),
@@ -452,7 +485,7 @@ export const FACTS: Record<string, FactDef> = {
   jobRuns: {
     label: "Job runs",
     description: "One row per job assignment per shift on a station; runs count each assignment once.",
-    permission: "job:read",
+    permission: "production:read",
     table: "StationJobLog",
     dateColumn: "businessDate",
     timeColumn: "startTime",
@@ -475,8 +508,18 @@ export const FACTS: Record<string, FactDef> = {
         description: "Assignments, counted in the shift they started in.",
       },
       periods: { kind: "count", label: "Periods", description: "Per-shift pieces." },
-      durationSeconds: { kind: "sum", label: "Duration (s)", expr: periodSeconds("startTime", "endTime"), format: "seconds" },
-      avgDurationSeconds: { kind: "avg", label: "Avg piece (s)", expr: periodSeconds("startTime", "endTime"), format: "seconds" },
+      durationSeconds: {
+        kind: "sum",
+        label: "Duration (s)",
+        expr: periodSeconds("startTime", "endTime"),
+        format: "seconds",
+      },
+      avgDurationSeconds: {
+        kind: "avg",
+        label: "Avg piece (s)",
+        expr: periodSeconds("startTime", "endTime"),
+        format: "seconds",
+      },
     },
     dimensions: {
       businessDate: businessDateDim(),
@@ -491,7 +534,7 @@ export const FACTS: Record<string, FactDef> = {
   logonSessions: {
     label: "Operator logons",
     description: "One row per operator logon session at a station.",
-    permission: "employee:read",
+    permission: "production:read",
     table: "StationLogonSession",
     dateColumn: "businessDate",
     timeColumn: "logonTime",
@@ -508,8 +551,18 @@ export const FACTS: Record<string, FactDef> = {
     },
     measures: {
       sessions: { kind: "count", label: "Sessions" },
-      durationSeconds: { kind: "sum", label: "Logged on (s)", expr: periodSeconds("logonTime", "logoffTime"), format: "seconds" },
-      avgDurationSeconds: { kind: "avg", label: "Avg session (s)", expr: periodSeconds("logonTime", "logoffTime"), format: "seconds" },
+      durationSeconds: {
+        kind: "sum",
+        label: "Logged on (s)",
+        expr: periodSeconds("logonTime", "logoffTime"),
+        format: "seconds",
+      },
+      avgDurationSeconds: {
+        kind: "avg",
+        label: "Avg session (s)",
+        expr: periodSeconds("logonTime", "logoffTime"),
+        format: "seconds",
+      },
     },
     dimensions: {
       businessDate: businessDateDim(),
@@ -527,7 +580,7 @@ export const FACTS: Record<string, FactDef> = {
   calls: {
     label: "Calls",
     description: "One row per raised shop-floor call.",
-    permission: "calls:read",
+    permission: "production:read",
     table: "Call",
     baseFilter: `f."deletedAt" IS NULL`,
     dateColumn: "businessDate",
@@ -537,7 +590,12 @@ export const FACTS: Record<string, FactDef> = {
     fields: periodFields("openedAt", "closedAt"),
     measures: {
       calls: { kind: "count", label: "Calls" },
-      openSeconds: { kind: "sum", label: "Open time (s)", expr: periodSeconds("openedAt", "closedAt"), format: "seconds" },
+      openSeconds: {
+        kind: "sum",
+        label: "Open time (s)",
+        expr: periodSeconds("openedAt", "closedAt"),
+        format: "seconds",
+      },
       avgOpenSeconds: {
         kind: "avg",
         label: "Avg response (s)",
@@ -545,7 +603,12 @@ export const FACTS: Record<string, FactDef> = {
         format: "seconds",
         description: "Average time from raise to close; open calls count elapsed-so-far.",
       },
-      maxOpenSeconds: { kind: "max", label: "Longest open (s)", expr: periodSeconds("openedAt", "closedAt"), format: "seconds" },
+      maxOpenSeconds: {
+        kind: "max",
+        label: "Longest open (s)",
+        expr: periodSeconds("openedAt", "closedAt"),
+        format: "seconds",
+      },
     },
     dimensions: {
       businessDate: businessDateDim(),
@@ -565,7 +628,7 @@ export const FACTS: Record<string, FactDef> = {
   materialLedger: {
     label: "Material ledger",
     description: "One row per material quantity change (signed; PRODUCTION rows are negative).",
-    permission: "product:read",
+    permission: "production:read",
     table: "MaterialLedgerEntry",
     dateColumn: "businessDate",
     timeColumn: "createdAt",
@@ -604,7 +667,7 @@ export const FACTS: Record<string, FactDef> = {
   materialUsage: {
     label: "Material usage",
     description: "One row per (shift, station, job, product, material) production consumption scope.",
-    permission: "product:read",
+    permission: "production:read",
     table: "MaterialShiftUsage",
     dateColumn: "businessDate",
     workcenterColumn: "workcenterId",
@@ -634,7 +697,7 @@ export const FACTS: Record<string, FactDef> = {
   orderConsumptions: {
     label: "Order fulfillment",
     description: "One row per line item consumed when an order completes.",
-    permission: "product:read",
+    permission: "production:read",
     table: "OrderConsumption",
     dateColumn: "businessDate",
     timeColumn: "createdAt",
@@ -662,7 +725,7 @@ export const FACTS: Record<string, FactDef> = {
   stockAdjustments: {
     label: "Stock adjustments",
     description: "One row per manual product on-hand correction (signed delta).",
-    permission: "product:read",
+    permission: "production:read",
     table: "ProductStockAdjustment",
     dateColumn: "businessDate",
     timeColumn: "createdAt",
@@ -693,7 +756,7 @@ export const FACTS: Record<string, FactDef> = {
       "Produced items (+) unioned with scrap dispositions (−); netQuantity nets them per slice. " +
       "Netting is per bucket, not per physical item — scrap logged against an earlier period stays " +
       "on the shift it was recorded for, so a bucket's net can go negative.",
-    permission: "product:read",
+    permission: "production:read",
     source: PRODUCTION_SOURCE,
     dateColumn: "businessDate",
     timeColumn: "createdAt",
@@ -725,7 +788,13 @@ export const FACTS: Record<string, FactDef> = {
         expr: `CASE WHEN f."entryType" = 'SCRAPPED' THEN -f."quantity" ELSE 0 END`,
       },
       netQuantity: { kind: "sum", label: "Net quantity", expr: `f."quantity"`, format: "quantity" },
-      scrapRate: { kind: "ratio", format: "percent", label: "Scrap rate", numerator: "scrapped", denominator: "produced" },
+      scrapRate: {
+        kind: "ratio",
+        format: "percent",
+        label: "Scrap rate",
+        numerator: "scrapped",
+        denominator: "produced",
+      },
     },
     dimensions: {
       businessDate: businessDateDim(),

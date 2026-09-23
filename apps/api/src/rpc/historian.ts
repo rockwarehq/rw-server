@@ -145,7 +145,10 @@ async function dbNowMs(): Promise<number> {
 
 export const query = userOrDisplayRequired.input(queryInputSchema).handler(async ({ context, input }) => {
   grant(
-    await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.series.siteId } }),
+    await authorize(context.iam, {
+      permission: "production:read",
+      scope: { kind: "site", siteId: input.series.siteId },
+    }),
   );
   const definition = await authorizeSeries(input.series);
 
@@ -191,7 +194,10 @@ export const query = userOrDisplayRequired.input(queryInputSchema).handler(async
 
 export const changes = userOrDisplayRequired.input(changesInputSchema).handler(async ({ context, input }) => {
   grant(
-    await authorize(context.iam, { permission: "facility:read", scope: { kind: "site", siteId: input.series.siteId } }),
+    await authorize(context.iam, {
+      permission: "production:read",
+      scope: { kind: "site", siteId: input.series.siteId },
+    }),
   );
   const definition = await authorizeSeries(input.series);
 

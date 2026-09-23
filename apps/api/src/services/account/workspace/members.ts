@@ -10,7 +10,7 @@ import {
 import { findSystemRole } from "@rw/auth/iam/roles";
 import { logEvent } from "@rw/services/audit/index";
 
-const USER_ROLE_ASSIGNMENT_PERMISSIONS: readonly Permission[] = ["user:write", "user:admin"];
+const USER_ROLE_ASSIGNMENT_PERMISSIONS: readonly Permission[] = ["plant:admin"];
 
 export interface RoleRef {
   [x: string]: unknown;
@@ -185,16 +185,18 @@ function buildWorkspaceAccessSummary(
     permissions: sortPermissions(summary.permissions),
   }));
 
-  const allSites = workspacePermissions.has("facility:read");
+  // Membership visibility: any workspace-scoped role sees every site; a
+  // site shows up when the member holds any role or grant there. Roles are
+  // no longer guaranteed to carry one particular read key.
+  const allSites = workspacePermissions.size > 0;
   const siteIds = allSites
     ? []
     : [
         ...new Set([
           ...sitePermissionSummaries
-            .filter((summary) => summary.permissions.includes("facility:read"))
+            .filter((summary) => summary.permissions.length > 0)
             .map((summary) => summary.siteId),
-          // A workcenter grant confers facility:read at its site, so
-          // grant-only members surface under their plant in the UI.
+          // Grant-only members surface under their plant in the UI.
           ...workcenterGrants.map((grantRow) => grantRow.workcenter.siteId),
         ]),
       ];
@@ -530,10 +532,10 @@ export async function updateRole(input: UpdateRoleInput): Promise<UpdateRoleResu
       }
 
       // Site-level analog of the last-owner guard: a plant must keep at
-      // least one member whose SITE role carries user:admin (Plant Admin or
-      // a custom admin role), so the site stays self-administrable without
-      // Company Administrator intervention.
-      const SITE_ADMIN_MARKER = "user:admin";
+      // least one member whose SITE role carries plant:admin (Plant Admin
+      // or a custom admin role), so the site stays self-administrable
+      // without Company Administrator intervention.
+      const SITE_ADMIN_MARKER = "plant:admin";
       const currentIsSiteAdmin =
         role.scope === "SITE" &&
         currentAssignments.some(

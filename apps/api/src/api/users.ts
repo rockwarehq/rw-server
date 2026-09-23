@@ -475,7 +475,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
     handler: async (request, reply) => {
       // Roster reads align with RPC workspace.listMembers: user:read held at
       // any site suffices (site Plant Admins manage their people).
-      const auth = await authorize(request.iam, { permission: "user:read", scope: { kind: "anySite" } });
+      const auth = await authorize(request.iam, { permission: "plant:admin", scope: { kind: "anySite" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       return user.list(request.query);
@@ -684,7 +684,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { permission: "user:read", scope: { kind: "anySite" } });
+      const auth = await authorize(request.iam, { permission: "plant:admin", scope: { kind: "anySite" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await user.getById(request.params.id);
@@ -712,7 +712,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       },
     },
     handler: async (request, reply) => {
-      const auth = await authorize(request.iam, { permission: "user:read", scope: { kind: "anySite" } });
+      const auth = await authorize(request.iam, { permission: "plant:admin", scope: { kind: "anySite" } });
       if (!auth.ok) return replyPolicyDenial(reply, auth);
 
       const result = await user.getLockStatus(request.params.id);
@@ -727,7 +727,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "PUT",
     url: "/:id",
-    preHandler: [fastify.verifyAccessToken, requirePermission("user:write", { scope: "workspace" })],
+    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { scope: "workspace" })],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -752,7 +752,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/disable",
-    preHandler: [fastify.verifyAccessToken, requirePermission("user:admin", { scope: "workspace" })],
+    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { scope: "workspace" })],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -793,7 +793,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/enable",
-    preHandler: [fastify.verifyAccessToken, requirePermission("user:admin", { scope: "workspace" })],
+    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { scope: "workspace" })],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -828,7 +828,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/unlock",
-    preHandler: [fastify.verifyAccessToken, requirePermission("user:admin", { scope: "workspace" })],
+    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { scope: "workspace" })],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],
@@ -868,7 +868,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
   fastify.route({
     method: "POST",
     url: "/:id/password",
-    preHandler: [fastify.verifyAccessToken, requirePermission("user:admin", { scope: "workspace" })],
+    preHandler: [fastify.verifyAccessToken, requirePermission("plant:admin", { scope: "workspace" })],
     schema: {
       tags: ["users"],
       security: [{ bearerAuth: [] }],

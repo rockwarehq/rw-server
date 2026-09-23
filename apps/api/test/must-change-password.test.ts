@@ -31,7 +31,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("mustChangePassword enforcement 
         workspaceId: workspace.id,
         name: ROLE_NAME,
         scope: "WORKSPACE",
-        permissions: ["user:read", "user:write", "user:admin"],
+        permissions: ["plant:admin"],
         isSystem: false,
       },
     });
