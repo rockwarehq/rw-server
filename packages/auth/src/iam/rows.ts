@@ -1,21 +1,31 @@
 import prisma from "@rw/db";
 
-// Where a row lives: the site (and, for floor rows, the workcenter) it
-// belongs to. access.ts uses this to find the row's bucket before any data
-// is fetched. Each lookup is a narrow read of the denormalized siteId column
-// (or one hop through a required parent).
+// Where a row lives decides who may touch it. access.ts looks the row up
+// here (a narrow read of its siteId, and workcenterId for floor rows)
+// before any data is fetched, then checks the caller's access there.
+//
+// Plant data: shared by every workcenter at the plant (jobs, products,
+// tools, materials, orders, customers, reason codes, shift patterns…).
+// Everyone at the plant can see it, crew included, so they can pick a job
+// or look up a part. Only plant members can change it.
+//
+// Workcenter data: what happens on the floor (cycles, state logs, calls,
+// inventory made, dispositions) and the stations themselves. It is checked
+// on its workcenter's bucket: crew see and change only their own
+// workcenters' data. A row whose workcenterId is null is plant data.
+//
+// The rule when adding a kind: if the row has a workcenterId (on itself or
+// its station), return it here — otherwise the row is checked as plant
+// data and crew of other workcenters can read it.
+//
+// Which jobs show up at which station is NOT decided here; that is labels
+// and station label filters.
 //
 // Missing row => null => NOT_FOUND. A row with `siteId: null` (unassigned
 // gateways/datasources, unclaimed displays, workspace-level documents,
 // global object schemas) is NOT a not-found: access.ts applies the
-// "somewhere" rule to it.
-//
-// No soft-delete filtering here: services keep producing their own
-// *_DELETED error codes after the check (wire parity, ADR-0003).
-//
-// Kinds whose rows carry a workcenter also return `workcenterId`, so the
-// check runs against that cell's bucket. A row with workcenterId null is a
-// plant thing.
+// "somewhere" rule to it. No soft-delete filtering here: services keep
+// producing their own *_DELETED error codes after the check (ADR-0003).
 
 export type SiteRow = { siteId: string | null; workcenterId?: string | null } | null;
 
@@ -25,82 +35,37 @@ const viaStation = (row: { siteId: string | null; workcenterId: string | null } 
   row ? { siteId: row.siteId, workcenterId: row.workcenterId } : null;
 
 export const RESOLVERS = {
-  // ── direct siteId column ────────────────────────────────────────────
+  // ── Workcenter data (checked on the row's workcenter) ────────────────
   station: (id: string) =>
     prisma.station.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
   workcenter: (id: string) =>
     prisma.workcenter
       .findUnique({ where: { id }, select: { siteId: true } })
       .then((r) => (r ? { siteId: r.siteId, workcenterId: id } : null)),
-  label: (id: string) => prisma.label.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  order: (id: string) => prisma.order.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  customer: (id: string) => prisma.customer.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  statusReason: (id: string) => prisma.statusReason.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  statusCategory: (id: string) =>
-    prisma.statusCategory.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  disposition: (id: string) => prisma.itemDisposition.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  dispositionReason: (id: string) =>
-    prisma.itemDispositionReason.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  dispositionLog: (id: string) =>
-    prisma.itemDispositionLog.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
-  tool: (id: string) => prisma.tool.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  job: (id: string) => prisma.job.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  product: (id: string) => prisma.product.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  material: (id: string) => prisma.material.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  dashboard: (id: string) => prisma.dashboard.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  savedView: (id: string) => prisma.savedView.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  shiftPattern: (id: string) => prisma.shiftPattern.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  shiftAssignment: (id: string) =>
-    prisma.shiftAssignment.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  shiftComment: (id: string) =>
-    prisma.shiftComment.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
-  employeeRole: (id: string) => prisma.employeeRole.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  cycle: (id: string) => prisma.cycle.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  graphNode: (id: string) => prisma.graphNode.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  graphNodeType: (id: string) => prisma.graphNodeType.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  graphHook: (id: string) => prisma.graphHook.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  integration: (id: string) => prisma.integration.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  integrationTrigger: (id: string) =>
-    prisma.integrationTrigger.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  siteAndonRule: (id: string) => prisma.siteAndonRule.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  call: (id: string) =>
-    prisma.call.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
-  callDefinition: (id: string) =>
-    prisma.callDefinition.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  productionMode: (id: string) =>
-    prisma.productionMode.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  notificationGroup: (id: string) =>
-    prisma.notificationGroup.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  notification: (id: string) => prisma.notification.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-
-  // ── nullable siteId column (null => the "somewhere" rule) ───────────
-  gateway: (id: string) => prisma.gateway.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  datasource: (id: string) => prisma.datasource.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  display: (id: string) =>
-    prisma.display.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
-  document: (id: string) => prisma.document.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  objectSchema: (id: string) => prisma.objectSchema.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  objectInstance: (id: string) =>
-    prisma.objectInstance.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-  automation: (id: string) => prisma.automation.findUnique({ where: { id }, select: { siteId: true } }).then(one),
-
-  // ── one hop through a required parent ───────────────────────────────
   stationStateLog: (id: string) =>
     prisma.stationStateLog
       .findUnique({ where: { id }, select: { station: { select: { siteId: true, workcenterId: true } } } })
       .then((r) => viaStation(r?.station)),
-  orderLineItem: (id: string) =>
-    prisma.orderLineItem
-      .findUnique({ where: { id }, select: { order: { select: { siteId: true } } } })
-      .then((r) => via(r?.order)),
-  toolCavity: (id: string) =>
-    prisma.toolCavity
-      .findUnique({ where: { id }, select: { tool: { select: { siteId: true } } } })
-      .then((r) => via(r?.tool)),
+  cycle: (id: string) =>
+    prisma.cycle.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
+  inventoryItem: (id: string) =>
+    prisma.inventoryItem
+      .findUnique({ where: { id }, select: { workcenterId: true, cycle: { select: { siteId: true } } } })
+      .then((r) => (r ? { siteId: r.cycle.siteId, workcenterId: r.workcenterId } : null)),
+  call: (id: string) =>
+    prisma.call.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
+  dispositionLog: (id: string) =>
+    prisma.itemDispositionLog.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
+  shiftComment: (id: string) =>
+    prisma.shiftComment.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
+
+  // ── Plant data (shared by every workcenter at the plant) ─────────────
+  job: (id: string) => prisma.job.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   jobProduct: (id: string) =>
     prisma.jobProduct
       .findUnique({ where: { id }, select: { job: { select: { siteId: true } } } })
       .then((r) => via(r?.job)),
+  product: (id: string) => prisma.product.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   productMaterial: (id: string) =>
     prisma.productMaterial
       .findUnique({ where: { id }, select: { product: { select: { siteId: true } } } })
@@ -113,14 +78,49 @@ export const RESOLVERS = {
     prisma.productPicture
       .findUnique({ where: { id }, select: { product: { select: { siteId: true } } } })
       .then((r) => via(r?.product)),
-  inventoryItem: (id: string) =>
-    prisma.inventoryItem
-      .findUnique({ where: { id }, select: { cycle: { select: { siteId: true } } } })
-      .then((r) => via(r?.cycle)),
+  material: (id: string) => prisma.material.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  tool: (id: string) => prisma.tool.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  toolCavity: (id: string) =>
+    prisma.toolCavity
+      .findUnique({ where: { id }, select: { tool: { select: { siteId: true } } } })
+      .then((r) => via(r?.tool)),
+  order: (id: string) => prisma.order.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  orderLineItem: (id: string) =>
+    prisma.orderLineItem
+      .findUnique({ where: { id }, select: { order: { select: { siteId: true } } } })
+      .then((r) => via(r?.order)),
+  customer: (id: string) => prisma.customer.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  label: (id: string) => prisma.label.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  statusReason: (id: string) => prisma.statusReason.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  statusCategory: (id: string) =>
+    prisma.statusCategory.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  disposition: (id: string) => prisma.itemDisposition.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  dispositionReason: (id: string) =>
+    prisma.itemDispositionReason.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  callDefinition: (id: string) =>
+    prisma.callDefinition.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  productionMode: (id: string) =>
+    prisma.productionMode.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  shiftPattern: (id: string) => prisma.shiftPattern.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   shiftDefinition: (id: string) =>
     prisma.shiftDefinition
       .findUnique({ where: { id }, select: { pattern: { select: { siteId: true } } } })
       .then((r) => via(r?.pattern)),
+  shiftAssignment: (id: string) =>
+    prisma.shiftAssignment.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  employeeRole: (id: string) => prisma.employeeRole.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  dashboard: (id: string) => prisma.dashboard.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  savedView: (id: string) => prisma.savedView.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  siteAndonRule: (id: string) => prisma.siteAndonRule.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  notificationGroup: (id: string) =>
+    prisma.notificationGroup.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  notification: (id: string) => prisma.notification.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  integration: (id: string) => prisma.integration.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  integrationTrigger: (id: string) =>
+    prisma.integrationTrigger.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  graphNode: (id: string) => prisma.graphNode.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  graphNodeType: (id: string) => prisma.graphNodeType.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  graphHook: (id: string) => prisma.graphHook.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   graphProperty: (id: string) =>
     prisma.graphProperty
       .findUnique({ where: { id }, select: { node: { select: { siteId: true } } } })
@@ -137,6 +137,10 @@ export const RESOLVERS = {
     prisma.graphNodeTypeFacet
       .findUnique({ where: { id }, select: { type: { select: { siteId: true } } } })
       .then((r) => via(r?.type)),
+
+  // ── May have no site (null => the "somewhere" rule) ──────────────────
+  gateway: (id: string) => prisma.gateway.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  datasource: (id: string) => prisma.datasource.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   point: (id: string) =>
     prisma.point
       .findUnique({ where: { id }, select: { datasource: { select: { siteId: true } } } })
@@ -145,6 +149,13 @@ export const RESOLVERS = {
     prisma.pointGroup
       .findUnique({ where: { id }, select: { datasource: { select: { siteId: true } } } })
       .then((r) => via(r?.datasource)),
+  display: (id: string) =>
+    prisma.display.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
+  document: (id: string) => prisma.document.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  objectSchema: (id: string) => prisma.objectSchema.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  objectInstance: (id: string) =>
+    prisma.objectInstance.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  automation: (id: string) => prisma.automation.findUnique({ where: { id }, select: { siteId: true } }).then(one),
 } satisfies Record<string, (id: string) => Promise<SiteRow>>;
 
 export type RowKind = keyof typeof RESOLVERS;

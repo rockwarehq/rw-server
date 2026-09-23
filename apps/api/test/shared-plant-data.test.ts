@@ -1,0 +1,109 @@
+import { randomUUID } from "node:crypto";
+import prisma from "@rw/db";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ensurePlantBucket, ensureWorkcenterBucket, makeUser } from "./helpers/access.js";
+import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
+import { rpcCall } from "./helpers/rpc-call.js";
+
+const EMAIL = "shared-plant-crew@test.local";
+const PASSWORD = "shared-plant-pass-1";
+
+// Tier 2: plant data vs workcenter data (see packages/auth/src/iam/rows.ts).
+// A crew member of workcenter A can see plant jobs and put one to work on
+// their own station, but cannot edit the job, and cannot reach workcenter B's
+// stations or floor records (cycles, inventory items).
+describe.skipIf(!process.env.TEST_DATABASE_URL)("shared plant data (Tier 2)", () => {
+  let server: TestServer;
+  let siteId: string;
+  let token: string;
+  let jobId: string;
+  const station = { a: "", b: "" };
+  const cycle = { a: "", b: "" };
+  const item = { a: "", b: "" };
+
+  beforeAll(async () => {
+    server = buildServer();
+    await server.ready();
+    const anchor = await prisma.site.findFirstOrThrow({ where: { name: "Rockware" }, select: { workspaceId: true } });
+    const workspaceId = anchor.workspaceId;
+    await prisma.user.deleteMany({ where: { email: EMAIL } });
+
+    // Unique per run: plant rows (jobs, products) keep the site from being deleted.
+    const siteName = `Shared Plant Site ${randomUUID()}`;
+    siteId = (await prisma.site.create({ data: { workspaceId, name: siteName }, select: { id: true } })).id;
+    await ensurePlantBucket(workspaceId, siteId, siteName);
+    const wcA = (await prisma.workcenter.create({ data: { siteId, name: "sp-a" }, select: { id: true } })).id;
+    const wcB = (await prisma.workcenter.create({ data: { siteId, name: "sp-b" }, select: { id: true } })).id;
+    await ensureWorkcenterBucket(workspaceId, siteId, wcA, "sp-a");
+    await ensureWorkcenterBucket(workspaceId, siteId, wcB, "sp-b");
+    station.a = (await prisma.station.create({ data: { siteId, workcenterId: wcA, name: "sp-s-a" } })).id;
+    station.b = (await prisma.station.create({ data: { siteId, workcenterId: wcB, name: "sp-s-b" } })).id;
+
+    // A plant job with a current version, and a product to record output of.
+    jobId = (await prisma.job.create({ data: { siteId } })).id;
+    const jobVersion = await prisma.jobVersion.create({ data: { jobId, version: 1, name: "sp-job" } });
+    await prisma.job.update({ where: { id: jobId }, data: { currentVersionId: jobVersion.id } });
+    const product = await prisma.product.create({ data: { siteId } });
+    const productVersion = await prisma.productVersion.create({
+      data: { productId: product.id, version: 1, sku: "sp-sku" },
+    });
+
+    // One cycle and one inventory item on each workcenter's station.
+    for (const key of ["a", "b"] as const) {
+      const workcenterId = key === "a" ? wcA : wcB;
+      cycle[key] = (
+        await prisma.cycle.create({
+          data: {
+            siteId,
+            stationId: station[key],
+            workcenterId,
+            jobVersionId: jobVersion.id,
+            cycleStatus: "GOOD",
+            start: new Date(),
+          },
+        })
+      ).id;
+      item[key] = (
+        await prisma.inventoryItem.create({
+          data: { cycleId: cycle[key], productVersionId: productVersion.id, workcenterId },
+        })
+      ).id;
+    }
+
+    await makeUser(workspaceId, EMAIL, PASSWORD, { workcenters: [{ workcenterId: wcA, tier: "MANAGE" }] });
+    token = (await loginAs(server, EMAIL, PASSWORD)).accessToken;
+  }, 30_000);
+
+  afterAll(async () => {
+    await prisma.user.deleteMany({ where: { email: EMAIL } });
+    await prisma.inventoryItem.deleteMany({ where: { id: { in: [item.a, item.b] } } });
+    await prisma.cycle.deleteMany({ where: { id: { in: [cycle.a, cycle.b] } } });
+    await server.close();
+  });
+
+  it("crew can see plant jobs", async () => {
+    expect((await rpcCall(server, "job/get", { id: jobId }, token)).statusCode).toBe(200);
+  });
+
+  it("crew can put a plant job to work on their own station", async () => {
+    const res = await rpcCall(server, "station/changeJob", { stationId: station.a, jobId }, token);
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("crew cannot edit the plant job itself", async () => {
+    const res = await rpcCall(server, "job/update", { id: jobId, name: "renamed" }, token);
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("crew cannot change another workcenter's station", async () => {
+    const res = await rpcCall(server, "station/changeJob", { stationId: station.b, jobId }, token);
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("crew see their own floor records and not another workcenter's", async () => {
+    expect((await rpcCall(server, "inventory/get", { id: item.a }, token)).statusCode).toBe(200);
+    expect((await rpcCall(server, "inventory/get", { id: item.b }, token)).statusCode).toBe(403);
+    expect((await rpcCall(server, "inventory/getByCycle", { cycleId: cycle.a }, token)).statusCode).toBe(200);
+    expect((await rpcCall(server, "inventory/getByCycle", { cycleId: cycle.b }, token)).statusCode).toBe(403);
+  });
+});

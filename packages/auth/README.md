@@ -82,6 +82,15 @@ Two kinds of people skip the buckets, like Basecamp's account roles:
 
 **Displays and API tokens** stay outside buckets. They are bound to one site. A display may do anything at its site that its procedures allow. An API token may only read.
 
+### Plant data vs workcenter data
+
+- **Plant data** is shared by every workcenter at the plant: jobs, products, tools, materials, orders, customers, reason codes, shift patterns. Everyone at the plant can see it, crew included, so they can pick a job or look up a part. Only plant members change it.
+- **Workcenter data** is what happens on the floor (cycles, state logs, calls, inventory made, dispositions) plus the stations themselves. It is checked on its workcenter, so crew see and change only their own workcenters' data.
+- **Using plant data on the floor** is checked where the write lands. For example, `station.changeJob` needs MANAGE on the station's workcenter; the job only has to be in the same plant. Crew never need edit rights on the job.
+- **Which jobs show up at which station** is not an access question. Labels and station label filters decide that.
+
+`iam/rows.ts` groups every row kind under these headings. When you add a kind whose rows carry a `workcenterId` (on the row or its station), return it there; otherwise the row is checked as plant data.
+
 ## Tokens & sessions
 
 - **Access tokens** — HS256, 15 minutes, per-audience keys derived from `JWT_SECRET` via HKDF (`rw-user`, `rw-display`).
