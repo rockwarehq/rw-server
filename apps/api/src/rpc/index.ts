@@ -476,6 +476,7 @@ export const router = {
     jobMetrics: shiftRecap.jobMetricsList,
     downtimeLogs: shiftRecap.downtimeLogList,
     scrapByReason: shiftRecap.scrapByReasonList,
+    scrapLogs: shiftRecap.scrapLogList,
     commentList: shiftRecap.commentList,
     commentCreate: shiftRecap.commentCreate,
     commentUpdate: shiftRecap.commentUpdate,

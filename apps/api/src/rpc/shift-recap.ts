@@ -405,6 +405,8 @@ const scrapByReasonListInputSchema = z.object({
   siteId: z.uuid(),
   shiftInstanceId: z.uuid(),
   workCenterId: z.uuid(),
+  // One station of the workcenter, for a station's own board.
+  stationId: z.uuid().optional(),
 });
 
 export const scrapByReasonList = userOrDisplayRequired
@@ -413,7 +415,11 @@ export const scrapByReasonList = userOrDisplayRequired
     await context.access.require("VIEW", { workcenter: input.workCenterId });
 
     const stations = await prisma.station.findMany({
-      where: { siteId: input.siteId, workcenterId: input.workCenterId },
+      where: {
+        siteId: input.siteId,
+        workcenterId: input.workCenterId,
+        ...(input.stationId ? { id: input.stationId } : {}),
+      },
       select: { id: true },
     });
     const stationIds = stations.map((s) => s.id);
@@ -448,6 +454,47 @@ export const scrapByReasonList = userOrDisplayRequired
       entryCount: g._count._all,
     }));
   });
+
+// ============================================================================
+// Scrap entries (one station, for a shift) — the counterpart of downtimeLogs,
+// each entry with its time, so a station's board can put scrap in its hour
+// ============================================================================
+
+const scrapLogListInputSchema = z.object({
+  siteId: z.uuid(),
+  shiftInstanceId: z.uuid(),
+  stationId: z.uuid(),
+});
+
+export const scrapLogList = userOrDisplayRequired.input(scrapLogListInputSchema).handler(async ({ input, context }) => {
+  // One station's floor data: check that station, as downtimeLogs does.
+  await context.access.require("VIEW", { station: input.stationId });
+
+  const rows = await prisma.itemDispositionLog.findMany({
+    where: {
+      siteId: input.siteId,
+      stationId: input.stationId,
+      shiftInstanceId: input.shiftInstanceId,
+      deletedAt: null,
+    },
+    orderBy: { createdAt: "asc" },
+    select: {
+      id: true,
+      createdAt: true,
+      quantity: true,
+      dispositionReasonId: true,
+      dispositionReason: { select: { name: true } },
+    },
+  });
+
+  return rows.map((r) => ({
+    id: r.id,
+    createdAt: r.createdAt,
+    quantity: Number(r.quantity),
+    dispositionReasonId: r.dispositionReasonId,
+    dispositionReasonName: r.dispositionReason?.name ?? null,
+  }));
+});
 
 // ============================================================================
 // Shift Comments (workcenter-overall + per-station, append-only thread)
