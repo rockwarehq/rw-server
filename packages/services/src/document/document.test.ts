@@ -263,6 +263,24 @@ describe("document service", () => {
       const found = await documents.list({ siteId, q: "setup.pdf" });
       expect(found.data.map((document) => document.id)).toContain(documentId);
 
+      // Any finished version can be made current again; nothing is lost.
+      const rolledBack = await documents.setCurrentVersion(documentId, v1Id);
+      if ("error" in rolledBack) throw new Error(rolledBack.error);
+      expect(rolledBack.data).toMatchObject({ filename: "setup.md", version: 1 });
+      const afterRollback = await documents.listVersions(documentId);
+      if ("error" in afterRollback) throw new Error(afterRollback.error);
+      expect(afterRollback.data.map((file) => [file.version, file.isCurrent])).toEqual([
+        [2, false],
+        [1, true],
+      ]);
+      const forward = await documents.setCurrentVersion(documentId, history.data[0]!.id);
+      if ("error" in forward) throw new Error(forward.error);
+      expect(forward.data).toMatchObject({ filename: "setup.pdf", version: 2 });
+      const wrongDocument = await documents.setCurrentVersion(randomUUID(), v1Id);
+      expect(wrongDocument).toMatchObject({ code: "DOCUMENT_NOT_FOUND" });
+      const unknownVersion = await documents.setCurrentVersion(documentId, randomUUID());
+      expect(unknownVersion).toMatchObject({ code: "VERSION_NOT_FOUND" });
+
       // An unfinished upload rolls back; a finished one cannot be cancelled.
       const v3 = await documents.createVersionUpload(documentId, {
         filename: "setup-v3.pdf",
@@ -271,6 +289,8 @@ describe("document service", () => {
       });
       if ("error" in v3) throw new Error(v3.error);
       expect(v3.data.version.version).toBe(3);
+      const pendingCurrent = await documents.setCurrentVersion(documentId, v3.data.version.id);
+      expect(pendingCurrent).toMatchObject({ code: "VERSION_NOT_FOUND" });
       const cancelled = await documents.cancelVersionUpload(documentId, v3.data.version.id);
       expect(cancelled).toEqual({ success: true });
       expect(storageMock.deleteObjects).toHaveBeenLastCalledWith([expect.stringContaining("setup-v3.pdf")]);

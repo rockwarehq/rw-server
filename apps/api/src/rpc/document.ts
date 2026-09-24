@@ -210,6 +210,15 @@ export const cancelVersionUpload = userRequired.input(versionInputSchema).handle
   return { success: true };
 });
 
+/** Make an older (or any) finished version the current one. */
+export const setCurrentVersion = userRequired.input(versionInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { document: input.documentId });
+
+  const result = await documents.setCurrentVersion(input.documentId, input.fileId);
+  if ("error" in result) throwServiceError(result);
+  return result.data;
+});
+
 export const listVersions = userRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
   await context.access.require("VIEW", { document: input.documentId });
 
