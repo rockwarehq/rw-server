@@ -27,6 +27,8 @@ export const EXCLUDED_PROCEDURES: ReadonlySet<string> = new Set([
   "operator.logoffAll",
   "operator.activeSessions",
   "operator.employees",
+  "operator.identify",
+  "operator.transferSessions",
   // ── processor shared-secret surface (machine-to-machine ingest/cache).
   "events.ingest",
   "station.listEventsForProcessor",
