@@ -27,7 +27,7 @@ import { flushAllExpiredShiftUsage } from "../inventory/material-shift-flush.js"
 import { resolveEffectiveStandards } from "../facility/station/effective-standards.js";
 import { resolveShiftStamp, toDateString } from "../facility/work-context.js";
 import { splitOpenPeriodsForAllStations } from "../facility/station/periods.js";
-import { catchUpAfterStockMigration } from "../stock/reconcile.js";
+import { catchUpAfterStockMigration, catchUpMaterialLedger } from "../stock/reconcile.js";
 
 const REDIS_URL = process.env.REDIS_URL;
 
@@ -191,39 +191,59 @@ export async function startMetricBucketEnsure(): Promise<void> {
   startStockCatchUp();
 }
 
-// ── Stock book catch-up after the stock_ledger deploy (ADR-0016) ──
+// ── Stock book catch-up after a deploy (ADR-0016) ──
 //
 // Servers still on the old code during a rollout save stock records without
-// posting them to the stock book. Check every few minutes from startup until
-// catchUpAfterStockMigration says there is nothing left to do (a day after
-// the migration), so the gap closes by itself. Repeating matters: the worker
-// that records cycles may restart after this one.
+// posting them to the stock book. Check every few minutes from startup so the
+// gap closes by itself. Repeating matters: the worker that records cycles may
+// restart after this one.
+//
+// Two passes:
+// - parts (stock_ledger deploy): until catchUpAfterStockMigration says there
+//   is nothing left to do, a day after that migration;
+// - materials (material_stock_book deploy): for a day after this worker
+//   starts. A deploy always restarts it, and a later restart is harmless.
 
 const STOCK_CATCH_UP_INTERVAL_MS = 5 * 60 * 1000;
+const MATERIAL_CATCH_UP_FOR_MS = 24 * 60 * 60 * 1000;
 let stockCatchUpTimer: NodeJS.Timeout | null = null;
 
 function startStockCatchUp(): void {
   if (stockCatchUpTimer) return;
+  const startedAt = Date.now();
+  let partsDone = false;
   let lastRun: Date | null = null;
   let running = false;
   const pass = async () => {
     if (running) return;
     running = true;
-    const startedAt = new Date();
+    const passStart = new Date();
     try {
-      const result = await catchUpAfterStockMigration({ after: lastRun });
-      lastRun = startedAt;
-      if (result.status === "done") {
+      if (!partsDone) {
+        const result = await catchUpAfterStockMigration({ after: lastRun });
+        if (result.status === "done") {
+          partsDone = true;
+        } else {
+          const fixed = Object.values(result.fixed).reduce((a, b) => a + b, 0);
+          if (fixed > 0) {
+            console.log(
+              `[stock-catch-up] posted ${fixed} part record(s) saved by old servers during the deploy ` +
+                `(${JSON.stringify(result.fixed)}, ${result.products} product(s))`,
+            );
+          }
+        }
+      }
+      const materialsDone = Date.now() - startedAt > MATERIAL_CATCH_UP_FOR_MS;
+      if (!materialsDone) {
+        const fixed = await catchUpMaterialLedger();
+        if (fixed > 0) {
+          console.log(`[stock-catch-up] posted ${fixed} material ledger row(s) saved by old servers during the deploy`);
+        }
+      }
+      lastRun = passStart;
+      if (partsDone && materialsDone) {
         if (stockCatchUpTimer) clearInterval(stockCatchUpTimer);
         stockCatchUpTimer = null;
-        return;
-      }
-      const fixed = Object.values(result.fixed).reduce((a, b) => a + b, 0);
-      if (fixed > 0) {
-        console.log(
-          `[stock-catch-up] posted ${fixed} record(s) saved by old servers during the deploy ` +
-            `(${JSON.stringify(result.fixed)}, ${result.products} product(s))`,
-        );
       }
     } catch (err) {
       console.error("[stock-catch-up] pass failed; will retry", err);
