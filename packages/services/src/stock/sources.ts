@@ -24,14 +24,27 @@ export const PRODUCT_SOURCE_TYPES: readonly ProductSourceType[] = [
   "PRODUCT_STOCK_ADJUSTMENT",
 ];
 
+/** The source type materials use (ADR-0016 phase 2): every material ledger row. */
+export type MaterialSourceType = Extract<StockSourceType, "MATERIAL_LEDGER_ENTRY">;
+
+export const MATERIAL_SOURCE_TYPES: readonly MaterialSourceType[] = ["MATERIAL_LEDGER_ENTRY"];
+
+/** Every source type that posts to the stock book today. */
+export type BookSourceType = ProductSourceType | MaterialSourceType;
+
+export const BOOK_SOURCE_TYPES: readonly BookSourceType[] = [...PRODUCT_SOURCE_TYPES, ...MATERIAL_SOURCE_TYPES];
+
+export const isMaterialSource = (type: BookSourceType): type is MaterialSourceType => type === "MATERIAL_LEDGER_ENTRY";
+
 /** Column list shared by every insert into "StockMovement" built here. */
 export const MOVEMENT_COLUMNS = Prisma.raw(
   `"id", "stockItemId", "siteId", "kind", "quantity", "unit", "sourceType", "sourceId", "idempotencyKey",
-   "stationId", "shiftInstanceId", "isScheduled", "businessDate", "performedByUserId", "occurredAt", "createdAt"`,
+   "stationId", "shiftInstanceId", "isScheduled", "businessDate", "performedByUserId", "occurredAt", "createdAt",
+   "note"`,
 );
 
 /** "TYPE:id", or "TYPE:id:rN" once the record's movement has been cancelled N times. */
-function keyFor(type: ProductSourceType, idColumn: string) {
+function keyFor(type: BookSourceType, idColumn: string) {
   return Prisma.raw(
     `'${type}:' || ${idColumn} || COALESCE(':r' || NULLIF((
        SELECT COUNT(*) FROM "StockMovement" x
@@ -45,7 +58,7 @@ function keyFor(type: ProductSourceType, idColumn: string) {
  * Records whose product has no StockItem yet are skipped — call
  * ensureProductStockItems first.
  */
-export function movementSelect(type: ProductSourceType, ids: string[]): Prisma.Sql {
+export function movementSelect(type: BookSourceType, ids: string[]): Prisma.Sql {
   switch (type) {
     case "INVENTORY_ITEM":
       // A made part. Older rows may lack the copied site and station, so the
@@ -54,7 +67,7 @@ export function movementSelect(type: ProductSourceType, ids: string[]): Prisma.S
         SELECT gen_random_uuid(), si.id, COALESCE(ii."siteId", cy."siteId"), 'OUTPUT'::"StockMovementKind",
                ii.quantity, ii."quantityUnit", 'INVENTORY_ITEM'::"StockSourceType", ii.id, ${keyFor(type, "ii.id")},
                COALESCE(ii."stationId", cy."stationId"), ii."shiftInstanceId", ii."isScheduled", ii."businessDate",
-               NULL::uuid, ii."createdAt", NOW()
+               NULL::uuid, ii."createdAt", NOW(), NULL::text
         FROM "InventoryItem" ii
         JOIN "Cycle" cy ON cy.id = ii."cycleId"
         JOIN "ProductVersion" pv ON pv.id = ii."productVersionId"
@@ -65,7 +78,7 @@ export function movementSelect(type: ProductSourceType, ids: string[]): Prisma.S
         SELECT gen_random_uuid(), si.id, idl."siteId", 'SCRAP'::"StockMovementKind",
                -idl.quantity, si."baseUnit", 'ITEM_DISPOSITION_LOG'::"StockSourceType", idl.id, ${keyFor(type, "idl.id")},
                idl."stationId", idl."shiftInstanceId", idl."isScheduled", idl."businessDate",
-               NULL::uuid, idl."createdAt", NOW()
+               NULL::uuid, idl."createdAt", NOW(), NULL::text
         FROM "ItemDispositionLog" idl
         JOIN "ProductVersion" pv ON pv.id = idl."productVersionId"
         JOIN "StockItem" si ON si."stockableType" = 'PRODUCT' AND si."stockableId" = pv."productId"
@@ -75,7 +88,7 @@ export function movementSelect(type: ProductSourceType, ids: string[]): Prisma.S
         SELECT gen_random_uuid(), si.id, oc."siteId", 'FULFILLMENT'::"StockMovementKind",
                -oc.quantity, si."baseUnit", 'ORDER_CONSUMPTION'::"StockSourceType", oc.id, ${keyFor(type, "oc.id")},
                NULL::uuid, oc."shiftInstanceId", oc."isScheduled", oc."businessDate",
-               u.id, oc."createdAt", NOW()
+               u.id, oc."createdAt", NOW(), NULL::text
         FROM "OrderConsumption" oc
         JOIN "StockItem" si ON si."stockableType" = 'PRODUCT' AND si."stockableId" = oc."productId"
         -- createdByUserId has no link to User; keep it only when the user still exists.
@@ -87,11 +100,32 @@ export function movementSelect(type: ProductSourceType, ids: string[]): Prisma.S
         SELECT gen_random_uuid(), si.id, sa."siteId", 'ADJUSTMENT'::"StockMovementKind",
                sa.delta, si."baseUnit", 'PRODUCT_STOCK_ADJUSTMENT'::"StockSourceType", sa.id, ${keyFor(type, "sa.id")},
                NULL::uuid, sa."shiftInstanceId", sa."isScheduled", sa."businessDate",
-               sa."performedByUserId", sa."createdAt", NOW()
+               sa."performedByUserId", sa."createdAt", NOW(), NULL::text
         FROM "ProductStockAdjustment" sa
         JOIN "StockItem" si ON si."stockableType" = 'PRODUCT' AND si."stockableId" = sa."productId"
         WHERE sa.id = ANY(${ids}::uuid[]) AND sa.delta <> 0`;
+    case "MATERIAL_LEDGER_ENTRY":
+      // A material ledger row, in the unit it was written in (the totals
+      // convert it). The end-of-shift PRODUCTION row becomes USAGE and is
+      // placed at its shift's start, so it stays in the shift it was for.
+      return Prisma.sql`
+        SELECT gen_random_uuid(), si.id, le."siteId",
+               (CASE le.kind WHEN 'PRODUCTION' THEN 'USAGE' ELSE le.kind::text END)::"StockMovementKind",
+               le.quantity, le.unit::text, 'MATERIAL_LEDGER_ENTRY'::"StockSourceType", le.id, ${keyFor(type, "le.id")},
+               NULL::uuid, le."shiftInstanceId", le."isScheduled", le."businessDate",
+               le."performedByUserId",
+               CASE WHEN le.kind = 'PRODUCTION' THEN COALESCE(sh."startTime", le."createdAt") ELSE le."createdAt" END,
+               NOW(), le.note
+        FROM "MaterialLedgerEntry" le
+        JOIN "StockItem" si ON si."stockableType" = 'MATERIAL' AND si."stockableId" = le."materialId"
+        LEFT JOIN "ShiftInstance" sh ON sh.id = le."shiftInstanceId"
+        WHERE le.id = ANY(${ids}::uuid[]) AND le.quantity <> 0`;
   }
+}
+
+/** SELECT the material ids these ledger rows are for. */
+export function materialIdsSelect(ids: string[]): Prisma.Sql {
+  return Prisma.sql`SELECT "materialId" FROM "MaterialLedgerEntry" WHERE id = ANY(${ids}::uuid[])`;
 }
 
 /** SELECT the product ids these records touch (deleted records included). */
@@ -115,7 +149,7 @@ export interface RecordScope {
   siteId?: string | null;
   /** Only records made or changed since this moment. */
   since?: Date | null;
-  /** Only records for these products. */
+  /** Only records for these products (part sources only). */
   productIds?: string[] | null;
 }
 
@@ -124,7 +158,7 @@ export interface RecordScope {
  * scope, where `expected` is what the record should add to stock right now —
  * zero once it is deleted.
  */
-export function expectedSelect(type: ProductSourceType, scope: RecordScope = {}): Prisma.Sql {
+export function expectedSelect(type: BookSourceType, scope: RecordScope = {}): Prisma.Sql {
   const siteId = scope.siteId ?? null;
   const since = scope.since ?? null;
   const products = scope.productIds ?? null;
@@ -164,5 +198,12 @@ export function expectedSelect(type: ProductSourceType, scope: RecordScope = {})
         WHERE (${siteId}::uuid IS NULL OR "siteId" = ${siteId}::uuid)
           AND (${since}::timestamptz IS NULL OR "createdAt" >= ${since}::timestamptz)
           ${byProduct}`;
+    case "MATERIAL_LEDGER_ENTRY":
+      // Ledger rows are never changed or deleted. `productIds` does not apply.
+      return Prisma.sql`
+        SELECT id, quantity AS expected
+        FROM "MaterialLedgerEntry"
+        WHERE (${siteId}::uuid IS NULL OR "siteId" = ${siteId}::uuid)
+          AND (${since}::timestamptz IS NULL OR "createdAt" >= ${since}::timestamptz)`;
   }
 }
