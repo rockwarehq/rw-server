@@ -5,7 +5,11 @@
 /// `onHand` is the plain total and can go below zero (for example, more
 /// scrapped than made). Screens show at least zero. The other columns split
 /// the total by kind, and always add up to `onHand`:
-/// onHand = produced − scrapped − consumed + adjusted.
+/// onHand = produced − scrapped − consumed + adjusted + received − issued.
+///
+/// Every number is in the StockItem's `baseUnit`. Movements keep the unit
+/// they were written in; the totals convert them (the `stock_convert`
+/// database function, weights only for now).
 model StockBalance {
   stockItemId String    @id @db.Uuid
   stockItem   StockItem @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
@@ -21,6 +25,10 @@ model StockBalance {
   consumed Decimal @default(0) @db.Decimal(18, 4)
   /// Total of hand corrections and counts (ADJUSTMENT), plus or minus.
   adjusted Decimal @default(0) @db.Decimal(18, 4)
+  /// Total brought in (RECEIPT, TRANSFER_IN, OPENING_BALANCE). Materials.
+  received Decimal @default(0) @db.Decimal(18, 4)
+  /// Total taken out (USAGE, WRITE_OFF, TRANSFER_OUT), as a plus number. Materials.
+  issued   Decimal @default(0) @db.Decimal(18, 4)
 
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 

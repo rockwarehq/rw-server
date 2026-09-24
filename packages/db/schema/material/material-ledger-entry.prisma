@@ -4,11 +4,11 @@
 /// shift builds up in `MaterialShiftUsage`; when the shift ends, the flush
 /// writes one `PRODUCTION` row per material from those staging rows.
 ///
-/// Balance is a single aggregate: `SUM(quantity) WHERE materialId = ?`, minus
-/// what is still in staging.
-///
-/// Materials move onto the shared stock book (StockMovement) in ADR-0016
-/// phase 2; these rows then become the source records for its movements.
+/// Each row is the source record of one StockMovement in the shared stock book
+/// (ADR-0016), posted in the same save; PRODUCTION becomes USAGE there. The
+/// balance comes from the book (StockBalance, in the material's unit) minus
+/// what is still in staging. A row keeps the unit it was written in; the
+/// book converts it.
 enum MaterialLedgerKind {
   RECEIPT // stock received from supplier
   ADJUSTMENT // manual audit delta (signed)

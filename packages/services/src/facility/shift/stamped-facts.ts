@@ -1,3 +1,5 @@
+import { shiftBoundLedger, shiftBoundMovement } from "../../stock/sources.js";
+
 // Every table that carries a shift stamp, named once. The re-stamp writes
 // through this list, the "is this instance still in use" check reads it, and a
 // new stamped table only has to be added here.
@@ -24,7 +26,16 @@ export const STAMPED_FACTS: readonly StampedFact[] = [
   { table: "StationLogonSession", at: '"logonTime"', byStation: true, businessDate: true },
   { table: "StationStateLog", at: '"startTime"', byStation: true, businessDate: true },
   { table: "StationJobLog", at: '"startTime"', byStation: true, businessDate: true },
-  { table: "MaterialLedgerEntry", at: '"createdAt"', byStation: false, businessDate: true },
+  // Rows written *for* a shift (end-of-shift PRODUCTION, an amendment's
+  // ADJUSTMENT) are not placed by their time: a re-stamp leaves them on their
+  // shift and only refreshes its labels (see SHIFT_BOUND_FACTS).
+  {
+    table: "MaterialLedgerEntry",
+    at: '"createdAt"',
+    byStation: false,
+    businessDate: true,
+    where: `NOT ${shiftBoundLedger("f")}`,
+  },
   { table: "OrderConsumption", at: '"createdAt"', byStation: false, businessDate: true },
   { table: "ProductStockAdjustment", at: '"createdAt"', byStation: false, businessDate: true },
   // The stock book holds both kinds: movements from a station (made and
@@ -36,9 +47,21 @@ export const STAMPED_FACTS: readonly StampedFact[] = [
     at: '"occurredAt"',
     byStation: false,
     businessDate: true,
-    where: 'f."stationId" IS NULL',
+    // The stock book copies of those shift-bound rows stay with their shift too.
+    where: `f."stationId" IS NULL AND NOT ${shiftBoundMovement("f")}`,
   },
 ] as const;
+
+/**
+ * Rows that belong to a shift no matter when they were written. They keep
+ * their shift instance (so it counts as in use and is not removed), and a
+ * re-stamp refreshes their labels from it; the stock book copies also move
+ * their time to the shift's start.
+ */
+export const SHIFT_BOUND_FACTS: readonly { table: string; where: string; atShiftStart: boolean }[] = [
+  { table: "MaterialLedgerEntry", where: shiftBoundLedger("f"), atShiftStart: false },
+  { table: "StockMovement", where: shiftBoundMovement("f"), atShiftStart: true },
+];
 
 /**
  * Totals keyed by shift rather than placed in time: there is no instant to

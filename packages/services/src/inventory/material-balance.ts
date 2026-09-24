@@ -1,15 +1,16 @@
 import prisma from "@rw/db";
 import { Prisma, type WeightUnit } from "@rw/db";
+import { getMaterialStock, pendingMaterialUsage } from "../stock/balance.js";
 
 export interface MaterialBalance {
   materialId: string;
-  /** Canonical weight unit of the material (from its current MaterialVersion). */
+  /** The material's stock unit (from its current MaterialVersion); null = not tracked. */
   unit: WeightUnit | null;
   /** Sum of RECEIPT + TRANSFER_IN + OPENING_BALANCE ledger entries. */
   received: Prisma.Decimal;
   /** Net signed sum of ADJUSTMENT entries. */
   adjusted: Prisma.Decimal;
-  /** Total consumed: WRITE_OFF + TRANSFER_OUT + PRODUCTION (all ledger-sourced). */
+  /** Total consumed: WRITE_OFF + TRANSFER_OUT + end-of-shift usage, plus what open shifts have used so far. */
   consumed: Prisma.Decimal;
   /** received + adjusted − consumed. */
   balance: Prisma.Decimal;
@@ -18,71 +19,47 @@ export interface MaterialBalance {
 }
 
 /**
- * Compute a material's on-hand balance.
+ * Compute a material's on-hand balance, in its stock unit.
  *
  * Balance has two sources:
- *   1. `MaterialLedgerEntry` — append-only immutable rows for receipts,
- *      adjustments, write-offs, transfers, and (post-flush) PRODUCTION.
- *   2. `MaterialShiftUsage` (unflushed) — mid-shift accumulating consumption
- *      that hasn't been flushed to the ledger yet.
+ *   1. The stock book (StockBalance, built from StockMovement, ADR-0016):
+ *      every material ledger row, converted to the material's unit —
+ *      receipts, adjustments, write-offs, transfers, and the end-of-shift
+ *      usage.
+ *   2. `MaterialShiftUsage` (unflushed) — what open shifts have used so far,
+ *      not in the book until the shift is flushed.
  *
- * Active-shift staging counts as consumption-in-progress, so we subtract
- * unflushed staging quantity from the ledger sum. After a shift flushes,
- * its rows move into the ledger as PRODUCTION entries and the staging side
- * stops contributing.
+ * Open-shift usage counts as consumption-in-progress, so it is subtracted.
  *
- * `asOf` filters the ledger side on `createdAt` (immutable, so this is the
- * actual transaction time). The staging side is "right now" by definition.
+ * `asOf` adds the book up to that moment instead of reading the saved
+ * totals. The open-shift side is "right now" by definition.
  */
 export async function balance(materialId: string, asOf?: Date): Promise<MaterialBalance> {
-  const asOfParam = asOf ?? null;
-
-  const rows = await prisma.$queryRaw<
-    Array<{
-      received: Prisma.Decimal;
-      adjusted: Prisma.Decimal;
-      consumed: Prisma.Decimal;
-      balance: Prisma.Decimal;
-    }>
-  >`
-    WITH ledger_agg AS (
-      SELECT
-        COALESCE(SUM(quantity) FILTER (WHERE kind IN ('RECEIPT','TRANSFER_IN','OPENING_BALANCE')), 0) AS received,
-        COALESCE(SUM(quantity) FILTER (WHERE kind = 'ADJUSTMENT'), 0) AS adjusted,
-        COALESCE(SUM(quantity) FILTER (WHERE kind IN ('WRITE_OFF','TRANSFER_OUT','PRODUCTION')), 0) AS consumed_signed
-      FROM "MaterialLedgerEntry"
-      WHERE "materialId" = ${materialId}::uuid
-        AND (${asOfParam}::timestamptz IS NULL OR "createdAt" <= ${asOfParam}::timestamptz)
-    ),
-    staging_agg AS (
-      SELECT COALESCE(SUM(quantity), 0) AS pending
-      FROM "MaterialShiftUsage"
-      WHERE "materialId" = ${materialId}::uuid
-        AND "flushedAt" IS NULL
-    )
-    SELECT
-      l.received,
-      l.adjusted,
-      (-l.consumed_signed + s.pending) AS consumed,
-      (l.received + l.adjusted + l.consumed_signed - s.pending) AS balance
-    FROM ledger_agg l, staging_agg s
-  `;
-
   const material = await prisma.material.findUnique({
     where: { id: materialId },
     select: { currentVersion: { select: { weightUnits: true } } },
   });
-
-  const row = rows[0];
+  const catalogUnit = material?.currentVersion?.weightUnits ?? null;
   const zero = new Prisma.Decimal(0);
+
+  const stock = await getMaterialStock(materialId, asOf ?? null);
+  // The numbers are in the stock unit, so that is the unit reported. It
+  // normally equals the catalog unit; null means the material is not tracked.
+  const unit = catalogUnit ? ((stock?.baseUnit || catalogUnit) as WeightUnit) : null;
+  const pending = await pendingMaterialUsage(prisma, materialId, stock?.baseUnit || catalogUnit || "");
+
+  const received = stock?.received ?? zero;
+  const adjusted = stock?.adjusted ?? zero;
+  const issued = stock?.issued ?? zero;
+  const onHand = stock?.onHand ?? zero;
 
   return {
     materialId,
-    unit: material?.currentVersion?.weightUnits ?? null,
-    received: row?.received ?? zero,
-    adjusted: row?.adjusted ?? zero,
-    consumed: row?.consumed ?? zero,
-    balance: row?.balance ?? zero,
+    unit,
+    received,
+    adjusted,
+    consumed: issued.plus(pending),
+    balance: onHand.minus(pending),
     asOf: asOf ?? null,
   };
 }
