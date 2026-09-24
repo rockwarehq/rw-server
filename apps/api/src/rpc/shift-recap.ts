@@ -544,7 +544,7 @@ export const commentCreate = userOrDisplayRequired
       createdById: context.current.kind === "user" ? context.current.user.id : null,
       createdByEmployeeId: input.employeeId,
     });
-    if (result.error !== undefined) throwServiceError(result);
+    if ("error" in result) throwServiceError(result);
     return result.data;
   });
 
