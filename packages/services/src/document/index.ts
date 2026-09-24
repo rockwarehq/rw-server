@@ -707,7 +707,7 @@ export async function link(documentId: string, targetType: DocumentTargetType, t
   }
 
   const target = await resolveTargetSite(targetType, targetId);
-  if ("error" in target) return target;
+  if ("error" in target) return { error: target.error, code: target.code };
 
   if (document.siteId && document.siteId !== target.siteId) {
     return { error: "Document and target must belong to the same site", code: "SITE_MISMATCH" };
