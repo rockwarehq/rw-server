@@ -73,6 +73,7 @@ model User {
   productStockAdjustments ProductStockAdjustment[]
   apiTokensCreated        ApiToken[]
   savedViewsCreated       SavedView[]
+  documentFilesCreated    DocumentFile[]           @relation("DocumentFileCreatedBy")
 
   // SMS consent decisions this user recorded
   smsConsentEvents SmsConsentEvent[]

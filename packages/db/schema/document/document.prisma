@@ -8,6 +8,10 @@ enum DocumentStatus {
   READY
 }
 
+/// A document is the stable "recording": identity, name, labels, folder,
+/// scope and links. A FILE delegates its bytes to immutable DocumentFile
+/// versions (delegated type); a new upload adds a version and moves
+/// currentFileId, the way Job moves currentVersionId.
 model Document {
   id String @id @default(uuid()) @db.Uuid
 
@@ -18,10 +22,11 @@ model Document {
   labels      String[]       @default([])
   attrs       Json           @default("{}")
 
-  filename    String?
-  contentType String?
-  size        Int?
-  storageKey  String? @unique
+  /// FILE only: the version readers get. Null for folders and for a file
+  /// whose first upload is still pending.
+  currentFileId String?        @unique @db.Uuid
+  currentFile   DocumentFile?  @relation("DocumentCurrentFile", fields: [currentFileId], references: [id])
+  files         DocumentFile[] @relation("DocumentFiles")
 
   siteId String? @db.Uuid
   site   Site?   @relation(fields: [siteId], references: [id], onDelete: Cascade)
@@ -41,4 +46,30 @@ model Document {
   @@index([kind, status])
   @@index([labels(ops: ArrayOps)], type: Gin)
   @@index([deletedAt])
+}
+
+/// One uploaded version of a FILE document. Immutable once READY: a new
+/// upload is a new row with the next version number.
+model DocumentFile {
+  id      String         @id @default(uuid()) @db.Uuid
+  version Int
+  status  DocumentStatus @default(PENDING_UPLOAD)
+
+  filename    String
+  contentType String
+  size        Int
+  storageKey  String @unique
+
+  documentId String   @db.Uuid
+  document   Document @relation("DocumentFiles", fields: [documentId], references: [id], onDelete: Cascade)
+
+  currentOfDocument Document? @relation("DocumentCurrentFile")
+
+  createdById String? @db.Uuid
+  createdBy   User?   @relation("DocumentFileCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([documentId, version])
+  @@index([documentId])
 }
