@@ -25,10 +25,7 @@ const createFolderInputSchema = z.object({
   attrs: attrsSchema.optional(),
 });
 
-const createUploadInputSchema = z.object({
-  name: z.string().min(1).max(255).optional(),
-  description: z.string().max(2000).optional(),
-  labels: labelsSchema.optional(),
+const uploadFileSchema = z.object({
   filename: z.string().min(1).max(255),
   contentType: z.string().refine((ct) => storageConfig.allowedDocumentContentTypes.includes(ct), {
     message: `Content type must be one of: ${storageConfig.allowedDocumentContentTypes.join(", ")}`,
@@ -40,9 +37,25 @@ const createUploadInputSchema = z.object({
     .max(storageConfig.maxDocumentFileSizeBytes, {
       message: `File size must not exceed ${storageConfig.maxDocumentFileSizeBytes / (1024 * 1024)}MB`,
     }),
+});
+
+const createUploadInputSchema = uploadFileSchema.extend({
+  name: z.string().min(1).max(255).optional(),
+  description: z.string().max(2000).optional(),
+  labels: labelsSchema.optional(),
   siteId: z.uuid().nullable().optional(),
   parentId: z.uuid().nullable().optional(),
   attrs: attrsSchema.optional(),
+});
+
+/** A new version of an existing file; any allowed type, not only the current one. */
+const createVersionUploadInputSchema = uploadFileSchema.extend({
+  documentId: z.uuid(),
+});
+
+const versionInputSchema = z.object({
+  documentId: z.uuid(),
+  fileId: z.uuid(),
 });
 
 const listInputSchema = z.object({
@@ -81,6 +94,35 @@ const targetInputSchema = z.object({
   labelsAny: labelsSchema.optional(),
   labelsAll: labelsSchema.optional(),
 });
+
+const contextInputSchema = z.object({
+  targetType: documentTargetTypeSchema,
+  targetId: z.uuid(),
+  /** STATION only: resolve this job instead of the one the station runs now. */
+  jobId: z.uuid().nullable().optional(),
+  labelsAny: labelsSchema.optional(),
+  labelsAll: labelsSchema.optional(),
+});
+
+/** The access row that authorizes reading a target's context. */
+function contextAccessTarget(targetType: DocumentTargetType, id: string) {
+  switch (targetType) {
+    case "SITE":
+      return { site: id };
+    case "WORKCENTER":
+      return { workcenter: id };
+    case "STATION":
+      return { station: id };
+    case "JOB":
+      return { job: id };
+    case "TOOL":
+      return { tool: id };
+    case "PRODUCT":
+      return { product: id };
+    case "MATERIAL":
+      return { material: id };
+  }
+}
 
 const displayContextInputSchema = z
   .object({
@@ -124,7 +166,11 @@ export const createUpload = userRequired.input(createUploadInputSchema).handler(
   if (input.siteId) await context.access.require("MANAGE", { site: input.siteId });
   else context.access.requireSomewhere("MANAGE");
 
-  const result = await documents.createUpload({ ...input, workspaceId: context.current.workspaceId });
+  const result = await documents.createUpload({
+    ...input,
+    workspaceId: context.current.workspaceId,
+    createdById: context.current.user.id,
+  });
   if ("error" in result) throwServiceError(result);
   return result.data;
 });
@@ -134,6 +180,57 @@ export const completeUpload = userRequired.input(documentIdInputSchema).handler(
 
   const result = await documents.completeUpload(input.documentId);
   if (result.error !== undefined) throwServiceError(result);
+  return result.data;
+});
+
+export const createVersionUpload = userRequired
+  .input(createVersionUploadInputSchema)
+  .handler(async ({ input, context }) => {
+    await context.access.require("MANAGE", { document: input.documentId });
+
+    const { documentId, ...file } = input;
+    const result = await documents.createVersionUpload(documentId, { ...file, createdById: context.current.user.id });
+    if ("error" in result) throwServiceError(result);
+    return result.data;
+  });
+
+export const completeVersionUpload = userRequired.input(versionInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { document: input.documentId });
+
+  const result = await documents.completeVersionUpload(input.documentId, input.fileId);
+  if ("error" in result) throwServiceError(result);
+  return result.data;
+});
+
+export const cancelVersionUpload = userRequired.input(versionInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("MANAGE", { document: input.documentId });
+
+  const result = await documents.cancelVersionUpload(input.documentId, input.fileId);
+  if ("error" in result) throwServiceError(result);
+  return { success: true };
+});
+
+export const listVersions = userRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { document: input.documentId });
+
+  const result = await documents.listVersions(input.documentId);
+  if ("error" in result) throwServiceError(result);
+  return { data: result.data };
+});
+
+export const openVersion = userRequired.input(versionInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { document: input.documentId });
+
+  const result = await documents.getVersionOpenUrl(input.documentId, input.fileId);
+  if ("error" in result) throwServiceError(result);
+  return result.data;
+});
+
+export const downloadVersion = userRequired.input(versionInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { document: input.documentId });
+
+  const result = await documents.getVersionDownloadUrl(input.documentId, input.fileId);
+  if ("error" in result) throwServiceError(result);
   return result.data;
 });
 
@@ -206,7 +303,7 @@ export const link = userRequired.input(documentLinkInputSchema).handler(async ({
   await context.access.require("MANAGE", { document: input.documentId });
 
   const result = await documents.link(input.documentId, input.targetType as DocumentTargetType, input.targetId);
-  if ("error" in result) throwServiceError(result);
+  if (result.error !== undefined) throwServiceError(result);
   return result.data;
 });
 
@@ -220,6 +317,22 @@ export const listForTarget = userRequired.input(targetInputSchema).handler(async
   context.access.requireSomewhere("VIEW");
 
   return documents.listForTarget(input.targetType as DocumentTargetType, input.targetId, getLabelFilter(input));
+});
+
+/**
+ * A record's knowledge context: every document linked to it or to what it is
+ * made of and runs with, most specific first, each with the records it came
+ * through and its current version. See services/document/context.ts.
+ */
+export const context = userRequired.input(contextInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", contextAccessTarget(input.targetType, input.targetId));
+
+  const result = await documents.resolveContext(
+    { targetType: input.targetType as DocumentTargetType, targetId: input.targetId },
+    { jobId: input.jobId, ...getLabelFilter(input) },
+  );
+  if ("error" in result) throwServiceError(result);
+  return { data: result.data, targets: result.targets };
 });
 
 export const listForDisplayContext = displayRequired

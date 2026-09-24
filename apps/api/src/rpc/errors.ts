@@ -74,6 +74,7 @@ const EXACT: Record<string, OrpcErrorCode> = {
   NOT_DELETABLE: "CONFLICT",
   STATION_EVENT_DISABLED: "CONFLICT",
   DOCUMENT_PENDING: "CONFLICT",
+  VERSION_READY: "CONFLICT",
   INVALID_PARENT: "CONFLICT",
   // Completing an order with coverage < 100% needs explicit confirmation
   // (retry with allowPartial: true).
