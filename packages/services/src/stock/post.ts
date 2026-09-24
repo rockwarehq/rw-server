@@ -1,4 +1,4 @@
-import { Prisma, type StockMovementKind } from "@rw/db";
+import { Prisma } from "@rw/db";
 import {
   type BookSourceType,
   isMaterialSource,
@@ -7,6 +7,7 @@ import {
   movementSelect,
   productIdsSelect,
 } from "./sources.js";
+import { totalsSelect } from "./totals.js";
 
 type Tx = Prisma.TransactionClient;
 
@@ -33,13 +34,6 @@ export interface PostNote {
   /** Who did it, for cancelling rows. New rows copy it from their source record. */
   performedByUserId?: string | null;
   note?: string | null;
-}
-
-/** Movement totals per item and kind, already converted to the item's baseUnit. */
-interface KindTotal {
-  stockItemId: string;
-  kind: StockMovementKind;
-  quantity: string;
 }
 
 /**
@@ -125,33 +119,37 @@ export async function repostSources(
   return applyToBalances(tx, [...cancelled, ...posted]);
 }
 
+/** A movement just written, and the stock item it belongs to. */
+interface NewMovement {
+  id: string;
+  stockItemId: string;
+}
+
 /** Add the movement rows for these records. Does not touch StockBalance. */
-async function insertPosts(tx: Tx, sources: StockSource[]): Promise<KindTotal[]> {
-  const totals: KindTotal[] = [];
+async function insertPosts(tx: Tx, sources: StockSource[]): Promise<NewMovement[]> {
+  const rows: NewMovement[] = [];
   for (const { type, ids } of sources) {
     if (ids.length === 0) continue;
     await ensureStockItemsFor(tx, type, ids);
-    const rows = await tx.$queryRaw<KindTotal[]>`
-      WITH posted AS (
+    rows.push(
+      ...(await tx.$queryRaw<NewMovement[]>`
         INSERT INTO "StockMovement" (${MOVEMENT_COLUMNS})
         ${movementSelect(type, ids)}
         ON CONFLICT ("idempotencyKey") DO NOTHING
-        RETURNING "stockItemId", "kind", "quantity", "unit"
-      )
-      ${convertedTotals("posted")}
-    `;
-    totals.push(...rows);
+        RETURNING "id", "stockItemId"
+      `),
+    );
   }
-  return totals;
+  return rows;
 }
 
 /** Add the cancelling rows for these records. Does not touch StockBalance. */
-async function insertReversals(tx: Tx, sources: StockSource[], by: PostNote): Promise<KindTotal[]> {
-  const totals: KindTotal[] = [];
+async function insertReversals(tx: Tx, sources: StockSource[], by: PostNote): Promise<NewMovement[]> {
+  const rows: NewMovement[] = [];
   for (const { type, ids } of sources) {
     if (ids.length === 0) continue;
-    const rows = await tx.$queryRaw<KindTotal[]>`
-      WITH cancelled AS (
+    rows.push(
+      ...(await tx.$queryRaw<NewMovement[]>`
         INSERT INTO "StockMovement" (${MOVEMENT_COLUMNS}, "reversesMovementId", "lotId")
         SELECT gen_random_uuid(), m."stockItemId", m."siteId", m."kind", -m."quantity", m."unit",
                m."sourceType", m."sourceId", 'REVERSAL:' || m.id, m."stationId", m."shiftInstanceId",
@@ -163,25 +161,11 @@ async function insertReversals(tx: Tx, sources: StockSource[], by: PostNote): Pr
           AND NOT EXISTS (SELECT 1 FROM "StockMovement" r WHERE r."reversesMovementId" = m.id)
         ORDER BY m.id
         ON CONFLICT DO NOTHING
-        RETURNING "stockItemId", "kind", "quantity", "unit"
-      )
-      ${convertedTotals("cancelled")}
-    `;
-    totals.push(...rows);
+        RETURNING "id", "stockItemId"
+      `),
+    );
   }
-  return totals;
-}
-
-/**
- * Totals per item and kind from just-inserted movements, each converted to
- * its item's baseUnit one row at a time (stock_convert rounds per row). The
- * rebuild adds up the same way, so kept-up totals and rebuilt totals agree.
- */
-function convertedTotals(cte: "posted" | "cancelled"): Prisma.Sql {
-  return Prisma.sql`
-    SELECT r."stockItemId", r."kind", SUM(stock_convert(r."quantity", r."unit", si."baseUnit"))::text AS quantity
-    FROM ${Prisma.raw(cte)} r JOIN "StockItem" si ON si.id = r."stockItemId"
-    GROUP BY 1, 2`;
+  return rows;
 }
 
 /**
@@ -197,89 +181,36 @@ export async function ensureBalances(tx: Tx, stockItemIds: string[]): Promise<vo
   `;
 }
 
-type BalanceColumn = "produced" | "scrapped" | "consumed" | "adjusted" | "received" | "issued";
-const BALANCE_COLUMNS: readonly BalanceColumn[] = [
-  "produced",
-  "scrapped",
-  "consumed",
-  "adjusted",
-  "received",
-  "issued",
-];
-
 /**
- * Where each kind lands in StockBalance, and whether it is kept as a plus
- * total of minus movements (scrap, orders and material issues go out of stock
- * but are shown as plus numbers).
+ * Add new movements to StockBalance. The balance rows are locked first, in
+ * stockItemId order, and only then are the movements converted to each
+ * item's baseUnit and added. A material's unit only changes under that same
+ * lock (setMaterialStockUnit), so a save can never add a total worked out in
+ * a unit that changed underneath it.
  */
-function columnFor(kind: StockMovementKind): { column: BalanceColumn; outflow: boolean } {
-  switch (kind) {
-    case "OUTPUT":
-      return { column: "produced", outflow: false };
-    case "SCRAP":
-      return { column: "scrapped", outflow: true };
-    case "FULFILLMENT":
-      return { column: "consumed", outflow: true };
-    case "ADJUSTMENT":
-      return { column: "adjusted", outflow: false };
-    case "RECEIPT":
-    case "TRANSFER_IN":
-    case "OPENING_BALANCE":
-      return { column: "received", outflow: false };
-    case "USAGE":
-    case "WRITE_OFF":
-    case "TRANSFER_OUT":
-      return { column: "issued", outflow: true };
-  }
-}
-
-/** Add movement totals to StockBalance, locking rows in stockItemId order. */
-async function applyToBalances(tx: Tx, totals: KindTotal[]): Promise<string[]> {
-  const zero = () => new Prisma.Decimal(0);
-  const byItem = new Map<string, Record<"onHand" | BalanceColumn, Prisma.Decimal>>();
-  for (const { stockItemId, kind, quantity } of totals) {
-    const q = new Prisma.Decimal(quantity);
-    if (q.isZero()) continue;
-    const row = byItem.get(stockItemId) ?? {
-      onHand: zero(),
-      produced: zero(),
-      scrapped: zero(),
-      consumed: zero(),
-      adjusted: zero(),
-      received: zero(),
-      issued: zero(),
-    };
-    const { column, outflow } = columnFor(kind);
-    row.onHand = row.onHand.plus(q);
-    row[column] = outflow ? row[column].minus(q) : row[column].plus(q);
-    byItem.set(stockItemId, row);
-  }
-  if (byItem.size === 0) return [];
-
-  const ids = [...byItem.keys()].sort();
+async function applyToBalances(tx: Tx, movements: NewMovement[]): Promise<string[]> {
+  if (movements.length === 0) return [];
+  const ids = [...new Set(movements.map((m) => m.stockItemId))].sort();
   await ensureBalances(tx, ids);
   await tx.$queryRaw`
     SELECT 1 FROM "StockBalance" WHERE "stockItemId" = ANY(${ids}::uuid[]) ORDER BY "stockItemId" FOR UPDATE
   `;
-  const values = Prisma.join(
-    ids.map((id) => {
-      const r = byItem.get(id) as Record<"onHand" | BalanceColumn, Prisma.Decimal>;
-      const amounts = [r.onHand, ...BALANCE_COLUMNS.map((c) => r[c])].map((d) => Prisma.sql`${d.toString()}::numeric`);
-      return Prisma.sql`(${id}::uuid, ${Prisma.join(amounts)})`;
-    }),
-  );
+  // A new statement, so it reads each item's unit as it is now that we hold the lock.
+  const movementIds = movements.map((m) => m.id);
   await tx.$executeRaw`
     UPDATE "StockBalance" b
-    SET "onHand" = b."onHand" + v.on_hand,
-        "produced" = b."produced" + v.produced,
-        "scrapped" = b."scrapped" + v.scrapped,
-        "consumed" = b."consumed" + v.consumed,
-        "adjusted" = b."adjusted" + v.adjusted,
-        "received" = b."received" + v.received,
-        "issued" = b."issued" + v.issued,
+    SET "onHand" = b."onHand" + t.on_hand,
+        "produced" = b."produced" + t.produced,
+        "scrapped" = b."scrapped" + t.scrapped,
+        "consumed" = b."consumed" + t.consumed,
+        "adjusted" = b."adjusted" + t.adjusted,
+        "received" = b."received" + t.received,
+        "issued" = b."issued" + t.issued,
         "updatedAt" = NOW()
-    FROM (VALUES ${values}) AS v(id, on_hand, produced, scrapped, consumed, adjusted, received, issued)
-    WHERE b."stockItemId" = v.id
+    FROM (${totalsSelect(
+      Prisma.sql`FROM "StockMovement" m JOIN "StockItem" si ON si.id = m."stockItemId" WHERE m.id = ANY(${movementIds}::uuid[])`,
+    )}) t
+    WHERE b."stockItemId" = t.id
   `;
   return ids;
 }

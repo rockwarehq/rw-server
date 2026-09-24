@@ -277,7 +277,7 @@ export async function applyShiftUsage(
           materialId: w.materialId,
         },
       },
-      select: { id: true, flushedAt: true, quantity: true, itemCount: true },
+      select: { id: true, flushedAt: true, quantity: true, unit: true, itemCount: true },
     });
 
     if (existing?.flushedAt) {
@@ -288,7 +288,10 @@ export async function applyShiftUsage(
     }
     touched++;
     if (existing) {
-      const quantity = existing.quantity.add(qtyDelta);
+      // The row keeps the unit it was started in. If the material's unit
+      // changed mid-shift, convert this usage into the row's unit rather than
+      // adding numbers in two different units.
+      const quantity = existing.quantity.add(convertWeight(qtyDelta, canonicalUnit, existing.unit));
       const itemCount = existing.itemCount + itemDelta;
       if (quantity.lte(0) && itemCount <= 0) {
         await tx.materialShiftUsage.delete({ where: { id: existing.id } });

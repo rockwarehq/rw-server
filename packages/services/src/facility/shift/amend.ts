@@ -30,7 +30,7 @@ import {
   toRule,
 } from "./materialize.js";
 import { type CreateShiftOverrideInput, OVERLAP_ERROR, validateRule } from "./override.js";
-import { RESTAMPED_TABLES, STAMPED_FACTS } from "./stamped-facts.js";
+import { RESTAMPED_TABLES, SHIFT_BOUND_FACTS, STAMPED_FACTS } from "./stamped-facts.js";
 
 type Tx = Prisma.TransactionClient;
 type Result<T> = { data: T } | { error: string; code: string };
@@ -149,6 +149,8 @@ export async function amendShift(input: AmendShiftInput): Promise<Result<ShiftAm
         ignoreTables: RESTAMPED_TABLES,
         client: tx,
       });
+      // Rows written for a shift (SHIFT_BOUND_FACTS) stay on it, so they keep it alive too.
+      for (const id of await shiftBoundInUse(tx, obsoleteIds)) inUse.add(id);
       const removable = plan.obsolete.filter((r) => !inUse.has(r.id));
       // Removed first: a shift moving back over a gap takes the start time that
       // gap row still holds, and the pair may not share it even mid-transaction.
@@ -176,6 +178,7 @@ export async function amendShift(input: AmendShiftInput): Promise<Result<ShiftAm
         window,
         obsoleteIds,
       );
+      await refreshShiftBoundFacts(tx, scope, window);
       for (const station of stations) await recutPeriods(tx, station, window);
 
       const amendment = await tx.shiftAmendment.create({
@@ -489,6 +492,44 @@ async function restampFacts(
          AND si.id <> ALL(${obsolete}::uuid[])
          AND si."startTime" <= ${at} AND si."endTime" > ${at}`,
       ...params,
+    );
+  }
+}
+
+/** Obsolete instances that rows written for a shift still point at. */
+async function shiftBoundInUse(tx: Tx, obsoleteIds: string[]): Promise<string[]> {
+  if (obsoleteIds.length === 0) return [];
+  const ids: string[] = [];
+  for (const f of SHIFT_BOUND_FACTS) {
+    const rows = await tx.$queryRawUnsafe<Array<{ shiftInstanceId: string }>>(
+      `SELECT DISTINCT f."shiftInstanceId" FROM "${f.table}" f
+       WHERE f."shiftInstanceId" = ANY($1::uuid[]) AND ${f.where}`,
+      obsoleteIds,
+    );
+    ids.push(...rows.map((r) => r.shiftInstanceId));
+  }
+  return ids;
+}
+
+/**
+ * Rows written for a shift stay on it; refresh their labels (scheduled or
+ * not, business date) from their own shift, and move the stock book copies
+ * to its (possibly new) start.
+ */
+async function refreshShiftBoundFacts(tx: Tx, scope: ShiftScope, window: { start: Date; end: Date }) {
+  for (const f of SHIFT_BOUND_FACTS) {
+    await tx.$executeRawUnsafe(
+      `UPDATE "${f.table}" f
+       SET "isScheduled" = si."isScheduled", "businessDate" = si."businessDate"${f.atShiftStart ? ', "occurredAt" = si."startTime"' : ""}
+       FROM "ShiftInstance" si
+       WHERE f."shiftInstanceId" = si.id
+         AND si."siteId" = $1::uuid AND si."workCenterId" IS NOT DISTINCT FROM $2::uuid
+         AND si."startTime" < $4 AND si."endTime" > $3
+         AND ${f.where}`,
+      scope.siteId,
+      scope.workCenterId,
+      window.start,
+      window.end,
     );
   }
 }

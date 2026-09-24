@@ -155,9 +155,11 @@ are never converted.
 **Materials (phase 2): weights now, room for more later.**
 
 - A material's **stock unit** is its catalog `weightUnits`, mirrored onto
-  `StockItem.baseUnit`. The two are kept equal: changing the catalog unit
-  changes the stock unit in the same save, and the repair job puts them back
-  in step if a script edits one behind the other's back.
+  `StockItem.baseUnit`. Only `material.update` changes it, and it first locks
+  the material's balance row. Every save converts its movements only after
+  taking that same lock, so no save can add a total worked out in a unit that
+  changed underneath it. The repair job puts the two back in step if a script
+  edits one behind the other's back.
 - **No unit means "not tracked".** That covers both "we choose not to count
   this" (glue, shop supplies) and "not set up yet". The material still works
   everywhere in the catalog (bills of materials, documents, jobs), but stock
@@ -172,7 +174,10 @@ are never converted.
 - **Changing the unit.** Weight to weight: the totals are rebuilt in the new
   unit; history keeps its own units. Weight to none: only when nothing is on
   hand or in use this shift (`STOCK_ON_HAND` otherwise), so stock never
-  disappears. None to a weight: tracking starts.
+  disappears; the stock item keeps its last unit, so its totals stay
+  converted (and zero). None to a weight: tracking starts. A unit change in
+  the middle of a shift converts that shift's later usage into the unit its
+  staging row started in.
 - **Later, a units phase:** custom units ("bag", "spool", "drum"), count,
   length and volume units, and per-material factors ("1 bag = 25 kg",
   "1 each = 0.25 kg") so a material can be bought in one unit and used in
@@ -222,12 +227,12 @@ movements and an event book beside them. Nothing already built changes shape.
    placed at its shift's start, so it stays in the shift it was for. Totals
    gain `received` and `issued`. `MaterialShiftUsage` stays outside the book
    as "used so far this shift", and the material balance subtracts it. Units
-   follow section 5. A shift amendment no longer moves end-of-shift rows (the
-   ledger's PRODUCTION rows or the book's USAGE rows) to whichever shift was
-   running when they were written.
-   - Known edge: a job history amendment's material ADJUSTMENT is stamped
-     with the flushed shift but carries the amendment's time, so a later
-     shift amendment covering that time can move it.
+   follow section 5. Rows written *for* a shift rather than at a moment —
+   the end-of-shift PRODUCTION row, and the ADJUSTMENT a job history
+   amendment writes for a shift it corrected — belong to that shift: their
+   movements are placed at its start, shift amendments never move them to
+   another shift (they keep it alive, like staging rows), and only refresh
+   their labels (scheduled or not, business date, start) from it.
    - Later: trim the statements a cycle close runs (check StockItems once for
      all sources, skip counting past cancellations for a first post, merge
      "make the balance row" with "lock it").
@@ -285,7 +290,8 @@ Found while reviewing the catalog. None of them block the stock book.
   `ProductStock`.
 - Rollout of phase 2 works the same way: old servers write material ledger
   rows without posting them, and the worker's `catchUpMaterialLedger` posts
-  any recent ledger row that has no movement, for a day after it starts.
+  any recent ledger row that has no movement, until a day after the
+  migration.
 - Material balances can change at the phase 2 cutover where a material's
   ledger mixed units: the old balance added them as plain numbers, the book
   converts them. `packages/db/scripts/preflight-material-stock.sql` lists

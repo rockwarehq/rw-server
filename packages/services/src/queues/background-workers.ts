@@ -201,8 +201,9 @@ export async function startMetricBucketEnsure(): Promise<void> {
 // Two passes:
 // - parts (stock_ledger deploy): until catchUpAfterStockMigration says there
 //   is nothing left to do, a day after that migration;
-// - materials (material_stock_book deploy): for a day after this worker
-//   starts. A deploy always restarts it, and a later restart is harmless.
+// - materials (material_stock_book deploy): until catchUpMaterialLedger says
+//   it is done, a day after that migration (or, on a site with no material
+//   ledger yet, a day after this worker started).
 
 const STOCK_CATCH_UP_INTERVAL_MS = 5 * 60 * 1000;
 const MATERIAL_CATCH_UP_FOR_MS = 24 * 60 * 60 * 1000;
@@ -212,6 +213,7 @@ function startStockCatchUp(): void {
   if (stockCatchUpTimer) return;
   const startedAt = Date.now();
   let partsDone = false;
+  let materialsDone = false;
   let lastRun: Date | null = null;
   let running = false;
   const pass = async () => {
@@ -233,11 +235,14 @@ function startStockCatchUp(): void {
           }
         }
       }
-      const materialsDone = Date.now() - startedAt > MATERIAL_CATCH_UP_FOR_MS;
       if (!materialsDone) {
-        const fixed = await catchUpMaterialLedger();
-        if (fixed > 0) {
-          console.log(`[stock-catch-up] posted ${fixed} material ledger row(s) saved by old servers during the deploy`);
+        const result = await catchUpMaterialLedger();
+        if (result.status === "done" || Date.now() - startedAt > MATERIAL_CATCH_UP_FOR_MS) {
+          materialsDone = true;
+        } else if (result.fixed > 0) {
+          console.log(
+            `[stock-catch-up] posted ${result.fixed} material ledger row(s) saved by old servers during the deploy`,
+          );
         }
       }
       lastRun = passStart;

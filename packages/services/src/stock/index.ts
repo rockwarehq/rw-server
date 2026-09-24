@@ -31,6 +31,8 @@ export {
   catchUpAfterStockMigration,
   catchUpMaterialLedger,
   isClean,
+  type MaterialCatchUpResult,
+  materialMigrationTime,
   reconcileProductStock,
   reconcileStock,
   type ReconcileReport,

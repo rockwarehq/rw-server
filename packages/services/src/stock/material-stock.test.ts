@@ -2,11 +2,11 @@ import { randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, test } from "vitest";
 import prisma, { ensureAccountWorkspace, type WeightUnit } from "@rw/db";
 import { balance } from "../inventory/material-balance.js";
-import { adjust, create as createEntry } from "../inventory/material-ledger.js";
+import { adjust, create as createEntry, list as listLedger } from "../inventory/material-ledger.js";
 import { create as createMaterial, update as updateMaterial } from "../inventory/material.js";
 import { flushShiftUsage } from "../inventory/material-shift-flush.js";
 import { countOffBalances } from "./balance.js";
-import { catchUpMaterialLedger, isClean, reconcileStock } from "./reconcile.js";
+import { catchUpMaterialLedger, isClean, materialMigrationTime, reconcileStock } from "./reconcile.js";
 
 // Integration tests for materials on the stock book (ADR-0016 phase 2).
 // Require DATABASE_URL, like the other stock tests.
@@ -91,7 +91,38 @@ describe.skipIf(!process.env.DATABASE_URL)("materials on the stock book", () => 
     await createEntry({ siteId, materialId: m, kind: "WRITE_OFF", quantity: -3, unit: "KG" });
     const allowed = await updateMaterial(m, { weightUnits: null });
     expect("error" in allowed).toBe(false);
-    expect((await stockItem(m)).baseUnit).toBe("");
+    // Not tracked now (the catalog has no unit); the stock item keeps its last unit.
+    expect((await balance(m)).unit).toBeNull();
+    expect((await stockItem(m)).baseUnit).toBe("KG");
+  });
+
+  test("stopping tracking after mixed-unit history leaves no phantom stock", async () => {
+    const m = await material("KG");
+    await createEntry({ siteId, materialId: m, kind: "RECEIPT", quantity: 10, unit: "KG" });
+    // 22.0462 LB = 9.99999 KG, so write off the rest in KG to land on zero.
+    await createEntry({ siteId, materialId: m, kind: "WRITE_OFF", quantity: "-22.0462", unit: "LB" });
+    const left = (await balance(m)).balance;
+    if (!left.isZero())
+      await createEntry({ siteId, materialId: m, kind: "WRITE_OFF", quantity: left.negated().toString(), unit: "KG" });
+    expect((await balance(m)).balance.isZero()).toBe(true);
+
+    const stopped = await updateMaterial(m, { weightUnits: null });
+    expect("error" in stopped).toBe(false);
+    // The stock item keeps its last unit, so the totals stay converted: zero.
+    expect((await stockItem(m)).baseUnit).toBe("KG");
+    const b = await balance(m);
+    expect(b.unit).toBeNull();
+    expect(b.balance.isZero()).toBe(true);
+    expect(await countOffBalances({ siteId })).toBe(0);
+  });
+
+  test("the ledger's running balance converts rows to the stock unit", async () => {
+    const m = await material("KG");
+    await createEntry({ siteId, materialId: m, kind: "RECEIPT", quantity: 10, unit: "KG" });
+    await createEntry({ siteId, materialId: m, kind: "RECEIPT", quantity: "11.0231", unit: "LB" });
+    const page = await listLedger({ materialId: m });
+    // Newest first: 10 KG + 5 KG.
+    expect(page.data.map((e) => Number(e.runningBalance))).toEqual([15, 10]);
   });
 
   test("a not-tracked material starts tracking when it gets a unit", async () => {
@@ -199,9 +230,16 @@ describe.skipIf(!process.env.DATABASE_URL)("materials on the stock book", () => 
     await prisma.materialLedgerEntry.create({
       data: { siteId, materialId: m, kind: "RECEIPT", quantity: 4, unit: "KG" },
     });
-    expect(await catchUpMaterialLedger({ siteId })).toBe(1);
+    expect(await catchUpMaterialLedger({ siteId })).toEqual({ status: "checked", fixed: 1 });
     expect((await balance(m)).balance.toNumber()).toBe(4);
-    expect(await catchUpMaterialLedger({ siteId })).toBe(0);
+    expect(await catchUpMaterialLedger({ siteId })).toEqual({ status: "checked", fixed: 0 });
+  });
+
+  test("the deploy catch-up stops a day after the material migration", async () => {
+    const migratedAt = await materialMigrationTime();
+    if (!migratedAt) throw new Error("no material movements: the material_stock_book migration has not run");
+    const dayLater = new Date(migratedAt.getTime() + 25 * hour);
+    expect(await catchUpMaterialLedger({ siteId, now: dayLater })).toEqual({ status: "done" });
   });
 
   test("the repair job covers material totals and stock units", async () => {
@@ -214,6 +252,9 @@ describe.skipIf(!process.env.DATABASE_URL)("materials on the stock book", () => 
     `;
     const current = await prisma.material.findUniqueOrThrow({ where: { id: m } });
     await prisma.materialVersion.update({ where: { id: current.currentVersionId ?? "" }, data: { weightUnits: "G" } });
+
+    // Until repaired, the balance is reported in the unit its numbers are in.
+    expect((await balance(m)).unit).toBe("KG");
 
     const check = await reconcileStock({ siteId });
     expect(check.balancesOff).toBeGreaterThanOrEqual(1);

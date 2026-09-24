@@ -1,5 +1,6 @@
 import prisma, { Prisma } from "@rw/db";
 import { ensureBalances, ensureMaterialStockItems, ensureProductStockItems } from "./post.js";
+import { totalsSelect } from "./totals.js";
 
 type Tx = Prisma.TransactionClient;
 type Client = Tx | typeof prisma;
@@ -98,26 +99,16 @@ export async function lockProductBalances(
 }
 
 /**
- * Totals per stock item from the book, each movement converted to the item's
- * baseUnit one row at a time (the same way posting adds them up).
- * Columns: id, on_hand, produced, scrapped, consumed, adjusted, received, issued.
+ * Totals per stock item from the book (see totals.ts), optionally only the
+ * movements up to a moment. Columns: id, on_hand, produced, scrapped,
+ * consumed, adjusted, received, issued.
  */
 function bookTotals(where: Prisma.Sql, asOf: Date | null = null): Prisma.Sql {
-  const q = Prisma.sql`stock_convert(m.quantity, m.unit, si."baseUnit")`;
-  return Prisma.sql`
-    SELECT si.id,
-           COALESCE(SUM(${q}), 0) AS on_hand,
-           COALESCE(SUM(${q}) FILTER (WHERE m.kind = 'OUTPUT'), 0) AS produced,
-           COALESCE(-SUM(${q}) FILTER (WHERE m.kind = 'SCRAP'), 0) AS scrapped,
-           COALESCE(-SUM(${q}) FILTER (WHERE m.kind = 'FULFILLMENT'), 0) AS consumed,
-           COALESCE(SUM(${q}) FILTER (WHERE m.kind = 'ADJUSTMENT'), 0) AS adjusted,
-           COALESCE(SUM(${q}) FILTER (WHERE m.kind IN ('RECEIPT', 'TRANSFER_IN', 'OPENING_BALANCE')), 0) AS received,
-           COALESCE(-SUM(${q}) FILTER (WHERE m.kind IN ('USAGE', 'WRITE_OFF', 'TRANSFER_OUT')), 0) AS issued
+  return totalsSelect(Prisma.sql`
     FROM "StockItem" si
     LEFT JOIN "StockMovement" m ON m."stockItemId" = si.id
       AND (${asOf}::timestamptz IS NULL OR m."occurredAt" <= ${asOf}::timestamptz)
-    WHERE ${where}
-    GROUP BY si.id`;
+    WHERE ${where}`);
 }
 
 /** How many balance rows one rebuild step locks at a time. */
@@ -229,16 +220,22 @@ async function materialItem(tx: Tx, materialId: string): Promise<{ id: string; b
 }
 
 /**
- * Set a material's stock unit (blank = not tracked). When it changes, the
- * material's totals are rebuilt in the new unit, converted; its movements
- * keep the units they were written in, so nothing is lost. Runs inside the
+ * Change a material's stock unit to another weight. The balance row is locked
+ * first (every save converts its movements only under that same lock), then
+ * the unit changes and the totals are rebuilt in it, converted; movements keep
+ * the units they were written in, so nothing is lost. Runs inside the
  * caller's save.
+ *
+ * A blank unit (the material stops being tracked) leaves the stock unit
+ * alone: the totals stay converted in the last unit, where they are zero.
+ * Whether a material is tracked is decided by its catalog unit, not this one.
  */
 export async function setMaterialStockUnit(tx: Tx, materialId: string, unit: string): Promise<void> {
-  const item = await materialItem(tx, materialId);
-  if (item.baseUnit === unit) return;
-  await tx.stockItem.update({ where: { id: item.id }, data: { baseUnit: unit } });
-  await rebuildItemBalances(tx, [item.id]);
+  if (!unit) return;
+  const stock = await lockMaterialBalance(tx, materialId);
+  if (stock.baseUnit === unit) return;
+  await tx.stockItem.update({ where: { id: stock.stockItemId }, data: { baseUnit: unit } });
+  await rebuildItemBalances(tx, [stock.stockItemId]);
 }
 
 /**

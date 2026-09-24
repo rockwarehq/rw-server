@@ -155,8 +155,10 @@ WHERE si."stockableType" = 'MATERIAL' AND si."stockableId" = m.id
 
 -- ── 6. Fill the book from the material ledger ────────────────────────────
 -- Same rows the live code posts (packages/services/src/stock/sources.ts).
--- PRODUCTION (the end-of-shift flush) becomes USAGE, placed at its shift's
--- start so it stays in that shift. Oldest first, so seq follows time.
+-- PRODUCTION (the end-of-shift flush) becomes USAGE. Rows written *for* a
+-- shift — PRODUCTION, and a job history amendment's ADJUSTMENT (its reference
+-- is the amendment id) — are placed at that shift's start, so they stay in
+-- it. Oldest first, so seq follows time.
 
 INSERT INTO "StockMovement" ("id", "stockItemId", "siteId", "kind", "quantity", "unit", "sourceType", "sourceId",
   "idempotencyKey", "shiftInstanceId", "isScheduled", "businessDate", "performedByUserId", "note",
@@ -169,8 +171,10 @@ FROM (
          'MATERIAL_LEDGER_ENTRY'::"StockSourceType" AS "sourceType", le.id AS "sourceId",
          'MATERIAL_LEDGER_ENTRY:' || le.id AS "idempotencyKey",
          le."shiftInstanceId", le."isScheduled", le."businessDate", le."performedByUserId", le.note,
-         CASE WHEN le.kind = 'PRODUCTION' THEN COALESCE(sh."startTime", le."createdAt") ELSE le."createdAt" END
-           AS "occurredAt"
+         CASE WHEN le.kind = 'PRODUCTION'
+                OR (le.kind = 'ADJUSTMENT' AND le.reference IN (SELECT ja.id::text FROM "JobHistoryAmendment" ja))
+              THEN COALESCE(sh."startTime", le."createdAt")
+              ELSE le."createdAt" END AS "occurredAt"
   FROM "MaterialLedgerEntry" le
   JOIN "StockItem" si ON si."stockableType" = 'MATERIAL' AND si."stockableId" = le."materialId"
   LEFT JOIN "ShiftInstance" sh ON sh.id = le."shiftInstanceId"

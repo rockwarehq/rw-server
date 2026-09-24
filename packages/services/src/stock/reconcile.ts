@@ -1,6 +1,6 @@
 import prisma from "@rw/db";
 import { countOffBalances, rebuildBalances, rebuildItemBalances } from "./balance.js";
-import { repostSources } from "./post.js";
+import { ensureBalances, repostSources } from "./post.js";
 import {
   BOOK_SOURCE_TYPES,
   type BookSourceType,
@@ -100,13 +100,15 @@ async function repairRecords(type: BookSourceType, ids: string[], note: string):
 /** Material StockItems whose stock unit is not the material's current catalog unit. */
 async function unitsOutOfStep(siteId: string | null) {
   return prisma.$queryRaw<Array<{ id: string; unit: string }>>`
-    SELECT si.id, COALESCE(mv."weightUnits"::text, '') AS unit
+    SELECT si.id, mv."weightUnits"::text AS unit
     FROM "StockItem" si
     JOIN "Material" m ON m.id = si."stockableId"
     LEFT JOIN "MaterialVersion" mv ON mv.id = m."currentVersionId"
     WHERE si."stockableType" = 'MATERIAL'
       AND (${siteId}::uuid IS NULL OR si."siteId" = ${siteId}::uuid)
-      AND si."baseUnit" <> COALESCE(mv."weightUnits"::text, '')
+      -- A not-tracked material keeps its last unit, so only tracked ones count.
+      AND mv."weightUnits" IS NOT NULL
+      AND si."baseUnit" <> mv."weightUnits"::text
     ORDER BY si.id
   `;
 }
@@ -122,13 +124,17 @@ export async function reconcileStock(options: { siteId?: string; repair?: boolea
   const drift = await unitsOutOfStep(siteId);
   if (options.repair && drift.length > 0) {
     await prisma.$transaction(async (tx) => {
+      // Lock first (in stockItemId order), as every unit change does, so no
+      // save can add a total worked out in the old unit after this.
+      const ids = drift.map((d) => d.id);
+      await ensureBalances(tx, ids);
+      await tx.$queryRaw`
+        SELECT 1 FROM "StockBalance" WHERE "stockItemId" = ANY(${ids}::uuid[]) ORDER BY "stockItemId" FOR UPDATE
+      `;
       for (const { id, unit } of drift) {
         await tx.stockItem.update({ where: { id }, data: { baseUnit: unit } });
       }
-      await rebuildItemBalances(
-        tx,
-        drift.map((d) => d.id),
-      );
+      await rebuildItemBalances(tx, ids);
     });
   }
 
@@ -295,11 +301,32 @@ export async function catchUpAfterStockMigration(
 /** How far back each pass looks. Longer than any rollout. */
 const MATERIAL_CATCH_UP_LOOKBACK_MS = 6 * 60 * 60 * 1000;
 
-/** Post recent material ledger rows that have no movement. Returns how many it fixed. */
-export async function catchUpMaterialLedger(options: { now?: Date; siteId?: string } = {}): Promise<number> {
+/**
+ * When the material_stock_book migration ran: it wrote every material
+ * movement that existed then, so the oldest one tells us. Null when there
+ * are none (no material ledger yet).
+ */
+export async function materialMigrationTime(): Promise<Date | null> {
+  const [row] = await prisma.$queryRaw<Array<{ at: Date | null }>>`
+    SELECT MIN("createdAt") AS at FROM "StockMovement" WHERE "sourceType" = 'MATERIAL_LEDGER_ENTRY'
+  `;
+  return row?.at ?? null;
+}
+
+export type MaterialCatchUpResult = { status: "done" } | { status: "checked"; fixed: number };
+
+/**
+ * Post recent material ledger rows that have no movement. Returns "done" a
+ * day after the migration, when there can be no old servers left.
+ */
+export async function catchUpMaterialLedger(
+  options: { now?: Date; siteId?: string } = {},
+): Promise<MaterialCatchUpResult> {
   const now = options.now ?? new Date();
+  const migratedAt = await materialMigrationTime();
+  if (migratedAt && now.getTime() - migratedAt.getTime() > CATCH_UP_WINDOW_MS) return { status: "done" };
   const since = new Date(now.getTime() - MATERIAL_CATCH_UP_LOOKBACK_MS);
   const ids = await mismatchedIds("MATERIAL_LEDGER_ENTRY", { siteId: options.siteId, since });
   await repairRecords("MATERIAL_LEDGER_ENTRY", ids, "Saved by an old server during the stock book deploy");
-  return ids.length;
+  return { status: "checked", fixed: ids.length };
 }

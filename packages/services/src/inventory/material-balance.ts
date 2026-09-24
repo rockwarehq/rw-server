@@ -39,11 +39,14 @@ export async function balance(materialId: string, asOf?: Date): Promise<Material
     where: { id: materialId },
     select: { currentVersion: { select: { weightUnits: true } } },
   });
-  const unit = material?.currentVersion?.weightUnits ?? null;
+  const catalogUnit = material?.currentVersion?.weightUnits ?? null;
   const zero = new Prisma.Decimal(0);
 
   const stock = await getMaterialStock(materialId, asOf ?? null);
-  const pending = await pendingMaterialUsage(prisma, materialId, stock?.baseUnit ?? unit ?? "");
+  // The numbers are in the stock unit, so that is the unit reported. It
+  // normally equals the catalog unit; null means the material is not tracked.
+  const unit = catalogUnit ? ((stock?.baseUnit || catalogUnit) as WeightUnit) : null;
+  const pending = await pendingMaterialUsage(prisma, materialId, stock?.baseUnit || catalogUnit || "");
 
   const received = stock?.received ?? zero;
   const adjusted = stock?.adjusted ?? zero;

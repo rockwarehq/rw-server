@@ -3,7 +3,8 @@ import { Prisma, type MaterialLedgerKind, type WeightUnit } from "@rw/db";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { resolveShiftStamp } from "../facility/work-context.js";
-import { lockMaterialBalance, pendingMaterialUsage, setMaterialStockUnit } from "../stock/balance.js";
+import { convertWeight } from "../lib/units/index.js";
+import { lockMaterialBalance, pendingMaterialUsage } from "../stock/balance.js";
 import { postSources } from "../stock/post.js";
 
 /** Post-commit refresh hint: ledger writes change the material's on-hand stock. */
@@ -16,6 +17,20 @@ export function publishStockEvent(siteId: string, workspaceId: string, materialI
     workspaceId,
     changedFields: ["stock"],
   });
+}
+
+/**
+ * Lock the material's stock row, then read its catalog unit. A unit change
+ * (material.update) takes the same lock, so the unit read here holds for the
+ * rest of the save. `unit` null means the material is not tracked.
+ */
+async function lockTrackedMaterial(tx: Prisma.TransactionClient, materialId: string) {
+  const stock = await lockMaterialBalance(tx, materialId);
+  const current = await tx.material.findUnique({
+    where: { id: materialId },
+    select: { currentVersion: { select: { weightUnits: true } } },
+  });
+  return { stock, unit: current?.currentVersion?.weightUnits ?? null };
 }
 
 export interface CreateLedgerEntryInput {
@@ -105,6 +120,10 @@ export async function create(input: CreateLedgerEntryInput) {
 
   // The ledger row and its stock movement are saved together.
   const entry = await prisma.$transaction(async (tx) => {
+    // Checked again under the material's stock lock: the unit can only change
+    // (or be removed) under this same lock, so it cannot change mid-save.
+    const { unit: trackedUnit } = await lockTrackedMaterial(tx, input.materialId);
+    if (!trackedUnit) return null;
     const created = await tx.materialLedgerEntry.create({
       data: {
         siteId: input.siteId,
@@ -120,11 +139,15 @@ export async function create(input: CreateLedgerEntryInput) {
       },
       include: ledgerInclude,
     });
-    // Totals are kept in the material's current unit; keep them in step.
-    await setMaterialStockUnit(tx, input.materialId, material.currentVersion?.weightUnits ?? "");
     await postSources(tx, [{ type: "MATERIAL_LEDGER_ENTRY", ids: [created.id] }]);
     return created;
   });
+  if (!entry) {
+    return {
+      error: "Material stock is not tracked; set its unit before recording stock",
+      code: "NO_CANONICAL_UNIT",
+    };
+  }
 
   publishStockEvent(input.siteId, material.site.workspaceId, input.materialId);
 
@@ -189,15 +212,17 @@ export async function adjust(input: AdjustMaterialStockInput & AdjustMaterialSto
   }
 
   const result = await prisma.$transaction(async (tx) => {
-    // Lock the material's stock row: concurrent counts, entries and the
-    // end-of-shift flush all wait here, so the count lands exactly.
-    await setMaterialStockUnit(tx, input.materialId, unit);
-    const stock = await lockMaterialBalance(tx, input.materialId);
+    // Lock the material's stock row: concurrent counts, entries, unit changes
+    // and the end-of-shift flush all wait here, so the count lands exactly.
+    const { stock, unit: countUnit } = await lockTrackedMaterial(tx, input.materialId);
+    if (!countUnit) return null;
 
-    // True current balance, in the material's unit: the stock book minus
-    // what open shifts have used so far (not in the book until the flush).
-    const pending = await pendingMaterialUsage(tx, input.materialId, unit);
-    const currentBalance = stock.onHand.minus(pending);
+    // True current balance, in the unit the count is given in (the material's
+    // unit): the stock book minus what open shifts have used so far (not in
+    // the book until the flush).
+    const onHand = stock.baseUnit ? convertWeight(stock.onHand, stock.baseUnit as WeightUnit, countUnit) : stock.onHand;
+    const pending = await pendingMaterialUsage(tx, input.materialId, countUnit);
+    const currentBalance = onHand.minus(pending);
 
     const delta = input.mode === "set" ? requested.minus(currentBalance) : requested;
 
@@ -211,7 +236,7 @@ export async function adjust(input: AdjustMaterialStockInput & AdjustMaterialSto
         materialId: input.materialId,
         kind: "ADJUSTMENT",
         quantity: delta,
-        unit,
+        unit: countUnit,
         reference: input.reference ?? null,
         note: input.note ?? null,
         performedByUserId: input.performedByUserId ?? null,
@@ -224,6 +249,9 @@ export async function adjust(input: AdjustMaterialStockInput & AdjustMaterialSto
     return { entry, delta, resultingBalance: currentBalance.plus(delta) };
   });
 
+  if (!result) {
+    return { error: "Material has no canonical unit; set one before adjusting stock", code: "NO_CANONICAL_UNIT" };
+  }
   if (!result.delta.isZero()) {
     publishStockEvent(input.siteId, material.site.workspaceId, input.materialId);
   }
@@ -250,9 +278,10 @@ export async function list(filter: ListLedgerEntriesFilter = {}) {
     prisma.materialLedgerEntry.count({ where }),
   ]);
 
-  // Running balance per entry: SUM(quantity) over all ledger rows for the
-  // same material with createdAt/id <= this entry. One query per material on
-  // the page, scoped by the (materialId, createdAt) index.
+  // Running balance per entry: every ledger row for the same material with
+  // createdAt/id <= this entry, each converted to the material's stock unit
+  // (rows keep the unit they were written in, which can differ). One query
+  // per material on the page, scoped by the (materialId, createdAt) index.
   const balanceByEntryId = new Map<string, string>();
   if (entries.length > 0) {
     const idsByMaterial = new Map<string, string[]>();
@@ -266,8 +295,9 @@ export async function list(filter: ListLedgerEntriesFilter = {}) {
         const rows = await prisma.$queryRaw<Array<{ id: string; runningBalance: Prisma.Decimal }>>`
           SELECT
             target.id,
-            COALESCE(SUM(le.quantity), 0) AS "runningBalance"
+            COALESCE(SUM(stock_convert(le.quantity, le.unit::text, COALESCE(si."baseUnit", ''))), 0) AS "runningBalance"
           FROM "MaterialLedgerEntry" target
+          LEFT JOIN "StockItem" si ON si."stockableType" = 'MATERIAL' AND si."stockableId" = target."materialId"
           LEFT JOIN "MaterialLedgerEntry" le
             ON le."materialId" = target."materialId"
            AND (le."createdAt" < target."createdAt"

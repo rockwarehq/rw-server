@@ -36,6 +36,23 @@ export const BOOK_SOURCE_TYPES: readonly BookSourceType[] = [...PRODUCT_SOURCE_T
 
 export const isMaterialSource = (type: BookSourceType): type is MaterialSourceType => type === "MATERIAL_LEDGER_ENTRY";
 
+/**
+ * SQL test for a material ledger row (alias `a`) written *for* a shift rather
+ * than at a moment: the end-of-shift PRODUCTION row, and the ADJUSTMENT a job
+ * history amendment writes for a shift it corrected (its reference is the
+ * amendment's id). Such rows belong to their shift no matter when they were
+ * written, so shift amendments never move them to another shift; they only
+ * refresh their labels from their own shift.
+ */
+export function shiftBoundLedger(a: string): string {
+  return `(${a}."kind" = 'PRODUCTION' OR (${a}."kind" = 'ADJUSTMENT' AND ${a}."reference" IN (SELECT ja.id::text FROM "JobHistoryAmendment" ja)))`;
+}
+
+/** The same test for a stock movement (alias `a`): its source is a shift-bound ledger row. */
+export function shiftBoundMovement(a: string): string {
+  return `(${a}."sourceType" = 'MATERIAL_LEDGER_ENTRY' AND ${a}."sourceId" IN (SELECT sb.id FROM "MaterialLedgerEntry" sb WHERE ${shiftBoundLedger("sb")}))`;
+}
+
 /** Column list shared by every insert into "StockMovement" built here. */
 export const MOVEMENT_COLUMNS = Prisma.raw(
   `"id", "stockItemId", "siteId", "kind", "quantity", "unit", "sourceType", "sourceId", "idempotencyKey",
@@ -106,15 +123,16 @@ export function movementSelect(type: BookSourceType, ids: string[]): Prisma.Sql 
         WHERE sa.id = ANY(${ids}::uuid[]) AND sa.delta <> 0`;
     case "MATERIAL_LEDGER_ENTRY":
       // A material ledger row, in the unit it was written in (the totals
-      // convert it). The end-of-shift PRODUCTION row becomes USAGE and is
-      // placed at its shift's start, so it stays in the shift it was for.
+      // convert it). The end-of-shift PRODUCTION row becomes USAGE. Rows
+      // written for a shift (shiftBoundLedger) are placed at its start.
       return Prisma.sql`
         SELECT gen_random_uuid(), si.id, le."siteId",
                (CASE le.kind WHEN 'PRODUCTION' THEN 'USAGE' ELSE le.kind::text END)::"StockMovementKind",
                le.quantity, le.unit::text, 'MATERIAL_LEDGER_ENTRY'::"StockSourceType", le.id, ${keyFor(type, "le.id")},
                NULL::uuid, le."shiftInstanceId", le."isScheduled", le."businessDate",
                le."performedByUserId",
-               CASE WHEN le.kind = 'PRODUCTION' THEN COALESCE(sh."startTime", le."createdAt") ELSE le."createdAt" END,
+               CASE WHEN ${Prisma.raw(shiftBoundLedger("le"))} THEN COALESCE(sh."startTime", le."createdAt")
+                    ELSE le."createdAt" END,
                NOW(), le.note
         FROM "MaterialLedgerEntry" le
         JOIN "StockItem" si ON si."stockableType" = 'MATERIAL' AND si."stockableId" = le."materialId"
