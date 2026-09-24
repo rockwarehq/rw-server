@@ -428,5 +428,9 @@ export const employees = displayRequired.input(employeesInputSchema).handler(asy
     employeeNumber: e.version?.employeeNumber ?? null,
     firstName: e.version?.firstName ?? null,
     lastName: e.version?.lastName ?? null,
+    // Their active role at this site — the one a call's or mode's allowed
+    // roles are checked against (actorSiteRoleId) — so the terminal can offer
+    // the people who may act first. The list already carries site access.
+    roleId: e.siteAccess.find((row) => row.siteId === ctx.siteId && row.status === "ACTIVE")?.roleId ?? null,
   }));
 });
