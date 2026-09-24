@@ -10,6 +10,8 @@ export interface StampedFact {
   byStation: boolean;
   /** The table also carries the shift's business date. */
   businessDate: boolean;
+  /** Extra SQL filter on the row (alias `f`), for a table that holds both station and site rows. */
+  where?: string;
 }
 
 /** Facts placed in time, so a re-stamp can re-resolve them from the instant alone. */
@@ -25,6 +27,17 @@ export const STAMPED_FACTS: readonly StampedFact[] = [
   { table: "MaterialLedgerEntry", at: '"createdAt"', byStation: false, businessDate: true },
   { table: "OrderConsumption", at: '"createdAt"', byStation: false, businessDate: true },
   { table: "ProductStockAdjustment", at: '"createdAt"', byStation: false, businessDate: true },
+  // The stock book holds both kinds: movements from a station (made and
+  // scrapped parts) and site-wide ones (orders, counts). Each takes its time
+  // and shift from its source record, so it moves with it.
+  { table: "StockMovement", at: '"occurredAt"', byStation: true, businessDate: true },
+  {
+    table: "StockMovement",
+    at: '"occurredAt"',
+    byStation: false,
+    businessDate: true,
+    where: 'f."stationId" IS NULL',
+  },
 ] as const;
 
 /**
@@ -38,7 +51,7 @@ const SHIFT_AGGREGATE_TABLES = ["MaterialShiftUsage"] as const;
 const METRIC_BUCKET_TABLES = ["MetricBucket", "MetricBucketLog"] as const;
 
 /** Tables a re-stamp re-resolves, so a reference from one does not pin an obsolete row. */
-export const RESTAMPED_TABLES: readonly string[] = STAMPED_FACTS.map((f) => f.table);
+export const RESTAMPED_TABLES: readonly string[] = [...new Set(STAMPED_FACTS.map((f) => f.table))];
 
 /**
  * Everything that references a ShiftInstance. A row referenced by any of these

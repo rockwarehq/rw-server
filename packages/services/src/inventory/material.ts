@@ -2,6 +2,7 @@ import prisma from "@rw/db";
 import { Prisma, type WeightUnit } from "@rw/db";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
+import { createForStockable } from "../stock/item.js";
 
 // ============================================================================
 // Types
@@ -111,7 +112,16 @@ export async function create(input: CreateMaterialInput) {
       },
     });
 
-    // 3. Link version as current and return
+    // 3. Its stock record, made in the same save (ADR-0016). Material stock
+    // is still kept in MaterialLedgerEntry until ADR-0016 phase 2.
+    await createForStockable(tx, {
+      stockableType: "MATERIAL",
+      stockableId: mat.id,
+      siteId,
+      baseUnit: weightUnits ?? "",
+    });
+
+    // 4. Link version as current and return
     return tx.material.update({
       where: { id: mat.id },
       data: { currentVersionId: version.id },

@@ -484,7 +484,7 @@ async function restampFacts(
        SET "shiftInstanceId" = si.id, "isScheduled" = si."isScheduled"${f.businessDate ? ', "businessDate" = si."businessDate"' : ""}
        FROM "ShiftInstance" si
        WHERE ${at} >= $1 AND ${at} < $2
-         AND ${f.byStation ? 'f."stationId" = ANY($3::uuid[])' : `f."siteId" = ${site}::uuid`}
+         AND ${f.byStation ? 'f."stationId" = ANY($3::uuid[])' : `f."siteId" = ${site}::uuid`}${f.where ? ` AND ${f.where}` : ""}
          AND si."siteId" = ${site}::uuid AND si."workCenterId" IS NOT DISTINCT FROM ${wc}::uuid
          AND si.id <> ALL(${obsolete}::uuid[])
          AND si."startTime" <= ${at} AND si."endTime" > ${at}`,

@@ -141,7 +141,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
     await prisma.productionMode.deleteMany({ where: { siteId: siteA.id, name: { startsWith: "pm-test" } } });
     if (rig) {
       await prisma.station.delete({ where: { id: rig.stationId } });
-      await prisma.productStock.deleteMany({ where: { productId: rig.productId } });
+      // Its stock record; the balance and movements go with it.
+      await prisma.stockItem.deleteMany({ where: { stockableType: "PRODUCT", stockableId: rig.productId } });
       await prisma.job.update({ where: { id: rig.jobId }, data: { currentVersionId: null } });
       await prisma.jobProduct.updateMany({ where: { jobId: rig.jobId }, data: { currentVersionId: null } });
       await prisma.jobProductVersion.deleteMany({ where: { jobProduct: { jobId: rig.jobId } } });

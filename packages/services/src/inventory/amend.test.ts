@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, test } from "vitest";
 import prisma, { ensureAccountWorkspace } from "@rw/db";
+import { postSources } from "../stock/post.js";
 import { reassignItems } from "./amend.js";
 import { createFromCycle } from "./inventory.js";
 import { flushShiftUsage } from "./material-shift-flush.js";
@@ -108,7 +109,8 @@ describe.skipIf(!process.env.DATABASE_URL)("reassignItems ledger adjustment", ()
         },
       });
       cycleId = cycle.id;
-      await createFromCycle(tx, cycle.id, j1.id, undefined, null, dims);
+      const items = await createFromCycle(tx, cycle.id, j1.id, undefined, null, dims);
+      await postSources(tx, [{ type: "INVENTORY_ITEM", ids: items.map((i) => i.id) }]);
     });
     await flushShiftUsage(shiftId);
     amendmentId = (
@@ -149,6 +151,16 @@ describe.skipIf(!process.env.DATABASE_URL)("reassignItems ledger adjustment", ()
       ["PRODUCTION", -2, "KG", shiftId, null],
       ["ADJUSTMENT", -1, "KG", shiftId, amendmentId],
     ]);
+    // Stock book: the old part's movement is cancelled and the new part's posted.
+    const stock = await prisma.stockMovement.findMany({ where: { stationId }, orderBy: { seq: "asc" } });
+    expect(stock.map((m) => [m.kind, m.quantity.toNumber(), m.reversesMovementId !== null, m.note])).toEqual([
+      ["OUTPUT", 1, false, null],
+      ["OUTPUT", -1, true, "Job history amendment"],
+      ["OUTPUT", 1, false, null],
+    ]);
+    expect(stock[1].stockItemId).toBe(stock[0].stockItemId);
+    expect(stock[2].stockItemId).not.toBe(stock[0].stockItemId);
+
     // Staging stays the audit record of the original flush.
     const staging = await prisma.materialShiftUsage.findMany({ where: { shiftInstanceId: shiftId } });
     expect(staging.map((r) => [r.jobId, r.quantity.toNumber(), r.flushedAt !== null])).toEqual([[j1.id, 2, true]]);

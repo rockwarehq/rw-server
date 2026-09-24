@@ -4,6 +4,7 @@ import type { Prisma, WeightUnit } from "@rw/db";
 import * as storage from "@rw/runtime/storage";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
+import { createForStockable } from "../stock/item.js";
 
 // ============================================================================
 // Types - Product CRUD
@@ -140,7 +141,10 @@ export async function create(input: CreateProductInput) {
       },
     });
 
-    // 3. Link version as current and return
+    // 3. Its stock record, made in the same save (ADR-0016)
+    await createForStockable(tx, { stockableType: "PRODUCT", stockableId: p.id, siteId });
+
+    // 4. Link version as current and return
     return tx.product.update({
       where: { id: p.id },
       data: { currentVersionId: version.id },
@@ -631,11 +635,13 @@ export async function duplicate(input: DuplicateProductInput) {
       },
     });
 
-    // 3. Link version as current
+    // 3. Link version as current, and make its stock record (ADR-0016).
+    // Stock is not copied: the copy starts with none on hand.
     await tx.product.update({
       where: { id: p.id },
       data: { currentVersionId: version.id },
     });
+    await createForStockable(tx, { stockableType: "PRODUCT", stockableId: p.id, siteId: source.siteId });
 
     // 4. Copy ProductMaterial links with initial versions
     for (const m of sourceMaterials) {
