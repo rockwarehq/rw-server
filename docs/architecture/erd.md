@@ -1007,8 +1007,16 @@ erDiagram
     uuid parentId FK "self - tree, cascade"
     DocumentKind kind "FILE or FOLDER"
     DocumentStatus status
-    string storageKey "unique - S3"
+    uuid currentFileId FK "unique - current DocumentFile"
     datetime deletedAt
+  }
+  DocumentFile {
+    uuid id PK
+    uuid documentId FK "cascade"
+    int version "unique per document"
+    DocumentStatus status
+    string storageKey "unique - S3"
+    uuid createdById FK "nullable, SetNull"
   }
   DocumentLink {
     uuid id PK
@@ -1030,6 +1038,9 @@ erDiagram
   Site |o--o{ Document : "cascade"
   Document |o--o{ Document : "folder tree"
   Document ||--o{ DocumentLink : "cascade"
+  Document ||--o{ DocumentFile : "versions, cascade"
+  Document |o--o| DocumentFile : "currentFileId"
+  User |o--o{ DocumentFile : "SetNull"
   DocumentLink }o..o| Site : "targetId - no FK"
   DocumentLink }o..o| Workcenter : "targetId - no FK"
   DocumentLink }o..o| Station : "targetId - no FK"

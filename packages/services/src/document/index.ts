@@ -1,5 +1,17 @@
-import prisma from "@rw/db";
-import type { DocumentTargetType, Prisma } from "@rw/db";
+import { randomUUID } from "node:crypto";
+import prisma, { Prisma } from "@rw/db";
+import type { DocumentTargetType } from "@rw/db";
+import {
+  applyLabelFilter,
+  collectDocumentTreeIds,
+  documentInclude,
+  normalizeLabels,
+  toDocument,
+  type LabelFilter,
+} from "./shared.js";
+import { resolveContext, targetNames } from "./context.js";
+
+export { contextTargets, resolveContext } from "./context.js";
 import * as storage from "@rw/runtime/storage";
 
 export interface CreateFolderInput {
@@ -23,6 +35,14 @@ export interface CreateUploadInput {
   parentId?: string | null;
   attrs?: Record<string, unknown>;
   workspaceId?: string;
+  createdById?: string | null;
+}
+
+export interface CreateVersionUploadInput {
+  filename: string;
+  contentType: string;
+  size: number;
+  createdById?: string | null;
 }
 
 export interface ListDocumentsInput {
@@ -55,63 +75,34 @@ export interface DisplayDocumentContext {
   stationId?: string | null;
 }
 
-interface TargetRef {
-  targetType: DocumentTargetType;
-  targetId: string;
-}
-
-interface LabelFilter {
-  labelsAny?: string[];
-  labelsAll?: string[];
-}
-
 interface ParentResolution {
   parentId: string | null;
   siteId: string | null;
 }
 
-const documentInclude = {
-  site: { select: { id: true, name: true } },
-  parent: { select: { id: true, name: true, kind: true } },
-  links: true,
-} satisfies Prisma.DocumentInclude;
+const versionSelect = {
+  id: true,
+  version: true,
+  filename: true,
+  contentType: true,
+  size: true,
+  createdAt: true,
+  createdBy: { select: { id: true, firstName: true, lastName: true, email: true } },
+} satisfies Prisma.DocumentFileSelect;
 
-function uniqueTargets(targets: TargetRef[]): TargetRef[] {
-  const seen = new Set<string>();
-  const out: TargetRef[] = [];
-  for (const target of targets) {
-    const key = `${target.targetType}:${target.targetId}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(target);
-  }
-  return out;
+type VersionRecord = Prisma.DocumentFileGetPayload<{ select: typeof versionSelect }>;
+
+function toVersion({ createdBy, ...file }: VersionRecord, currentFileId: string | null) {
+  const name = createdBy ? [createdBy.firstName, createdBy.lastName].filter(Boolean).join(" ") : "";
+  return {
+    ...file,
+    isCurrent: file.id === currentFileId,
+    createdBy: createdBy ? { id: createdBy.id, name: name || createdBy.email } : null,
+  };
 }
 
-function normalizeLabel(label: string): string {
-  return label
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function normalizeLabels(labels?: string[]): string[] {
-  if (!labels) return [];
-  return [...new Set(labels.map(normalizeLabel).filter(Boolean))];
-}
-
-function applyLabelFilter(where: Prisma.DocumentWhereInput, filter: LabelFilter): void {
-  const labelsAny = normalizeLabels(filter.labelsAny);
-  const labelsAll = normalizeLabels(filter.labelsAll);
-
-  if (labelsAny.length > 0) {
-    where.labels = { hasSome: labelsAny };
-  }
-
-  if (labelsAll.length > 0) {
-    where.AND = [...(Array.isArray(where.AND) ? where.AND : []), { labels: { hasEvery: labelsAll } }];
-  }
+function isUniqueViolation(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
 
 async function validateSite(
@@ -223,22 +214,6 @@ async function resolveTargetSite(
   }
 }
 
-async function collectDocumentTreeIds(rootId: string): Promise<string[]> {
-  const ids = [rootId];
-  let frontier = [rootId];
-
-  while (frontier.length > 0) {
-    const children = await prisma.document.findMany({
-      where: { parentId: { in: frontier } },
-      select: { id: true },
-    });
-    frontier = children.map((item) => item.id);
-    ids.push(...frontier);
-  }
-
-  return ids;
-}
-
 export async function createFolder(input: CreateFolderInput) {
   const location = await resolveParentAndSite(input);
   if ("error" in location) return location;
@@ -257,7 +232,7 @@ export async function createFolder(input: CreateFolderInput) {
     include: documentInclude,
   });
 
-  return { data: document };
+  return { data: toDocument(document) };
 }
 
 export async function createUpload(input: CreateUploadInput) {
@@ -273,30 +248,45 @@ export async function createUpload(input: CreateUploadInput) {
   const location = await resolveParentAndSite(input);
   if ("error" in location) return location;
 
-  const document = await prisma.document.create({
-    data: {
-      kind: "FILE",
-      status: "PENDING_UPLOAD",
-      name: input.name ?? input.filename,
-      description: input.description ?? null,
-      labels: normalizeLabels(input.labels),
-      attrs: input.attrs ?? {},
-      filename: input.filename,
-      contentType: input.contentType,
-      size: input.size,
-      siteId: location.siteId,
-      parentId: location.parentId,
-    },
-    include: documentInclude,
-  });
-
-  const storageKey = storage.generateDocumentKey(document.id, input.filename);
-  const [updated, uploadUrl] = await Promise.all([
-    prisma.document.update({ where: { id: document.id }, data: { storageKey }, include: documentInclude }),
-    storage.getPresignedUploadUrl(storageKey, input.contentType, input.size),
+  // Version 1 is created with the document and is current from the start;
+  // the document's status says whether its bytes have landed yet.
+  const documentId = randomUUID();
+  const fileId = randomUUID();
+  const storageKey = storage.generateDocumentKey(documentId, input.filename);
+  const [, document] = await prisma.$transaction([
+    prisma.document.create({
+      data: {
+        id: documentId,
+        kind: "FILE",
+        status: "PENDING_UPLOAD",
+        name: input.name ?? input.filename,
+        description: input.description ?? null,
+        labels: normalizeLabels(input.labels),
+        attrs: input.attrs ?? {},
+        siteId: location.siteId,
+        parentId: location.parentId,
+        files: {
+          create: {
+            id: fileId,
+            version: 1,
+            filename: input.filename,
+            contentType: input.contentType,
+            size: input.size,
+            storageKey,
+            createdById: input.createdById ?? null,
+          },
+        },
+      },
+    }),
+    prisma.document.update({
+      where: { id: documentId },
+      data: { currentFileId: fileId },
+      include: documentInclude,
+    }),
   ]);
 
-  return { data: { document: updated, uploadUrl } };
+  const uploadUrl = await storage.getPresignedUploadUrl(storageKey, input.contentType, input.size);
+  return { data: { document: toDocument(document), uploadUrl } };
 }
 
 export async function completeUpload(documentId: string) {
@@ -311,10 +301,11 @@ export async function completeUpload(documentId: string) {
   }
 
   if (document.status === "READY") {
-    return { data: document };
+    return { data: toDocument(document) };
   }
 
-  if (!document.storageKey) {
+  const file = document.currentFile;
+  if (!file) {
     return { error: "Document is missing a storage key", code: "MISSING_STORAGE_KEY" };
   }
 
@@ -322,18 +313,201 @@ export async function completeUpload(documentId: string) {
     return { error: "Storage is not configured", code: "STORAGE_NOT_CONFIGURED" };
   }
 
-  const exists = await storage.objectExists(document.storageKey);
+  const exists = await storage.objectExists(file.storageKey);
   if (!exists) {
     return { error: "Uploaded object was not found", code: "UPLOAD_NOT_FOUND" };
   }
 
-  const updated = await prisma.document.update({
+  const [, updated] = await prisma.$transaction([
+    prisma.documentFile.update({ where: { id: file.id }, data: { status: "READY" } }),
+    prisma.document.update({ where: { id: documentId }, data: { status: "READY" }, include: documentInclude }),
+  ]);
+
+  return { data: toDocument(updated) };
+}
+
+async function findReadyFile(documentId: string) {
+  const document = await prisma.document.findUnique({
     where: { id: documentId },
-    data: { status: "READY" },
-    include: documentInclude,
+    select: { id: true, kind: true, status: true, currentFileId: true, deletedAt: true },
   });
 
-  return { data: updated };
+  if (!document || document.deletedAt) {
+    return { error: "Document not found", code: "DOCUMENT_NOT_FOUND" };
+  }
+
+  if (document.kind !== "FILE") {
+    return { error: "Folders have no versions", code: "NOT_FILE" };
+  }
+
+  if (document.status !== "READY") {
+    return { error: "Document upload is not complete", code: "DOCUMENT_PENDING" };
+  }
+
+  return { data: document };
+}
+
+/**
+ * Start uploading a new version of a READY file. The new DocumentFile row is
+ * PENDING_UPLOAD and not yet current: readers keep the previous version until
+ * completeVersionUpload. Any file type is accepted; the name, folder, labels
+ * and links stay on the document.
+ */
+export async function createVersionUpload(documentId: string, input: CreateVersionUploadInput) {
+  if (!storage.isStorageEnabled()) {
+    return { error: "Storage is not configured", code: "STORAGE_NOT_CONFIGURED" };
+  }
+
+  const validationError = storage.validateDocumentUpload(input.contentType, input.size);
+  if (validationError) {
+    return { error: validationError, code: "INVALID_UPLOAD" };
+  }
+
+  const found = await findReadyFile(documentId);
+  if (found.error !== undefined) return found;
+
+  const latest = await prisma.documentFile.aggregate({ where: { documentId }, _max: { version: true } });
+  const storageKey = storage.generateDocumentKey(documentId, input.filename);
+
+  let file: VersionRecord;
+  try {
+    file = await prisma.documentFile.create({
+      data: {
+        documentId,
+        version: (latest._max.version ?? 0) + 1,
+        filename: input.filename,
+        contentType: input.contentType,
+        size: input.size,
+        storageKey,
+        createdById: input.createdById ?? null,
+      },
+      select: versionSelect,
+    });
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      return { error: "Another version was uploaded at the same time; try again", code: "VERSION_CONFLICT" };
+    }
+    throw error;
+  }
+
+  const uploadUrl = await storage.getPresignedUploadUrl(storageKey, input.contentType, input.size);
+  return { data: { version: toVersion(file, found.data.currentFileId), uploadUrl } };
+}
+
+async function findPendingVersion(documentId: string, fileId: string) {
+  const file = await prisma.documentFile.findUnique({
+    where: { id: fileId },
+    select: { id: true, documentId: true, version: true, status: true, storageKey: true },
+  });
+
+  if (!file || file.documentId !== documentId) {
+    return { error: "Version not found", code: "VERSION_NOT_FOUND" };
+  }
+
+  return { data: file };
+}
+
+/** Confirm a new version's bytes landed and make it the document's current file. */
+export async function completeVersionUpload(documentId: string, fileId: string) {
+  const found = await findReadyFile(documentId);
+  if (found.error !== undefined) return found;
+
+  const pending = await findPendingVersion(documentId, fileId);
+  if (pending.error !== undefined) return pending;
+  const file = pending.data;
+
+  if (file.status === "PENDING_UPLOAD") {
+    if (!storage.isStorageEnabled()) {
+      return { error: "Storage is not configured", code: "STORAGE_NOT_CONFIGURED" };
+    }
+
+    const exists = await storage.objectExists(file.storageKey);
+    if (!exists) {
+      return { error: "Uploaded object was not found", code: "UPLOAD_NOT_FOUND" };
+    }
+  }
+
+  const current = found.data.currentFileId
+    ? await prisma.documentFile.findUnique({ where: { id: found.data.currentFileId }, select: { version: true } })
+    : null;
+  // A slower upload that finishes after a newer one never moves current back.
+  const becomesCurrent = !current || file.version > current.version;
+
+  const [, document] = await prisma.$transaction([
+    prisma.documentFile.update({ where: { id: file.id }, data: { status: "READY" } }),
+    prisma.document.update({
+      where: { id: documentId },
+      data: becomesCurrent ? { currentFileId: file.id } : {},
+      include: documentInclude,
+    }),
+  ]);
+
+  return { data: toDocument(document) };
+}
+
+/** Roll back a version upload that never finished. READY versions are kept. */
+export async function cancelVersionUpload(documentId: string, fileId: string) {
+  const pending = await findPendingVersion(documentId, fileId);
+  if (pending.error !== undefined) return pending;
+
+  if (pending.data.status !== "PENDING_UPLOAD") {
+    return { error: "Only an unfinished version can be cancelled", code: "VERSION_READY" };
+  }
+
+  await prisma.documentFile.delete({ where: { id: fileId } });
+
+  if (storage.isStorageEnabled()) {
+    try {
+      await storage.deleteObjects([pending.data.storageKey]);
+    } catch {
+      // Best effort; nothing points at the object any more.
+    }
+  }
+
+  return { success: true };
+}
+
+/** Every uploaded version of a file, newest first. */
+export async function listVersions(documentId: string) {
+  const found = await findReadyFile(documentId);
+  if (found.error !== undefined) return found;
+
+  const files = await prisma.documentFile.findMany({
+    where: { documentId, status: "READY" },
+    select: versionSelect,
+    orderBy: { version: "desc" },
+  });
+
+  return { data: files.map((file) => toVersion(file, found.data.currentFileId)) };
+}
+
+async function getVersionFileUrl(documentId: string, fileId: string, disposition: "inline" | "attachment") {
+  const found = await findReadyFile(documentId);
+  if (found.error !== undefined) return found;
+
+  const file = await prisma.documentFile.findUnique({ where: { id: fileId } });
+  if (!file || file.documentId !== documentId || file.status !== "READY") {
+    return { error: "Version not found", code: "VERSION_NOT_FOUND" };
+  }
+
+  if (!storage.isStorageEnabled()) {
+    return { error: "Storage is not configured", code: "STORAGE_NOT_CONFIGURED" };
+  }
+
+  const url = await storage.getPresignedDownloadUrl(file.storageKey, {
+    disposition,
+    filename: file.filename,
+    contentType: file.contentType,
+  });
+  return { data: { url } };
+}
+
+export async function getVersionDownloadUrl(documentId: string, fileId: string) {
+  return getVersionFileUrl(documentId, fileId, "attachment");
+}
+
+export async function getVersionOpenUrl(documentId: string, fileId: string) {
+  return getVersionFileUrl(documentId, fileId, "inline");
 }
 
 export async function list(input: ListDocumentsInput = {}) {
@@ -368,7 +542,7 @@ export async function list(input: ListDocumentsInput = {}) {
     where.OR = [
       { name: { contains: q, mode: "insensitive" } },
       { description: { contains: q, mode: "insensitive" } },
-      { filename: { contains: q, mode: "insensitive" } },
+      { currentFile: { filename: { contains: q, mode: "insensitive" } } },
     ];
   }
 
@@ -385,7 +559,7 @@ export async function list(input: ListDocumentsInput = {}) {
     prisma.document.count({ where }),
   ]);
 
-  return { data: documents, total, limit: Number(limit), offset: Number(offset) };
+  return { data: documents.map(toDocument), total, limit: Number(limit), offset: Number(offset) };
 }
 
 export async function getById(documentId: string, options: { includePending?: boolean } = {}) {
@@ -399,7 +573,16 @@ export async function getById(documentId: string, options: { includePending?: bo
     return { error: "Document upload is not complete", code: "DOCUMENT_PENDING" };
   }
 
-  return { data: document };
+  const names = await targetNames(document.links);
+  return {
+    data: {
+      ...toDocument(document),
+      links: document.links.map((link) => ({
+        ...link,
+        targetName: names.get(`${link.targetType}:${link.targetId}`) ?? null,
+      })),
+    },
+  };
 }
 
 async function getDocumentFileUrl(documentId: string, disposition: "inline" | "attachment") {
@@ -417,7 +600,8 @@ async function getDocumentFileUrl(documentId: string, disposition: "inline" | "a
     return { error: "Document upload is not complete", code: "DOCUMENT_PENDING" };
   }
 
-  if (!document.storageKey) {
+  const file = document.currentFile;
+  if (!file) {
     return { error: "Document is missing a storage key", code: "MISSING_STORAGE_KEY" };
   }
 
@@ -425,12 +609,12 @@ async function getDocumentFileUrl(documentId: string, disposition: "inline" | "a
     return { error: "Storage is not configured", code: "STORAGE_NOT_CONFIGURED" };
   }
 
-  const url = await storage.getPresignedDownloadUrl(document.storageKey, {
+  const url = await storage.getPresignedDownloadUrl(file.storageKey, {
     disposition,
-    filename: document.filename ?? document.name,
-    contentType: document.contentType ?? undefined,
+    filename: file.filename,
+    contentType: file.contentType,
   });
-  return { data: { document, url } };
+  return { data: { document: toDocument(document), url } };
 }
 
 export async function getDownloadUrl(documentId: string) {
@@ -478,7 +662,7 @@ export async function update(documentId: string, input: UpdateDocumentInput) {
   }
 
   const document = await prisma.document.update({ where: { id: documentId }, data, include: documentInclude });
-  return { data: document };
+  return { data: toDocument(document) };
 }
 
 export async function remove(documentId: string) {
@@ -492,11 +676,12 @@ export async function remove(documentId: string) {
   }
 
   const ids = await collectDocumentTreeIds(documentId);
-  const files = await prisma.document.findMany({
-    where: { id: { in: ids }, kind: "FILE", storageKey: { not: null } },
+  // Every version's bytes go, not just the current one.
+  const files = await prisma.documentFile.findMany({
+    where: { documentId: { in: ids } },
     select: { storageKey: true },
   });
-  const storageKeys = files.map((file) => file.storageKey).filter((key): key is string => !!key);
+  const storageKeys = files.map((file) => file.storageKey);
 
   await prisma.document.deleteMany({ where: { id: { in: ids } } });
 
@@ -556,99 +741,29 @@ export async function listForTarget(targetType: DocumentTargetType, targetId: st
     orderBy: { createdAt: "desc" },
   });
 
-  return { data: links.map((link) => link.document) };
+  return { data: links.map((link) => toDocument(link.document)) };
 }
 
-export async function listForTargets(targets: TargetRef[], siteId?: string, filter: LabelFilter = {}) {
-  const unique = uniqueTargets(targets);
-  if (unique.length === 0) {
-    return { data: [] };
-  }
-
-  const documentWhere: Prisma.DocumentWhereInput = {
-    deletedAt: null,
-    status: "READY",
-    ...(siteId ? { OR: [{ siteId: null }, { siteId }] } : {}),
-  };
-  applyLabelFilter(documentWhere, filter);
-
-  const links = await prisma.documentLink.findMany({
-    where: {
-      OR: unique.map((target) => ({ targetType: target.targetType, targetId: target.targetId })),
-      document: documentWhere,
-    },
-    include: { document: { include: documentInclude } },
-    orderBy: { createdAt: "desc" },
-  });
-
-  const seen = new Set<string>();
-  const documents = [];
-  for (const link of links) {
-    if (seen.has(link.documentId)) continue;
-    seen.add(link.documentId);
-    documents.push(link.document);
-  }
-
-  return { data: documents };
-}
-
+/**
+ * A terminal's documents: the knowledge context of its station (current job,
+ * its parts, tools and materials, then workcenter and site), or of its
+ * workcenter or site when it shows no station. See context.ts.
+ */
 export async function listForDisplayContext(context: DisplayDocumentContext, filter: LabelFilter = {}) {
-  const targets: TargetRef[] = [{ targetType: "SITE", targetId: context.siteId }];
+  const station = context.stationId
+    ? await prisma.station.findUnique({
+        where: { id: context.stationId },
+        select: { id: true, siteId: true, deletedAt: true },
+      })
+    : null;
+  const root: { targetType: DocumentTargetType; targetId: string } =
+    station && !station.deletedAt && station.siteId === context.siteId
+      ? { targetType: "STATION", targetId: station.id }
+      : context.workcenterId
+        ? { targetType: "WORKCENTER", targetId: context.workcenterId }
+        : { targetType: "SITE", targetId: context.siteId };
 
-  if (context.workcenterId) {
-    targets.push({ targetType: "WORKCENTER", targetId: context.workcenterId });
-  }
-
-  if (context.stationId) {
-    const station = await prisma.station.findUnique({
-      where: { id: context.stationId },
-      select: {
-        id: true,
-        siteId: true,
-        workcenterId: true,
-        currentJobId: true,
-        deletedAt: true,
-      },
-    });
-
-    if (station && !station.deletedAt && station.siteId === context.siteId) {
-      targets.push({ targetType: "STATION", targetId: station.id });
-      if (station.workcenterId) {
-        targets.push({ targetType: "WORKCENTER", targetId: station.workcenterId });
-      }
-
-      if (station.currentJobId) {
-        targets.push({ targetType: "JOB", targetId: station.currentJobId });
-        const job = await prisma.job.findUnique({
-          where: { id: station.currentJobId },
-          select: {
-            tools: { where: { deletedAt: null }, select: { toolId: true } },
-            jobProducts: {
-              where: { deletedAt: null },
-              select: {
-                productId: true,
-                toolId: true,
-                product: { select: { materials: { where: { archivedAt: null }, select: { materialId: true } } } },
-              },
-            },
-          },
-        });
-
-        for (const jobTool of job?.tools ?? []) {
-          targets.push({ targetType: "TOOL", targetId: jobTool.toolId });
-        }
-        for (const jobProduct of job?.jobProducts ?? []) {
-          targets.push({ targetType: "PRODUCT", targetId: jobProduct.productId });
-          if (jobProduct.toolId) {
-            targets.push({ targetType: "TOOL", targetId: jobProduct.toolId });
-          }
-          for (const productMaterial of jobProduct.product.materials) {
-            targets.push({ targetType: "MATERIAL", targetId: productMaterial.materialId });
-          }
-        }
-      }
-    }
-  }
-
-  return listForTargets(targets, context.siteId, filter);
+  const result = await resolveContext(root, filter);
+  if ("error" in result) return { data: [] };
+  return { data: result.data.map((item) => item.document) };
 }
