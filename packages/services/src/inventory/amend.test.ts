@@ -161,6 +161,17 @@ describe.skipIf(!process.env.DATABASE_URL)("reassignItems ledger adjustment", ()
     expect(stock[1].stockItemId).toBe(stock[0].stockItemId);
     expect(stock[2].stockItemId).not.toBe(stock[0].stockItemId);
 
+    // Materials are on the book too: the flush's USAGE, then the amendment's
+    // ADJUSTMENT, posted in the same single call as the parts above.
+    const materialBook = await prisma.stockMovement.findMany({
+      where: { sourceType: "MATERIAL_LEDGER_ENTRY", stockItem: { stockableId: materialId } },
+      orderBy: { seq: "asc" },
+    });
+    expect(materialBook.map((m) => [m.kind, m.quantity.toNumber(), m.unit, m.shiftInstanceId])).toEqual([
+      ["USAGE", -2, "KG", shiftId],
+      ["ADJUSTMENT", -1, "KG", shiftId],
+    ]);
+
     // Staging stays the audit record of the original flush.
     const staging = await prisma.materialShiftUsage.findMany({ where: { shiftInstanceId: shiftId } });
     expect(staging.map((r) => [r.jobId, r.quantity.toNumber(), r.flushedAt !== null])).toEqual([[j1.id, 2, true]]);

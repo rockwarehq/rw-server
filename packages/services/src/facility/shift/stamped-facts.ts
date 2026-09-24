@@ -24,7 +24,16 @@ export const STAMPED_FACTS: readonly StampedFact[] = [
   { table: "StationLogonSession", at: '"logonTime"', byStation: true, businessDate: true },
   { table: "StationStateLog", at: '"startTime"', byStation: true, businessDate: true },
   { table: "StationJobLog", at: '"startTime"', byStation: true, businessDate: true },
-  { table: "MaterialLedgerEntry", at: '"createdAt"', byStation: false, businessDate: true },
+  // End-of-shift PRODUCTION rows are written after their shift ends, for
+  // that shift. Their time says nothing about which shift owns them, so a
+  // re-stamp leaves them alone.
+  {
+    table: "MaterialLedgerEntry",
+    at: '"createdAt"',
+    byStation: false,
+    businessDate: true,
+    where: `f."kind" <> 'PRODUCTION'`,
+  },
   { table: "OrderConsumption", at: '"createdAt"', byStation: false, businessDate: true },
   { table: "ProductStockAdjustment", at: '"createdAt"', byStation: false, businessDate: true },
   // The stock book holds both kinds: movements from a station (made and
@@ -36,7 +45,9 @@ export const STAMPED_FACTS: readonly StampedFact[] = [
     at: '"occurredAt"',
     byStation: false,
     businessDate: true,
-    where: 'f."stationId" IS NULL',
+    // USAGE is the stock book copy of an end-of-shift PRODUCTION row; it
+    // stays with its shift for the same reason.
+    where: `f."stationId" IS NULL AND f."kind" <> 'USAGE'`,
   },
 ] as const;
 

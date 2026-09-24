@@ -2,6 +2,7 @@ import prisma from "@rw/db";
 import { Prisma, type WeightUnit } from "@rw/db";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
+import { lockMaterialBalance, pendingMaterialUsage, setMaterialStockUnit } from "../stock/balance.js";
 import { createForStockable } from "../stock/item.js";
 
 // ============================================================================
@@ -290,8 +291,24 @@ export async function update(id: string, input: UpdateMaterialInput) {
 
   const nextVersion = (latestVersion?.version ?? 0) + 1;
 
+  const nextUnit = weightUnits !== undefined ? weightUnits : currentVersion.weightUnits;
+
   // Create new version with merged data
-  const material = await prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
+    // Stock unit rules (ADR-0016): switching between weights converts the
+    // totals; dropping the unit stops tracking, which is only allowed when
+    // nothing is on hand or in use this shift, so no stock disappears.
+    if (currentVersion.weightUnits && !nextUnit) {
+      const stock = await lockMaterialBalance(tx, id);
+      const pending = await pendingMaterialUsage(tx, id, stock.baseUnit);
+      if (!stock.onHand.isZero() || !pending.isZero()) {
+        return {
+          error: "Material has stock on hand; bring it to zero before it stops being tracked",
+          code: "STOCK_ON_HAND",
+        } as const;
+      }
+    }
+
     const version = await tx.materialVersion.create({
       data: {
         materialId: id,
@@ -308,7 +325,9 @@ export async function update(id: string, input: UpdateMaterialInput) {
       },
     });
 
-    return tx.material.update({
+    await setMaterialStockUnit(tx, id, nextUnit ?? "");
+
+    const updated = await tx.material.update({
       where: { id },
       data: {
         currentVersionId: version.id,
@@ -321,7 +340,11 @@ export async function update(id: string, input: UpdateMaterialInput) {
         _count: { select: { products: true, versions: true } },
       },
     });
+    return { data: updated };
   });
+
+  if ("error" in result) return result;
+  const material = result.data;
 
   publishEntityEvent({
     action: "updated",

@@ -58,6 +58,8 @@ const EXACT: Record<string, OrpcErrorCode> = {
   IN_OTHER_GROUP: "CONFLICT",
   LABEL_CONFLICT: "CONFLICT",
   VERSION_CONFLICT: "CONFLICT",
+  // A material cannot stop being tracked while it has stock (ADR-0016).
+  STOCK_ON_HAND: "CONFLICT",
   GRAPH_CYCLE: "CONFLICT",
   CIRCULAR_REFERENCE: "CONFLICT",
   DEFINITION_IS_ROTATION_ANCHOR: "CONFLICT",

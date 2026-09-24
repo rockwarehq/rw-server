@@ -168,6 +168,9 @@ export async function createFromCycle(
 
 type RawClient = { $queryRaw: typeof prisma.$queryRaw; $executeRaw: typeof prisma.$executeRaw };
 
+/** Not-tracked materials already warned about in this process. */
+const untrackedWarned = new Set<string>();
+
 export interface ShiftUsageScope {
   siteId: string;
   shiftInstanceId: string;
@@ -224,11 +227,16 @@ export async function materialUsage(tx: TransactionClient, itemIds: string[]): P
   `;
   const usage: MaterialUsage[] = [];
   for (const w of rows) {
-    // Assuming a default unit would silently mis-stamp ledger entries.
+    // No unit means the material's stock is not tracked (ADR-0016), so there
+    // is no unit to record its use in. Skip it, and say so once per material
+    // per process; the repair report counts these (untrackedMaterialsInUse).
     if (w.materialUnit === null) {
-      console.warn(
-        `[inventory] material ${w.materialId} has no weightUnit set; discarding usage qty=${w.qty} for product ${w.productId}`,
-      );
+      if (!untrackedWarned.has(w.materialId)) {
+        untrackedWarned.add(w.materialId);
+        console.warn(
+          `[inventory] material ${w.materialId} is not tracked (no unit); its production use is not recorded`,
+        );
+      }
       continue;
     }
     usage.push({

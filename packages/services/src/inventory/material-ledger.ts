@@ -3,9 +3,11 @@ import { Prisma, type MaterialLedgerKind, type WeightUnit } from "@rw/db";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { resolveShiftStamp } from "../facility/work-context.js";
+import { lockMaterialBalance, pendingMaterialUsage, setMaterialStockUnit } from "../stock/balance.js";
+import { postSources } from "../stock/post.js";
 
 /** Post-commit refresh hint: ledger writes change the material's on-hand stock. */
-function publishStockEvent(siteId: string, workspaceId: string, materialId: string): void {
+export function publishStockEvent(siteId: string, workspaceId: string, materialId: string): void {
   publishEntityEvent({
     action: "updated",
     entityKey: SYSTEM_ENTITY_KEYS.Material,
@@ -71,15 +73,13 @@ export async function create(input: CreateLedgerEntryInput) {
     return { error: "Material does not belong to the given site", code: "SITE_MISMATCH" };
   }
 
-  // Manual ledger entries must be submitted in the material's canonical unit.
-  // The auto path (cycle close → shift flush) handles unit conversion before
-  // it ever reaches the ledger; this guard catches client bugs that would
-  // otherwise corrupt SUM(quantity) balances.
-  const canonicalUnit = material.currentVersion?.weightUnits ?? null;
-  if (canonicalUnit !== null && input.unit !== canonicalUnit) {
+  // A material with no stock unit is not tracked: stock actions are refused
+  // (ADR-0016). A tracked material takes any weight; the entry keeps the unit
+  // it was written in and the stock book converts it to the material's unit.
+  if (!material.currentVersion?.weightUnits) {
     return {
-      error: `Ledger unit ${input.unit} does not match material canonical unit ${canonicalUnit}`,
-      code: "UNIT_MISMATCH",
+      error: "Material stock is not tracked; set its unit before recording stock",
+      code: "NO_CANONICAL_UNIT",
     };
   }
 
@@ -103,20 +103,27 @@ export async function create(input: CreateLedgerEntryInput) {
   // (calendar-date fallback when none — e.g. workcenter-scheduled sites).
   const stamp = await resolveShiftStamp(input.siteId, null, new Date());
 
-  const entry = await prisma.materialLedgerEntry.create({
-    data: {
-      siteId: input.siteId,
-      materialId: input.materialId,
-      kind: input.kind,
-      quantity: qty,
-      unit: input.unit,
-      unitCost: input.unitCost != null ? new Prisma.Decimal(input.unitCost) : null,
-      reference: input.reference ?? null,
-      note: input.note ?? null,
-      performedByUserId: input.performedByUserId ?? null,
-      ...stamp,
-    },
-    include: ledgerInclude,
+  // The ledger row and its stock movement are saved together.
+  const entry = await prisma.$transaction(async (tx) => {
+    const created = await tx.materialLedgerEntry.create({
+      data: {
+        siteId: input.siteId,
+        materialId: input.materialId,
+        kind: input.kind,
+        quantity: qty,
+        unit: input.unit,
+        unitCost: input.unitCost != null ? new Prisma.Decimal(input.unitCost) : null,
+        reference: input.reference ?? null,
+        note: input.note ?? null,
+        performedByUserId: input.performedByUserId ?? null,
+        ...stamp,
+      },
+      include: ledgerInclude,
+    });
+    // Totals are kept in the material's current unit; keep them in step.
+    await setMaterialStockUnit(tx, input.materialId, material.currentVersion?.weightUnits ?? "");
+    await postSources(tx, [{ type: "MATERIAL_LEDGER_ENTRY", ids: [created.id] }]);
+    return created;
   });
 
   publishStockEvent(input.siteId, material.site.workspaceId, input.materialId);
@@ -139,11 +146,11 @@ export type AdjustMaterialStockMode =
 /**
  * Manually adjust or reconcile a material's on-hand balance (the stock
  * reconciliation counterpart to ProductStockAdjustment). Appends an immutable
- * signed ADJUSTMENT ledger entry; "set" mode computes the delta against the
- * TRUE current balance (ledger sum minus unflushed shift usage) with the
- * Material row locked, so a count lands exactly on the counted value. A
- * zero-delta count is recorded (audit evidence); a zero manual delta is
- * rejected.
+ * signed ADJUSTMENT ledger entry and posts it to the stock book; "set" mode
+ * computes the delta against the TRUE current balance (stock book minus
+ * unflushed shift usage) with the material's stock row locked, so a count
+ * lands exactly on the counted value. A zero-delta count is recorded (audit
+ * evidence); a zero manual delta is rejected.
  */
 export async function adjust(input: AdjustMaterialStockInput & AdjustMaterialStockMode) {
   const material = await prisma.material.findUnique({
@@ -182,27 +189,22 @@ export async function adjust(input: AdjustMaterialStockInput & AdjustMaterialSto
   }
 
   const result = await prisma.$transaction(async (tx) => {
-    const txRaw = tx as unknown as { $queryRaw: typeof prisma.$queryRaw };
+    // Lock the material's stock row: concurrent counts, entries and the
+    // end-of-shift flush all wait here, so the count lands exactly.
+    await setMaterialStockUnit(tx, input.materialId, unit);
+    const stock = await lockMaterialBalance(tx, input.materialId);
 
-    // Serialize concurrent reconciles on this material. A concurrent shift
-    // flush can still land between read and insert — acceptable: a physical
-    // count is itself a point-in-time snapshot.
-    await txRaw.$queryRaw`SELECT id FROM "Material" WHERE id = ${input.materialId}::uuid FOR UPDATE`;
-
-    // True current balance: ledger sum minus unflushed staging (same math as
-    // material-balance.ts) — what the physical count is being compared to.
-    const rows = await txRaw.$queryRaw<Array<{ balance: string }>>`
-      SELECT (
-        COALESCE((SELECT SUM(quantity) FROM "MaterialLedgerEntry" WHERE "materialId" = ${input.materialId}::uuid), 0)
-        - COALESCE((SELECT SUM(quantity) FROM "MaterialShiftUsage" WHERE "materialId" = ${input.materialId}::uuid AND "flushedAt" IS NULL), 0)
-      )::text AS balance
-    `;
-    const currentBalance = new Prisma.Decimal(rows[0]?.balance ?? 0);
+    // True current balance, in the material's unit: the stock book minus
+    // what open shifts have used so far (not in the book until the flush).
+    const pending = await pendingMaterialUsage(tx, input.materialId, unit);
+    const currentBalance = stock.onHand.minus(pending);
 
     const delta = input.mode === "set" ? requested.minus(currentBalance) : requested;
 
     const stamp = await resolveShiftStamp(input.siteId, null, new Date(), tx);
 
+    // A count that matched is still recorded on the ledger (audit evidence);
+    // it adds nothing to the stock book.
     const entry = await tx.materialLedgerEntry.create({
       data: {
         siteId: input.siteId,
@@ -217,6 +219,7 @@ export async function adjust(input: AdjustMaterialStockInput & AdjustMaterialSto
       },
       include: ledgerInclude,
     });
+    await postSources(tx, [{ type: "MATERIAL_LEDGER_ENTRY", ids: [entry.id] }]);
 
     return { entry, delta, resultingBalance: currentBalance.plus(delta) };
   });
