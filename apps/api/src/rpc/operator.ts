@@ -342,6 +342,54 @@ export const operatorLogoffAll = displayRequired.input(displayIdSchema).handler(
 });
 
 /**
+ * Move the display's logged-on operators to another station, for a terminal
+ * changing station: each session ends at the old station and opens at the
+ * new one, for the same operator, with no PIN re-entry.
+ */
+const transferSessionsInputSchema = z.object({
+  displayId: z.uuid(),
+  stationId: z.uuid(),
+});
+
+export const operatorTransferSessions = displayRequired
+  .input(transferSessionsInputSchema)
+  .handler(async ({ input, context }) => {
+    assertDisplayIdentity(input.displayId, context.current.display.id);
+
+    const ctx = await resolveDisplayContext(input.displayId);
+    if (!ctx) {
+      throw new ORPCError("NOT_FOUND", { message: "Display not found or not claimed" });
+    }
+
+    // A display provisioned to a station does not change station.
+    if (ctx.stationId && ctx.stationId !== input.stationId) {
+      throw new ORPCError("BAD_REQUEST", { message: "Display is provisioned to a different station" });
+    }
+
+    const station = await prisma.station.findUnique({
+      where: { id: input.stationId },
+      select: { id: true, siteId: true },
+    });
+    if (!station || station.siteId !== ctx.siteId) {
+      throw new ORPCError("BAD_REQUEST", { message: "Selected station is not at this site" });
+    }
+
+    // One logon per station, as a logon there would enforce: whoever is on
+    // the new station from another display comes off first.
+    if (!ctx.config.multiLogon) {
+      await logon.logoffByScope("station", input.displayId, input.stationId);
+    }
+
+    const result = await logon.transferSessions(input.displayId, input.stationId);
+    if (result.error !== undefined) {
+      throwServiceError(result, { STATION_NOT_FOUND: "BAD_REQUEST" });
+    }
+
+    const activeSessions = await logon.getActiveSessions(input.displayId);
+    return { count: result.data.count, activeSessions: activeSessions.data };
+  });
+
+/**
  * Get active logon sessions for the display's station.
  */
 export const activeSessions = displayRequired.input(displayIdSchema).handler(async ({ input, context }) => {

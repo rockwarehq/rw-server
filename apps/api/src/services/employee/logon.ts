@@ -295,6 +295,106 @@ export async function logoffByScope(scope: "station" | "display", displayId: str
 }
 
 /**
+ * Move every open session at a display to another station: each is ended
+ * where it was and opened again, for the same operator, at the new station,
+ * at the same instant — so labor history hands over without a gap and no one
+ * re-enters a PIN. Sessions already at the new station are left as they are.
+ * One transaction: either every session moves or none does.
+ */
+export async function transferSessions(displayId: string, stationId: string) {
+  const station = await prisma.station.findUnique({
+    where: { id: stationId },
+    select: { siteId: true, workcenterId: true },
+  });
+  if (!station) return { error: "Station not found", code: "STATION_NOT_FOUND" };
+
+  // The new sessions take the new station's shift, as a fresh logon would.
+  const now = new Date();
+  const { shiftInstanceId, businessDate, isScheduled } = await resolveShiftStamp(
+    station.siteId,
+    station.workcenterId,
+    now,
+  );
+
+  const moved = await prisma.$transaction(async (tx) => {
+    const open = await tx.stationLogonSession.findMany({
+      where: { displayId, logoffTime: null, stationId: { not: stationId } },
+      select: {
+        id: true,
+        stationId: true,
+        employeeId: true,
+        versionId: true,
+        logonMethod: true,
+        genericName: true,
+      },
+    });
+    if (open.length === 0) return [];
+
+    await tx.stationLogonSession.updateMany({
+      where: { id: { in: open.map((session) => session.id) } },
+      data: { logoffTime: now },
+    });
+
+    return Promise.all(
+      open.map(async (session) => ({
+        from: session,
+        to: await tx.stationLogonSession.create({
+          data: {
+            employeeId: session.employeeId,
+            versionId: session.versionId,
+            stationId,
+            siteId: station.siteId,
+            workcenterId: station.workcenterId,
+            displayId,
+            logonMethod: session.logonMethod,
+            genericName: session.genericName,
+            logonTime: now,
+            shiftInstanceId,
+            businessDate,
+            isScheduled,
+          },
+          select: { id: true },
+        }),
+      })),
+    );
+  });
+
+  for (const { from, to } of moved) {
+    await logEvent({
+      action: "OPERATOR_LOGOFF",
+      metadata: {
+        sessionId: from.id,
+        employeeId: from.employeeId,
+        stationId: from.stationId,
+        displayId,
+        transfer: true,
+      },
+    });
+    await logEvent({
+      action: "OPERATOR_LOGON",
+      metadata: {
+        sessionId: to.id,
+        employeeId: from.employeeId,
+        stationId,
+        displayId,
+        logonMethod: from.logonMethod,
+        genericName: from.genericName,
+        shiftInstanceId,
+        transfer: true,
+        fromStationId: from.stationId,
+      },
+    });
+  }
+
+  if (moved.length > 0) {
+    const stations = new Set([stationId, ...moved.map(({ from }) => from.stationId)]);
+    await publishLogonsForStations([...stations], now);
+  }
+
+  return { data: { count: moved.length } };
+}
+
+/**
  * Get all active (open) logon sessions for a display.
  */
 export async function getActiveSessions(displayId: string) {
