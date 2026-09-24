@@ -4,9 +4,9 @@ import prisma, { ensureAccountWorkspace } from "@rw/db";
 import { remove as removeScrap, update as updateScrap } from "../inventory/disposition-log.js";
 import { getStock } from "../inventory/stock.js";
 import * as orders from "../order/order.js";
-import { lockProductBalances, rebuildProductBalances } from "./balance.js";
-import { stockFixture } from "./fixtures.js";
-import { postSources, reverseSources } from "./post.js";
+import { countOffBalances, lockProductBalances, rebuildProductBalances } from "./balance.js";
+import { stockFixture } from "../testing/stock-fixtures.js";
+import { postSources, repostSources, reverseSources } from "./post.js";
 import { isClean, reconcileProductStock } from "./reconcile.js";
 
 // Integration tests: require DATABASE_URL and run against the real schema
@@ -146,6 +146,66 @@ describe.skipIf(!process.env.DATABASE_URL)("stock book", () => {
       [6, null],
       [-6, "Stock repair"],
     ]);
+  });
+
+  test("a rebuild running during a live save does not lose that save", async () => {
+    const productId = await newProduct();
+    await fixture.produce(productId, 1);
+    const productVersionId = await fixture.versionOf(productId);
+    const cycle = await prisma.cycle.findFirstOrThrow({ where: { siteId } });
+    const item = await prisma.inventoryItem.create({
+      data: { cycleId: cycle.id, siteId, productId, productVersionId, quantity: 5 },
+    });
+
+    // The live save takes the balance lock, posts, and holds on for a moment
+    // while the rebuild starts and has to wait for it.
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const live = prisma.$transaction(async (tx) => {
+      await lockProductBalances(tx, siteId, [productId]);
+      await postSources(tx, [{ type: "INVENTORY_ITEM", ids: [item.id] }]);
+      await held;
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    const rebuild = rebuildProductBalances(siteId, [productId]);
+    await new Promise((r) => setTimeout(r, 200));
+    release();
+    await Promise.all([live, rebuild]);
+
+    expect((await getStock(prisma, siteId, [productId])).get(productId)?.produced).toBe(6);
+    expect(await countOffBalances(siteId)).toBe(0);
+  });
+
+  test("the check sees totals that drifted from the book, and repair fixes them", async () => {
+    const productId = await newProduct();
+    await fixture.produce(productId, 3);
+    await prisma.$executeRaw`
+      UPDATE "StockBalance" b SET produced = 99, "onHand" = 99 - b.scrapped - b.consumed + b.adjusted
+      FROM "StockItem" si
+      WHERE si.id = b."stockItemId" AND si."stockableType" = 'PRODUCT' AND si."stockableId" = ${productId}::uuid
+    `;
+
+    const check = await reconcileProductStock({ siteId });
+    expect(check.balancesOff).toBe(1);
+    expect(isClean(check)).toBe(false);
+
+    await reconcileProductStock({ siteId, repair: true });
+    expect(isClean(await reconcileProductStock({ siteId }))).toBe(true);
+    expect((await getStock(prisma, siteId, [productId])).get(productId)?.produced).toBe(3);
+  });
+
+  test("cancel and repost in one call changes the totals once", async () => {
+    const productId = await newProduct();
+    await fixture.produce(productId, 10);
+    const logId = await fixture.scrap(productId, 4);
+    await prisma.itemDispositionLog.update({ where: { id: logId }, data: { quantity: 1 } });
+
+    const sources = [{ type: "ITEM_DISPOSITION_LOG" as const, ids: [logId] }];
+    const touched = await prisma.$transaction((tx) => repostSources(tx, { cancel: sources, post: sources }));
+    expect(touched).toHaveLength(1);
+    expect((await getStock(prisma, siteId, [productId])).get(productId)).toMatchObject({ scrapped: 1, available: 9 });
   });
 
   test("rebuilding the totals from the book changes nothing", async () => {

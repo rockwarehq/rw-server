@@ -27,7 +27,9 @@ async function main() {
     console.log(`  ${type}: ${count} record(s) ${check ? "disagree" : "fixed"}`);
   }
   console.log(`  movements whose record is gone: ${report.movementsWithoutSource} (kept)`);
+  console.log(`  totals that did not match the book: ${report.balancesOff} ${check ? "" : "(rebuilt)"}`.trimEnd());
   console.log(`  stock items with no product or material: ${report.stockItemsWithoutStockable}`);
+  console.log(`  products or materials with no stock item: ${report.stockablesWithoutStockItem}`);
   if (check && !isClean(report)) process.exitCode = 2;
 }
 

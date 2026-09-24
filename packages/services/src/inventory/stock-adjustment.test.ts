@@ -4,7 +4,7 @@ import prisma, { ensureAccountWorkspace } from "@rw/db";
 import * as orders from "../order/order.js";
 import { checkAutoComplete } from "../order/auto-complete.js";
 import { adjustStock, list } from "./stock-adjustment.js";
-import { stockFixture } from "../stock/fixtures.js";
+import { stockFixture } from "../testing/stock-fixtures.js";
 import { getStock, rederiveProductStock } from "./stock.js";
 
 // Integration tests (inventory-first.test.ts conventions): require

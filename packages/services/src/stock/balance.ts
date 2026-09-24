@@ -1,5 +1,5 @@
 import prisma, { Prisma } from "@rw/db";
-import { ensureProductStockItems } from "./post.js";
+import { ensureBalances, ensureProductStockItems } from "./post.js";
 
 type Tx = Prisma.TransactionClient;
 type Client = Tx | typeof prisma;
@@ -76,13 +76,14 @@ export async function lockProductBalances(
   if (productIds.length === 0) return onHand;
 
   await ensureProductStockItems(tx, productIds);
-  await tx.$executeRaw`
-    INSERT INTO "StockBalance" ("stockItemId", "siteId", "updatedAt")
-    SELECT id, "siteId", NOW() FROM "StockItem"
+  const items = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT id FROM "StockItem"
     WHERE "stockableType" = 'PRODUCT' AND "stockableId" = ANY(${productIds}::uuid[])
-    ORDER BY id
-    ON CONFLICT ("stockItemId") DO NOTHING
   `;
+  await ensureBalances(
+    tx,
+    items.map((i) => i.id),
+  );
   const rows = await tx.$queryRaw<Array<{ productId: string; onHand: string }>>`
     SELECT si."stockableId" AS "productId", b."onHand"::text AS "onHand"
     FROM "StockBalance" b
@@ -96,36 +97,83 @@ export async function lockProductBalances(
   return onHand;
 }
 
+/** How many balance rows one rebuild step locks at a time. */
+const REBUILD_CHUNK = 200;
+
 /**
- * Rebuild StockBalance from the stock book. Safe to run any time and as
- * often as you like. `productIds` narrows it to those products.
+ * Rebuild StockBalance from the stock book. Safe to run any time, even while
+ * servers are saving: each step first locks its balance rows (in stockItemId
+ * order, like every stock save), and only then adds up the book. A save that
+ * wrote movements but has not reached its balance update yet waits for the
+ * lock and then adds its change on top, so nothing is lost. Steps are small
+ * so live saves are only held up briefly. `productIds` narrows it to those
+ * products.
  */
 export async function rebuildProductBalances(siteId?: string, productIds?: string[]): Promise<void> {
-  const onlyProducts = productIds ? Prisma.sql`AND si."stockableId" = ANY(${productIds}::uuid[])` : Prisma.empty;
-  await prisma.$transaction(
-    async (tx) => {
-      await tx.$executeRaw`
-        INSERT INTO "StockBalance" ("stockItemId", "siteId", "onHand", produced, scrapped, consumed, adjusted, "updatedAt")
-        SELECT si.id, si."siteId",
-               COALESCE(SUM(m.quantity), 0),
-               COALESCE(SUM(m.quantity) FILTER (WHERE m.kind = 'OUTPUT'), 0),
-               COALESCE(-SUM(m.quantity) FILTER (WHERE m.kind = 'SCRAP'), 0),
-               COALESCE(-SUM(m.quantity) FILTER (WHERE m.kind = 'FULFILLMENT'), 0),
-               COALESCE(SUM(m.quantity) FILTER (WHERE m.kind = 'ADJUSTMENT'), 0),
-               NOW()
-        FROM "StockItem" si
-        LEFT JOIN "StockMovement" m ON m."stockItemId" = si.id
-        WHERE si."stockableType" = 'PRODUCT'
-          AND (${siteId ?? null}::uuid IS NULL OR si."siteId" = ${siteId ?? null}::uuid)
-          ${onlyProducts}
-        GROUP BY si.id, si."siteId"
-        ORDER BY si.id
-        ON CONFLICT ("stockItemId") DO UPDATE
-        SET "onHand" = EXCLUDED."onHand", produced = EXCLUDED.produced, scrapped = EXCLUDED.scrapped,
-            consumed = EXCLUDED.consumed, adjusted = EXCLUDED.adjusted, "updatedAt" = NOW()
-      `;
-    },
-    // A whole-site rebuild reads every movement; the default 5s is too short.
-    { timeout: 300_000, maxWait: 10_000 },
-  );
+  const onlyProducts = productIds ? Prisma.sql`AND "stockableId" = ANY(${productIds}::uuid[])` : Prisma.empty;
+  const items = await prisma.$queryRaw<Array<{ id: string }>>`
+    SELECT id FROM "StockItem"
+    WHERE "stockableType" = 'PRODUCT'
+      AND (${siteId ?? null}::uuid IS NULL OR "siteId" = ${siteId ?? null}::uuid)
+      ${onlyProducts}
+    ORDER BY id
+  `;
+  for (let i = 0; i < items.length; i += REBUILD_CHUNK) {
+    const ids = items.slice(i, i + REBUILD_CHUNK).map((r) => r.id);
+    await prisma.$transaction(
+      async (tx) => {
+        await ensureBalances(tx, ids);
+        await tx.$queryRaw`
+          SELECT 1 FROM "StockBalance" WHERE "stockItemId" = ANY(${ids}::uuid[]) ORDER BY "stockItemId" FOR UPDATE
+        `;
+        // A new statement, so it sees everything committed before the locks were granted.
+        await tx.$executeRaw`
+          UPDATE "StockBalance" b
+          SET "onHand" = t.on_hand, produced = t.produced, scrapped = t.scrapped,
+              consumed = t.consumed, adjusted = t.adjusted, "updatedAt" = NOW()
+          FROM (
+            SELECT si.id,
+                   COALESCE(SUM(m.quantity), 0) AS on_hand,
+                   COALESCE(SUM(m.quantity) FILTER (WHERE m.kind = 'OUTPUT'), 0) AS produced,
+                   COALESCE(-SUM(m.quantity) FILTER (WHERE m.kind = 'SCRAP'), 0) AS scrapped,
+                   COALESCE(-SUM(m.quantity) FILTER (WHERE m.kind = 'FULFILLMENT'), 0) AS consumed,
+                   COALESCE(SUM(m.quantity) FILTER (WHERE m.kind = 'ADJUSTMENT'), 0) AS adjusted
+            FROM "StockItem" si
+            LEFT JOIN "StockMovement" m ON m."stockItemId" = si.id
+            WHERE si.id = ANY(${ids}::uuid[])
+            GROUP BY si.id
+          ) t
+          WHERE b."stockItemId" = t.id
+            AND (b."onHand", b.produced, b.scrapped, b.consumed, b.adjusted)
+                IS DISTINCT FROM (t.on_hand, t.produced, t.scrapped, t.consumed, t.adjusted)
+        `;
+      },
+      { timeout: 60_000, maxWait: 10_000 },
+    );
+  }
+}
+
+/**
+ * Count balance rows that do not match their book. Reads only; a row being
+ * saved right now can show up for a moment, so check again before acting.
+ */
+export async function countOffBalances(siteId?: string): Promise<number> {
+  const [{ off }] = await prisma.$queryRaw<Array<{ off: bigint }>>`
+    SELECT COUNT(*) AS off
+    FROM "StockBalance" b
+    JOIN "StockItem" si ON si.id = b."stockItemId"
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(SUM(m.quantity), 0) AS on_hand,
+             COALESCE(SUM(m.quantity) FILTER (WHERE m.kind = 'OUTPUT'), 0) AS produced,
+             COALESCE(-SUM(m.quantity) FILTER (WHERE m.kind = 'SCRAP'), 0) AS scrapped,
+             COALESCE(-SUM(m.quantity) FILTER (WHERE m.kind = 'FULFILLMENT'), 0) AS consumed,
+             COALESCE(SUM(m.quantity) FILTER (WHERE m.kind = 'ADJUSTMENT'), 0) AS adjusted
+      FROM "StockMovement" m WHERE m."stockItemId" = b."stockItemId"
+    ) t ON true
+    WHERE si."stockableType" = 'PRODUCT'
+      AND (${siteId ?? null}::uuid IS NULL OR si."siteId" = ${siteId ?? null}::uuid)
+      AND (b."onHand", b.produced, b.scrapped, b.consumed, b.adjusted)
+          IS DISTINCT FROM (t.on_hand, t.produced, t.scrapped, t.consumed, t.adjusted)
+  `;
+  return Number(off);
 }

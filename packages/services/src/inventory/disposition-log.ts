@@ -4,7 +4,7 @@ import { publishEntityEvent } from "../entity/events.js";
 import { publishUiChange } from "../events/ui-changes.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { resolveShiftStamp, toDateString } from "../facility/work-context.js";
-import { postSources, reverseSources } from "../stock/post.js";
+import { postSources, repostSources, reverseSources } from "../stock/post.js";
 import { crewFilter } from "../lib/crew-filter.js";
 
 /** Post-commit refresh hint: dispositions change the product's on-hand stock. */
@@ -438,19 +438,22 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
   return { data: log };
 }
 
-/**
- * Bulk-scrap freshly created cycle items (production-mode scrapAll): one log
- * row per inventory item, inside the caller's cycle transaction. Version
- * snapshots come from the items themselves; the badItems metric bump is the
- * caller's post-commit responsibility, and so is posting the scrap to the
- * stock book (postSources with the returned log ids). Returns the total
- * scrapped quantity and the new log ids.
- */
 export interface AutoScrapResult {
   total: number;
   logIds: string[];
 }
 
+/**
+ * Bulk-scrap freshly created cycle items (production-mode scrapAll): one log
+ * row per inventory item, inside the caller's cycle transaction. Version
+ * snapshots come from the items themselves.
+ *
+ * The caller has two jobs left:
+ * - INSIDE the same transaction, post the returned log ids to the stock book
+ *   together with the cycle's made parts (one postSources call), so the scrap
+ *   and its stock movement are saved together and the locks are taken once.
+ * - AFTER commit, bump the badItems metric.
+ */
 export async function autoScrapCycleItems(
   tx: Prisma.TransactionClient,
   input: {
@@ -622,8 +625,7 @@ export async function update(
       // Cancel the old scrap movement and post the new amount; the stock book
       // is never edited in place.
       const sources = [{ type: "ITEM_DISPOSITION_LOG" as const, ids: [id] }];
-      await reverseSources(tx, sources, { note: "Scrap quantity changed" });
-      await postSources(tx, sources);
+      await repostSources(tx, { cancel: sources, post: sources }, { note: "Scrap quantity changed" });
     }
     return updated;
   });

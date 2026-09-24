@@ -1,6 +1,6 @@
 import prisma from "@rw/db";
-import { rebuildProductBalances } from "./balance.js";
-import { postSources, reverseSources } from "./post.js";
+import { countOffBalances, rebuildProductBalances } from "./balance.js";
+import { repostSources } from "./post.js";
 import { expectedSelect, PRODUCT_SOURCE_TYPES, type ProductSourceType } from "./sources.js";
 
 // ============================================================================
@@ -12,12 +12,17 @@ import { expectedSelect, PRODUCT_SOURCE_TYPES, type ProductSourceType } from "./
 // book disagrees and, when asked, fixes them the normal way: cancel what is
 // there and post the right amount. Then it rebuilds the balances.
 //
-// It also reports, but never fixes:
+// It also checks the saved totals (StockBalance) against the book, and
+// rebuilds them when repairing.
+//
+// It reports, but never fixes:
 // - movements whose record is gone for good (for example, a station was
 //   really deleted). The parts were still made, so their stock stays.
-// - StockItems whose product or material no longer exists.
+// - StockItems whose product or material no longer exists, and products or
+//   materials with no StockItem (made by a script that skips the services).
 
-const BATCH = 1000;
+/** Small batches keep each repair save short, so live saves are barely held up. */
+const BATCH = 200;
 
 export interface ReconcileReport {
   /** Records whose stock book total disagrees with the record, per source type. */
@@ -26,6 +31,10 @@ export interface ReconcileReport {
   movementsWithoutSource: number;
   /** StockItems pointing at a product or material that does not exist. */
   stockItemsWithoutStockable: number;
+  /** Products and materials with no StockItem. Products get one when they first move. */
+  stockablesWithoutStockItem: number;
+  /** StockBalance rows that did not match the book before any repair. */
+  balancesOff: number;
   /** True when the mismatches were fixed and balances rebuilt. */
   repaired: boolean;
 }
@@ -63,12 +72,12 @@ export async function reconcileProductStock(
     if (!options.repair) continue;
     for (let i = 0; i < ids.length; i += BATCH) {
       const sources = [{ type, ids: ids.slice(i, i + BATCH) }];
+      // One call, so the balance rows are locked in one ordered pass.
       await prisma.$transaction(
-        async (tx) => {
-          await reverseSources(tx, sources, { note: "Stock repair" });
-          await postSources(tx, sources);
+        (tx) => repostSources(tx, { cancel: sources, post: sources }, { note: "Stock repair" }),
+        {
+          timeout: 60_000,
         },
-        { timeout: 60_000 },
       );
     }
   }
@@ -93,17 +102,32 @@ export async function reconcileProductStock(
       END
   `;
 
+  const [{ unlinked }] = await prisma.$queryRaw<Array<{ unlinked: bigint }>>`
+    SELECT
+      (SELECT COUNT(*) FROM "Product" p
+       WHERE (${siteId}::uuid IS NULL OR p."siteId" = ${siteId}::uuid)
+         AND NOT EXISTS (SELECT 1 FROM "StockItem" si WHERE si."stockableType" = 'PRODUCT' AND si."stockableId" = p.id))
+      +
+      (SELECT COUNT(*) FROM "Material" m
+       WHERE (${siteId}::uuid IS NULL OR m."siteId" = ${siteId}::uuid)
+         AND NOT EXISTS (SELECT 1 FROM "StockItem" si WHERE si."stockableType" = 'MATERIAL' AND si."stockableId" = m.id))
+      AS unlinked
+  `;
+
+  const balancesOff = await countOffBalances(siteId ?? undefined);
   if (options.repair) await rebuildProductBalances(siteId ?? undefined);
 
   return {
     mismatched,
     movementsWithoutSource: Number(orphans),
     stockItemsWithoutStockable: Number(missing),
+    stockablesWithoutStockItem: Number(unlinked),
+    balancesOff,
     repaired: options.repair === true,
   };
 }
 
-/** True when nothing disagrees. */
+/** True when every record matches the book and every total matches the book. */
 export function isClean(report: ReconcileReport): boolean {
-  return Object.values(report.mismatched).every((n) => n === 0);
+  return Object.values(report.mismatched).every((n) => n === 0) && report.balancesOff === 0;
 }

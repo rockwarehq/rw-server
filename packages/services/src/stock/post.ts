@@ -14,7 +14,8 @@ type Tx = Prisma.TransactionClient;
 //
 // Every save that touches StockBalance locks its rows in stockItemId order, so
 // two saves can never wait on each other in a circle. Post everything a save
-// changes in ONE postSources call so the locks are taken in one pass.
+// changes in ONE call (postSources, or repostSources when it also cancels) so
+// the locks are taken in one pass.
 
 export interface StockSource {
   type: ProductSourceType;
@@ -59,6 +60,37 @@ export async function ensureProductStockItems(tx: Tx, productIds: Prisma.Sql | s
  * whose balance changed.
  */
 export async function postSources(tx: Tx, sources: StockSource[]): Promise<string[]> {
+  return applyToBalances(tx, await insertPosts(tx, sources));
+}
+
+/**
+ * Cancel the current movement of each of these records: add a row with the
+ * opposite amount, the same shift and the same time. Records with nothing to
+ * cancel are skipped, and a movement can only be cancelled once.
+ */
+export async function reverseSources(tx: Tx, sources: StockSource[], by: PostNote = {}): Promise<string[]> {
+  return applyToBalances(tx, await insertReversals(tx, sources, by));
+}
+
+/**
+ * Cancel what `cancel` records did to stock, then post `post` records, and
+ * update the totals ONCE. Use this whenever one save both cancels and posts
+ * (an edited scrap entry, a job history amendment, a repair): two separate
+ * calls would lock balance rows in two passes, and two saves doing that in
+ * opposite orders wait on each other forever.
+ */
+export async function repostSources(
+  tx: Tx,
+  change: { cancel: StockSource[]; post: StockSource[] },
+  by: PostNote = {},
+): Promise<string[]> {
+  const cancelled = await insertReversals(tx, change.cancel, by);
+  const posted = await insertPosts(tx, change.post);
+  return applyToBalances(tx, [...cancelled, ...posted]);
+}
+
+/** Add the movement rows for these records. Does not touch StockBalance. */
+async function insertPosts(tx: Tx, sources: StockSource[]): Promise<KindTotal[]> {
   const totals: KindTotal[] = [];
   for (const { type, ids } of sources) {
     if (ids.length === 0) continue;
@@ -74,15 +106,11 @@ export async function postSources(tx: Tx, sources: StockSource[]): Promise<strin
     `;
     totals.push(...rows);
   }
-  return applyToBalances(tx, totals);
+  return totals;
 }
 
-/**
- * Cancel the current movement of each of these records: add a row with the
- * opposite amount, the same shift and the same time. Records with nothing to
- * cancel are skipped, and a movement can only be cancelled once.
- */
-export async function reverseSources(tx: Tx, sources: StockSource[], by: PostNote = {}): Promise<string[]> {
+/** Add the cancelling rows for these records. Does not touch StockBalance. */
+async function insertReversals(tx: Tx, sources: StockSource[], by: PostNote): Promise<KindTotal[]> {
   const totals: KindTotal[] = [];
   for (const { type, ids } of sources) {
     if (ids.length === 0) continue;
@@ -105,7 +133,20 @@ export async function reverseSources(tx: Tx, sources: StockSource[], by: PostNot
     `;
     totals.push(...rows);
   }
-  return applyToBalances(tx, totals);
+  return totals;
+}
+
+/**
+ * Make sure these stock items have a StockBalance row (made the first time an
+ * item moves). Inserts go in stockItemId order, like every other stock lock.
+ */
+export async function ensureBalances(tx: Tx, stockItemIds: string[]): Promise<void> {
+  if (stockItemIds.length === 0) return;
+  await tx.$executeRaw`
+    INSERT INTO "StockBalance" ("stockItemId", "siteId", "updatedAt")
+    SELECT id, "siteId", NOW() FROM "StockItem" WHERE id = ANY(${stockItemIds}::uuid[]) ORDER BY id
+    ON CONFLICT ("stockItemId") DO NOTHING
+  `;
 }
 
 /** Where each kind lands in StockBalance. Plus/minus is from the movement's point of view. */
@@ -151,12 +192,7 @@ async function applyToBalances(tx: Tx, totals: KindTotal[]): Promise<string[]> {
   if (byItem.size === 0) return [];
 
   const ids = [...byItem.keys()].sort();
-  // A balance row is made the first time an item moves.
-  await tx.$executeRaw`
-    INSERT INTO "StockBalance" ("stockItemId", "siteId", "updatedAt")
-    SELECT id, "siteId", NOW() FROM "StockItem" WHERE id = ANY(${ids}::uuid[]) ORDER BY id
-    ON CONFLICT ("stockItemId") DO NOTHING
-  `;
+  await ensureBalances(tx, ids);
   await tx.$queryRaw`
     SELECT 1 FROM "StockBalance" WHERE "stockItemId" = ANY(${ids}::uuid[]) ORDER BY "stockItemId" FOR UPDATE
   `;

@@ -1,6 +1,6 @@
 import { Prisma, type WeightUnit } from "@rw/db";
 import type { AmendContext } from "../history/context.js";
-import { postSources, reverseSources } from "../stock/post.js";
+import { repostSources } from "../stock/post.js";
 import { applyShiftUsage, materialUsage, type ShiftUsageScope } from "./inventory.js";
 
 export interface ReassignItemsSummary {
@@ -64,12 +64,18 @@ export async function reassignItems(ctx: AmendContext, cycleIds: string[]): Prom
   summary.itemsCreated = created.length;
 
   // Stock book: cancel the removed items' movements and post the recreated
-  // ones, set-based (the station lock is held throughout). This is the whole
-  // stock effect of an amendment, so nothing has to be rebuilt afterwards.
-  await reverseSources(tx, [{ type: "INVENTORY_ITEM", ids: removed.map((r) => r.id) }], {
-    note: "Job history amendment",
-  });
-  await postSources(tx, [{ type: "INVENTORY_ITEM", ids: created.map((r) => r.id) }]);
+  // ones in ONE call, so the old and new products' balance rows are locked in
+  // a single ordered pass (a cycle making both at once cannot deadlock with
+  // it). This is the whole stock effect of an amendment, so nothing has to be
+  // rebuilt afterwards.
+  await repostSources(
+    tx,
+    {
+      cancel: [{ type: "INVENTORY_ITEM", ids: removed.map((r) => r.id) }],
+      post: [{ type: "INVENTORY_ITEM", ids: created.map((r) => r.id) }],
+    },
+    { note: "Job history amendment" },
+  );
 
   if (created.length > 0) {
     await tx.$executeRaw`

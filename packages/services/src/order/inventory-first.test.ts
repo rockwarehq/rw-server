@@ -3,7 +3,7 @@ import { beforeAll, describe, expect, test } from "vitest";
 import prisma, { ensureAccountWorkspace } from "@rw/db";
 import { remove as removeScrap } from "../inventory/disposition-log.js";
 import { getStock, rederiveProductStock } from "../inventory/stock.js";
-import { stockFixture } from "../stock/fixtures.js";
+import { stockFixture } from "../testing/stock-fixtures.js";
 import { checkAutoComplete } from "./auto-complete.js";
 import { computeCoverage, getProductStockSummary } from "./coverage.js";
 import * as orders from "./order.js";

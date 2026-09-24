@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
 import prisma from "@rw/db";
-import { postSources } from "./post.js";
+import { postSources } from "../stock/post.js";
 
 // ============================================================================
 // Test helpers: real made-part and scrap records, posted to the stock book
 // ============================================================================
+//
+// For tests only. This folder is not in the package's "exports", so app code
+// cannot import it.
 //
 // Stock only moves when a record behind it exists, so tests make those
 // records (a cycle with a made part, a scrap entry) instead of writing to

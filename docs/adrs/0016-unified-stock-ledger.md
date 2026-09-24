@@ -118,9 +118,18 @@ source records (`reconcileProductStock`, run by
 and orders see at least zero.
 
 **One locking order.** Every save that changes a balance locks the rows in
-`stockItemId` order, and a save posts everything it changes in one call. So
-two saves can never end up waiting on each other in a circle. A cycle now
-posts its made parts and its auto-scrap together.
+`stockItemId` order, and a save posts everything it changes in one call:
+`postSources`, or `repostSources` when the same save also cancels something
+(an edited scrap entry, a job history amendment, a repair). So two saves can
+never end up waiting on each other in a circle. A cycle now posts its made
+parts and its auto-scrap together.
+
+**Rebuilding while servers are running.** The rebuild works in small steps.
+Each step locks its balance rows first and only then adds up the book. A
+save that has written its movements but not yet updated its balance waits
+for the step to finish, then adds its change on top, so nothing is lost. The
+check (`--check`) also compares every balance with its book, not just every
+record with its movements.
 
 ### 4. What stays the same
 
@@ -181,8 +190,19 @@ movements and an event book beside them. Nothing already built changes shape.
 2. **Materials on the book.** Material receipts, write-offs and transfers
    post movements, and `MaterialLedgerEntry` becomes their source record.
    The end-of-shift flush posts `USAGE`. `MaterialShiftUsage` stays as a
-   "used so far this shift" figure outside the book. Needs unit conversion
-   first.
+   "used so far this shift" figure outside the book. Before this starts:
+   - **Units.** Convert every movement to the StockItem's `baseUnit` when
+     posting. Today a part's made-part rows copy the station's unit (for
+     example `KG`) while its scrap, order and count rows are blank, and the
+     totals add them together, just as the old counters did.
+   - **Material StockItems for script-made materials.** Seed and import
+     scripts make materials without a StockItem. The repair job reports
+     them (`stockablesWithoutStockItem`); phase 2 should make them on the
+     spot the way posting already does for products.
+   - **Fewer steps on cycle close.** Posting from a cycle runs about seven
+     small statements. It can be trimmed: check StockItems once for all
+     sources, skip counting past cancellations for a first post, and merge
+     "make the balance row" with "lock it".
 3. **Counts and claims.** Shelf count sessions whose lines post
    `ADJUSTMENT`; order claims and reservations that hold stock for an order.
 4. **Serials and batches.** `Lot`, `StockLotBalance`, `LotComponent`,
