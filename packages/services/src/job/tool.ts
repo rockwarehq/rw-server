@@ -3,6 +3,8 @@ import type { Prisma } from "@rw/db";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 
+export { summarizeUsage, usage, type ToolUsage, type ToolUsageRun } from "./tool-usage.js";
+
 // ============================================================================
 // Types - Tool
 // ============================================================================
