@@ -1,0 +1,52 @@
+/// Which kind of catalog record a StockItem stands for.
+enum StockableType {
+  PRODUCT
+  MATERIAL
+}
+
+/// How closely a stock item is followed (ADR-0016).
+/// NONE: only the count is kept.
+/// BATCH: stock is grouped into batches, for parts made too fast to label one by one.
+/// SERIAL: every single piece has its own label or barcode.
+/// Only NONE has any effect today; BATCH and SERIAL are saved for later.
+enum TrackingMode {
+  NONE
+  BATCH
+  SERIAL
+}
+
+/// Anything we keep a count of on the shelf: a part we make or a material we
+/// use (ADR-0016). Each Product and Material gets exactly one StockItem.
+///
+/// `stockableType` + `stockableId` point at that Product or Material. There is
+/// no database link on purpose, so a new kind of stock can be added without
+/// a new column. To keep the two in step: products and materials are never
+/// really deleted (only marked deleted or archived), the StockItem is made in
+/// the same save as the product or material, and posting stock makes a missing
+/// one on the spot.
+///
+/// Settings about stock live here, not on the product or material versions,
+/// because changing how we count stock is not a change to what the part is.
+model StockItem {
+  id            String        @id @default(uuid()) @db.Uuid
+  stockableType StockableType
+  stockableId   String        @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  /// The unit the count is kept in. Blank for parts counted in pieces.
+  baseUnit     String       @default("")
+  trackingMode TrackingMode @default(NONE)
+  /// Warn when the count on hand drops to this. Not used yet.
+  reorderPoint Decimal?     @db.Decimal(18, 4)
+
+  balance   StockBalance?
+  movements StockMovement[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([stockableType, stockableId])
+  @@index([siteId, stockableType])
+}

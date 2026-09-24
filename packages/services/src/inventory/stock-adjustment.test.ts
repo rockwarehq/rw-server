@@ -4,7 +4,8 @@ import prisma, { ensureAccountWorkspace } from "@rw/db";
 import * as orders from "../order/order.js";
 import { checkAutoComplete } from "../order/auto-complete.js";
 import { adjustStock, list } from "./stock-adjustment.js";
-import { applyProduction, applyScrapDelta, getStock, rederiveProductStock } from "./stock.js";
+import { stockFixture } from "../testing/stock-fixtures.js";
+import { getStock, rederiveProductStock } from "./stock.js";
 
 // Integration tests (inventory-first.test.ts conventions): require
 // DATABASE_URL and run against the real schema with an isolated fixture graph.
@@ -15,12 +16,9 @@ describe.skipIf(!process.env.DATABASE_URL)("stock adjustments", () => {
   let userId: string;
   let productA: string;
   let productB: string;
+  let fixture: Awaited<ReturnType<typeof stockFixture>>;
 
-  async function produce(productId: string, quantity: number) {
-    await prisma.$transaction(async (tx) => {
-      await applyProduction(tx, siteId, [{ productId, quantity }]);
-    });
-  }
+  const produce = (productId: string, quantity: number) => fixture.produce(productId, quantity);
 
   beforeAll(async () => {
     const suffix = randomUUID();
@@ -35,6 +33,7 @@ describe.skipIf(!process.env.DATABASE_URL)("stock adjustments", () => {
     ).id;
     productA = (await prisma.product.create({ data: { siteId } })).id;
     productB = (await prisma.product.create({ data: { siteId } })).id;
+    fixture = await stockFixture(siteId);
   });
 
   test("delta mode accumulates signed corrections into the aggregate", async () => {
@@ -67,7 +66,7 @@ describe.skipIf(!process.env.DATABASE_URL)("stock adjustments", () => {
   test("set mode lands exactly on the counted value, even from negative raw on-hand", async () => {
     // produced 5, scrapped 8 → raw −3, clamped available 0
     await produce(productB, 5);
-    await applyScrapDelta(prisma, siteId, productB, 8);
+    await fixture.scrap(productB, 8);
     const before = await getStock(prisma, siteId, [productB]);
     expect(before.get(productB)).toMatchObject({ available: 0 });
 
@@ -92,7 +91,7 @@ describe.skipIf(!process.env.DATABASE_URL)("stock adjustments", () => {
   test("zero-delta count is recorded; zero delta and negative counts are rejected", async () => {
     const productC = (await prisma.product.create({ data: { siteId } })).id;
 
-    // Set mode on a product with NO ProductStock row yet: creates the row.
+    // Set mode on a product that never moved: makes its stock rows.
     const confirming = await adjustStock({
       siteId,
       productId: productC,
@@ -124,12 +123,13 @@ describe.skipIf(!process.env.DATABASE_URL)("stock adjustments", () => {
     expect("code" in result && result.code).toBe("SITE_MISMATCH");
   });
 
-  test("rederive recomputes adjustment from the ledger (fact-backed), and zeroes orphans", async () => {
-    // Corrupt the aggregate out-of-band, then rebuild.
-    await prisma.productStock.update({
-      where: { siteId_productId: { siteId, productId: productA } },
-      data: { adjustment: 999 },
-    });
+  test("rederive rebuilds the totals from the stock book", async () => {
+    // Corrupt the totals out-of-band, then rebuild.
+    await prisma.$executeRaw`
+      UPDATE "StockBalance" b SET adjusted = 999, "onHand" = b.produced - b.scrapped - b.consumed + 999
+      FROM "StockItem" si
+      WHERE si.id = b."stockItemId" AND si."stockableType" = 'PRODUCT' AND si."stockableId" = ${productA}::uuid
+    `;
     await rederiveProductStock(siteId);
     const stock = await getStock(prisma, siteId, [productA, productB]);
     expect(stock.get(productA)?.adjustment).toBe(6); // SUM(+10, −4)

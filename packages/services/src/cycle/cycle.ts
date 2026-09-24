@@ -3,9 +3,9 @@ import { Prisma } from "@rw/db";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { findOpenModeLog, type OpenModeLog } from "../facility/production-mode/open-log.js";
-import { autoScrapCycleItems } from "../inventory/disposition-log.js";
+import { type AutoScrapResult, autoScrapCycleItems } from "../inventory/disposition-log.js";
 import { inventory } from "../inventory/index.js";
-import { applyProduction } from "../inventory/stock.js";
+import { postSources } from "../stock/post.js";
 import { updateDispositionBadItems } from "../metrics/recalc.js";
 import { checkAutoComplete } from "../order/auto-complete.js";
 import {
@@ -121,8 +121,10 @@ async function applyModeScrap(
   mode: OpenModeLog | null,
   items: CycleItems,
   dims: StampDims,
-): Promise<number> {
-  if (!mode?.scrapAll || !mode.itemDispositionId || !mode.dispositionReasonId || items.length === 0) return 0;
+): Promise<AutoScrapResult> {
+  if (!mode?.scrapAll || !mode.itemDispositionId || !mode.dispositionReasonId || items.length === 0) {
+    return { total: 0, logIds: [] };
+  }
   return autoScrapCycleItems(tx, {
     siteId,
     stationId,
@@ -132,6 +134,18 @@ async function applyModeScrap(
     items,
     ...dims,
   });
+}
+
+/**
+ * Post the cycle's made parts and any auto-scrap to the stock book in one
+ * call, so the cycle takes its stock locks in a single ordered pass. Call it
+ * LAST in the cycle transaction to keep those locks short.
+ */
+async function postCycleStock(tx: Prisma.TransactionClient, items: CycleItems, scrap: AutoScrapResult) {
+  await postSources(tx, [
+    { type: "INVENTORY_ITEM", ids: items.map((item) => item.id) },
+    { type: "ITEM_DISPOSITION_LOG", ids: scrap.logIds },
+  ]);
 }
 
 /**
@@ -593,7 +607,7 @@ async function completeImmediate(
       stationId,
       ...dims,
     });
-    const scrappedQuantity = await applyModeScrap(tx, siteId, stationId, mode, items, dims);
+    const scrap = await applyModeScrap(tx, siteId, stationId, mode, items, dims);
 
     // Live-publish & detection-schedule data — read inside the tx so the
     // post-commit fire-and-forget block holds no DB connection.
@@ -614,9 +628,9 @@ async function completeImmediate(
       totalCycleIncrement,
     );
 
-    // On-hand stock upsert — last in the tx to keep the per-product row-lock
-    // window minimal under cross-station same-product contention.
-    await applyProduction(tx, siteId, items);
+    // Stock book — last in the tx to keep the balance row-lock window
+    // minimal under cross-station same-product contention.
+    await postCycleStock(tx, items, scrap);
 
     return {
       cycle,
@@ -626,7 +640,7 @@ async function completeImmediate(
       statusChanged: transition.statusChanged,
       stationCtx,
       detectionPrepared,
-      scrappedQuantity,
+      scrappedQuantity: scrap.total,
     };
   });
 }
@@ -723,7 +737,7 @@ async function completeOpenClose(
         }
       }
 
-      const scrappedQuantity = await applyModeScrap(tx, siteId, stationId, mode, items, dims);
+      const scrap = await applyModeScrap(tx, siteId, stationId, mode, items, dims);
 
       const openEntry = await findOpenStateEntry(tx, stationId);
       const cycleDurationSeconds =
@@ -794,8 +808,8 @@ async function completeOpenClose(
         0,
       );
 
-      // On-hand stock upsert — last in the tx; see completeImmediate.
-      await applyProduction(tx, siteId, items);
+      // Stock book — last in the tx; see completeImmediate.
+      await postCycleStock(tx, items, scrap);
 
       return {
         cycle: newCycle,
@@ -805,7 +819,7 @@ async function completeOpenClose(
         statusChanged: transition.statusChanged,
         stationCtx,
         detectionPrepared,
-        scrappedQuantity,
+        scrappedQuantity: scrap.total,
       };
     })
     .catch((err: unknown) => {
@@ -900,11 +914,11 @@ async function completeImmediateReplay(
       stationId,
       ...dims,
     });
-    const scrappedQuantity = await applyModeScrap(tx, siteId, stationId, mode, items, dims);
+    const scrap = await applyModeScrap(tx, siteId, stationId, mode, items, dims);
 
     // Stock facts are never skipped: replayed cycles update on-hand too, even
     // though the replay path skips state transitions, detection, and metrics.
-    await applyProduction(tx, siteId, items);
+    await postCycleStock(tx, items, scrap);
 
     return {
       cycle,
@@ -914,7 +928,7 @@ async function completeImmediateReplay(
       statusChanged: false,
       stationCtx: null,
       detectionPrepared: null,
-      scrappedQuantity,
+      scrappedQuantity: scrap.total,
     };
   });
 }
@@ -1001,7 +1015,7 @@ async function completeOpenCloseReplay(
         }
       }
 
-      const scrappedQuantity = await applyModeScrap(tx, siteId, stationId, mode, items, dims);
+      const scrap = await applyModeScrap(tx, siteId, stationId, mode, items, dims);
 
       // Stamped on the new open cycle — see completeOpenClose.
       const newCycle = await tx.cycle.create({
@@ -1018,7 +1032,7 @@ async function completeOpenCloseReplay(
       });
 
       // Stock facts are never skipped on replay; see completeImmediateReplay.
-      await applyProduction(tx, siteId, items);
+      await postCycleStock(tx, items, scrap);
 
       return {
         cycle: newCycle,
@@ -1028,7 +1042,7 @@ async function completeOpenCloseReplay(
         statusChanged: false,
         stationCtx: null,
         detectionPrepared: null,
-        scrappedQuantity,
+        scrappedQuantity: scrap.total,
       };
     })
     .catch((err: unknown) => {

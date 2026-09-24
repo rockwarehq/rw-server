@@ -6,7 +6,7 @@ import { getStock } from "../inventory/stock.js";
 // Coverage — read-time FIFO matching of available stock to open-order demand
 // ============================================================================
 //
-// Nothing is stored: coverage is a pure projection of (ProductStock.available,
+// Nothing is stored: coverage is a pure projection of (available stock,
 // open-order queue ordered by sequence). Consumption happens only at order
 // completion. A future scheduling module overrides this default by partitioning
 // `available` before the walk — the API shape stays unchanged.
@@ -41,7 +41,7 @@ export interface CoverageResult {
  * total, independent of caller page size.
  *
  * `client` lets the completion transaction run this walk against its own tx,
- * under the ProductStock locks it already holds, so the answer cannot drift
+ * under the StockBalance locks it already holds, so the answer cannot drift
  * between the check and the consume.
  */
 export async function computeCoverage(
@@ -102,8 +102,8 @@ export function isQueueStatus(status: string): boolean {
 }
 
 /**
- * Per-product stock summary for product pages and pickers: the ProductStock
- * columns plus open-order demand and how much of it current stock covers.
+ * Per-product stock summary for product pages and pickers: the stock
+ * totals plus open-order demand and how much of it current stock covers.
  */
 export async function getProductStockSummary(siteId: string, productIds: string[]) {
   const stock = await getStock(prisma, siteId, productIds);

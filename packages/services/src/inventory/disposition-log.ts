@@ -4,7 +4,7 @@ import { publishEntityEvent } from "../entity/events.js";
 import { publishUiChange } from "../events/ui-changes.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { resolveShiftStamp, toDateString } from "../facility/work-context.js";
-import { applyScrapDelta } from "./stock.js";
+import { postSources, repostSources, reverseSources } from "../stock/post.js";
 import { crewFilter } from "../lib/crew-filter.js";
 
 /** Post-commit refresh hint: dispositions change the product's on-hand stock. */
@@ -294,8 +294,8 @@ export async function record(input: RecordDispositionLogInput): Promise<ServiceE
     ...passthrough,
   });
 
-  // The stock scrap delta is applied inside create() (via the resolved
-  // productVersion), so this wrapper must not apply it again.
+  // create() posts the scrap to the stock book, so this wrapper must not
+  // post it again.
   return result;
 }
 
@@ -392,8 +392,8 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
     stampToolId = tv?.toolId ?? null;
   }
 
-  // Log write + stock scrap delta stay atomic: scrap only ever affects
-  // inventory (never orders), and the aggregate must match the fact.
+  // The log and its stock movement are saved together: scrap only ever
+  // affects stock (never orders), and the stock book must match the log.
   const log = await prisma.$transaction(async (tx) => {
     const created = await tx.itemDispositionLog.create({
       data: {
@@ -422,7 +422,7 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
       },
       include: logInclude,
     });
-    await applyScrapDelta(tx, siteId, productVersion.productId, quantity ?? 1);
+    await postSources(tx, [{ type: "ITEM_DISPOSITION_LOG", ids: [created.id] }]);
     return created;
   });
 
@@ -438,11 +438,21 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
   return { data: log };
 }
 
+export interface AutoScrapResult {
+  total: number;
+  logIds: string[];
+}
+
 /**
  * Bulk-scrap freshly created cycle items (production-mode scrapAll): one log
  * row per inventory item, inside the caller's cycle transaction. Version
- * snapshots come from the items themselves; the badItems metric bump is the
- * caller's post-commit responsibility. Returns the total scrapped quantity.
+ * snapshots come from the items themselves.
+ *
+ * The caller has two jobs left:
+ * - INSIDE the same transaction, post the returned log ids to the stock book
+ *   together with the cycle's made parts (one postSources call), so the scrap
+ *   and its stock movement are saved together and the locks are taken once.
+ * - AFTER commit, bump the badItems metric.
  */
 export async function autoScrapCycleItems(
   tx: Prisma.TransactionClient,
@@ -469,8 +479,8 @@ export async function autoScrapCycleItems(
       toolCavityVersionId: string | null;
     }>;
   },
-): Promise<number> {
-  if (input.items.length === 0) return 0;
+): Promise<AutoScrapResult> {
+  if (input.items.length === 0) return { total: 0, logIds: [] };
 
   const station = await tx.station.findUniqueOrThrow({
     where: { id: input.stationId },
@@ -484,32 +494,20 @@ export async function autoScrapCycleItems(
         Prisma.sql`(gen_random_uuid(), ${item.quantity}, ${input.siteId}::uuid, ${input.stationId}::uuid, ${input.workcenterId}::uuid, ${item.cycleId}::uuid, ${input.shiftInstanceId}::uuid, ${businessDate}::date, ${input.jobId}::uuid, ${item.productId}::uuid, ${item.toolId}::uuid, ${input.itemDispositionId}::uuid, ${input.dispositionReasonId}::uuid, ${item.productVersionId}::uuid, ${station.currentVersionId}::uuid, ${item.jobProductVersionId}::uuid, ${item.toolVersionId}::uuid, ${item.toolCavityVersionId}::uuid, ${input.modeId}::uuid, NOW(), NOW())`,
     ),
   );
-  await tx.$executeRaw`
+  const rows = await tx.$queryRaw<Array<{ id: string }>>`
     INSERT INTO "ItemDispositionLog"
       (id, quantity, "siteId", "stationId", "workcenterId", "cycleId", "shiftInstanceId",
        "businessDate", "jobId", "productId", "toolId",
        "itemDispositionId", "dispositionReasonId", "productVersionId", "stationVersionId",
        "jobProductVersionId", "toolVersionId", "toolCavityVersionId", "modeId", "createdAt", "updatedAt")
     VALUES ${values}
+    RETURNING id
   `;
 
-  const perProduct = new Map<string, number>();
-  for (const item of input.items) {
-    perProduct.set(item.productId, (perProduct.get(item.productId) ?? 0) + item.quantity);
-  }
-  let total = 0;
-  // Sorted by productId: applyProduction and completeOrder both take their
-  // ProductStock row locks in that order, and a Map iterates in insertion
-  // order. Scrapping two products in the opposite order to a concurrent
-  // cycle or completion is an ABBA deadlock — and the cycle path runs this
-  // and applyProduction in the same transaction.
-  for (const productId of [...perProduct.keys()].sort()) {
-    const qty = perProduct.get(productId) ?? 0;
-    if (qty === 0) continue;
-    await applyScrapDelta(tx, input.siteId, productId, qty);
-    total += qty;
-  }
-  return total;
+  // The stock movements are the caller's to post, together with the cycle's
+  // made parts, so the whole cycle takes its stock locks in one pass.
+  const total = input.items.reduce((sum, item) => sum + item.quantity, 0);
+  return { total, logIds: rows.map((r) => r.id) };
 }
 
 export async function list(filter: ListDispositionLogsFilter = {}) {
@@ -624,7 +622,10 @@ export async function update(
       include: logInclude,
     });
     if (quantityDelta !== 0) {
-      await applyScrapDelta(tx, current.siteId, current.productVersion.productId, quantityDelta);
+      // Cancel the old scrap movement and post the new amount; the stock book
+      // is never edited in place.
+      const sources = [{ type: "ITEM_DISPOSITION_LOG" as const, ids: [id] }];
+      await repostSources(tx, { cancel: sources, post: sources }, { note: "Scrap quantity changed" });
     }
     return updated;
   });
@@ -666,7 +667,7 @@ export async function remove(id: string) {
       where: { id },
       data: { deletedAt: new Date() },
     });
-    await applyScrapDelta(tx, log.siteId, log.productVersion.productId, -Number(log.quantity));
+    await reverseSources(tx, [{ type: "ITEM_DISPOSITION_LOG", ids: [id] }], { note: "Scrap entry removed" });
   });
 
   // Subtract the removed quantity from metrics

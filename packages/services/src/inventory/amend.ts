@@ -1,5 +1,6 @@
 import { Prisma, type WeightUnit } from "@rw/db";
 import type { AmendContext } from "../history/context.js";
+import { repostSources } from "../stock/post.js";
 import { applyShiftUsage, materialUsage, type ShiftUsageScope } from "./inventory.js";
 
 export interface ReassignItemsSummary {
@@ -62,23 +63,19 @@ export async function reassignItems(ctx: AmendContext, cycleIds: string[]): Prom
   `;
   summary.itemsCreated = created.length;
 
-  // On-hand stock: subtract the removed items, add the recreated ones, per
-  // product, in productId order (same row-lock order as cycle completion).
-  // This is the whole stock effect of an amendment, so the rebuild never has
-  // to re-derive a product's total from all of its history.
-  await tx.$executeRaw`
-    INSERT INTO "ProductStock" ("siteId", "productId", produced, "updatedAt")
-    SELECT ${siteId}::uuid, pv."productId",
-           SUM(CASE WHEN ii.id = ANY(${created.map((r) => r.id)}::uuid[]) THEN ii.quantity ELSE -ii.quantity END),
-           NOW()
-    FROM "InventoryItem" ii
-    JOIN "ProductVersion" pv ON pv.id = ii."productVersionId"
-    WHERE ii.id = ANY(${[...removed, ...created].map((r) => r.id)}::uuid[])
-    GROUP BY pv."productId"
-    ORDER BY pv."productId"
-    ON CONFLICT ("siteId", "productId")
-    DO UPDATE SET produced = "ProductStock".produced + EXCLUDED.produced, "updatedAt" = NOW()
-  `;
+  // Stock book: cancel the removed items' movements and post the recreated
+  // ones in ONE call, so the old and new products' balance rows are locked in
+  // a single ordered pass (a cycle making both at once cannot deadlock with
+  // it). This is the whole stock effect of an amendment, so nothing has to be
+  // rebuilt afterwards.
+  await repostSources(
+    tx,
+    {
+      cancel: [{ type: "INVENTORY_ITEM", ids: removed.map((r) => r.id) }],
+      post: [{ type: "INVENTORY_ITEM", ids: created.map((r) => r.id) }],
+    },
+    { note: "Job history amendment" },
+  );
 
   if (created.length > 0) {
     await tx.$executeRaw`

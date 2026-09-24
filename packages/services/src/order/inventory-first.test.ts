@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, test } from "vitest";
 import prisma, { ensureAccountWorkspace } from "@rw/db";
-import { applyProduction, applyScrapDelta, getStock, rederiveProductStock } from "../inventory/stock.js";
+import { remove as removeScrap } from "../inventory/disposition-log.js";
+import { getStock, rederiveProductStock } from "../inventory/stock.js";
+import { stockFixture } from "../testing/stock-fixtures.js";
 import { checkAutoComplete } from "./auto-complete.js";
 import { computeCoverage, getProductStockSummary } from "./coverage.js";
 import * as orders from "./order.js";
@@ -15,6 +17,7 @@ describe.skipIf(!process.env.DATABASE_URL)("inventory-first orders", () => {
   let productA: string;
   let productB: string;
   let orderNo = 0;
+  let fixture: Awaited<ReturnType<typeof stockFixture>>;
 
   const nextOrderNumber = () => `TST-${String(++orderNo).padStart(3, "0")}`;
 
@@ -28,11 +31,7 @@ describe.skipIf(!process.env.DATABASE_URL)("inventory-first orders", () => {
     return result.data;
   }
 
-  async function produce(productId: string, quantity: number) {
-    await prisma.$transaction(async (tx) => {
-      await applyProduction(tx, siteId, [{ productId, quantity }]);
-    });
-  }
+  const produce = (productId: string, quantity: number) => fixture.produce(productId, quantity);
 
   beforeAll(async () => {
     const suffix = randomUUID();
@@ -46,31 +45,29 @@ describe.skipIf(!process.env.DATABASE_URL)("inventory-first orders", () => {
 
     productA = (await prisma.product.create({ data: { siteId } })).id;
     productB = (await prisma.product.create({ data: { siteId } })).id;
+    fixture = await stockFixture(siteId);
   });
 
-  test("applyProduction groups by product and accumulates; getStock defaults to zero", async () => {
+  test("made parts accumulate per product; getStock defaults to zero", async () => {
     const before = await getStock(prisma, siteId, [productA]);
     expect(before.get(productA)).toMatchObject({ produced: 0, available: 0 });
 
-    await prisma.$transaction(async (tx) => {
-      await applyProduction(tx, siteId, [
-        { productId: productA, quantity: 3 },
-        { productId: productA, quantity: 2 },
-        { productId: productB, quantity: 1 },
-      ]);
-    });
+    await produce(productA, 3);
+    await produce(productA, 2);
+    await produce(productB, 1);
 
     const after = await getStock(prisma, siteId, [productA, productB]);
     expect(after.get(productA)).toMatchObject({ produced: 5, available: 5 });
     expect(after.get(productB)).toMatchObject({ produced: 1, available: 1 });
   });
 
-  test("applyScrapDelta reduces availability and clamps at zero", async () => {
-    await applyScrapDelta(prisma, siteId, productB, 5);
+  test("scrap reduces availability and clamps at zero; removing it gives the stock back", async () => {
+    const logId = await fixture.scrap(productB, 5);
     const stock = await getStock(prisma, siteId, [productB]);
     expect(stock.get(productB)).toMatchObject({ produced: 1, scrapped: 5, available: 0 });
-    // Reversal (disposition removed)
-    await applyScrapDelta(prisma, siteId, productB, -5);
+
+    const removed = await removeScrap(logId);
+    expect("error" in removed).toBe(false);
     const reverted = await getStock(prisma, siteId, [productB]);
     expect(reverted.get(productB)).toMatchObject({ scrapped: 0, available: 1 });
   });
@@ -300,16 +297,15 @@ describe.skipIf(!process.env.DATABASE_URL)("inventory-first orders", () => {
     expect("code" in blockedRemove && blockedRemove.code).toBe("NOT_EDITABLE");
   });
 
-  test("rederiveProductStock preserves incremental totals (minus untracked facts) and is idempotent", async () => {
-    // The incremental aggregate includes fixture production with no backing
-    // InventoryItem rows, so re-derivation zeroes produced but must keep the
-    // consumed totals that DO have OrderConsumption rows behind them.
+  test("rederiveProductStock finds nothing to fix and keeps every total", async () => {
+    // Every movement in this suite came from a real record, so the check is
+    // clean and the rebuild changes nothing.
     const before = await getStock(prisma, siteId, [productA, productB]);
-    await rederiveProductStock(siteId);
+    const report = await rederiveProductStock(siteId);
+    expect(Object.values(report.mismatched).every((n) => n === 0)).toBe(true);
     const after = await getStock(prisma, siteId, [productA, productB]);
-    expect(after.get(productA)?.consumed).toBe(before.get(productA)?.consumed);
-    expect(after.get(productB)?.consumed).toBe(before.get(productB)?.consumed);
-    expect(after.get(productA)?.produced).toBe(0); // no InventoryItem facts in this fixture
+    expect(after.get(productA)).toEqual(before.get(productA));
+    expect(after.get(productB)).toEqual(before.get(productB));
 
     await rederiveProductStock(siteId);
     const again = await getStock(prisma, siteId, [productA, productB]);

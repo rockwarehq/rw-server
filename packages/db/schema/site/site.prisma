@@ -51,6 +51,8 @@ model Site {
   buckets                 Bucket[]
   materialLedgerEntries   MaterialLedgerEntry[]
   materialShiftUsage      MaterialShiftUsage[]
+  stockItems              StockItem[]
+  stockMovements          StockMovement[]
   graphNodes              GraphNode[]
   graphNodeTypes          GraphNodeType[]
   graphHooks              GraphHook[]

@@ -3,6 +3,8 @@ import type { OrderStatus, Prisma } from "@rw/db";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { resolveShiftStamp } from "../facility/work-context.js";
+import { lockProductBalances } from "../stock/balance.js";
+import { postSources } from "../stock/post.js";
 import { computeCoverage, isQueueStatus } from "./coverage.js";
 
 // ============================================================================
@@ -580,9 +582,10 @@ export async function transitionStatus(id: string, targetStatus: OrderStatus, op
 /**
  * Complete an order, consuming covered stock. Runs in one transaction:
  * re-validates the transition (a concurrent complete — user vs auto-complete
- * rule — loses with INVALID_TRANSITION), locks the ProductStock rows in
- * productId order (the same order applyProduction upserts in), consumes
- * min(target, available) per line, and records OrderConsumption rows.
+ * rule — loses with INVALID_TRANSITION), locks the products' StockBalance
+ * rows (in stockItemId order, like every stock save), consumes
+ * min(target, available) per line, records OrderConsumption rows, and posts
+ * them to the stock book.
  * When any line is short and `allowPartial` is false, returns
  * PARTIAL_COVERAGE and writes nothing.
  */
@@ -608,19 +611,13 @@ async function completeOrder(orderId: string, siteId: string, workspaceId: strin
 
     const productIds = [...new Set(fresh.lineItems.map((li) => li.productId))].sort();
 
-    const txRaw = tx as unknown as { $queryRaw: typeof prisma.$queryRaw };
-    const stockRows =
-      productIds.length > 0
-        ? await txRaw.$queryRaw<Array<{ productId: string; available: number; raw: number }>>`
-            SELECT "productId",
-                   GREATEST(produced - scrapped - consumed + adjustment, 0)::float8 AS available,
-                   (produced - scrapped - consumed + adjustment)::float8 AS raw
-            FROM "ProductStock"
-            WHERE "siteId" = ${siteId}::uuid AND "productId" = ANY(${productIds}::uuid[])
-            ORDER BY "productId"
-            FOR UPDATE
-          `
-        : [];
+    // Lock the products' stock rows (in stockItemId order, like every stock
+    // save) so nothing moves them between this read and the take below.
+    const onHand = await lockProductBalances(tx, siteId, productIds);
+    const stockRows = productIds.map((productId) => {
+      const raw = Number(onHand.get(productId) ?? 0);
+      return { productId, raw, available: Math.max(raw, 0) };
+    });
     const availableByProduct = new Map(stockRows.map((row) => [row.productId, row.available]));
 
     const takes = fresh.lineItems.map((li) => {
@@ -638,7 +635,7 @@ async function completeOrder(orderId: string, siteId: string, workspaceId: strin
     for (const row of stockRows) {
       if (row.raw < 0) {
         console.error(
-          `[order] ProductStock for site ${siteId} product ${row.productId} is negative (${row.raw}); ` +
+          `[order] Stock for site ${siteId} product ${row.productId} is negative (${row.raw}); ` +
             `availability clamps to 0, so completing order ${orderId} will consume nothing for it.`,
         );
       }
@@ -672,7 +669,7 @@ async function completeOrder(orderId: string, siteId: string, workspaceId: strin
       // Star-pattern stamps: the site-level shift running at completion
       // (calendar-date fallback when none — e.g. workcenter-scheduled sites).
       const stamp = await resolveShiftStamp(siteId, null, new Date(), tx);
-      await tx.orderConsumption.createMany({
+      const consumptions = await tx.orderConsumption.createManyAndReturn({
         data: consuming.map((t) => ({
           siteId,
           orderId,
@@ -683,13 +680,9 @@ async function completeOrder(orderId: string, siteId: string, workspaceId: strin
           createdByUserId: userId,
           ...stamp,
         })),
+        select: { id: true },
       });
-      for (const t of consuming) {
-        await tx.productStock.update({
-          where: { siteId_productId: { siteId, productId: t.productId } },
-          data: { consumed: { increment: t.take } },
-        });
-      }
+      await postSources(tx, [{ type: "ORDER_CONSUMPTION", ids: consumptions.map((c) => c.id) }]);
     }
 
     const updated = await tx.order.update({

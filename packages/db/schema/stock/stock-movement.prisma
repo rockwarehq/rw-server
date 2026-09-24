@@ -1,0 +1,98 @@
+/// What a stock movement did. Plus means stock went up, minus means it went down.
+enum StockMovementKind {
+  OUTPUT // + parts made (InventoryItem)
+  SCRAP // − parts scrapped (ItemDispositionLog)
+  FULFILLMENT // − parts taken by a completed order (OrderConsumption)
+  ADJUSTMENT // ± a hand correction or a shelf count (ProductStockAdjustment)
+  // For materials, not used yet (ADR-0016 phase 2):
+  RECEIPT // + received from a supplier
+  USAGE // − used up making parts
+  WRITE_OFF // − damaged, expired or thrown away
+  TRANSFER_IN // + moved in from another site
+  TRANSFER_OUT // − moved out to another site
+  OPENING_BALANCE // ± first count when a site starts
+}
+
+/// The record that caused a stock movement.
+enum StockSourceType {
+  INVENTORY_ITEM
+  ITEM_DISPOSITION_LOG
+  ORDER_CONSUMPTION
+  PRODUCT_STOCK_ADJUSTMENT
+  MATERIAL_LEDGER_ENTRY // not used yet
+  MATERIAL_SHIFT_USAGE // not used yet
+}
+
+/// The stock book (ADR-0016). One row for every time stock went up or down.
+/// Rows are only ever added, never changed or removed. To fix a mistake, add
+/// a row that cancels the old one (`reversesMovementId`), then add the right one.
+///
+/// `sourceType` + `sourceId` point at the record that caused the change (a
+/// made part, a scrap entry, an order, a count). There is no database link, so
+/// one column can point at any of them.
+///
+/// `idempotencyKey` stops the same record from being counted twice, even when
+/// a save is retried.
+model StockMovement {
+  id  String @id @default(uuid()) @db.Uuid
+  /// Counts up with every row, so the book always reads in the order it was
+  /// written, even for rows written in the same save.
+  seq BigInt @unique @default(autoincrement())
+
+  stockItemId String    @db.Uuid
+  stockItem   StockItem @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  kind     StockMovementKind
+  /// Plus adds to stock, minus takes away.
+  quantity Decimal           @db.Decimal(18, 4)
+  /// The unit the source record used. Blank for pieces.
+  unit     String            @default("")
+
+  sourceType StockSourceType
+  sourceId   String          @db.Uuid
+
+  idempotencyKey String? @unique
+
+  /// Set on a row that cancels an earlier row. A row can be cancelled once.
+  /// NoAction (not Restrict) so deleting a whole site or StockItem, which takes
+  /// both rows at once, still works; a cancelled row alone cannot be deleted.
+  reversesMovementId String?        @unique @db.Uuid
+  reverses           StockMovement? @relation("StockMovementReversal", fields: [reversesMovementId], references: [id], onDelete: NoAction)
+  reversedBy         StockMovement? @relation("StockMovementReversal")
+
+  /// Saved for batch and serial tracking (ADR-0016). Always empty for now.
+  lotId String? @db.Uuid
+
+  /// The station, for movements that happened at one (made and scrapped
+  /// parts). Empty for site-wide movements like orders and counts.
+  stationId String?  @db.Uuid
+  station   Station? @relation(fields: [stationId], references: [id], onDelete: SetNull)
+
+  // ── Shift labels, copied from the source record so reports can slice the
+  // stock book by shift and day. Updated again when shift times change. ──
+  shiftInstanceId String?        @db.Uuid
+  shiftInstance   ShiftInstance? @relation(fields: [shiftInstanceId], references: [id], onDelete: SetNull)
+  isScheduled     Boolean        @default(true)
+  businessDate    DateTime?      @db.Date
+
+  performedByUserId String? @db.Uuid
+  performedByUser   User?   @relation(fields: [performedByUserId], references: [id], onDelete: SetNull)
+
+  note String?
+
+  /// When it happened in the plant. Same time as the source record, so it
+  /// lands in the same shift. A cancelling row keeps the old row's time.
+  occurredAt DateTime @db.Timestamptz(3)
+  /// When it was written down.
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([stockItemId, occurredAt])
+  @@index([sourceType, sourceId])
+  @@index([siteId, occurredAt])
+  @@index([siteId, businessDate])
+  @@index([shiftInstanceId])
+  @@index([stationId])
+}

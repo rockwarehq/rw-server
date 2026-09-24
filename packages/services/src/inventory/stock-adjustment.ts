@@ -4,15 +4,16 @@ import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { resolveShiftStamp } from "../facility/work-context.js";
 import { checkAutoComplete } from "../order/auto-complete.js";
+import { lockProductBalances } from "../stock/balance.js";
+import { postSources } from "../stock/post.js";
 import { getStock } from "./stock.js";
 
 // ============================================================================
 // Product stock adjustments — manual on-hand reconciliation
 // ============================================================================
 //
-// Append-only book of record mirroring the material ledger: each adjustment is
-// one immutable signed delta, applied to ProductStock.adjustment in the same
-// transaction. Two entry modes: "set" reconciles to a counted on-hand value
+// Append-only book of record: each adjustment is one immutable signed delta,
+// posted to the stock book (StockMovement, ADR-0016) in the same transaction. Two entry modes: "set" reconciles to a counted on-hand value
 // (the delta is computed against the RAW unclamped on-hand under a row lock,
 // so the count lands exactly — even when raw is negative from over-scrap);
 // "delta" applies a signed correction directly.
@@ -67,33 +68,13 @@ export async function adjustStock(input: AdjustStockInput) {
   }
 
   const result = await prisma.$transaction(async (tx) => {
-    const txRaw = tx as unknown as { $queryRaw: typeof prisma.$queryRaw; $executeRaw: typeof prisma.$executeRaw };
-
-    // Ensure the aggregate row exists, then lock it. Single-row lock with no
-    // further lock acquisition — cannot deadlock against applyProduction /
-    // completeOrder (both lock in sorted productId order).
-    await txRaw.$executeRaw`
-      INSERT INTO "ProductStock" ("siteId", "productId", "updatedAt")
-      VALUES (${input.siteId}::uuid, ${input.productId}::uuid, NOW())
-      ON CONFLICT ("siteId", "productId") DO NOTHING
-    `;
-    const rows = await txRaw.$queryRaw<Array<{ raw: string }>>`
-      SELECT (produced - scrapped - consumed + adjustment)::text AS raw
-      FROM "ProductStock"
-      WHERE "siteId" = ${input.siteId}::uuid AND "productId" = ${input.productId}::uuid
-      FOR UPDATE
-    `;
-    const rawOnHand = new Prisma.Decimal(rows[0]?.raw ?? 0);
+    // Lock this product's stock row. One row, no other locks taken — cannot
+    // block cycle saves or order completion in a circle.
+    const onHand = await lockProductBalances(tx, input.siteId, [input.productId]);
+    const rawOnHand = onHand.get(input.productId) ?? new Prisma.Decimal(0);
 
     const delta = input.mode === "set" ? requested.minus(rawOnHand) : requested;
     const resultingOnHand = rawOnHand.plus(delta);
-
-    if (!delta.isZero()) {
-      await tx.productStock.update({
-        where: { siteId_productId: { siteId: input.siteId, productId: input.productId } },
-        data: { adjustment: { increment: delta } },
-      });
-    }
 
     // Star-pattern stamps: the site-level shift running when the adjustment lands
     // (calendar-date fallback when none — e.g. workcenter-scheduled sites).
@@ -112,6 +93,9 @@ export async function adjustStock(input: AdjustStockInput) {
       },
       include: adjustmentInclude,
     });
+    // A count that matched adds nothing to the stock book; the adjustment row
+    // is the record that it happened.
+    await postSources(tx, [{ type: "PRODUCT_STOCK_ADJUSTMENT", ids: [entry.id] }]);
 
     const stock = await getStock(tx, input.siteId, [input.productId]);
     return { entry, stock: stock.get(input.productId), delta };

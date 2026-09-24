@@ -374,7 +374,7 @@ erDiagram
 
 ## Inventory, Orders & Materials
 
-Source: `packages/db/schema/` — `order/`, `product/`, `material/` and `inventory-item/`. The densest domain, split into four diagrams.
+Source: `packages/db/schema/` — `order/`, `product/`, `material/`, `inventory-item/` and `stock/`. The densest domain, split into five diagrams.
 
 ### Fulfillment orders
 
@@ -592,7 +592,77 @@ erDiagram
   MaterialLedgerEntry |o--o{ MaterialShiftUsage : "flushed to, SetNull"
 ```
 
-- The ledger is append-only except `PRODUCTION` rows, which mutate during an open shift via the `MaterialShiftUsage` staging binding, then freeze at flush.
+- The ledger is only ever added to. Use during an open shift builds up in `MaterialShiftUsage`; at shift end the flush writes one `PRODUCTION` row per material and marks the staging rows flushed.
+
+### Stock book
+
+The book every counted thing is kept in (ADR-0016). Parts use it today; materials move onto it in phase 2.
+
+```mermaid
+erDiagram
+  StockItem {
+    uuid id PK
+    StockableType stockableType "PRODUCT | MATERIAL"
+    uuid stockableId "no FK - Product or Material"
+    uuid siteId FK "cascade"
+    string baseUnit
+    TrackingMode trackingMode "NONE | BATCH | SERIAL"
+  }
+  StockMovement {
+    uuid id PK
+    bigint seq "unique, book order"
+    uuid stockItemId FK "cascade"
+    uuid siteId FK "cascade"
+    StockMovementKind kind "OUTPUT SCRAP FULFILLMENT ADJUSTMENT etc"
+    decimal quantity "signed, never 0"
+    StockSourceType sourceType
+    uuid sourceId "no FK - the record that caused it"
+    string idempotencyKey "unique"
+    uuid reversesMovementId FK "nullable, unique, NoAction"
+    uuid lotId "reserved, always null"
+    uuid stationId FK "nullable, SetNull"
+    uuid shiftInstanceId FK "nullable, SetNull"
+    uuid performedByUserId FK "nullable, SetNull"
+    datetime occurredAt "plant time, drives the shift"
+  }
+  StockBalance {
+    uuid stockItemId PK "FK, cascade"
+    decimal onHand "= produced - scrapped - consumed + adjusted"
+    decimal produced
+    decimal scrapped
+    decimal consumed
+    decimal adjusted
+  }
+  OrderConsumption {
+    uuid id PK
+    uuid orderLineItemId FK "cascade"
+    uuid productId FK "Restrict"
+    decimal quantity
+  }
+  ProductStockAdjustment {
+    uuid id PK
+    uuid productId FK "Restrict"
+    decimal delta "signed"
+    StockAdjustmentReason reason
+  }
+
+  Site ||--o{ StockItem : "cascade"
+  Product ||..o| StockItem : "stockableId, no FK"
+  Material ||..o| StockItem : "stockableId, no FK"
+  StockItem ||--o| StockBalance : "cascade"
+  StockItem ||--o{ StockMovement : "cascade"
+  StockMovement |o--o| StockMovement : "reverses"
+  InventoryItem ||..o{ StockMovement : "OUTPUT source"
+  ItemDispositionLog ||..o{ StockMovement : "SCRAP source"
+  OrderConsumption ||..o{ StockMovement : "FULFILLMENT source"
+  ProductStockAdjustment ||..o{ StockMovement : "ADJUSTMENT source"
+  Station |o--o{ StockMovement : "SetNull"
+  ShiftInstance |o--o{ StockMovement : "SetNull"
+```
+
+- Rows are never changed. A correction adds a row that cancels the old one (`reversesMovementId`) and then posts the new amount.
+- `StockBalance` is saved totals of the book, updated in the same save; `rebuildProductBalances` rebuilds it and `reconcileProductStock` checks the book against its source records.
+- `ProductStock` (the old four counters) is retired: nothing reads or writes it, and a later migration drops it.
 
 ## Shifts
 
@@ -1169,6 +1239,8 @@ Every dashed line above. Nothing prevents dangling ids; each consumer must handl
 | `GraphNode.typeRef` | `GraphNodeType.key` | String key, no FK |
 | `GraphProperty.resolver` (JSON) | any entity / MetricBucket / Point path | zod-validated only |
 | `Datasource.driver` + `.driverVersion` | `Driver` catalog | Denormalized snapshot, catalog unenforced |
+| `StockItem.stockableId` | Product \| Material | *(by design, ADR-0016)* — made in the same save; products and materials are never really deleted |
+| `StockMovement.sourceId` | InventoryItem \| ItemDispositionLog \| OrderConsumption \| ProductStockAdjustment | *(by design, ADR-0016)* — the repair job reports movements whose record is gone |
 
 **Suggested review:** for each row, decide FK vs. documented-orphan policy; `StationJobLog.jobVersionId` should almost certainly become a real FK.
 
@@ -1202,7 +1274,7 @@ Most entities scope by `siteId` with workspace implicit. Direct `workspaceId` sc
 
 ### 8. Deprecated-but-present schema
 
-`User.firstName`/`lastName` are still here: code still reads them, so that code has to move to the employee profile before the columns can go. The rest of the old schema (`Location`, `WorkOrder`, `StationJob`, `ToolStatus`, `ToolLocation`, the pre-bucket access tables and their columns) was dropped in `20260929100000_drop_dead_models`.
+`ProductStock` is retired by ADR-0016 and kept for one release so a rolling deploy does not break; a later migration drops it. `User.firstName`/`lastName` are still here: code still reads them, so that code has to move to the employee profile before the columns can go. The rest of the old schema (`Location`, `WorkOrder`, `StationJob`, `ToolStatus`, `ToolLocation`, the pre-bucket access tables and their columns) was dropped in `20260929100000_drop_dead_models`.
 
 ### 9. Parallel hand-maintained schema: `SYSTEM_ENTITY_REGISTRY`
 
