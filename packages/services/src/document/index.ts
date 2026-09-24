@@ -467,6 +467,32 @@ export async function cancelVersionUpload(documentId: string, fileId: string) {
   return { success: true };
 }
 
+/**
+ * Make any finished version the current one. Nothing is copied or deleted:
+ * the document just points at that version, and every other version stays.
+ * A later upload still becomes current when it finishes.
+ */
+export async function setCurrentVersion(documentId: string, fileId: string) {
+  const found = await findReadyFile(documentId);
+  if (found.error !== undefined) return found;
+
+  const file = await prisma.documentFile.findUnique({
+    where: { id: fileId },
+    select: { documentId: true, status: true },
+  });
+  if (!file || file.documentId !== documentId || file.status !== "READY") {
+    return { error: "Version not found", code: "VERSION_NOT_FOUND" };
+  }
+
+  const document = await prisma.document.update({
+    where: { id: documentId },
+    data: { currentFileId: fileId },
+    include: documentInclude,
+  });
+
+  return { data: toDocument(document) };
+}
+
 /** Every uploaded version of a file, newest first. */
 export async function listVersions(documentId: string) {
   const found = await findReadyFile(documentId);

@@ -350,6 +350,7 @@ export const router = {
     completeVersionUpload: document.completeVersionUpload,
     cancelVersionUpload: document.cancelVersionUpload,
     listVersions: document.listVersions,
+    setCurrentVersion: document.setCurrentVersion,
     openVersion: document.openVersion,
     downloadVersion: document.downloadVersion,
     list: document.list,
