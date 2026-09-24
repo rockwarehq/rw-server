@@ -135,6 +135,30 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reporting domain authorization 
     expect(res.statusCode).toBe(403);
   });
 
+  it("scrap entries for a station on another site are denied", async () => {
+    const res = await rpcCall(
+      server,
+      "shiftRecap/scrapLogs",
+      // Any id serves for the shift: the station check comes first.
+      { siteId: siteA.id, shiftInstanceId: wcA.id, stationId: stationB.id },
+      faToken,
+    );
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("scrap by reason narrowed to another site's station finds nothing", async () => {
+    // The workcenter check passes (it is site A's); the station narrows
+    // within that workcenter, so a foreign station matches no rows.
+    const res = await rpcCall(
+      server,
+      "shiftRecap/scrapByReason",
+      { siteId: siteA.id, shiftInstanceId: wcA.id, workCenterId: wcA.id, stationId: stationB.id },
+      faToken,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.json).toEqual([]);
+  });
+
   it("shift-recap reads deny out-of-scope sites before any lookup", async () => {
     const res = await rpcCall(
       server,
