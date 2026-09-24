@@ -15,7 +15,6 @@ describe.skipIf(!process.env.DATABASE_URL)("shiftComment authorship", () => {
   let userId: string;
   let employeeId: string;
   let employeeVersionId: string;
-  let foreignEmployeeId: string;
 
   const at = (hours: number) => new Date(Date.now() + hours * 3_600_000);
 
@@ -31,12 +30,8 @@ describe.skipIf(!process.env.DATABASE_URL)("shiftComment authorship", () => {
 
   beforeAll(async () => {
     const suffix = randomUUID();
-    const workspace = await prisma.workspace.create({
-      data: { name: `Comments ${suffix}`, slug: `comments-${suffix}` },
-    });
-    const otherWorkspace = await prisma.workspace.create({
-      data: { name: `Comments other ${suffix}`, slug: `comments-other-${suffix}` },
-    });
+    // One workspace per deployment: use it.
+    const workspace = await prisma.workspace.findFirstOrThrow();
     siteId = (await prisma.site.create({ data: { name: `Comments Site ${suffix}`, workspaceId: workspace.id } })).id;
     workcenterId = (await prisma.workcenter.create({ data: { name: `WC ${suffix}`, siteId } })).id;
     stationId = (await prisma.station.create({ data: { name: `STN ${suffix}`, siteId, workcenterId } })).id;
@@ -71,10 +66,8 @@ describe.skipIf(!process.env.DATABASE_URL)("shiftComment authorship", () => {
     ).id;
 
     userId = (await prisma.user.create({ data: { email: `commenter-${suffix}@test.local`, passwordHash: "x" } })).id;
-    await prisma.workspaceMembership.create({ data: { userId, workspaceId: workspace.id } });
 
     ({ employeeId, versionId: employeeVersionId } = await createEmployee(workspace.id, "Floor"));
-    ({ employeeId: foreignEmployeeId } = await createEmployee(otherWorkspace.id, "Elsewhere"));
   });
 
   const base = () => ({ siteId, shiftInstanceId, workcenterId, stationId, text: "Hopper ran low at 10" });
@@ -95,11 +88,6 @@ describe.skipIf(!process.env.DATABASE_URL)("shiftComment authorship", () => {
   test("a terminal comment with no one named is refused", async () => {
     const result = await comments.create({ ...base(), createdById: null });
     expect("error" in result && result.code).toBe("EMPLOYEE_REQUIRED");
-  });
-
-  test("an employee from another workspace is refused", async () => {
-    const result = await comments.create({ ...base(), createdById: null, createdByEmployeeId: foreignEmployeeId });
-    expect("error" in result && result.code).toBe("EMPLOYEE_NOT_FOUND");
   });
 
   test("a signed-in user's comment keeps the user, with no employee when none is linked", async () => {

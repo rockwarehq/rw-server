@@ -27,9 +27,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("operator.identify", () => {
     await server.ready();
 
     const suffix = randomUUID();
-    const workspace = await prisma.workspace.create({
-      data: { name: `Identify ${suffix}`, slug: `identify-${suffix}` },
-    });
+    // One workspace per deployment: use it.
+    const workspace = await prisma.workspace.findFirstOrThrow();
     // Single logon, site-wide: logon ends whoever is on the station.
     const site = await prisma.site.create({
       data: { name: `Site ${suffix}`, workspaceId: workspace.id, attrs: { operatorLogon: { multiLogon: false } } },

@@ -32,9 +32,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("shift comments from a terminal"
     await server.ready();
 
     const suffix = randomUUID();
-    const workspace = await prisma.workspace.create({
-      data: { name: `Terminal comments ${suffix}`, slug: `terminal-comments-${suffix}` },
-    });
+    // One workspace per deployment: use it.
+    const workspace = await prisma.workspace.findFirstOrThrow();
     siteId = (await prisma.site.create({ data: { name: `Site ${suffix}`, workspaceId: workspace.id } })).id;
     const otherSiteId = (await prisma.site.create({ data: { name: `Other ${suffix}`, workspaceId: workspace.id } }))
       .id;
