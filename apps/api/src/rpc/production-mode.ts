@@ -111,15 +111,16 @@ export const archive = userRequired.input(idInputSchema).handler(async ({ input,
 export const force = userOrDisplayRequired.input(forceInputSchema).handler(async ({ input, context }) => {
   await context.access.require("MANAGE", { station: input.stationId });
 
-  // Everyone past this gate may skip the mode's role limits: users here
-  // hold MANAGE, and displays always could (unchanged from before buckets).
+  // A terminal acts as the employee it names, whose site role the mode must
+  // allow — naming no one, when roles are set, is refused. A signed-in user
+  // past this gate holds MANAGE and may skip the roles, from the office.
 
   const result = await productionMode.force({
     stationId: input.stationId,
     modeId: input.modeId,
     employeeId: input.employeeId,
     userId: context.current.kind === "user" ? context.current.user.id : undefined,
-    bypassRoles: true,
+    bypassRoles: context.current.kind === "user",
   });
   if ("error" in result) throwServiceError(result);
   return result.data;
@@ -128,14 +129,15 @@ export const force = userOrDisplayRequired.input(forceInputSchema).handler(async
 export const clear = userOrDisplayRequired.input(clearInputSchema).handler(async ({ input, context }) => {
   await context.access.require("MANAGE", { station: input.stationId });
 
-  // Everyone past this gate may skip the mode's role limits: users here
-  // hold MANAGE, and displays always could (unchanged from before buckets).
+  // A terminal acts as the employee it names, whose site role the mode must
+  // allow — naming no one, when roles are set, is refused. A signed-in user
+  // past this gate holds MANAGE and may skip the roles, from the office.
 
   const result = await productionMode.clear({
     stationId: input.stationId,
     employeeId: input.employeeId,
     userId: context.current.kind === "user" ? context.current.user.id : undefined,
-    bypassRoles: true,
+    bypassRoles: context.current.kind === "user",
   });
   if ("error" in result) throwServiceError(result);
   return result.data;
