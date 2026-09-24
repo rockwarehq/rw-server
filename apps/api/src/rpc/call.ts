@@ -151,17 +151,17 @@ export const open = userOrDisplayRequired.input(openInputSchema).handler(async (
 export const close = userOrDisplayRequired.input(closeInputSchema).handler(async ({ input, context }) => {
   await context.access.require("MANAGE", { call: input.id });
 
-  // Everyone past this gate may skip the definition's answer roles: users
-  // here hold MANAGE, and displays always could (unchanged from before
-  // buckets). Whether answer roles should ever bind is an open product
-  // question.
+  // A terminal answers as the employee it names, and that employee's site
+  // role must be one the definition allows — naming no one, when roles are
+  // set, is refused. A signed-in user past this gate holds MANAGE and may
+  // skip the roles, to clear a stuck call from the office.
 
   const result = await call.close({
     id: input.id,
     closeMessage: input.closeMessage,
     closedByEmployeeId: input.employeeId,
     closedByUserId: context.current.kind === "user" ? context.current.user.id : undefined,
-    bypassAnswerRoles: true,
+    bypassAnswerRoles: context.current.kind === "user",
   });
   if ("error" in result) throwServiceError(result);
   return result.data;
