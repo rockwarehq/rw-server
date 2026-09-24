@@ -106,6 +106,13 @@ describe("document service", () => {
     });
     expect(listAll.data.map((document) => document.id)).toContain(uploadedDocument.id);
 
+    // The root listing never reaches into folders; allFolders spans the tree.
+    const rootFiles = await documents.list({ siteId, kind: "FILE" });
+    expect(rootFiles.data.map((document) => document.id)).not.toContain(uploadedDocument.id);
+    const everyFile = await documents.list({ siteId, kind: "FILE", allFolders: true });
+    expect(everyFile.data.map((document) => document.id)).toContain(uploadedDocument.id);
+    expect(everyFile.data.every((document) => document.kind === "FILE")).toBe(true);
+
     const updateResult = await documents.update(uploadedDocument.id, {
       labels: ["Operator Manual", "AI Context", "Setup Sheet"],
     });

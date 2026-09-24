@@ -28,6 +28,8 @@ export interface CreateUploadInput {
 export interface ListDocumentsInput {
   siteId?: string | null;
   parentId?: string | null;
+  /** Span every folder instead of scoping to `parentId`. */
+  allFolders?: boolean;
   kind?: "FILE" | "FOLDER";
   includePending?: boolean;
   labelsAny?: string[];
@@ -335,11 +337,21 @@ export async function completeUpload(documentId: string) {
 }
 
 export async function list(input: ListDocumentsInput = {}) {
-  const { siteId, parentId = null, kind, includePending = false, q, limit = 50, offset = 0, linkedTo } = input;
+  const {
+    siteId,
+    parentId = null,
+    allFolders = false,
+    kind,
+    includePending = false,
+    q,
+    limit = 50,
+    offset = 0,
+    linkedTo,
+  } = input;
   const where: Prisma.DocumentWhereInput = {
     deletedAt: null,
-    // Linked-document queries span the whole folder tree.
-    ...(linkedTo ? {} : { parentId }),
+    // Linked-document and all-folder queries span the whole folder tree.
+    ...(linkedTo || allFolders ? {} : { parentId }),
     ...(kind ? { kind } : {}),
     ...(includePending ? {} : { status: "READY" }),
   };

@@ -48,6 +48,8 @@ const createUploadInputSchema = z.object({
 const listInputSchema = z.object({
   siteId: z.uuid().nullable().optional(),
   parentId: z.uuid().nullable().optional(),
+  /** Span every folder instead of scoping to `parentId`. */
+  allFolders: z.boolean().default(false),
   kind: z.enum(["FILE", "FOLDER"]).optional(),
   includePending: z.boolean().default(false),
   labelsAny: labelsSchema.optional(),
