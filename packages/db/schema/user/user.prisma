@@ -71,6 +71,7 @@ model User {
   shiftAmendments         ShiftAmendment[]
   materialLedgerEntries   MaterialLedgerEntry[]
   productStockAdjustments ProductStockAdjustment[]
+  stockMovements          StockMovement[]
   apiTokensCreated        ApiToken[]
   savedViewsCreated       SavedView[]
   documentFilesCreated    DocumentFile[]           @relation("DocumentFileCreatedBy")

@@ -1,12 +1,14 @@
 /// The book of record for every quantity-changing material event.
 ///
-/// Manual events (receipts, adjustments, write-offs, transfers) are append-only:
-/// each event is one immutable row. Production consumption is tracked as
-/// `PRODUCTION` rows that are **mutable during a shift** — the same row
-/// accumulates weight as cycles close, via the `MaterialShiftUsage` binding.
-/// Once the shift ends nothing touches the row again.
+/// Every event is one row, only ever added, never changed. Use during an open
+/// shift builds up in `MaterialShiftUsage`; when the shift ends, the flush
+/// writes one `PRODUCTION` row per material from those staging rows.
 ///
-/// Balance is a single aggregate: `SUM(quantity) WHERE materialId = ?`.
+/// Balance is a single aggregate: `SUM(quantity) WHERE materialId = ?`, minus
+/// what is still in staging.
+///
+/// Materials move onto the shared stock book (StockMovement) in ADR-0016
+/// phase 2; these rows then become the source records for its movements.
 enum MaterialLedgerKind {
   RECEIPT // stock received from supplier
   ADJUSTMENT // manual audit delta (signed)
@@ -14,7 +16,7 @@ enum MaterialLedgerKind {
   TRANSFER_IN // from another site
   TRANSFER_OUT // to another site (negative)
   OPENING_BALANCE // initial count at onboarding
-  PRODUCTION // production usage; mutable-during-shift, incremented by cycle close
+  PRODUCTION // production usage, written at shift end from MaterialShiftUsage
 }
 
 model MaterialLedgerEntry {

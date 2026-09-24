@@ -1,0 +1,28 @@
+/// How much of a stock item is on hand right now (ADR-0016). This is a saved
+/// sum of the stock book, kept up to date in the same save as each new
+/// movement. It can always be rebuilt from StockMovement.
+///
+/// `onHand` is the plain total and can go below zero (for example, more
+/// scrapped than made). Screens show at least zero. The other columns split
+/// the total by kind, and always add up to `onHand`:
+/// onHand = produced − scrapped − consumed + adjusted.
+model StockBalance {
+  stockItemId String    @id @db.Uuid
+  stockItem   StockItem @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+
+  siteId String @db.Uuid
+
+  onHand   Decimal @default(0) @db.Decimal(18, 4)
+  /// Total made (OUTPUT).
+  produced Decimal @default(0) @db.Decimal(18, 4)
+  /// Total scrapped (SCRAP), as a plus number.
+  scrapped Decimal @default(0) @db.Decimal(18, 4)
+  /// Total taken by orders (FULFILLMENT), as a plus number.
+  consumed Decimal @default(0) @db.Decimal(18, 4)
+  /// Total of hand corrections and counts (ADJUSTMENT), plus or minus.
+  adjusted Decimal @default(0) @db.Decimal(18, 4)
+
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([siteId])
+}
