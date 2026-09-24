@@ -2,9 +2,13 @@
 /// the running total for one (shift, station, job, product, material) scope;
 /// `quantity` and `itemCount` increment with each cycle close. Once the shift
 /// ends, `flushShiftUsage` writes one immutable PRODUCTION ledger entry per
-/// staging row, sets `flushedAt`, and links the ledger row via
+/// material (adding up that material's staging rows), posts it to the stock
+/// book as USAGE, sets `flushedAt`, and links the ledger row via
 /// `flushedLedgerEntryId`. Flushed staging rows are kept as audit trails —
 /// they record the exact rollup that produced each ledger entry.
+///
+/// Unflushed rows are not in the stock book yet; the material balance
+/// subtracts them as "used so far this shift" (ADR-0016).
 model MaterialShiftUsage {
   id String @id @default(uuid()) @db.Uuid
 
