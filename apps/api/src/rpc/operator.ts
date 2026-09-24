@@ -26,6 +26,14 @@ const logonInputSchema = z.object({
   stationId: z.uuid(),
 });
 
+/** Same credentials as logon, minus GENERIC: a typed name identifies no one. */
+const identifyInputSchema = z.object({
+  displayId: z.uuid(),
+  method: z.enum(["EMPLOYEE_ID", "PIN", "BADGE"]),
+  credentials: credentialsSchema,
+  stationId: z.uuid(),
+});
+
 const logoffInputSchema = z.object({
   displayId: z.uuid(),
   sessionId: z.uuid(),
@@ -137,17 +145,22 @@ export const config = displayRequired.input(displayIdSchema).handler(async ({ in
 });
 
 /**
- * Authenticate and log on an operator at the display's station.
+ * The checks logon and identify share before any credential is looked at:
+ * the token is this display's, the display is claimed, the station is the
+ * one it serves at its site, and the method is enabled there.
  */
-export const operatorLogon = displayRequired.input(logonInputSchema).handler(async ({ input, context }) => {
-  assertDisplayIdentity(input.displayId, context.current.display.id);
+async function resolveOperatorAction(
+  input: { displayId: string; stationId: string; method: string },
+  authenticatedDisplayId: string,
+) {
+  assertDisplayIdentity(input.displayId, authenticatedDisplayId);
 
   const ctx = await resolveDisplayContext(input.displayId);
   if (!ctx) {
     throw new ORPCError("NOT_FOUND", { message: "Display not found or not claimed" });
   }
 
-  // If the display was provisioned to a station, the client must log on at
+  // If the display was provisioned to a station, the client must act at
   // that one — otherwise honor the operator-picked station.
   if (ctx.stationId && ctx.stationId !== input.stationId) {
     throw new ORPCError("BAD_REQUEST", { message: "Display is provisioned to a different station" });
@@ -162,10 +175,18 @@ export const operatorLogon = displayRequired.input(logonInputSchema).handler(asy
     throw new ORPCError("BAD_REQUEST", { message: "Selected station is not at this site" });
   }
 
-  // Check method is enabled
   if (!ctx.config.enabledMethods.includes(input.method)) {
     throw new ORPCError("BAD_REQUEST", { message: `Auth method '${input.method}' is not enabled` });
   }
+
+  return ctx;
+}
+
+/**
+ * Authenticate and log on an operator at the display's station.
+ */
+export const operatorLogon = displayRequired.input(logonInputSchema).handler(async ({ input, context }) => {
+  const ctx = await resolveOperatorAction(input, context.current.display.id);
 
   const authContext = {
     displayId: input.displayId,
@@ -251,6 +272,49 @@ export const operatorLogon = displayRequired.input(logonInputSchema).handler(asy
 });
 
 /**
+ * Establish who is acting, without logging them on.
+ *
+ * Restricted actions at a terminal — raising or answering a call, starting
+ * or ending a production mode, posting a comment — ask the person to prove
+ * who they are, then send that employee with the action for the server to
+ * judge. Logon did that job but also opened a session, and under single
+ * logon ended whoever was already on: a supervisor approving a call would
+ * log the machine's operator off. This checks the same credentials, with
+ * the same lockout, and changes nothing else.
+ *
+ * Never creates an employee (a badge nobody holds identifies no one) and
+ * takes no GENERIC name.
+ */
+export const operatorIdentify = displayRequired.input(identifyInputSchema).handler(async ({ input, context }) => {
+  const ctx = await resolveOperatorAction(input, context.current.display.id);
+
+  const authResult = await auth.authenticate(
+    ctx.siteId,
+    input.method as AuthMethod,
+    input.credentials as AuthCredentials,
+    { displayId: input.displayId, stationId: input.stationId },
+    {
+      maxFailedAttempts: ctx.config.maxFailedAttempts,
+      lockoutMinutes: ctx.config.lockoutMinutes,
+      allowAutoCreate: false,
+    },
+  );
+
+  if (!authResult.success) {
+    throw new ORPCError("FORBIDDEN", { message: authResult.error });
+  }
+  if (!authResult.data.employeeId) {
+    throw new ORPCError("FORBIDDEN", { message: "Employee not found" });
+  }
+
+  return {
+    employeeId: authResult.data.employeeId,
+    // The operator's site role, as logon returns it.
+    roleId: authResult.data.roleId,
+  };
+});
+
+/**
  * Log off an operator from the display's station.
  */
 export const operatorLogoff = displayRequired.input(logoffInputSchema).handler(async ({ input, context }) => {
@@ -276,6 +340,54 @@ export const operatorLogoffAll = displayRequired.input(displayIdSchema).handler(
   const result = await logon.logoffAll(input.displayId);
   return { count: result.data.count, activeSessions: [] };
 });
+
+/**
+ * Move the display's logged-on operators to another station, for a terminal
+ * changing station: each session ends at the old station and opens at the
+ * new one, for the same operator, with no PIN re-entry.
+ */
+const transferSessionsInputSchema = z.object({
+  displayId: z.uuid(),
+  stationId: z.uuid(),
+});
+
+export const operatorTransferSessions = displayRequired
+  .input(transferSessionsInputSchema)
+  .handler(async ({ input, context }) => {
+    assertDisplayIdentity(input.displayId, context.current.display.id);
+
+    const ctx = await resolveDisplayContext(input.displayId);
+    if (!ctx) {
+      throw new ORPCError("NOT_FOUND", { message: "Display not found or not claimed" });
+    }
+
+    // A display provisioned to a station does not change station.
+    if (ctx.stationId && ctx.stationId !== input.stationId) {
+      throw new ORPCError("BAD_REQUEST", { message: "Display is provisioned to a different station" });
+    }
+
+    const station = await prisma.station.findUnique({
+      where: { id: input.stationId },
+      select: { id: true, siteId: true },
+    });
+    if (!station || station.siteId !== ctx.siteId) {
+      throw new ORPCError("BAD_REQUEST", { message: "Selected station is not at this site" });
+    }
+
+    // One logon per station, as a logon there would enforce: whoever is on
+    // the new station from another display comes off first.
+    if (!ctx.config.multiLogon) {
+      await logon.logoffByScope("station", input.displayId, input.stationId);
+    }
+
+    const result = await logon.transferSessions(input.displayId, input.stationId);
+    if (result.error !== undefined) {
+      throwServiceError(result, { STATION_NOT_FOUND: "BAD_REQUEST" });
+    }
+
+    const activeSessions = await logon.getActiveSessions(input.displayId);
+    return { count: result.data.count, activeSessions: activeSessions.data };
+  });
 
 /**
  * Get active logon sessions for the display's station.

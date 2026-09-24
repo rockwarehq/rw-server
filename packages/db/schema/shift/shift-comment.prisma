@@ -19,6 +19,14 @@ model ShiftComment {
   createdById String? @db.Uuid
   createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
 
+  /// Who wrote it on the floor. A comment from an operator terminal has no
+  /// user (the terminal is a display), so the operator names themselves;
+  /// a signed-in user's comment carries their linked employee, when any.
+  /// Same shape as Call.openedByEmployee.
+  createdByEmployeeId        String?   @db.Uuid
+  createdByEmployee          Employee? @relation("ShiftCommentCreatedBy", fields: [createdByEmployeeId], references: [id], onDelete: SetNull)
+  createdByEmployeeVersionId String?   @db.Uuid
+
   createdAt DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt DateTime  @updatedAt @db.Timestamptz(3)
   deletedAt DateTime? @db.Timestamptz(3)
