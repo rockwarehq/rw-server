@@ -593,10 +593,12 @@ erDiagram
 ```
 
 - The ledger is only ever added to. Use during an open shift builds up in `MaterialShiftUsage`; at shift end the flush writes one `PRODUCTION` row per material and marks the staging rows flushed.
+- Every ledger row is posted to the stock book (below) in the same save; `PRODUCTION` becomes `USAGE`. The material balance is the book minus what open shifts have used so far.
+- A material with no `weightUnits` is not tracked: stock actions are refused and its production use is skipped (ADR-0016 §5).
 
 ### Stock book
 
-The book every counted thing is kept in (ADR-0016). Parts use it today; materials move onto it in phase 2.
+The book every counted thing is kept in (ADR-0016): parts and materials.
 
 ```mermaid
 erDiagram
@@ -613,8 +615,9 @@ erDiagram
     bigint seq "unique, book order"
     uuid stockItemId FK "cascade"
     uuid siteId FK "cascade"
-    StockMovementKind kind "OUTPUT SCRAP FULFILLMENT ADJUSTMENT etc"
+    StockMovementKind kind "OUTPUT SCRAP FULFILLMENT ADJUSTMENT RECEIPT USAGE etc"
     decimal quantity "signed, never 0"
+    string unit "as written by its source"
     StockSourceType sourceType
     uuid sourceId "no FK - the record that caused it"
     string idempotencyKey "unique"
@@ -627,11 +630,13 @@ erDiagram
   }
   StockBalance {
     uuid stockItemId PK "FK, cascade"
-    decimal onHand "= produced - scrapped - consumed + adjusted"
+    decimal onHand "= produced - scrapped - consumed + adjusted + received - issued, in baseUnit"
     decimal produced
     decimal scrapped
     decimal consumed
     decimal adjusted
+    decimal received
+    decimal issued
   }
   OrderConsumption {
     uuid id PK
@@ -656,12 +661,13 @@ erDiagram
   ItemDispositionLog ||..o{ StockMovement : "SCRAP source"
   OrderConsumption ||..o{ StockMovement : "FULFILLMENT source"
   ProductStockAdjustment ||..o{ StockMovement : "ADJUSTMENT source"
+  MaterialLedgerEntry ||..o{ StockMovement : "material source"
   Station |o--o{ StockMovement : "SetNull"
   ShiftInstance |o--o{ StockMovement : "SetNull"
 ```
 
 - Rows are never changed. A correction adds a row that cancels the old one (`reversesMovementId`) and then posts the new amount.
-- `StockBalance` is saved totals of the book, updated in the same save; `rebuildProductBalances` rebuilds it and `reconcileProductStock` checks the book against its source records.
+- `StockBalance` is saved totals of the book, in each item's `baseUnit` (movements are converted by the `stock_convert` database function), updated in the same save; `rebuildBalances` rebuilds it and `reconcileStock` checks the book against its source records.
 - `ProductStock` (the old four counters) is retired: nothing reads or writes it, and a later migration drops it.
 
 ## Shifts

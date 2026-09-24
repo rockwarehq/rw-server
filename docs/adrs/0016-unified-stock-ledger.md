@@ -145,10 +145,39 @@ record with its movements.
 
 ### 5. Units
 
-A movement copies the unit its source used. Parts counted in pieces have a
-blank unit. Before materials move onto the book, units have to be converted
-to the StockItem's `baseUnit` when posting. That is a condition for phase 2,
-not something phase 1 needs.
+A movement keeps the unit its source used, so the book is a faithful copy.
+The totals in `StockBalance` are kept in the StockItem's `baseUnit`: each
+movement is converted when it is added up (the `stock_convert` database
+function, rounded to 4 places one movement at a time, so totals kept up as we
+go and totals rebuilt from scratch always agree). Parts have a blank unit and
+are never converted.
+
+**Materials (phase 2): weights now, room for more later.**
+
+- A material's **stock unit** is its catalog `weightUnits`, mirrored onto
+  `StockItem.baseUnit`. The two are kept equal: changing the catalog unit
+  changes the stock unit in the same save, and the repair job puts them back
+  in step if a script edits one behind the other's back.
+- **No unit means "not tracked".** That covers both "we choose not to count
+  this" (glue, shop supplies) and "not set up yet". The material still works
+  everywhere in the catalog (bills of materials, documents, jobs), but stock
+  actions are refused with `NO_CANONICAL_UNIT`, and its production use is
+  skipped. It is never silently lost: the worker logs it once, and the repair
+  report counts not-tracked materials on a live part's bill of materials
+  (`untrackedMaterialsInUse`).
+- **Any weight can be used anywhere** for a tracked material: bill-of-materials
+  lines, receipts, write-offs, transfers. It is converted to the stock unit.
+  (Before phase 2, hand entries had to match the unit exactly; now they
+  convert. Counts are given in the stock unit.)
+- **Changing the unit.** Weight to weight: the totals are rebuilt in the new
+  unit; history keeps its own units. Weight to none: only when nothing is on
+  hand or in use this shift (`STOCK_ON_HAND` otherwise), so stock never
+  disappears. None to a weight: tracking starts.
+- **Later, a units phase:** custom units ("bag", "spool", "drum"), count,
+  length and volume units, and per-material factors ("1 bag = 25 kg",
+  "1 each = 0.25 kg") so a material can be bought in one unit and used in
+  another. That changes the `WeightUnit` enum columns to text, so it is its
+  own step.
 
 ### 6. Serials, batches, and the birth certificate (later)
 
@@ -184,25 +213,24 @@ movements and an event book beside them. Nothing already built changes shape.
 
 ### 7. Phases
 
-1. **Parts on the book** (this change). StockItem, StockMovement and
+1. **Parts on the book** (built). StockItem, StockMovement and
    StockBalance; every part stock save posts to the book; `ProductStock` is
    retired and dropped by a later migration.
-2. **Materials on the book.** Material receipts, write-offs and transfers
-   post movements, and `MaterialLedgerEntry` becomes their source record.
-   The end-of-shift flush posts `USAGE`. `MaterialShiftUsage` stays as a
-   "used so far this shift" figure outside the book. Before this starts:
-   - **Units.** Convert every movement to the StockItem's `baseUnit` when
-     posting. Today a part's made-part rows copy the station's unit (for
-     example `KG`) while its scrap, order and count rows are blank, and the
-     totals add them together, just as the old counters did.
-   - **Material StockItems for script-made materials.** Seed and import
-     scripts make materials without a StockItem. The repair job reports
-     them (`stockablesWithoutStockItem`); phase 2 should make them on the
-     spot the way posting already does for products.
-   - **Fewer steps on cycle close.** Posting from a cycle runs about seven
-     small statements. It can be trimmed: check StockItems once for all
-     sources, skip counting past cancellations for a first post, and merge
-     "make the balance row" with "lock it".
+2. **Materials on the book** (built). Every `MaterialLedgerEntry` posts a
+   movement and is its source record: receipts, write-offs, transfers, counts,
+   and the end-of-shift PRODUCTION row, which becomes `USAGE`. `USAGE` is
+   placed at its shift's start, so it stays in the shift it was for. Totals
+   gain `received` and `issued`. `MaterialShiftUsage` stays outside the book
+   as "used so far this shift", and the material balance subtracts it. Units
+   follow section 5. A shift amendment no longer moves end-of-shift rows (the
+   ledger's PRODUCTION rows or the book's USAGE rows) to whichever shift was
+   running when they were written.
+   - Known edge: a job history amendment's material ADJUSTMENT is stamped
+     with the flushed shift but carries the amendment's time, so a later
+     shift amendment covering that time can move it.
+   - Later: trim the statements a cycle close runs (check StockItems once for
+     all sources, skip counting past cancellations for a first post, merge
+     "make the balance row" with "lock it").
 3. **Counts and claims.** Shelf count sessions whose lines post
    `ADJUSTMENT`; order claims and reservations that hold stock for an order.
 4. **Serials and batches.** `Lot`, `StockLotBalance`, `LotComponent`,
@@ -255,6 +283,13 @@ Found while reviewing the catalog. None of them block the stock book.
   recent records are checked, and the catch-up stops a day after the
   migration. Nobody has to run a script. A later migration drops
   `ProductStock`.
+- Rollout of phase 2 works the same way: old servers write material ledger
+  rows without posting them, and the worker's `catchUpMaterialLedger` posts
+  any recent ledger row that has no movement, for a day after it starts.
+- Material balances can change at the phase 2 cutover where a material's
+  ledger mixed units: the old balance added them as plain numbers, the book
+  converts them. `packages/db/scripts/preflight-material-stock.sql` lists
+  these, and the materials that get a unit from their history.
 
 ## Alternatives Considered
 

@@ -32,7 +32,7 @@ Other domains: `iam` (roles/assignments), `api-token`, `audit`, `automation`, `d
 - **Soft delete, three flavors**: `deletedAt DateTime?` on operational entities, `archivedAt` on versioned catalog entities (job/tool/product), `isDeleted Boolean` on graph/entity/document rows. Always filter in queries.
 - **Version snapshots**: config that affects historical interpretation is snapshotted — `StationVersion`, `JobVersion`, `ToolVersion` — and cycles reference the version ids in effect at the time. Historical queries must read the version, not current config.
 - **`attrs Json` escape hatch** on most entities for customer-specific fields without migrations; user-defined types go through `ObjectSchema`/`ObjectInstance` (JSONB).
-- **Stock only changes through the stock book** (ADR-0016): save the record (a made part, scrap, an order, a count), then post it with `postSources` from `@rw/services/stock/post` in the same save. Never write `StockBalance` directly, and never edit a `StockMovement`; cancel it with `reverseSources` and post again.
+- **Stock only changes through the stock book** (ADR-0016): save the record (a made part, scrap, an order, a count, a material ledger row), then post it with `postSources` from `@rw/services/stock/post` in the same save. Never write `StockBalance` directly, and never edit a `StockMovement`; cancel it with `reverseSources` and post again.
 - **Audit**: security-relevant actions write `AuditLog` rows (action enum, target user, actor, IP, user agent, metadata).
 
 ## Database client
