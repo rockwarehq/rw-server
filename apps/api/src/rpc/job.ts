@@ -207,6 +207,16 @@ export const toolGet = userRequired.input(toolIdInputSchema).handler(async ({ in
 });
 
 /**
+ * Where a tool is running now — each station running a job that uses it,
+ * with the job and since when — or when it was last in use.
+ */
+export const toolUsage = userRequired.input(toolIdInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { tool: input.id });
+
+  return unwrap(await tool.usage(input.id), { notFoundMessage: "Tool not found" });
+});
+
+/**
  * Update tool (creates new version version)
  */
 export const toolUpdate = userRequired.input(toolUpdateInputSchema).handler(async ({ input, context }) => {

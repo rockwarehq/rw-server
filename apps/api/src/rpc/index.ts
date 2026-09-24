@@ -296,6 +296,7 @@ export const router = {
     create: job.toolCreate,
     list: job.toolList,
     get: job.toolGet,
+    usage: job.toolUsage,
     update: job.toolUpdate,
     delete: job.toolRemove,
     addCavity: job.toolAddCavity,
