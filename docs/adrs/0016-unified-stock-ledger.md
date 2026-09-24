@@ -246,9 +246,15 @@ Found while reviewing the catalog. None of them block the stock book.
 - Corrections made before this change are not rebuilt as history. The book
   starts with one movement per record that counted on the day of the move.
 - Rollout: the migration fills the book but keeps `ProductStock`, so servers
-  still on the old code keep working during the deploy. Afterwards, run
-  `pnpm exec tsx apps/api/scripts/rederive-product-stock.ts` once to post
-  anything those servers saved. A later migration drops `ProductStock`.
+  still on the old code keep working during the deploy. Anything those
+  servers save during the rollout reaches the book by itself: the `rollups`
+  worker runs a catch-up every five minutes from startup
+  (`catchUpAfterStockMigration`). Old code updates `ProductStock` in the same
+  save as every stock record and new code never does, so a `ProductStock` row
+  changed after the migration names a product to check. Only those products'
+  recent records are checked, and the catch-up stops a day after the
+  migration. Nobody has to run a script. A later migration drops
+  `ProductStock`.
 
 ## Alternatives Considered
 

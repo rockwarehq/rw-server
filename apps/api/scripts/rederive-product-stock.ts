@@ -6,9 +6,9 @@ import { isClean, reconcileProductStock } from "@rw/services/stock/reconcile";
 // from — made parts, scrap, completed orders, counts — fix anything that
 // disagrees, and rebuild the totals (StockBalance). Safe to run any time.
 //
-// Run it once after the stock_ledger deploy settles: servers still running
-// the old code during the rollout saved records without posting them to the
-// book, and this posts them. Also run it any time stock looks wrong.
+// Not needed after a deploy: the workers catch up on records old servers
+// saved during the rollout by themselves (catchUpAfterStockMigration). Run it
+// any time stock looks wrong, or with --check to confirm the book is clean.
 //
 // Usage:
 //   pnpm exec tsx apps/api/scripts/rederive-product-stock.ts [siteId] [--check]

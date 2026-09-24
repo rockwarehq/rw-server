@@ -110,29 +110,59 @@ export function productIdsSelect(type: ProductSourceType, ids: string[]): Prisma
   }
 }
 
+/** Which records the repair job looks at. Every field narrows it; none means all. */
+export interface RecordScope {
+  siteId?: string | null;
+  /** Only records made or changed since this moment. */
+  since?: Date | null;
+  /** Only records for these products. */
+  productIds?: string[] | null;
+}
+
 /**
- * For the repair job: SELECT (id, expected) for every record of this type,
- * where `expected` is what the record should add to stock right now — zero
- * once it is deleted. Optionally narrowed to one site.
+ * For the repair job: SELECT (id, expected) for the records of this type in
+ * scope, where `expected` is what the record should add to stock right now —
+ * zero once it is deleted.
  */
-export function expectedSelect(type: ProductSourceType, siteId: string | null): Prisma.Sql {
+export function expectedSelect(type: ProductSourceType, scope: RecordScope = {}): Prisma.Sql {
+  const siteId = scope.siteId ?? null;
+  const since = scope.since ?? null;
+  const products = scope.productIds ?? null;
+  // Parts and scrap name the product through its version; the index is on the version.
+  const byVersion = (column: string) =>
+    products
+      ? Prisma.sql`AND ${Prisma.raw(column)} IN (SELECT id FROM "ProductVersion" WHERE "productId" = ANY(${products}::uuid[]))`
+      : Prisma.empty;
+  const byProduct = products ? Prisma.sql`AND "productId" = ANY(${products}::uuid[])` : Prisma.empty;
   switch (type) {
     case "INVENTORY_ITEM":
       return Prisma.sql`
         SELECT ii.id, CASE WHEN ii."deletedAt" IS NULL THEN ii.quantity ELSE 0 END AS expected
         FROM "InventoryItem" ii JOIN "Cycle" cy ON cy.id = ii."cycleId"
-        WHERE (${siteId}::uuid IS NULL OR cy."siteId" = ${siteId}::uuid)`;
+        WHERE (${siteId}::uuid IS NULL OR cy."siteId" = ${siteId}::uuid)
+          AND (${since}::timestamptz IS NULL OR ii."updatedAt" >= ${since}::timestamptz)
+          ${byVersion('ii."productVersionId"')}`;
     case "ITEM_DISPOSITION_LOG":
       return Prisma.sql`
         SELECT id, CASE WHEN "deletedAt" IS NULL THEN -quantity ELSE 0 END AS expected
-        FROM "ItemDispositionLog" WHERE (${siteId}::uuid IS NULL OR "siteId" = ${siteId}::uuid)`;
+        FROM "ItemDispositionLog"
+        WHERE (${siteId}::uuid IS NULL OR "siteId" = ${siteId}::uuid)
+          AND (${since}::timestamptz IS NULL OR "updatedAt" >= ${since}::timestamptz)
+          ${byVersion('"productVersionId"')}`;
     case "ORDER_CONSUMPTION":
+      // Never changed after it is written, so its creation time is enough.
       return Prisma.sql`
         SELECT id, -quantity AS expected
-        FROM "OrderConsumption" WHERE (${siteId}::uuid IS NULL OR "siteId" = ${siteId}::uuid)`;
+        FROM "OrderConsumption"
+        WHERE (${siteId}::uuid IS NULL OR "siteId" = ${siteId}::uuid)
+          AND (${since}::timestamptz IS NULL OR "createdAt" >= ${since}::timestamptz)
+          ${byProduct}`;
     case "PRODUCT_STOCK_ADJUSTMENT":
       return Prisma.sql`
         SELECT id, delta AS expected
-        FROM "ProductStockAdjustment" WHERE (${siteId}::uuid IS NULL OR "siteId" = ${siteId}::uuid)`;
+        FROM "ProductStockAdjustment"
+        WHERE (${siteId}::uuid IS NULL OR "siteId" = ${siteId}::uuid)
+          AND (${since}::timestamptz IS NULL OR "createdAt" >= ${since}::timestamptz)
+          ${byProduct}`;
   }
 }

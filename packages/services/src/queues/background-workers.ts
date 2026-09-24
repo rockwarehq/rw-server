@@ -27,6 +27,7 @@ import { flushAllExpiredShiftUsage } from "../inventory/material-shift-flush.js"
 import { resolveEffectiveStandards } from "../facility/station/effective-standards.js";
 import { resolveShiftStamp, toDateString } from "../facility/work-context.js";
 import { splitOpenPeriodsForAllStations } from "../facility/station/periods.js";
+import { catchUpAfterStockMigration } from "../stock/reconcile.js";
 
 const REDIS_URL = process.env.REDIS_URL;
 
@@ -186,11 +187,60 @@ export async function startMetricBucketEnsure(): Promise<void> {
       }
     })
     .catch((err) => console.error("[metric-bucket-ensure] startup material-shift flush failed:", err));
+
+  startStockCatchUp();
+}
+
+// ── Stock book catch-up after the stock_ledger deploy (ADR-0016) ──
+//
+// Servers still on the old code during a rollout save stock records without
+// posting them to the stock book. Check every few minutes from startup until
+// catchUpAfterStockMigration says there is nothing left to do (a day after
+// the migration), so the gap closes by itself. Repeating matters: the worker
+// that records cycles may restart after this one.
+
+const STOCK_CATCH_UP_INTERVAL_MS = 5 * 60 * 1000;
+let stockCatchUpTimer: NodeJS.Timeout | null = null;
+
+function startStockCatchUp(): void {
+  if (stockCatchUpTimer) return;
+  let lastRun: Date | null = null;
+  let running = false;
+  const pass = async () => {
+    if (running) return;
+    running = true;
+    const startedAt = new Date();
+    try {
+      const result = await catchUpAfterStockMigration({ after: lastRun });
+      lastRun = startedAt;
+      if (result.status === "done") {
+        if (stockCatchUpTimer) clearInterval(stockCatchUpTimer);
+        stockCatchUpTimer = null;
+        return;
+      }
+      const fixed = Object.values(result.fixed).reduce((a, b) => a + b, 0);
+      if (fixed > 0) {
+        console.log(
+          `[stock-catch-up] posted ${fixed} record(s) saved by old servers during the deploy ` +
+            `(${JSON.stringify(result.fixed)}, ${result.products} product(s))`,
+        );
+      }
+    } catch (err) {
+      console.error("[stock-catch-up] pass failed; will retry", err);
+    } finally {
+      running = false;
+    }
+  };
+  stockCatchUpTimer = setInterval(() => void pass(), STOCK_CATCH_UP_INTERVAL_MS);
+  stockCatchUpTimer.unref();
+  void pass();
 }
 
 export async function stopMetricBucketEnsure(): Promise<void> {
   if (ensureWatchdogTimer) clearInterval(ensureWatchdogTimer);
   ensureWatchdogTimer = null;
+  if (stockCatchUpTimer) clearInterval(stockCatchUpTimer);
+  stockCatchUpTimer = null;
   await Promise.all([bucketEnsureWorker?.close(), bucketEnsureQueue?.close()]);
   bucketEnsureWorker = null;
   bucketEnsureQueue = null;

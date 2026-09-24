@@ -17,4 +17,11 @@ export {
   rebuildProductBalances,
   type ProductStockRow,
 } from "./balance.js";
-export { isClean, reconcileProductStock, type ReconcileReport } from "./reconcile.js";
+export {
+  type CatchUpResult,
+  catchUpAfterStockMigration,
+  isClean,
+  reconcileProductStock,
+  type ReconcileReport,
+  stockMigrationTime,
+} from "./reconcile.js";

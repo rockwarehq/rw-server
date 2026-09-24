@@ -10,9 +10,9 @@
 -- effect was already undone.
 --
 -- ProductStock is NOT dropped here. Servers still running the old code keep
--- writing to it while the deploy rolls out; once it is done, run
---   pnpm exec tsx apps/api/scripts/rederive-product-stock.ts
--- to post anything those servers saved. A later migration drops the table.
+-- writing to it while the deploy rolls out. The new workers post anything
+-- those servers saved by themselves (catchUpAfterStockMigration, every few
+-- minutes for a day). A later migration drops the table.
 --
 -- The whole migration runs as one transaction: if any check below stops it,
 -- nothing is left half made. Run packages/db/scripts/preflight-stock-ledger.sql

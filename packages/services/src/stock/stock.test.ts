@@ -7,7 +7,7 @@ import * as orders from "../order/order.js";
 import { countOffBalances, lockProductBalances, rebuildProductBalances } from "./balance.js";
 import { stockFixture } from "../testing/stock-fixtures.js";
 import { postSources, repostSources, reverseSources } from "./post.js";
-import { isClean, reconcileProductStock } from "./reconcile.js";
+import { catchUpAfterStockMigration, isClean, reconcileProductStock, stockMigrationTime } from "./reconcile.js";
 
 // Integration tests: require DATABASE_URL and run against the real schema
 // with an isolated fixture graph (same conventions as inventory-first.test.ts).
@@ -206,6 +206,67 @@ describe.skipIf(!process.env.DATABASE_URL)("stock book", () => {
     const touched = await prisma.$transaction((tx) => repostSources(tx, { cancel: sources, post: sources }));
     expect(touched).toHaveLength(1);
     expect((await getStock(prisma, siteId, [productId])).get(productId)).toMatchObject({ scrapped: 1, available: 9 });
+  });
+
+  describe("catch-up after the deploy", () => {
+    // What an old server does: save the record and bump ProductStock, but
+    // never touch the stock book.
+    const oldServerTouches = (productId: string) => prisma.$executeRaw`
+      INSERT INTO "ProductStock" ("siteId", "productId", "updatedAt")
+      VALUES (${siteId}::uuid, ${productId}::uuid, NOW())
+      ON CONFLICT ("siteId", "productId") DO UPDATE SET "updatedAt" = NOW()
+    `;
+    let duringWindow: Date;
+
+    beforeAll(async () => {
+      const migratedAt = await stockMigrationTime();
+      if (!migratedAt) throw new Error("no StockItem rows: the stock_ledger migration has not run");
+      // Pretend it is an hour after the migration, whenever this test runs.
+      duringWindow = new Date(migratedAt.getTime() + 60 * 60 * 1000);
+    });
+
+    test("posts made parts and scrap edits that old servers saved", async () => {
+      const productId = await newProduct();
+      await fixture.produce(productId, 10);
+      const logId = await fixture.scrap(productId, 2);
+      const productVersionId = await fixture.versionOf(productId);
+      const cycle = await prisma.cycle.findFirstOrThrow({ where: { siteId } });
+
+      // Old server: a new made part and a scrap edit, neither in the book.
+      const item = await prisma.inventoryItem.create({
+        data: { cycleId: cycle.id, siteId, productId, productVersionId, quantity: 4 },
+      });
+      await prisma.itemDispositionLog.update({ where: { id: logId }, data: { quantity: 3 } });
+      await oldServerTouches(productId);
+
+      const result = await catchUpAfterStockMigration({ siteId, now: duringWindow });
+      expect(result).toMatchObject({ status: "checked", fixed: { INVENTORY_ITEM: 1, ITEM_DISPOSITION_LOG: 1 } });
+      expect((await getStock(prisma, siteId, [productId])).get(productId)).toMatchObject({
+        produced: 14,
+        scrapped: 3,
+        available: 11,
+      });
+      expect((await movementsOf(item.id)).map((m) => m.note)).toEqual([null]);
+      expect(isClean(await reconcileProductStock({ siteId }))).toBe(true);
+
+      // A second pass finds nothing more to do.
+      const again = await catchUpAfterStockMigration({ siteId, now: duringWindow });
+      expect(Object.values(again.status === "checked" ? again.fixed : {}).every((n) => n === 0)).toBe(true);
+    });
+
+    test("skips products old servers did not touch since the last pass", async () => {
+      const result = await catchUpAfterStockMigration({
+        siteId,
+        now: duringWindow,
+        after: new Date(Date.now() + 60 * 60 * 1000),
+      });
+      expect(result).toMatchObject({ status: "checked", products: 0 });
+    });
+
+    test("stops for good a day after the migration", async () => {
+      const dayLater = new Date(duringWindow.getTime() + 24 * 60 * 60 * 1000);
+      expect(await catchUpAfterStockMigration({ siteId, now: dayLater })).toEqual({ status: "done" });
+    });
   });
 
   test("rebuilding the totals from the book changes nothing", async () => {
