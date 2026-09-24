@@ -32,6 +32,7 @@
     "./reporting/*": "./dist/reporting/*.js",
     "./rpc/*": "./dist/rpc/*.js",
     "./saved-view/*": "./dist/saved-view/*.js",
+    "./stock/*": "./dist/stock/*.js",
     "./types/*": "./dist/types/*.js",
     "./user/*": "./dist/user/*.js"
   },
