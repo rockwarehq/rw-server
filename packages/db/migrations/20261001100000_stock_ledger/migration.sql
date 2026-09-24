@@ -13,6 +13,12 @@
 -- writing to it while the deploy rolls out; once it is done, run
 --   pnpm exec tsx apps/api/scripts/rederive-product-stock.ts
 -- to post anything those servers saved. A later migration drops the table.
+--
+-- The whole migration runs as one transaction: if any check below stops it,
+-- nothing is left half made. Run packages/db/scripts/preflight-stock-ledger.sql
+-- on a copy of production first to see what it will find.
+
+BEGIN;
 
 -- ── 1. Check first: every record's site must match its product's site ────
 -- A StockItem belongs to one site (its product's). If a part was ever made,
@@ -272,3 +278,5 @@ ALTER TABLE "StockMovement" ADD CONSTRAINT "StockMovement_reversesMovementId_fke
 ALTER TABLE "StockMovement" ADD CONSTRAINT "StockMovement_stationId_fkey" FOREIGN KEY ("stationId") REFERENCES "Station"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 ALTER TABLE "StockMovement" ADD CONSTRAINT "StockMovement_shiftInstanceId_fkey" FOREIGN KEY ("shiftInstanceId") REFERENCES "ShiftInstance"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 ALTER TABLE "StockMovement" ADD CONSTRAINT "StockMovement_performedByUserId_fkey" FOREIGN KEY ("performedByUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+COMMIT;
