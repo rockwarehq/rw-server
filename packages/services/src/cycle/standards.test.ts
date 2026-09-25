@@ -13,7 +13,6 @@ const base: StandardsConfig = {
   jobStandardRate: null,
   jobStandardRateUnit: "",
   jobStandardRatePeriod: "MINUTE",
-  jobStandardQuantity: null,
 };
 
 describe("DISCRETE — must match today's behavior exactly", () => {
@@ -86,10 +85,11 @@ describe("QUANTITY_PER_CYCLE — pulse case (100 ft every tick)", () => {
     expect(actuals.standardCycle).toBeCloseTo(87 * 1.2, 10);
   });
 
-  it("job-level standardQuantity overrides the station pulse", () => {
-    const std = resolveStandards({ ...cfg, jobStandardQuantity: 250 });
-    expect(std.standardQuantity).toBe(250);
-    expect(std.standardCycleSeconds).toBeCloseTo(300, 10);
+  it("the amount per signal is the station's; a job cannot change it (ADR-0017)", () => {
+    // Only a job's speed differs: 25 ft/min on the same 100 ft signal.
+    const std = resolveStandards({ ...cfg, jobStandardRate: 25 });
+    expect(std.standardQuantity).toBe(100);
+    expect(std.standardCycleSeconds).toBeCloseTo(240, 10);
   });
 
   it("station-level rate works with no job rate; job rate overrides it", () => {
@@ -152,11 +152,15 @@ describe("QUANTITY_PER_INTERVAL — fixed clock, variable quantity (500/min)", (
     expect(resolveCycleActuals(std, null)).toMatchObject({ quantity: null, standardCycle: null });
   });
 
-  it("job-level standardCycle overrides the station tick length", () => {
+  it("the report interval is the station's; a job's standardCycle does not change it (ADR-0017)", () => {
     const std = resolveStandards({ ...cfg, jobStandardCycle: 30 });
-    expect(std.standardCycleSeconds).toBe(30);
-    // Expected quantity follows the effective interval: 30 s at 500/min = 250.
-    expect(std.standardQuantity).toBeCloseTo(250, 10);
+    expect(std.standardCycleSeconds).toBe(60);
+    expect(std.standardQuantity).toBeCloseTo(500, 10);
+  });
+
+  it("no interval on the station → no standard, even if the job has seconds", () => {
+    const std = resolveStandards({ ...cfg, stationStandardCycle: null, jobStandardCycle: 60 });
+    expect(std.standardCycleSeconds).toBeNull();
   });
 
   it("station-level rate: 100 rivets/min on a 60 s tick, no job config", () => {
@@ -171,15 +175,12 @@ describe("QUANTITY_PER_INTERVAL — fixed clock, variable quantity (500/min)", (
     expect(resolveCycleActuals(std, 40).standardCycle).toBeCloseTo(24, 10);
   });
 
-  it("no rate anywhere: per-tick standardQuantity (job override, else station)", () => {
+  it("no rate anywhere: the station's expected amount per report", () => {
     const noRate = { ...cfg, jobStandardRate: null };
     const std = resolveStandards({ ...noRate, stationStandardQuantity: 500 });
     expect(std.standardQuantity).toBe(500);
     // Derived time-per-unit keeps earned time working: 200 made → 24 s earned.
     expect(resolveCycleActuals(std, 200).standardCycle).toBeCloseTo(24, 10);
-    // Job override beats the station default.
-    const overridden = resolveStandards({ ...noRate, stationStandardQuantity: 500, jobStandardQuantity: 250 });
-    expect(overridden.standardQuantity).toBe(250);
   });
 
   it("slow by quantity shortfall, not lateness", () => {

@@ -200,7 +200,6 @@ export async function complete(input: StartCycleInput) {
       standardRate: number | null;
       standardRateUnit: string | null;
       standardRatePeriod: string | null;
-      jobStandardQuantity: number | null;
       jobToolIds: string[];
       toolVersionIds: string[];
     }>
@@ -224,8 +223,7 @@ export async function complete(input: StartCycleInput) {
         sb."standardRatePeriod"::text AS "stationStandardRatePeriod",
         jb."standardRate"::float8 AS "standardRate",
         jb."standardRateUnit" AS "standardRateUnit",
-        jb."standardRatePeriod"::text AS "standardRatePeriod",
-        jb."standardQuantity"::float8 AS "jobStandardQuantity"
+        jb."standardRatePeriod"::text AS "standardRatePeriod"
       FROM "Station" s
       JOIN "Site" si ON si.id = s."siteId"
       JOIN "Job" j ON j.id = ${jobId}
@@ -247,7 +245,7 @@ export async function complete(input: StartCycleInput) {
     GROUP BY s."siteId", s."workspaceId", s."workcenterId", s."jobSiteId", s."currentVersionId", s."standardCycle", s."slowDetect",
              s."cycleMode", s."stationStandardQuantity", s."stationQuantityUnit", s."stationStandardCycle",
              s."stationStandardRate", s."stationStandardRateUnit", s."stationStandardRatePeriod",
-             s."standardRate", s."standardRateUnit", s."standardRatePeriod", s."jobStandardQuantity"
+             s."standardRate", s."standardRateUnit", s."standardRatePeriod"
   `;
   const t1 = Date.now();
 
@@ -278,7 +276,6 @@ export async function complete(input: StartCycleInput) {
     jobStandardRate: setup.standardRate,
     jobStandardRateUnit: setup.standardRateUnit,
     jobStandardRatePeriod: setup.standardRatePeriod,
-    jobStandardQuantity: setup.jobStandardQuantity,
   });
   const standardCycleSeconds = std.standardCycleSeconds;
   const cycleStamp = resolveCycleActuals(std, quantity ?? null);
