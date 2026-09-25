@@ -1,6 +1,7 @@
 import { ORPCError } from "@orpc/server";
 import type { Automation, AutomationAction, AutomationFramework } from "@rw/automations";
 import * as z from "zod";
+import { listAutomationRuns } from "@rw/services/automation/runs";
 import { getAutomationFramework } from "../automations/index.js";
 import { userRequired } from "./middleware.js";
 
@@ -224,3 +225,21 @@ export const deleteAutomation = userRequired.input(z.object({ id: z.string() }))
   fw.engine.reload();
   return { ok: true };
 });
+
+/**
+ * Run history for one automation, newest first: each run it matched, whether it acted or was
+ * skipped (cooldown), and what each of its actions did. Readable by anyone who can view the
+ * automation. Page with `before` = the oldest `firedAt` already shown.
+ */
+export const listRuns = userRequired
+  .input(
+    z.object({
+      automationId: z.uuid(),
+      limit: z.number().int().min(1).max(200).default(50),
+      before: z.coerce.date().optional(),
+    }),
+  )
+  .handler(async ({ input, context }) => {
+    await context.access.require("VIEW", { automation: input.automationId });
+    return listAutomationRuns(input);
+  });
