@@ -207,7 +207,7 @@ export async function create(input: CreateStationInput) {
   }
 
   const profile = await resolveStationProfileFields(siteId, null, input);
-  if (profile && "error" in profile) return profile;
+  if (profile && "error" in profile) return { error: profile.error, code: profile.code };
   const profileFields = profile?.fields ?? {};
 
   const wantVersion = hasVersionFields(input as unknown as Record<string, unknown>) || profile != null;
@@ -434,7 +434,7 @@ export async function update(id: string, input: UpdateStationInput) {
   const profile = touchesConfig
     ? await resolveStationProfileFields(current.siteId, current.currentVersion, input)
     : null;
-  if (profile && "error" in profile) return profile;
+  if (profile && "error" in profile) return { error: profile.error, code: profile.code };
   const profileFields = profile?.fields ?? {};
   const wantVersionUpdate = hasVersionFields(versionInput as unknown as Record<string, unknown>) || profile != null;
 

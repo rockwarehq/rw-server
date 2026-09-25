@@ -76,3 +76,4 @@ export {
   getFilterLabelIds,
   type SetLabelFilterInput,
 } from "./label-filter.js";
+export { canRunJob, checkEligibility, eligibleJobs, eligibleStations } from "./eligibility.js";

@@ -40,6 +40,11 @@ const createInputSchema = z.object({
   slowDetectUnit: z.enum(["PERCENTAGE"]).optional(),
   inLineCalculations: z.boolean().optional(),
   inStationCalculations: z.boolean().optional(),
+  // Follow a profile (ADR-0017): how the station counts comes from it, and
+  // only its speed can be set here. null = stop following (values stay).
+  profileId: z.uuid().nullable().optional(),
+  // Drop the station's own speed and use the profile's usual speed.
+  useProfileSpeed: z.boolean().optional(),
 });
 
 const updateInputSchema = z.object({
@@ -63,6 +68,11 @@ const updateInputSchema = z.object({
   slowDetectUnit: z.enum(["PERCENTAGE"]).optional(),
   inLineCalculations: z.boolean().optional(),
   inStationCalculations: z.boolean().optional(),
+  // Follow a profile (ADR-0017): how the station counts comes from it, and
+  // only its speed can be set here. null = stop following (values stay).
+  profileId: z.uuid().nullable().optional(),
+  // Drop the station's own speed and use the profile's usual speed.
+  useProfileSpeed: z.boolean().optional(),
 });
 
 const idInputSchema = z.object({
@@ -602,4 +612,26 @@ export const listLabelFilters = userRequired.input(stationIdInputSchema).handler
   const result = await station.listLabelFilters(input.stationId);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
+});
+
+const eligibleJobsInputSchema = z.object({
+  stationId: z.uuid(),
+  q: z.string().optional(),
+  // Also return jobs this station can't run, each with its reasons.
+  includeBlocked: z.boolean().default(false),
+  limit: z.number().min(0).default(50),
+  offset: z.number().min(0).default(0),
+});
+
+/**
+ * Jobs this station can run (ADR-0017): same counting kind as the station,
+ * and passing its job label filter. For the operator's job picker.
+ */
+export const eligibleJobs = userOrDisplayRequired.input(eligibleJobsInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { station: input.stationId });
+
+  const { stationId, ...opts } = input;
+  const result = await station.eligibleJobs(stationId, opts);
+  if (result.error !== undefined) throwServiceError(result);
+  return result;
 });

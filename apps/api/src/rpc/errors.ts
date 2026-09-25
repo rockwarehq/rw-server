@@ -53,6 +53,13 @@ const EXACT: Record<string, OrpcErrorCode> = {
   TOOL_SITE_MISMATCH: "CONFLICT",
   WORKCENTER_MISMATCH: "CONFLICT",
   LABEL_FILTER_MISMATCH: "CONFLICT",
+  // Station profiles (ADR-0017): the job counts a different way than the
+  // station, a profile in use can't change how it counts, a job can't move to
+  // another kind, and a finished-parts clock feeds one product.
+  PROFILE_MISMATCH: "CONFLICT",
+  PROFILE_IN_USE: "CONFLICT",
+  PROFILE_KIND_CHANGE: "CONFLICT",
+  ONE_OUTPUT_PRODUCT: "CONFLICT",
   DEFINITION_PATTERN_MISMATCH: "CONFLICT",
   NOT_ARCHIVED: "CONFLICT",
   IN_OTHER_GROUP: "CONFLICT",

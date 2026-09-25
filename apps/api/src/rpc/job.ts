@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { userRequired, userOrDisplayRequired } from "./middleware.js";
-import { tool, job } from "@rw/services/job/index";
+import { tool, job, jobProfile } from "@rw/services/job/index";
+import { station } from "@rw/services/facility/index";
 import { type CodeOverrides, throwServiceError, unwrap } from "./errors.js";
 
 // Historical mappings that predate the shared mapper — pinned because
@@ -93,6 +94,9 @@ const jobCreateInputSchema = z.object({
   standardQuantity: z.number().positive().nullable().optional(),
   productsPerCycle: z.number().int().positive().optional(),
   attrs: z.record(z.string(), z.unknown()).optional(),
+  // The kind of machine this job is made for (ADR-0017). Its speed takes the
+  // profile's shape; a new job with no speed starts with the profile's usual one.
+  profileId: z.uuid().nullable().optional(),
 });
 
 const jobUpdateInputSchema = z.object({
@@ -109,6 +113,9 @@ const jobUpdateInputSchema = z.object({
   standardQuantity: z.number().positive().nullable().optional(),
   productsPerCycle: z.number().int().positive().optional(),
   attrs: z.record(z.string(), z.unknown()).optional(),
+  // The kind of machine this job is made for (ADR-0017). Its speed takes the
+  // profile's shape; a new job with no speed starts with the profile's usual one.
+  profileId: z.uuid().nullable().optional(),
 });
 
 const jobIdInputSchema = z.object({
@@ -421,4 +428,26 @@ export const jobsByProductIds = userRequired.input(jobsByProductIdsInputSchema).
 
   const result = await job.jobsByProductIds(input.siteId, input.productIds);
   return result.data;
+});
+
+// ============================================================================
+// Procedures - Where a job runs, and its planning speed (ADR-0017)
+// ============================================================================
+
+/**
+ * Every station on the job's site, each with the reasons it can't run the job
+ * (empty = it can): PROFILE_MISMATCH (counts a different way) or
+ * LABEL_FILTER_MISMATCH (the station's job filter).
+ */
+export const eligibleStations = userOrDisplayRequired.input(jobIdInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { job: input.id });
+
+  return unwrap(await station.eligibleStations(input.id));
+});
+
+/** The job's target with no station: its speed (or its profile's) and output per hour. */
+export const planning = userOrDisplayRequired.input(jobIdInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { job: input.id });
+
+  return unwrap(await jobProfile.planning(input.id));
 });

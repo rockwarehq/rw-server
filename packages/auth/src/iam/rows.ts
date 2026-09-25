@@ -102,6 +102,8 @@ export const RESOLVERS = {
     prisma.callDefinition.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   productionMode: (id: string) =>
     prisma.productionMode.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  stationProfile: (id: string) =>
+    prisma.stationProfile.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   shiftPattern: (id: string) => prisma.shiftPattern.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   shiftDefinition: (id: string) =>
     prisma.shiftDefinition
@@ -198,6 +200,7 @@ export const NOT_FOUND_MESSAGES: Record<RowKind, string> = {
   call: "Call not found",
   callDefinition: "Call definition not found",
   productionMode: "Production mode not found",
+  stationProfile: "Profile not found",
   notificationGroup: "Notification group not found",
   notification: "Notification not found",
   disposition: "Disposition not found",

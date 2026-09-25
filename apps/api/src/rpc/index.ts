@@ -17,6 +17,7 @@ import * as statusCategory from "./status-category.js";
 import * as statusReason from "./status-reason.js";
 import * as callRpc from "./call.js";
 import * as productionModeRpc from "./production-mode.js";
+import * as stationProfileRpc from "./station-profile.js";
 import * as notificationRpc from "./notification.js";
 import * as shift from "./shift.js";
 import * as disposition from "./disposition.js";
@@ -213,6 +214,7 @@ export const router = {
   station: {
     create: station.create,
     list: station.list,
+    eligibleJobs: station.eligibleJobs,
     get: station.get,
     update: station.update,
     move: station.move,
@@ -318,6 +320,8 @@ export const router = {
     removeItem: job.removeItem,
     listItems: job.listItems,
     jobsByProductIds: job.jobsByProductIds,
+    eligibleStations: job.eligibleStations,
+    planning: job.planning,
   },
   dashboard: {
     create: dashboard.create,
@@ -393,6 +397,13 @@ export const router = {
     get: callRpc.get,
     listActive: callRpc.listActive,
     search: callRpc.search,
+  },
+  stationProfile: {
+    create: stationProfileRpc.create,
+    list: stationProfileRpc.list,
+    get: stationProfileRpc.get,
+    update: stationProfileRpc.update,
+    archive: stationProfileRpc.archive,
   },
   productionMode: {
     create: productionModeRpc.create,

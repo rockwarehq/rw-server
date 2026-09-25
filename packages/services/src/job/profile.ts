@@ -4,7 +4,9 @@ import {
   kindOf,
   kindsMatch,
   planningRate,
+  type ProfileSpec,
   type Speed,
+  type SpeedDisplay,
   speedDisplay,
   usesRate,
   validateSpeedShape,
@@ -116,7 +118,15 @@ export async function resolveJobProfileFields(
  * A job's planning numbers with no station picked: its own speed, or the
  * profile's usual speed, and what that makes per hour given its products.
  */
-export async function planning(jobId: string) {
+export interface JobPlanning {
+  profile: (ProfileSpec & { id: string; name: string }) | null;
+  speedDisplay: SpeedDisplay | null;
+  /** Parts per cycle or stroke (active products added up; at least 1). */
+  partsPerCount: number;
+  rate: ReturnType<typeof planningRate> | null;
+}
+
+export async function planning(jobId: string): Promise<{ error: string; code: string } | { data: JobPlanning }> {
   const job = await prisma.job.findUnique({
     where: { id: jobId },
     select: {
@@ -130,7 +140,7 @@ export async function planning(jobId: string) {
   });
   if (!job || job.deletedAt) return { error: "Job not found", code: "JOB_NOT_FOUND" };
   const version = job.currentVersion;
-  if (!version?.profile) return { data: { profile: null, speedDisplay: null, rate: null } };
+  if (!version?.profile) return { data: { profile: null, speedDisplay: null, partsPerCount: 1, rate: null } };
 
   const spec = toSpec(version.profile);
   const partsPerCount = job.jobProducts

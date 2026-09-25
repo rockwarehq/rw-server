@@ -2,3 +2,4 @@
 
 export * as tool from "./tool.js";
 export * as job from "./job.js";
+export * as jobProfile from "./profile.js";
