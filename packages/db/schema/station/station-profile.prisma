@@ -1,0 +1,48 @@
+/// What the number in a Count-by-time report stands for (ADR-0017).
+/// OUTPUT: finished parts, so the count goes to one product at x1.
+/// CYCLES: machine strokes, so each product's quantity is parts per stroke.
+/// Count by amount is always OUTPUT; count by cycle is always CYCLES.
+enum ProfileCountedAs {
+  OUTPUT
+  CYCLES
+}
+
+/// A named kind of machine: how its signal counts, in what unit, and the
+/// usual speed for new jobs (ADR-0017). Many stations share one profile.
+/// A station copies these values onto its StationVersion, so the cycle
+/// engine keeps reading StationVersion only.
+model StationProfile {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+
+  cycleMode      CycleMode
+  /// The unit the machine counts in ("ea", "ft", "lb", ...).
+  quantityUnit   String           @default("")
+  /// Count by amount only: how much one signal means (e.g. 100 ft).
+  signalAmount   Decimal?         @db.Decimal(18, 4)
+  /// Count by time only: seconds between reports (e.g. 60).
+  signalInterval Decimal?         @db.Decimal(10, 2)
+  countedAs      ProfileCountedAs @default(CYCLES)
+
+  /// The usual speed. It fills in new jobs, and stations use it when they
+  /// have no speed of their own. Count by cycle uses standardCycle (s);
+  /// the other two use the rate.
+  standardCycle      Decimal?   @db.Decimal(10, 2)
+  standardRate       Decimal?   @db.Decimal(18, 4)
+  standardRateUnit   String     @default("")
+  standardRatePeriod RatePeriod @default(MINUTE)
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  stationVersions StationVersion[]
+  jobVersions     JobVersion[]
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}

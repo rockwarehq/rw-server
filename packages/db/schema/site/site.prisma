@@ -65,6 +65,7 @@ model Site {
   callDefinitions         CallDefinition[]
   calls                   Call[]
   productionModes         ProductionMode[]
+  stationProfiles         StationProfile[]
   automations             Automation[]
   notificationGroups      NotificationGroup[]
   notifications           Notification[]
