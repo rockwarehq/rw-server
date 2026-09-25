@@ -54,10 +54,30 @@ says:
   - `CYCLES`: the number is machine strokes. Each product's quantity is the
     parts per stroke.
   - Count by cycle is always `CYCLES`, and count by amount is always `OUTPUT`.
-- the **usual speed**. For count by cycle this is seconds per cycle. For the
-  other two it is a rate, like 45 ft/min.
+- the **default standard** for new jobs, named by kind: the **standard cycle
+  time** (count by cycle), **standard line speed** (count by amount), or
+  **standard rate** / **standard stroke rate** (count by time).
 
 Many stations use one profile, so a change is made in one place.
+
+### 1a. The default profile: "Discrete"
+
+Most plants do normal discrete work: one signal is one cycle, and each job has
+a target cycle time in seconds. They should not have to set anything up. So:
+
+- Every site has exactly one **default** profile, named **"Discrete"**. It
+  is fixed: it always counts by cycle, it can't be renamed, changed or
+  archived, and it has no standard of its own. Every job sets its own
+  **standard cycle time**. A partial unique index keeps one default per site.
+  `ensureDefaultProfile` makes it the first time a site needs it.
+- A new station with no profile gets the default. So does an older station
+  when it is next edited, and it keeps its own cycle time.
+- A new job with no profile gets the default, unless it arrives with a rate,
+  which means another kind of machine.
+- When checking where a job can run, a job with no profile counts as Discrete.
+- The UI hides profiles until a plant adds a second one, for example for an
+  extruder or a production-rate process. Until then, the job and station pages
+  just show "Cycle time".
 
 ### 2. Three questions, three owners
 
@@ -133,12 +153,16 @@ certification.
 Migration `20261004100000_station_profiles` does these steps:
 
 1. It makes one profile for each different counting setup on live stations,
-   named like "Count by amount – 100 ft".
+   named like "Count by amount – 100 ft". The plain count-by-cycle setup
+   becomes the site's "Discrete" default, with no standard of its own; its
+   stations keep their own standard cycle times. Every site without one gets
+   it.
 2. It points each station at its profile. A station keeps its own speed. It
    follows the profile only if its speed already equals the profile's usual
    speed, which is the speed most of its stations use.
 3. It gives each job the profile of the station it ran on last. Jobs that
-   never ran stay without a profile until someone picks one.
+   never ran get the Discrete default, unless they carry a rate; those stay
+   without a profile until someone picks one.
 4. It turns a count-by-time station's "expected per report" into a rate per
    minute. The number of units per report stays the same.
 

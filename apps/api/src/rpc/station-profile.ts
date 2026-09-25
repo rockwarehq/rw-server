@@ -45,6 +45,7 @@ const listInputSchema = z.object({
 });
 
 const idInputSchema = z.object({ id: z.uuid() });
+const siteInputSchema = z.object({ siteId: z.uuid() });
 
 export const create = userRequired.input(createInputSchema).handler(async ({ input, context }) => {
   await context.access.require("ADMIN", { site: input.siteId });
@@ -63,6 +64,13 @@ export const get = userOrDisplayRequired.input(idInputSchema).handler(async ({ i
   await context.access.require("VIEW", { stationProfile: input.id });
 
   return unwrap(await stationProfile.getById(input.id), { notFoundMessage: "Profile not found" });
+});
+
+/** The site's default profile, "Discrete" (made on first use). */
+export const getDefault = userOrDisplayRequired.input(siteInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { site: input.siteId });
+
+  return unwrap(await stationProfile.getDefault(input.siteId));
 });
 
 export const update = userRequired.input(updateInputSchema).handler(async ({ input, context }) => {

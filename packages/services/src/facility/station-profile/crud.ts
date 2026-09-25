@@ -2,11 +2,13 @@ import prisma, { Prisma } from "@rw/db";
 import type { CycleModeValue } from "../../cycle/standards.js";
 import type { RatePeriod } from "../../lib/units/quantity.js";
 import { applyProfileToStations } from "./apply.js";
+import { ensureDefaultProfile } from "./default.js";
 import { type ProfileRow, toSpec } from "./spec.js";
 import { type CountedAs, effectiveCountedAs, type ProfileSpec, speedDisplay, validateProfile } from "./rules.js";
 import { areCompatible } from "../../lib/units/quantity.js";
 
 // Station profiles (ADR-0017): a per-site list of named kinds of machine.
+// Every site has one default, "Discrete" (see default.ts).
 
 type ServiceError = { error: string; code: string };
 
@@ -112,6 +114,8 @@ export async function create(input: CreateStationProfileInput) {
 
 export async function list(filter: ListStationProfilesFilter = {}) {
   const { siteId, includeArchived, name, limit = 50, offset = 0 } = filter;
+  // A site always has its default, even before anything asked for it.
+  if (siteId) await ensureDefaultProfile(siteId);
   const where: Prisma.StationProfileWhereInput = {};
   if (!includeArchived) where.archivedAt = null;
   if (siteId) where.siteId = siteId;
@@ -122,12 +126,22 @@ export async function list(filter: ListStationProfilesFilter = {}) {
       where,
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
       skip: Number(offset),
-      orderBy: { name: "asc" },
+      // The default first, then by name.
+      orderBy: [{ isDefault: "desc" }, { name: "asc" }],
     }),
     prisma.stationProfile.count({ where }),
   ]);
   const used = await usage(rows.map((r) => r.id));
   return { data: rows.map((r) => present(r, used.get(r.id))), total, limit: Number(limit), offset: Number(offset) };
+}
+
+/** The site's default profile (made if missing). */
+export async function getDefault(siteId: string) {
+  const site = await prisma.site.findUnique({ where: { id: siteId }, select: { id: true } });
+  if (!site) return { error: "Site not found", code: "SITE_NOT_FOUND" };
+  const row = await ensureDefaultProfile(siteId);
+  const used = await usage([row.id]);
+  return { data: present(row, used.get(row.id)) };
 }
 
 export async function getById(id: string) {
@@ -138,15 +152,22 @@ export async function getById(id: string) {
 }
 
 /**
- * Edit a profile. Stations that follow it get a new version with the new
- * values at once. While any station or job uses it, a profile cannot switch
- * how it counts or move to a unit of another kind — that would change what
- * every recorded number means; make a new profile instead.
+ * Edit a profile (never the Discrete default). Stations that follow it get a
+ * new version with the new values at once. While any station or job uses it,
+ * a profile cannot switch how it counts or move to a unit of another kind —
+ * that would change what every recorded number means; make a new profile
+ * instead.
  */
 export async function update(id: string, input: UpdateStationProfileInput) {
   const row = await prisma.stationProfile.findUnique({ where: { id } });
   if (!row || row.archivedAt) return NOT_FOUND;
   const before = toSpec(row);
+
+  // The Discrete default is fixed: always count by cycle, no standard of its
+  // own (every job sets its own standard cycle time), and no renaming.
+  if (row.isDefault) {
+    return { error: "The default profile can't be changed.", code: "PROFILE_IS_DEFAULT" };
+  }
 
   const cycleMode = input.cycleMode ?? before.cycleMode;
   const merged: ProfileSpec = {
@@ -201,8 +222,11 @@ export async function update(id: string, input: UpdateStationProfileInput) {
 
 /** Archive a profile no live station uses. Jobs keep pointing at it. */
 export async function archive(id: string) {
-  const row = await prisma.stationProfile.findUnique({ where: { id }, select: { archivedAt: true } });
+  const row = await prisma.stationProfile.findUnique({ where: { id }, select: { archivedAt: true, isDefault: true } });
   if (!row || row.archivedAt) return NOT_FOUND;
+  if (row.isDefault) {
+    return { error: "The default profile can't be archived.", code: "PROFILE_IS_DEFAULT" };
+  }
   const used = (await usage([id])).get(id);
   if (used && used.stations > 0) {
     return {

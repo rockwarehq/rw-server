@@ -3,7 +3,7 @@
 --   psql "$DATABASE_URL" -f packages/db/scripts/preflight-station-profiles.sql
 -- Each section is a list a person should look at. Empty is good.
 
-\echo '== 1. Profiles the migration will make (one per counting setup, per site)'
+\echo '== 1. Profiles the migration will make (one per counting setup, per site; plain count by cycle becomes the "Discrete" default, and every site gets one)'
 SELECT si.name AS site, sv."cycleMode", sv."quantityUnit",
        CASE WHEN sv."cycleMode" = 'QUANTITY_PER_CYCLE' THEN sv."standardQuantity" END AS "amountPerSignal",
        CASE WHEN sv."cycleMode" = 'QUANTITY_PER_INTERVAL' THEN sv."standardCycle" END AS "reportEverySeconds",
@@ -15,7 +15,7 @@ WHERE s."deletedAt" IS NULL
 GROUP BY 1, 2, 3, 4, 5
 ORDER BY 1, 2, 3;
 
-\echo '== 2. Live stations with no settings at all (they get no profile until edited)'
+\echo '== 2. Live stations with no settings at all (they get the Discrete default when next edited)'
 SELECT si.name AS site, s.name AS station
 FROM "Station" s JOIN "Site" si ON si.id = s."siteId"
 WHERE s."deletedAt" IS NULL AND s."currentVersionId" IS NULL
@@ -32,10 +32,12 @@ GROUP BY jv.name
 HAVING COUNT(DISTINCT sv."cycleMode") > 1
 ORDER BY 1;
 
-\echo '== 4. Jobs that never ran (they stay without a profile; pick one on the job page)'
-SELECT jv.name AS job
+\echo '== 4. Jobs that never ran but carry a rate (they stay without a profile; pick one on the job page)'
+\echo '   Jobs that never ran and have no rate get the Discrete default.'
+SELECT jv.name AS job, jv."standardRate", jv."standardRateUnit"
 FROM "Job" j JOIN "JobVersion" jv ON jv.id = j."currentVersionId"
 WHERE j."deletedAt" IS NULL
+  AND jv."standardRate" IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM "StationJobLog" l WHERE l."jobId" = j.id)
 ORDER BY 1;
 

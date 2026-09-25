@@ -85,7 +85,9 @@ const stationInclude = {
   },
   currentVersion: {
     include: {
-      profile: { select: { id: true, name: true, cycleMode: true, countedAs: true, quantityUnit: true } },
+      profile: {
+        select: { id: true, name: true, cycleMode: true, countedAs: true, quantityUnit: true, isDefault: true },
+      },
     },
   },
   labels: {

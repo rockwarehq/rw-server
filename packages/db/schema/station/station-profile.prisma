@@ -33,6 +33,12 @@ model StationProfile {
   standardRateUnit   String     @default("")
   standardRatePeriod RatePeriod @default(MINUTE)
 
+  /// The plant's default profile, "Discrete" (count by cycle). Every site has
+  /// exactly one; new stations and jobs get it unless another is picked. It
+  /// always counts by cycle and can't be archived. One per site is enforced
+  /// by a partial unique index in the migration (Prisma can't express it).
+  isDefault Boolean @default(false)
+
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
   archivedAt DateTime? @db.Timestamptz(3)

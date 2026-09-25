@@ -2,13 +2,20 @@
 -- signal counts (by cycle, by amount, by time), its unit, the amount per
 -- signal or the report interval, and the usual speed for new jobs.
 --
+-- Every site gets one default profile, "Discrete": count by cycle, with the
+-- target a cycle time in seconds. New stations and jobs get it unless another
+-- profile is picked, so a plant that only does normal discrete work never
+-- sets anything up.
+--
 -- Backfill, per site:
---   1. One profile for each different counting setup on live stations.
+--   1. One profile for each different counting setup on live stations. The
+--      plain count-by-cycle setup becomes the site's "Discrete" default.
 --   2. Each station's current version points at its profile. Its own speed
 --      stays; it follows the profile only when it already equals the
 --      profile's usual speed.
 --   3. Each job's current version gets the profile of the station it ran on
---      last. Jobs that never ran stay without a profile.
+--      last. Jobs that never ran get the default, unless they carry a rate
+--      (then they stay without a profile for a person to pick).
 --
 -- Nothing the cycle engine reads changes, except one case: a Count-by-time
 -- station with an "expected per report" and no rate gets that written as a
@@ -37,6 +44,7 @@ CREATE TABLE "StationProfile" (
     "standardRate" DECIMAL(18,4),
     "standardRateUnit" TEXT NOT NULL DEFAULT '',
     "standardRatePeriod" "RatePeriod" NOT NULL DEFAULT 'MINUTE',
+    "isDefault" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMPTZ(3) NOT NULL,
     "archivedAt" TIMESTAMPTZ(3),
@@ -47,6 +55,8 @@ CREATE TABLE "StationProfile" (
 
 CREATE INDEX "StationProfile_siteId_idx" ON "StationProfile"("siteId");
 CREATE UNIQUE INDEX "StationProfile_siteId_name_key" ON "StationProfile"("siteId", "name");
+-- At most one default per site.
+CREATE UNIQUE INDEX "StationProfile_siteId_default_key" ON "StationProfile"("siteId") WHERE "isDefault";
 ALTER TABLE "StationProfile" ADD CONSTRAINT "StationProfile_siteId_fkey"
   FOREIGN KEY ("siteId") REFERENCES "Site"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
@@ -107,6 +117,10 @@ SELECT gen_random_uuid() AS "profileId",
 FROM sp_station st
 GROUP BY st."siteId", st."cycleMode", st."quantityUnit", st.amount, st."interval";
 
+-- The Discrete default has no standard of its own: every job sets its own
+-- standard cycle time. Its stations keep theirs (they won't follow it).
+UPDATE sp_setup SET "speedCycle" = NULL WHERE "cycleMode" = 'DISCRETE' AND "quantityUnit" = '';
+
 -- The most common rate (value + unit + period together) among its stations.
 UPDATE sp_setup p
 SET "speedRate" = r."speedRate", "speedRateUnit" = r."speedRateUnit", "speedRatePeriod" = r."speedRatePeriod"
@@ -126,11 +140,11 @@ WHERE r."siteId" = p."siteId" AND r."cycleMode" = p."cycleMode"
   AND r.amount IS NOT DISTINCT FROM p.amount
   AND r."interval" IS NOT DISTINCT FROM p."interval";
 
--- Plain names, e.g. "Count by cycle (ea)", "Count by amount – 100 ft",
+-- Plain names, e.g. "Discrete", "Count by cycle (ea)", "Count by amount – 100 ft",
 -- "Count by time – every 60 s (ea)". A number is added if two still match.
 UPDATE sp_setup SET name = CASE "cycleMode"
-    WHEN 'DISCRETE' THEN 'Count by cycle'
-      || CASE WHEN "quantityUnit" <> '' THEN ' (' || "quantityUnit" || ')' ELSE '' END
+    WHEN 'DISCRETE' THEN CASE WHEN "quantityUnit" = '' THEN 'Discrete'
+      ELSE 'Count by cycle (' || "quantityUnit" || ')' END
     WHEN 'QUANTITY_PER_CYCLE' THEN 'Count by amount – '
       || COALESCE(trim_scale(amount)::text, '?') || ' ' || COALESCE(NULLIF("quantityUnit", ''), 'units')
     ELSE 'Count by time – every ' || COALESCE(trim_scale("interval")::text, '?') || ' s'
@@ -148,17 +162,32 @@ WHERE d."profileId" = p."profileId" AND d.n > 1;
 INSERT INTO "StationProfile" (
   "id", "name", "description", "cycleMode", "quantityUnit", "signalAmount", "signalInterval",
   "countedAs", "standardCycle", "standardRate", "standardRateUnit", "standardRatePeriod",
-  "createdAt", "updatedAt", "siteId"
+  "isDefault", "createdAt", "updatedAt", "siteId"
 )
-SELECT "profileId", name, 'Made from existing station settings.', "cycleMode", "quantityUnit",
+SELECT "profileId", name,
+       CASE WHEN "cycleMode" = 'DISCRETE' AND "quantityUnit" = ''
+            THEN 'Counts by cycle; the target is a cycle time in seconds.'
+            ELSE 'Made from existing station settings.' END,
+       "cycleMode", "quantityUnit",
        amount, "interval",
        -- Count by time: "strokes" keeps every job's products as they are.
        -- Switch a profile to "finished parts" once its jobs have one product.
        CASE WHEN "cycleMode" = 'QUANTITY_PER_CYCLE' THEN 'OUTPUT'::"ProfileCountedAs"
             ELSE 'CYCLES'::"ProfileCountedAs" END,
        "speedCycle", "speedRate", "speedRateUnit", "speedRatePeriod",
+       "cycleMode" = 'DISCRETE' AND "quantityUnit" = '',
        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, "siteId"
 FROM sp_setup;
+
+-- Every site without one gets the "Discrete" default (no usual speed; each
+-- job carries its own cycle time).
+INSERT INTO "StationProfile" (
+  "id", "name", "description", "cycleMode", "countedAs", "isDefault", "createdAt", "updatedAt", "siteId"
+)
+SELECT gen_random_uuid(), 'Discrete', 'Counts by cycle; the target is a cycle time in seconds.',
+       'DISCRETE', 'CYCLES', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, si.id
+FROM "Site" si
+WHERE NOT EXISTS (SELECT 1 FROM "StationProfile" p WHERE p."siteId" = si.id AND p."isDefault");
 
 -- ── 3. Stations point at their profile ───────────────────────────────────
 
@@ -195,6 +224,16 @@ JOIN LATERAL (
 ) last ON true
 WHERE jv.id = j."currentVersionId";
 
+-- Jobs that never ran get the default, unless they carry a rate (a rate
+-- means another kind of machine; a person picks the profile for those).
+UPDATE "JobVersion" jv
+SET "profileId" = p.id
+FROM "Job" j
+JOIN "StationProfile" p ON p."siteId" = j."siteId" AND p."isDefault"
+WHERE jv.id = j."currentVersionId"
+  AND jv."profileId" IS NULL
+  AND jv."standardRate" IS NULL;
+
 -- ── 5. Checks ────────────────────────────────────────────────────────────
 
 DO $$
@@ -214,6 +253,12 @@ BEGIN
   WHERE sv."cycleMode" <> p."cycleMode" OR sv."quantityUnit" <> p."quantityUnit";
   IF n > 0 THEN
     RAISE EXCEPTION 'station_profiles: % station version(s) do not match their profile', n;
+  END IF;
+
+  SELECT COUNT(*) INTO n FROM "Site" si
+  WHERE NOT EXISTS (SELECT 1 FROM "StationProfile" p WHERE p."siteId" = si.id AND p."isDefault" AND p."cycleMode" = 'DISCRETE');
+  IF n > 0 THEN
+    RAISE EXCEPTION 'station_profiles: % site(s) have no Discrete default', n;
   END IF;
 END $$;
 

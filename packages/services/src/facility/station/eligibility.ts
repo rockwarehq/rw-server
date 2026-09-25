@@ -7,7 +7,8 @@ import { COUNT_NAMES, type CountedAs, kindOf, kindsMatch } from "../station-prof
 // amendments, and the "which stations / which jobs" lists. Two gates:
 //   1. Kind — the job's profile must count the same way as the station, in a
 //      unit of the same kind. The math depends on it, so it always holds.
-//      A job with no profile yet skips this gate.
+//      A job with no profile counts as the Discrete default (unless it has a
+//      rate, then this gate is skipped).
 //   2. Labels — the station's JOB label filter (ADR-0011): the job must
 //      carry at least one of its labels. No filter, or an empty one, passes.
 
@@ -37,13 +38,20 @@ export interface EligibilityJob {
   labelIds: string[];
   /** Null = an older job with no profile yet. */
   profile: { cycleMode: CycleModeValue; countedAs: CountedAs; quantityUnit: string } | null;
+  /** The job has its own rate (only matters when it has no profile). */
+  hasRate?: boolean;
 }
+
+const DISCRETE_DEFAULT = { cycleMode: "DISCRETE" as const, countedAs: "CYCLES" as const, quantityUnit: "" };
 
 export function checkEligibility(station: EligibilityStation, job: EligibilityJob): EligibilityReason[] {
   const reasons: EligibilityReason[] = [];
 
-  if (job.profile) {
-    const jobKind = kindOf(job.profile.cycleMode, job.profile.countedAs, job.profile.quantityUnit);
+  // A job with no profile counts as the Discrete default — unless it carries
+  // a rate, which says it is for another kind of machine we can't name yet.
+  const jobProfile = job.profile ?? (job.hasRate ? null : DISCRETE_DEFAULT);
+  if (jobProfile) {
+    const jobKind = kindOf(jobProfile.cycleMode, jobProfile.countedAs, jobProfile.quantityUnit);
     const stationKind =
       station.countedAs == null
         ? { cycleMode: station.cycleMode, countedAs: null, quantityUnit: station.quantityUnit }
@@ -115,6 +123,7 @@ const jobSelect = {
   currentVersion: {
     select: {
       name: true,
+      standardRate: true,
       profile: { select: { id: true, cycleMode: true, countedAs: true, quantityUnit: true } },
     },
   },
@@ -138,6 +147,7 @@ function toJob(row: JobRow): EligibilityJob {
   return {
     name: row.currentVersion?.name ?? "",
     labelIds: row.labels.map((l) => l.id),
+    hasRate: row.currentVersion?.standardRate != null,
     profile: p
       ? { cycleMode: p.cycleMode as CycleModeValue, countedAs: p.countedAs as CountedAs, quantityUnit: p.quantityUnit }
       : null,
