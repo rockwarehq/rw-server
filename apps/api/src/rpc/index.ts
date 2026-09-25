@@ -402,6 +402,7 @@ export const router = {
     create: stationProfileRpc.create,
     list: stationProfileRpc.list,
     get: stationProfileRpc.get,
+    getDefault: stationProfileRpc.getDefault,
     update: stationProfileRpc.update,
     archive: stationProfileRpc.archive,
   },

@@ -285,6 +285,30 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("station profiles", () => {
     await call("job/addItem", { jobId: hj.id, productId: p2, quantity: 1 }, admin, 409);
   });
 
+  it("every site has a Discrete default; no profile given means the default", async () => {
+    const def = await call<Profile & { isDefault: boolean }>("stationProfile/getDefault", { siteId }, reader);
+    expect(def).toMatchObject({ name: "Discrete", cycleMode: "DISCRETE", isDefault: true });
+    const list = await call<{ data: (Profile & { isDefault: boolean })[] }>("stationProfile/list", { siteId });
+    expect(list.data[0]).toMatchObject({ id: def.id, isDefault: true });
+
+    // A plain station and a plain job need no setup at all.
+    const plain = await station("plain", { standardCycle: 22 });
+    expect(plain.currentVersion).toMatchObject({ profileId: def.id, cycleMode: "DISCRETE" });
+    expect(num(plain.currentVersion.standardCycle)).toBe(22);
+    const plainJob = await job("plain", { standardCycle: 18 });
+    expect(plainJob.currentVersion.profileId).toBe(def.id);
+    expect(num(plainJob.currentVersion.standardCycle)).toBe(18);
+    await call("station/changeJob", { stationId: plain.id, jobId: plainJob.id });
+
+    // A job that arrives with a rate is for another kind of machine: no default.
+    const rated = await job("rated", { standardRate: 40, standardRateUnit: "ft" });
+    expect(rated.currentVersion.profileId).toBeNull();
+
+    // The default always counts by cycle and stays.
+    await call("stationProfile/update", { id: def.id, cycleMode: "QUANTITY_PER_CYCLE", quantityUnit: "ft", signalAmount: 1 }, admin, 409);
+    await call("stationProfile/archive", { id: def.id }, admin, 409);
+  });
+
   it("a profile used by stations can't be archived", async () => {
     await call("stationProfile/archive", { id: press.id }, admin, 409);
   });

@@ -1,4 +1,5 @@
 import prisma from "@rw/db";
+import { ensureDefaultProfile } from "../facility/station-profile/default.js";
 import { toSpec } from "../facility/station-profile/spec.js";
 import {
   kindOf,
@@ -47,8 +48,9 @@ export interface JobProfileFields {
 }
 
 /**
- * Work out a job version's profile and speed. Returns null when the job has
- * no profile and asks for none (older jobs keep working as before).
+ * Work out a job version's profile and speed. A new job with no profile gets
+ * the site's Discrete default. Returns null for an older job that has no
+ * profile and asks for none (it keeps working as before).
  *  - A new job with no speed of its own starts with the profile's usual speed,
  *    so it has a target from day one (for planning, before any station).
  *  - A job can move to another profile only of the same counting kind: same
@@ -59,12 +61,15 @@ export async function resolveJobProfileFields(
   old: OldVersion,
   req: JobProfileRequest,
 ): Promise<{ error: string; code: string } | { fields: JobProfileFields } | null> {
-  const profileId = req.profileId !== undefined ? req.profileId : (old?.profileId ?? null);
+  let profileId = req.profileId !== undefined ? req.profileId : (old?.profileId ?? null);
   if (!profileId) {
     if (req.profileId === null && old?.profileId) {
       return { error: "A job's profile can be changed but not removed", code: "PROFILE_REQUIRED" };
     }
-    return null;
+    // A new job with no profile is made for the site's Discrete default —
+    // unless it arrives with a rate, which means another kind of machine.
+    if (old || req.standardRate != null) return null;
+    profileId = (await ensureDefaultProfile(siteId)).id;
   }
 
   const profile = await prisma.stationProfile.findUnique({ where: { id: profileId } });

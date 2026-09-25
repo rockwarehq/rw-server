@@ -59,6 +59,8 @@ const EXACT: Record<string, OrpcErrorCode> = {
   PROFILE_MISMATCH: "CONFLICT",
   PROFILE_IN_USE: "CONFLICT",
   PROFILE_KIND_CHANGE: "CONFLICT",
+  // The Discrete default can't be archived or switched to another kind.
+  PROFILE_IS_DEFAULT: "CONFLICT",
   ONE_OUTPUT_PRODUCT: "CONFLICT",
   DEFINITION_PATTERN_MISMATCH: "CONFLICT",
   NOT_ARCHIVED: "CONFLICT",

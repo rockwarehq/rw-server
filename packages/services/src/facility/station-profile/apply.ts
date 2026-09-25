@@ -4,6 +4,7 @@ import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import type { RatePeriod } from "../../lib/units/quantity.js";
 import { decimalToNumber } from "../../metrics/sync.js";
 import { refreshStationStandards } from "../station/state.js";
+import { ensureDefaultProfile } from "./default.js";
 import { toSpec } from "./spec.js";
 import {
   type Speed,
@@ -143,8 +144,16 @@ export async function resolveStationProfileFields(
   req: StationProfileRequest,
 ): Promise<{ error: string; code: string } | { fields: StationProfileFields | { profileId: null } } | null> {
   if (req.profileId === null) return { fields: { profileId: null } };
-  const profileId = req.profileId ?? current?.profileId ?? null;
-  if (!profileId) return null;
+  let profileId = req.profileId ?? current?.profileId ?? null;
+  // A hand-set station taking the default keeps the speed it already has.
+  let keepSpeed = false;
+  if (!profileId) {
+    keepSpeed = !!current;
+    // No profile yet: the site's Discrete default — unless an older client is
+    // setting another way of counting by hand, which stays a hand-set station.
+    if (req.cycleMode !== undefined && req.cycleMode !== "DISCRETE") return null;
+    profileId = (await ensureDefaultProfile(siteId)).id;
+  }
 
   const profile = await prisma.stationProfile.findUnique({ where: { id: profileId } });
   if (!profile || profile.archivedAt || profile.siteId !== siteId) {
@@ -190,6 +199,8 @@ export async function resolveStationProfileFields(
     const hasSpeed = usesRate(spec.cycleMode) ? checked.data.standardRate != null : checked.data.standardCycle != null;
     // Clearing the station's speed means "follow the profile".
     ownSpeed = hasSpeed ? checked.data : null;
+  } else if (keepSpeed && current && hasOwnSpeed(spec.cycleMode, ownSpeedOf(current))) {
+    ownSpeed = ownSpeedOf(current);
   } else if (switching || !current || current.speedFromProfile) {
     ownSpeed = null;
   } else {
@@ -197,6 +208,10 @@ export async function resolveStationProfileFields(
   }
 
   return { fields: stationFieldsFromProfile(profileId, spec, ownSpeed) };
+}
+
+function hasOwnSpeed(mode: string, speed: Speed): boolean {
+  return mode === "DISCRETE" ? speed.standardCycle != null : speed.standardRate != null;
 }
 
 function sameNumber(a: number | null | undefined, b: number | null): boolean {

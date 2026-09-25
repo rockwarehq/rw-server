@@ -24,6 +24,7 @@ const PROFILE_SUMMARY = {
   standardRate: true,
   standardRateUnit: true,
   standardRatePeriod: true,
+  isDefault: true,
 } as const;
 
 // ============================================================================

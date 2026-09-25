@@ -64,8 +64,15 @@ describe("checkEligibility", () => {
     ]);
   });
 
-  it("an older job with no profile only meets the label gate", () => {
+  it("a job with no profile counts as the Discrete default", () => {
     const legacy = { ...moldingJob, profile: null };
+    const extruder = { ...press, cycleMode: "QUANTITY_PER_CYCLE" as const, quantityUnit: "ft" };
+    expect(checkEligibility(press, legacy)).toEqual([]);
+    expect(checkEligibility(extruder, legacy).map((r) => r.code)).toEqual(["PROFILE_MISMATCH"]);
+  });
+
+  it("a job with no profile but a rate only meets the label gate", () => {
+    const legacy = { ...moldingJob, profile: null, hasRate: true };
     const extruder = { ...press, cycleMode: "QUANTITY_PER_CYCLE" as const, quantityUnit: "ft" };
     expect(checkEligibility(extruder, legacy)).toEqual([]);
   });
