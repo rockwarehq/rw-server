@@ -63,7 +63,7 @@ Each state-log period overlapping the bucket is clipped to the bucket bounds (an
 
 | Field | Definition |
 | --- | --- |
-| `idealCycleSeconds` | Sum over completed cycles of the job's **standard cycle time** (from the cycle's `JobVersion.standardCycle` snapshot; JOB buckets use the job's snapshot uniformly). This is "earned time" — what the cycles *should* have taken — and is the numerator of Performance. |
+| `idealCycleSeconds` | Sum over completed cycles of each cycle's **earned time**, the `Cycle.standardCycle` stamped when it was recorded. For count by cycle that is the standard cycle time. For count by amount or by time it is quantity × time per unit (ADR-0017). Older cycles with no stamp fall back to the job version's `standardCycle`. This is what the cycles *should* have taken, and it is the numerator of Performance. |
 | `totalCycleSeconds` | Sum of actual cycle durations (`end - start`), clipped to the bucket window. Diagnostic — not used in any OEE ratio. |
 | `currentStandardCycle` | Display only, **not additive**. The standard cycle of the station's latest job. Time rollups take the latest sub-bucket's non-null value; WORKCENTER/SITE rollups set it NULL. |
 
