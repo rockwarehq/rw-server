@@ -193,6 +193,7 @@ async function listSystemInstances(
             standardCycle: job.currentVersion?.standardCycle != null ? Number(job.currentVersion.standardCycle) : null,
             standardCycleUnit: job.currentVersion?.standardCycleUnit ?? null,
             productsPerCycle: job.currentVersion?.productsPerCycle ?? null,
+            profileId: job.currentVersion?.profileId ?? null,
             siteId: job.siteId,
             createdAt: job.createdAt,
             updatedAt: job.updatedAt,

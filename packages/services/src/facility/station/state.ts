@@ -879,6 +879,20 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
   return result.entry;
 }
 
+// A station's or its job's standards changed mid-run (job edit, station
+// profile edit): re-resolve the effective standard and re-publish it.
+export async function refreshStationStandards(stationId: string, jobId: string, observedAt: Date): Promise<void> {
+  const std = await resolveEffectiveStandards(prisma, stationId, jobId);
+  await publishStationStandardCycleMetric(stationId, std.standardCycleSeconds, observedAt);
+  const ctx = await loadStationMetricContext(prisma, stationId);
+  if (ctx)
+    publishStationStatusEntityEvent(ctx, [
+      "currentSecondsPerUnit",
+      "currentStandardQuantity",
+      "currentStandardCycleSeconds",
+    ]);
+}
+
 // Mid-run job or job-product edits: re-publish job-derived context for every
 // station currently running the job, mirroring what a job change publishes
 // (see station/jobs.ts). `undefined` means the field didn't change; `null` clears it.
@@ -900,15 +914,7 @@ export async function refreshStationsRunningJob(
   for (const { id } of stations) {
     if (changes.name !== undefined) await publishStationCurrentJobMetric(id, changes.name, observedAt);
     if (changes.standardsChanged) {
-      const std = await resolveEffectiveStandards(prisma, id, jobId);
-      await publishStationStandardCycleMetric(id, std.standardCycleSeconds, observedAt);
-      const ctx = await loadStationMetricContext(prisma, id);
-      if (ctx)
-        publishStationStatusEntityEvent(ctx, [
-          "currentSecondsPerUnit",
-          "currentStandardQuantity",
-          "currentStandardCycleSeconds",
-        ]);
+      await refreshStationStandards(id, jobId, observedAt);
     } else if (changes.standardCycleSeconds !== undefined) {
       await publishStationStandardCycleMetric(id, changes.standardCycleSeconds, observedAt);
     }
