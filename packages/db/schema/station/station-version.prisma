@@ -1,10 +1,11 @@
-/// DISCRETE: each event is one cycle whose duration is measured against the
-/// standard cycle; item counts come from job products. QUANTITY_PER_CYCLE:
-/// same math, but the machine emits a pulse every `cycleQuantity` units
-/// (e.g. an encoder firing every 100 feet) and the job's standard is entered
-/// as a rate. QUANTITY_PER_INTERVAL: events arrive on a fixed clock of
-/// `standardCycle` seconds and the produced quantity is the variable,
-/// measured against the expected quantity (rate × interval).
+/// How a machine's signal counts (ADR-0017 names in brackets).
+/// DISCRETE [Count by cycle]: each signal is one cycle, timed against the
+/// standard cycle; item counts come from job products.
+/// QUANTITY_PER_CYCLE [Count by amount]: each signal means a fixed amount,
+/// `standardQuantity` (e.g. an encoder firing every 100 ft); the speed is a rate.
+/// QUANTITY_PER_INTERVAL [Count by time]: signals come on a fixed clock of
+/// `standardCycle` seconds and the amount in each one varies; it is measured
+/// against the expected amount (rate × interval).
 enum CycleMode {
   DISCRETE
   QUANTITY_PER_CYCLE
@@ -40,6 +41,15 @@ model StationVersion {
   slowDetect            Decimal?           @db.Decimal(10, 2)
   slowDetectUnit        SlowDetectUnit     @default(PERCENTAGE)
 
+  /// The profile this station follows (ADR-0017). When set, cycleMode,
+  /// quantityUnit, standardQuantity and (count by time) standardCycle are
+  /// copies of the profile, made by the service; null = set by hand.
+  profileId        String?         @db.Uuid
+  profile          StationProfile? @relation(fields: [profileId], references: [id], onDelete: NoAction)
+  /// true = the speed fields are the profile's usual speed and follow it when
+  /// the profile changes; false = the station's own speed.
+  speedFromProfile Boolean         @default(false)
+
   stationId String  @db.Uuid
   station   Station @relation("StationVersions", fields: [stationId], references: [id], onDelete: Cascade)
 
@@ -54,4 +64,5 @@ model StationVersion {
 
   @@unique([stationId, version])
   @@index([stationId])
+  @@index([profileId])
 }

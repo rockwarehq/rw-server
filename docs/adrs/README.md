@@ -30,3 +30,4 @@ They are immutable once accepted — a change of course gets a **new** ADR that 
 | [0014](./0014-period-rows-per-shift.md) | Period Rows Are Cut at Shift Boundaries | Accepted | 2026-09-10 |
 | [0015](./0015-shift-overrides-and-amendments.md) | Shift Calendar: Gap Rows, Overrides, and Amendments | Proposed | 2026-09-15 |
 | [0016](./0016-unified-stock-ledger.md) | One Stock Book for Parts and Materials | Proposed | 2026-09-24 |
+| [0017](./0017-station-profiles.md) | Station Profiles: How a Machine Counts, and Where a Job Can Run | Proposed | 2026-09-25 |

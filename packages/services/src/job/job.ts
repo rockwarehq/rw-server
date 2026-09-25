@@ -3,12 +3,28 @@ import type { Prisma } from "@rw/db";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { refreshStationsRunningJob } from "../facility/station/state.js";
+import { checkOneOutputRule, resolveJobProfileFields } from "./profile.js";
 
 // Work orders are gone, but shipped UIs still read a job's `_count.orders`.
 // Keep it on the wire, always 0.
 function withOrderCount<T extends { _count: object }>(job: T) {
   return { ...job, _count: { ...job._count, orders: 0 } };
 }
+
+// The profile a job version points at, as the job endpoints return it.
+const PROFILE_SUMMARY = {
+  id: true,
+  name: true,
+  cycleMode: true,
+  quantityUnit: true,
+  signalAmount: true,
+  signalInterval: true,
+  countedAs: true,
+  standardCycle: true,
+  standardRate: true,
+  standardRateUnit: true,
+  standardRatePeriod: true,
+} as const;
 
 // ============================================================================
 // Types - Job
@@ -27,6 +43,8 @@ export interface CreateJobInput {
   standardQuantity?: number | null;
   productsPerCycle?: number;
   attrs?: Record<string, unknown>;
+  /** The kind of machine this job is made for (ADR-0017). */
+  profileId?: string | null;
 }
 
 export interface UpdateJobInput {
@@ -41,6 +59,8 @@ export interface UpdateJobInput {
   attrs?: Record<string, unknown>;
   /** Replaces the record's whole label list with this one (same-site labels only). */
   labelIds?: string[];
+  /** Move to another profile of the same counting kind (ADR-0017). */
+  profileId?: string | null;
 }
 
 export interface ListJobsFilter {
@@ -126,6 +146,9 @@ export async function create(input: CreateJobInput) {
     }
   }
 
+  const profile = await resolveJobProfileFields(siteId, null, input);
+  if (profile && "error" in profile) return profile;
+
   // Create job and initial version in transaction
   const job = await prisma.$transaction(async (tx) => {
     // 1. Create Job entity
@@ -150,6 +173,7 @@ export async function create(input: CreateJobInput) {
         standardQuantity: standardQuantity ?? null,
         productsPerCycle: productsPerCycle ?? 1,
         attrs: attrs ?? {},
+        ...(profile ? profile.fields : {}),
       },
     });
 
@@ -158,7 +182,7 @@ export async function create(input: CreateJobInput) {
       where: { id: j.id },
       data: { currentVersionId: version.id },
       include: {
-        currentVersion: true,
+        currentVersion: { include: { profile: { select: PROFILE_SUMMARY } } },
         site: { select: { id: true, name: true } },
         labels: { select: { id: true, name: true, color: true } },
         _count: { select: { tools: true, jobProducts: true, versions: true } },
@@ -304,7 +328,7 @@ export async function getById(id: string) {
   const job = await prisma.job.findUnique({
     where: { id },
     include: {
-      currentVersion: true,
+      currentVersion: { include: { profile: { select: PROFILE_SUMMARY } } },
       site: { select: { id: true, name: true } },
       labels: { select: { id: true, name: true, color: true } },
       tools: {
@@ -413,6 +437,9 @@ export async function update(id: string, input: UpdateJobInput) {
 
   const currentVersion = current.currentVersion;
 
+  const profile = await resolveJobProfileFields(current.siteId, currentVersion, input);
+  if (profile && "error" in profile) return profile;
+
   // Get next version number
   const latestVersion = await prisma.jobVersion.findFirst({
     where: { jobId: id },
@@ -437,6 +464,8 @@ export async function update(id: string, input: UpdateJobInput) {
         standardQuantity: standardQuantity !== undefined ? standardQuantity : currentVersion.standardQuantity,
         productsPerCycle: productsPerCycle !== undefined ? productsPerCycle : currentVersion.productsPerCycle,
         attrs: attrs !== undefined ? attrs : (currentVersion.attrs as Record<string, unknown>),
+        profileId: currentVersion.profileId,
+        ...(profile ? profile.fields : {}),
       },
     });
 
@@ -447,7 +476,7 @@ export async function update(id: string, input: UpdateJobInput) {
         ...(labelIds !== undefined ? { labels: { set: labelIds.map((cid) => ({ id: cid })) } } : {}),
       },
       include: {
-        currentVersion: true,
+        currentVersion: { include: { profile: { select: PROFILE_SUMMARY } } },
         site: { select: { id: true, name: true } },
         labels: { select: { id: true, name: true, color: true } },
         _count: { select: { tools: true, jobProducts: true, versions: true } },
@@ -470,6 +499,7 @@ export async function update(id: string, input: UpdateJobInput) {
       standardRatePeriod,
       standardQuantity,
       productsPerCycle,
+      profileId: input.profileId,
     })
       .filter(([, value]) => value !== undefined)
       .map(([key]) => key),
@@ -478,9 +508,14 @@ export async function update(id: string, input: UpdateJobInput) {
   // Mid-run edits: stations running this job carry its name/standard cycle in
   // the shift-bucket mirror — refresh them so livestore doesn't wait for the
   // next job change. (itemsPerCycle is driven by JobProduct edits, not here.)
-  const standardsChanged = [standardCycle, standardRate, standardRateUnit, standardRatePeriod, standardQuantity].some(
-    (v) => v !== undefined,
-  );
+  const standardsChanged = [
+    standardCycle,
+    standardRate,
+    standardRateUnit,
+    standardRatePeriod,
+    standardQuantity,
+    input.profileId,
+  ].some((v) => v !== undefined);
   if (name !== undefined || standardsChanged) {
     refreshStationsRunningJob(id, { name, standardsChanged }, new Date()).catch((err) => {
       console.error(`[job.update] refreshStationsRunningJob failed for job ${id}:`, err);
@@ -748,6 +783,9 @@ export async function addItem(input: AddItemInput) {
     return { error: "Job has been deleted", code: "JOB_DELETED" };
   }
 
+  const outputRule = await checkOneOutputRule(jobId, { isActive: true, quantity: quantity ?? 1 });
+  if (outputRule) return outputRule;
+
   // Verify product exists and is not deleted
   const product = await prisma.product.findUnique({
     where: { id: productId },
@@ -906,6 +944,15 @@ export async function updateItem(itemId: string, input: UpdateItemInput) {
   }
 
   const currentVersion = current.currentVersion;
+
+  if (isActive !== undefined || quantity !== undefined) {
+    const outputRule = await checkOneOutputRule(current.job.id, {
+      isActive: isActive ?? currentVersion.isActive,
+      quantity: quantity ?? currentVersion.quantity,
+      exceptItemId: itemId,
+    });
+    if (outputRule) return outputRule;
+  }
 
   // Validate toolId if changing
   if (toolId !== undefined && toolId !== null) {

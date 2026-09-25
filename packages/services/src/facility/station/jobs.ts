@@ -9,6 +9,7 @@ import {
   splitOpenStateEntryForJobChange,
 } from "./state.js";
 import { publishEntityEvent } from "../../entity/events.js";
+import { canRunJob } from "./eligibility.js";
 import { resolveEffectiveStandards } from "./effective-standards.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import type { ActionSource, Prisma } from "@rw/db";
@@ -103,7 +104,6 @@ export async function changeJob(
         currentVersion: {
           select: { name: true },
         },
-        labels: { select: { id: true } },
       },
     });
 
@@ -134,10 +134,6 @@ export async function changeJob(
         workcenterId: true,
         site: { select: { workspaceId: true } },
         workcenter: { select: { name: true } },
-        labelFilters: {
-          where: { target: "JOB" },
-          select: { labels: { select: { id: true } } },
-        },
       },
     });
 
@@ -149,19 +145,11 @@ export async function changeJob(
       return { error: "Job and station must belong to the same site" as const, code: "SITE_MISMATCH" as const };
     }
 
-    // If the station has a job filter, the job must carry at least one of
-    // the filter's labels. No filter = every job is eligible. A filter with
-    // no labels (only possible via direct DB writes) is ignored, not a
-    // block-everything rule.
-    const jobFilter = station.labelFilters[0];
-    if (job && jobFilter && jobFilter.labels.length > 0) {
-      const allowed = new Set(jobFilter.labels.map((l) => l.id));
-      if (!job.labels.some((l) => allowed.has(l.id))) {
-        return {
-          error: "The station's job filter does not allow this job" as const,
-          code: "LABEL_FILTER_MISMATCH" as const,
-        };
-      }
+    // The job must fit the station: same counting kind, and the station's
+    // job label filter (ADR-0017). Clearing the job is never blocked.
+    if (job) {
+      const [reason] = await canRunJob(tx, stationId, job.id);
+      if (reason) return { error: reason.message, code: reason.code };
     }
 
     const previousJobId = station.currentJobId;

@@ -1,3 +1,4 @@
+import { canRunJob } from "../facility/station/eligibility.js";
 import prisma from "@rw/db";
 import type { JobHistoryAmendment } from "@rw/db";
 import { restampCycles } from "../cycle/amend.js";
@@ -39,6 +40,7 @@ export type AmendJobHistoryResult =
         | "NO_CURRENT_VERSION"
         | "SITE_MISMATCH"
         | "LABEL_FILTER_MISMATCH"
+        | "PROFILE_MISMATCH"
         | "INVALID_RANGE"
         | "RANGE_TOO_LARGE"
         | "JOB_REQUIRED"
@@ -65,7 +67,6 @@ export async function amendJobHistory(input: AmendJobHistoryInput): Promise<Amen
           deletedAt: true,
           currentVersionId: true,
           currentVersion: { select: { name: true } },
-          labels: { select: { id: true } },
           versions: {
             where: { createdAt: { lte: from } },
             orderBy: { createdAt: "desc" },
@@ -92,22 +93,15 @@ export async function amendJobHistory(input: AmendJobHistoryInput): Promise<Amen
           workcenterId: true,
           site: { select: { workspaceId: true } },
           workcenter: { select: { name: true } },
-          labelFilters: { where: { target: "JOB" }, select: { labels: { select: { id: true } } } },
         },
       });
       if (!station) return { error: "Station not found" as const, code: "STATION_NOT_FOUND" as const };
       if (job && job.siteId !== station.siteId) {
         return { error: "Job and station must belong to the same site" as const, code: "SITE_MISMATCH" as const };
       }
-      const jobFilter = station.labelFilters[0];
-      if (job && jobFilter && jobFilter.labels.length > 0) {
-        const allowed = new Set(jobFilter.labels.map((l) => l.id));
-        if (!job.labels.some((l) => allowed.has(l.id))) {
-          return {
-            error: "The station's job filter does not allow this job" as const,
-            code: "LABEL_FILTER_MISMATCH" as const,
-          };
-        }
+      if (job) {
+        const [reason] = await canRunJob(tx, stationId, job.id);
+        if (reason) return { error: reason.message, code: reason.code };
       }
 
       const std = job && jobVersionId ? await resolveEffectiveStandards(tx, stationId, job.id, jobVersionId) : null;

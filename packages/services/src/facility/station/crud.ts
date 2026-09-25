@@ -2,6 +2,7 @@ import prisma from "@rw/db";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { crewFilter } from "../../lib/crew-filter.js";
+import { resolveStationProfileFields } from "../station-profile/apply.js";
 
 export interface CreateStationInput {
   name: string;
@@ -25,6 +26,10 @@ export interface CreateStationInput {
   slowDetectUnit?: "PERCENTAGE";
   inLineCalculations?: boolean;
   inStationCalculations?: boolean;
+  /** Follow this profile (ADR-0017): how the station counts comes from it. null = stop following. */
+  profileId?: string | null;
+  /** Drop the station's own speed and use the profile's usual speed. */
+  useProfileSpeed?: boolean;
 }
 
 export interface UpdateStationInput {
@@ -47,6 +52,10 @@ export interface UpdateStationInput {
   slowDetectUnit?: "PERCENTAGE";
   inLineCalculations?: boolean;
   inStationCalculations?: boolean;
+  /** Follow this profile (ADR-0017): how the station counts comes from it. null = stop following. */
+  profileId?: string | null;
+  /** Drop the station's own speed and use the profile's usual speed. */
+  useProfileSpeed?: boolean;
 }
 
 export interface ListStationsFilter {
@@ -74,7 +83,11 @@ const stationInclude = {
   workcenter: {
     select: { id: true, name: true },
   },
-  currentVersion: true,
+  currentVersion: {
+    include: {
+      profile: { select: { id: true, name: true, cycleMode: true, countedAs: true, quantityUnit: true } },
+    },
+  },
   labels: {
     select: { id: true, name: true },
   },
@@ -193,7 +206,11 @@ export async function create(input: CreateStationInput) {
     }
   }
 
-  const wantVersion = hasVersionFields(input as unknown as Record<string, unknown>);
+  const profile = await resolveStationProfileFields(siteId, null, input);
+  if (profile && "error" in profile) return { error: profile.error, code: profile.code };
+  const profileFields = profile?.fields ?? {};
+
+  const wantVersion = hasVersionFields(input as unknown as Record<string, unknown>) || profile != null;
 
   if (wantVersion) {
     // 3-step transaction: create station -> create version v1 -> link version
@@ -228,6 +245,7 @@ export async function create(input: CreateStationInput) {
           slowDetectUnit: slowDetectUnit ?? "PERCENTAGE",
           inLineCalculations: inLineCalculations ?? false,
           inStationCalculations: inStationCalculations ?? false,
+          ...profileFields,
         },
       });
 
@@ -408,7 +426,17 @@ export async function update(id: string, input: UpdateStationInput) {
     inLineCalculations,
     inStationCalculations,
   };
-  const wantVersionUpdate = hasVersionFields(versionInput as unknown as Record<string, unknown>);
+  // Only config edits touch the profile fields; a rename makes no new version.
+  const touchesConfig =
+    input.profileId !== undefined ||
+    input.useProfileSpeed !== undefined ||
+    hasVersionFields(versionInput as unknown as Record<string, unknown>);
+  const profile = touchesConfig
+    ? await resolveStationProfileFields(current.siteId, current.currentVersion, input)
+    : null;
+  if (profile && "error" in profile) return { error: profile.error, code: profile.code };
+  const profileFields = profile?.fields ?? {};
+  const wantVersionUpdate = hasVersionFields(versionInput as unknown as Record<string, unknown>) || profile != null;
 
   if (wantVersionUpdate) {
     // Create new version version with merged data
@@ -444,6 +472,10 @@ export async function update(id: string, input: UpdateStationInput) {
             inLineCalculations !== undefined ? inLineCalculations : (oldVersion?.inLineCalculations ?? false),
           inStationCalculations:
             inStationCalculations !== undefined ? inStationCalculations : (oldVersion?.inStationCalculations ?? false),
+          // Carried over, then set by the profile when the station follows one.
+          profileId: oldVersion?.profileId ?? null,
+          speedFromProfile: oldVersion?.speedFromProfile ?? false,
+          ...profileFields,
         },
       });
 
@@ -468,6 +500,7 @@ export async function update(id: string, input: UpdateStationInput) {
         ...Object.entries(versionInput)
           .filter(([, value]) => value !== undefined)
           .map(([key]) => key),
+        ...Object.keys(profileFields),
       ],
     });
 

@@ -7,25 +7,27 @@ import { secondsPerUnitIn, type RatePeriod } from "../lib/units/quantity.js";
 export type CycleModeValue = "DISCRETE" | "QUANTITY_PER_CYCLE" | "QUANTITY_PER_INTERVAL";
 
 /** Raw config off the current station/job versions; null/undefined are normalized here.
- *  Every input is a station default with a job override: rate, quantity, standardCycle. */
+ *  The machine owns how its signal counts — the amount per signal and the report
+ *  interval come from the station only (ADR-0017). The job owns its speed: its
+ *  rate or standardCycle beats the station's. */
 export interface StandardsConfig {
   cycleMode: CycleModeValue | string | null | undefined;
   /** StationVersion.standardQuantity — standard quantity per cycle event. */
   stationStandardQuantity: number | null;
   /** StationVersion.quantityUnit — the station's canonical unit. */
   stationQuantityUnit: string | null | undefined;
-  /** StationVersion.standardCycle — the interval length for QUANTITY_PER_INTERVAL. */
+  /** StationVersion.standardCycle — the report interval for QUANTITY_PER_INTERVAL,
+   *  else the station's own cycle time. */
   stationStandardCycle: number | null;
   stationStandardRate: number | null;
   stationStandardRateUnit: string | null | undefined;
   stationStandardRatePeriod: RatePeriod | string | null | undefined;
-  /** JobVersion.standardCycle — entered directly (DISCRETE). */
+  /** JobVersion.standardCycle — the job's cycle time (seconds per signal). Never
+   *  the report interval. */
   jobStandardCycle: number | null;
   jobStandardRate: number | null;
   jobStandardRateUnit: string | null | undefined;
   jobStandardRatePeriod: RatePeriod | string | null | undefined;
-  /** JobVersion.standardQuantity — per-job override; null = inherit. */
-  jobStandardQuantity: number | null;
 }
 
 export interface ResolvedStandards {
@@ -47,7 +49,9 @@ export function resolveStandards(cfg: StandardsConfig): ResolvedStandards {
   const perUnit =
     ratePerUnit(cfg.jobStandardRate, cfg.jobStandardRateUnit, cfg.jobStandardRatePeriod, quantityUnit) ??
     ratePerUnit(cfg.stationStandardRate, cfg.stationStandardRateUnit, cfg.stationStandardRatePeriod, quantityUnit);
-  const configuredQuantity = positive(cfg.jobStandardQuantity) ?? positive(cfg.stationStandardQuantity);
+  // Amount per signal (count by amount), or expected amount per report (count
+  // by time, used only without a rate). Station only.
+  const configuredQuantity = positive(cfg.stationStandardQuantity);
 
   if (mode === "QUANTITY_PER_CYCLE") {
     // No usable rate: fall back to a directly-entered job standardCycle.
@@ -57,10 +61,9 @@ export function resolveStandards(cfg: StandardsConfig): ResolvedStandards {
   }
 
   if (mode === "QUANTITY_PER_INTERVAL") {
-    // Tick length: job override, else station — only valid when the machine
-    // actually reports at the overridden cadence for that job.
-    const intervalSeconds = positive(cfg.jobStandardCycle) ?? positive(cfg.stationStandardCycle);
-    // Rate wins; else the configured per-tick quantity (job override, else station).
+    // The report interval is set by the machine, so it comes from the station.
+    const intervalSeconds = positive(cfg.stationStandardCycle);
+    // Rate wins; else the station's expected amount per report.
     const standardQuantity =
       intervalSeconds != null && perUnit != null ? intervalSeconds / perUnit : configuredQuantity;
     return {

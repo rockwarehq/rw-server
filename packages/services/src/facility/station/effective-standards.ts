@@ -38,7 +38,6 @@ export async function resolveEffectiveStandards(
         standardRate: true,
         standardRateUnit: true,
         standardRatePeriod: true,
-        standardQuantity: true,
       },
     }),
   ]);
@@ -55,6 +54,5 @@ export async function resolveEffectiveStandards(
     jobStandardRate: decimalToNumber(jobVersion?.standardRate ?? null),
     jobStandardRateUnit: jobVersion?.standardRateUnit,
     jobStandardRatePeriod: jobVersion?.standardRatePeriod,
-    jobStandardQuantity: decimalToNumber(jobVersion?.standardQuantity ?? null),
   });
 }

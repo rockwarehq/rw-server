@@ -21,10 +21,18 @@ model JobVersion {
   standardRate       Decimal?          @db.Decimal(18, 4)
   standardRateUnit   String            @default("")
   standardRatePeriod RatePeriod        @default(MINUTE)
-  /// Per-job override of StationVersion.standardQuantity; null = inherit.
+  /// Legacy per-job override of StationVersion.standardQuantity. No longer
+  /// read by the cycle engine (ADR-0017): the amount per signal belongs to
+  /// the machine. Kept for history; dropped in a later cleanup.
   standardQuantity   Decimal?          @db.Decimal(18, 4)
   productsPerCycle   Int               @default(1)
   attrs              Json              @default("{}")
+
+  /// The kind of machine this job is made for (ADR-0017). It sets the shape
+  /// of the job's speed and which stations can run it. Null = older job
+  /// with no profile yet.
+  profileId String?         @db.Uuid
+  profile   StationProfile? @relation(fields: [profileId], references: [id], onDelete: NoAction)
 
   jobId String @db.Uuid
   job   Job    @relation("JobVersions", fields: [jobId], references: [id])
@@ -39,4 +47,5 @@ model JobVersion {
 
   @@unique([jobId, version])
   @@index([jobId])
+  @@index([profileId])
 }
