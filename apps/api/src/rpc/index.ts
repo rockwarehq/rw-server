@@ -587,6 +587,7 @@ export const router = {
     create: automations.createAutomation,
     update: automations.updateAutomation,
     delete: automations.deleteAutomation,
+    listRuns: automations.listRuns,
   },
 };
 
