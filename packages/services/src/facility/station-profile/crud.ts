@@ -152,18 +152,21 @@ export async function getById(id: string) {
 }
 
 /**
- * Edit a profile. Stations that follow it get a new version with the new
- * values at once. While any station or job uses it, a profile cannot switch
- * how it counts or move to a unit of another kind — that would change what
- * every recorded number means; make a new profile instead.
+ * Edit a profile (never the Discrete default). Stations that follow it get a
+ * new version with the new values at once. While any station or job uses it,
+ * a profile cannot switch how it counts or move to a unit of another kind —
+ * that would change what every recorded number means; make a new profile
+ * instead.
  */
 export async function update(id: string, input: UpdateStationProfileInput) {
   const row = await prisma.stationProfile.findUnique({ where: { id } });
   if (!row || row.archivedAt) return NOT_FOUND;
   const before = toSpec(row);
 
-  if (row.isDefault && input.cycleMode !== undefined && input.cycleMode !== "DISCRETE") {
-    return { error: "The default profile always counts by cycle.", code: "PROFILE_IS_DEFAULT" };
+  // The Discrete default is fixed: always count by cycle, no standard of its
+  // own (every job sets its own standard cycle time), and no renaming.
+  if (row.isDefault) {
+    return { error: "The default profile can't be changed.", code: "PROFILE_IS_DEFAULT" };
   }
 
   const cycleMode = input.cycleMode ?? before.cycleMode;

@@ -304,7 +304,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("station profiles", () => {
     const rated = await job("rated", { standardRate: 40, standardRateUnit: "ft" });
     expect(rated.currentVersion.profileId).toBeNull();
 
-    // The default always counts by cycle and stays.
+    // The default is fixed: no edits at all (not even a rename), no archive.
+    await call("stationProfile/update", { id: def.id, name: "Molding" }, admin, 409);
+    await call("stationProfile/update", { id: def.id, standardCycle: 30 }, admin, 409);
     await call("stationProfile/update", { id: def.id, cycleMode: "QUANTITY_PER_CYCLE", quantityUnit: "ft", signalAmount: 1 }, admin, 409);
     await call("stationProfile/archive", { id: def.id }, admin, 409);
   });

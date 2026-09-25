@@ -54,8 +54,9 @@ says:
   - `CYCLES`: the number is machine strokes. Each product's quantity is the
     parts per stroke.
   - Count by cycle is always `CYCLES`, and count by amount is always `OUTPUT`.
-- the **usual speed**. For count by cycle this is seconds per cycle. For the
-  other two it is a rate, like 45 ft/min.
+- the **default standard** for new jobs, named by kind: the **standard cycle
+  time** (count by cycle), **standard line speed** (count by amount), or
+  **standard rate** / **standard stroke rate** (count by time).
 
 Many stations use one profile, so a change is made in one place.
 
@@ -65,9 +66,10 @@ Most plants do normal discrete work: one signal is one cycle, and each job has
 a target cycle time in seconds. They should not have to set anything up. So:
 
 - Every site has exactly one **default** profile, named **"Discrete"**. It
-  always counts by cycle, and it can't be archived or switched to another kind.
-  A partial unique index keeps one default per site. `ensureDefaultProfile`
-  makes it the first time a site needs it.
+  is fixed: it always counts by cycle, it can't be renamed, changed or
+  archived, and it has no standard of its own. Every job sets its own
+  **standard cycle time**. A partial unique index keeps one default per site.
+  `ensureDefaultProfile` makes it the first time a site needs it.
 - A new station with no profile gets the default. So does an older station
   when it is next edited, and it keeps its own cycle time.
 - A new job with no profile gets the default, unless it arrives with a rate,
@@ -152,7 +154,9 @@ Migration `20261004100000_station_profiles` does these steps:
 
 1. It makes one profile for each different counting setup on live stations,
    named like "Count by amount – 100 ft". The plain count-by-cycle setup
-   becomes the site's "Discrete" default. Every site without one gets it.
+   becomes the site's "Discrete" default, with no standard of its own; its
+   stations keep their own standard cycle times. Every site without one gets
+   it.
 2. It points each station at its profile. A station keeps its own speed. It
    follows the profile only if its speed already equals the profile's usual
    speed, which is the speed most of its stations use.

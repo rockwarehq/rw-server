@@ -117,6 +117,10 @@ SELECT gen_random_uuid() AS "profileId",
 FROM sp_station st
 GROUP BY st."siteId", st."cycleMode", st."quantityUnit", st.amount, st."interval";
 
+-- The Discrete default has no standard of its own: every job sets its own
+-- standard cycle time. Its stations keep theirs (they won't follow it).
+UPDATE sp_setup SET "speedCycle" = NULL WHERE "cycleMode" = 'DISCRETE' AND "quantityUnit" = '';
+
 -- The most common rate (value + unit + period together) among its stations.
 UPDATE sp_setup p
 SET "speedRate" = r."speedRate", "speedRateUnit" = r."speedRateUnit", "speedRatePeriod" = r."speedRatePeriod"
