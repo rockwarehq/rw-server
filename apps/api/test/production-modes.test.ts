@@ -1,4 +1,5 @@
 import prisma from "@rw/db";
+import { createAccessToken } from "@rw/auth/verify";
 import { complete as completeCycle } from "@rw/services/cycle/cycle";
 import { productionMode } from "@rw/services/facility/index";
 import { transitionToDown } from "@rw/services/facility/station/state";
@@ -330,6 +331,37 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("production modes", () => {
     expect("error" in clearDenied && clearDenied.code).toBe("MODE_ROLE_RESTRICTED");
     const cleared = await rpcCall(server, "productionMode/clear", { stationId: stationA.id }, faToken);
     expect(cleared.statusCode).toBe(200);
+  });
+
+  it("a terminal starts or ends a mode only as an employee whose role the mode allows", async () => {
+    const restricted = await createMode({ name: "pm-test-terminal-gate", roleIds: [roleMaintId] });
+    const display = await prisma.display.create({
+      data: { status: "CLAIMED", siteId: siteA.id, claimedAt: new Date() },
+      select: { id: true },
+    });
+    const terminal = createAccessToken({ principal: "DISPLAY", displayId: display.id, siteId: siteA.id, workspaceId });
+    const maint = await prisma.employee.create({ data: { workspaceId }, select: { id: true } });
+    await prisma.employeeSiteAccess.create({ data: { employeeId: maint.id, siteId: siteA.id, roleId: roleMaintId } });
+    const force = (employeeId?: string) =>
+      rpcCall(server, "productionMode/force", { stationId: stationA.id, modeId: restricted.id, employeeId }, terminal);
+    const clear = (employeeId?: string) =>
+      rpcCall(server, "productionMode/clear", { stationId: stationA.id, employeeId }, terminal);
+
+    try {
+      // Unlike the office, the terminal gets no bypass: the named employee's
+      // role decides. officeEmployeeId holds ops, not maint.
+      expect((await force(officeEmployeeId)).statusCode).toBe(403);
+      expect((await force()).statusCode).toBe(403);
+      expect((await force(maint.id)).statusCode).toBe(200);
+
+      // Ending is gated by the same list.
+      expect((await clear(officeEmployeeId)).statusCode).toBe(403);
+      expect((await clear(maint.id)).statusCode).toBe(200);
+    } finally {
+      await rpcCall(server, "productionMode/clear", { stationId: stationA.id }, faToken);
+      await prisma.display.delete({ where: { id: display.id } });
+      await prisma.employee.delete({ where: { id: maint.id } });
+    }
   });
 
   it("SYSTEM source skips role gates, stamps the log, and emits forced/cleared mode events", async () => {

@@ -1,4 +1,5 @@
 import prisma from "@rw/db";
+import { createAccessToken } from "@rw/auth/verify";
 import { call as callService } from "@rw/services/facility/index";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ensurePlantBucket, ensureWorkcenterBucket, makeUser } from "./helpers/access.js";
@@ -501,5 +502,36 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("calls", () => {
     // manager holds only the ops employee role, not maint, yet closes.
     const bypass = await rpcCall(server, "call/close", { id: callId }, officeToken);
     expect(bypass.statusCode).toBe(200);
+  });
+
+  it("a terminal answers only as an employee whose role the definition allows", async () => {
+    const def = await createDefinition({ name: "calls-test-terminal-answer", answerRoleIds: [roleMaintId] });
+    const display = await prisma.display.create({
+      data: { status: "CLAIMED", siteId: siteA.id, claimedAt: new Date() },
+      select: { id: true },
+    });
+    const terminal = createAccessToken({ principal: "DISPLAY", displayId: display.id, siteId: siteA.id, workspaceId });
+    const maint = await prisma.employee.create({ data: { workspaceId }, select: { id: true } });
+    await prisma.employeeSiteAccess.create({ data: { employeeId: maint.id, siteId: siteA.id, roleId: roleMaintId } });
+
+    try {
+      const open = await rpcCall(server, "call/open", { stationId: stationA.id, definitionId: def.id }, officeToken);
+      const callId = (open.json as CallJson).id;
+
+      // The terminal, unlike the office, gets no bypass: the named employee's
+      // role decides. employeeId holds the ops role, not maint.
+      const opsAnswer = await rpcCall(server, "call/close", { id: callId, employeeId }, terminal);
+      expect(opsAnswer.statusCode).toBe(403);
+      const nobody = await rpcCall(server, "call/close", { id: callId }, terminal);
+      expect(nobody.statusCode).toBe(403);
+
+      const maintAnswer = await rpcCall(server, "call/close", { id: callId, employeeId: maint.id }, terminal);
+      expect(maintAnswer.statusCode).toBe(200);
+      expect((maintAnswer.json as CallJson).closedByEmployeeId).toBe(maint.id);
+    } finally {
+      await prisma.call.deleteMany({ where: { definitionId: def.id } });
+      await prisma.display.delete({ where: { id: display.id } });
+      await prisma.employee.delete({ where: { id: maint.id } });
+    }
   });
 });
