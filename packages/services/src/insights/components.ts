@@ -191,11 +191,14 @@ export interface Spec {
 export const MAX_ELEMENTS = 60;
 const MAX_INLINE_ELEMENTS = 8;
 
+// The AI picks short ids. Stored ids have room for the prefixes the server
+// and page add when a screen is copied between an answer and the board.
 const idSchema = z
   .string()
   .min(1)
-  .max(48)
+  .max(32)
   .regex(/^[a-zA-Z0-9_-]+$/, "Use letters, numbers, - and _ only");
+const storedIdSchema = z.string().min(1).max(96);
 
 /** One element as the AI sends it. */
 export interface ElementInput {
@@ -221,14 +224,14 @@ export const elementInputSchema = z.discriminatedUnion(
 
 /** A stored element, checked loosely: the page checks props again before drawing. */
 export const storedSpecSchema = z.object({
-  root: idSchema,
+  root: storedIdSchema,
   elements: z
     .record(
-      idSchema,
+      storedIdSchema,
       z.object({
         type: z.enum(COMPONENT_TYPES),
         props: z.record(z.string(), z.unknown()),
-        children: z.array(idSchema).max(24).optional(),
+        children: z.array(storedIdSchema).max(24).optional(),
       }),
     )
     .refine((els) => Object.keys(els).length <= MAX_ELEMENTS, `At most ${MAX_ELEMENTS} elements`),
