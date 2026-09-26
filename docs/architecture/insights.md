@@ -39,21 +39,39 @@ sequenceDiagram
   AI->>API: describe_view / find_values / run_query
   API->>Cat: query, with the caller's scope
   Cat-->>AI: up to 50 rows
-  AI->>API: update_board (tiles)
+  AI->>API: show / update_board (a screen of components)
   API-->>Page: "insights.board" event
   Page->>Cat: each tile fetches its own numbers (report.query)
-  AI-->>Page: one or two sentences
-```
-
-The AI has five tools (`packages/services/src/insights/tools.ts`):
+  AI-->>Page: onThe AI has six tools (`packages/services/src/insights/tools.ts`):
 
 - `search_catalog`: find views, measures and dimensions by the words people use.
 - `describe_view`: everything about one view.
 - `find_values`: turn "press 12" into a station id.
 - `run_query`: run a query and read up to 50 rows, to check the numbers.
-- `update_board`: add, change or remove tiles. Bad tiles are sent back to the AI to fix. Good ones go to the page as an `insights.board` event.
+- `show`: put a small screen (one to four components) right inside the answer. It goes to the page as an `insights.inline` event.
+- `update_board`: change the board that opens beside the chat, element by element. It goes to the page as an `insights.board` event.
 
-The AI never types the numbers into a chart. Chart and figure tiles hold a report definition, and the page fetches the numbers itself with `report.query`. The page uses the same access rules, so what you see is exactly what the report explorer would show. The AI only writes numbers in text tiles, and it is told to use only numbers it read from `run_query`.
+## How the AI builds screens
+
+The AI builds screens from a list of components (`packages/services/src/insights/components.ts`), the same way people build pages from parts. A screen is a json-render spec: a flat list of elements, each with an id, a type, its settings ("props") and, for layout parts, the ids of the parts inside it. The page draws it with json-render and our Bedrock components.
+
+| Kind | Components |
+|---|---|
+| Layout | `Stack`, `Grid`, `Card`, `Section`, `Tabs`, `Separator` |
+| Words | `Heading`, `Text`, `Callout`, `Status` |
+| Data | `Report` (chart or table), `Figure` (one big number), `Figures` (a row of them), `StatusStrip` (a bar split by status) |
+
+Before anything reaches the page, the server checks the screen:
+- every component and setting is on the list,
+- data components' queries are real (the view has those measures, the report compiler accepts them),
+- a Figure's query has no dimensions, a StatusStrip groups by a status,
+- the root exists, nothing loops, and nothing points at a part that isn't there. Broken links are cut, and the AI is told what to fix.
+
+**The AI never types a number into a component.** Data components hold a report definition, and the page fetches the numbers itself with `report.query`, with the same access rules as the report explorer. The AI only writes numbers in words, and it is told to use only numbers it read from `run_query`.
+
+Boards are saved as savedView page `board`, version 2 (`{ v: 2, title, spec }`). Boards saved by the first version (a list of tiles) are turned into a spec when they are read.
+
+read from `run_query`.
 
 ## Setup
 

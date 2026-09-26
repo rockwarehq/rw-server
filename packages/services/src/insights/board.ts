@@ -1,98 +1,81 @@
 import { z } from "zod";
-import { RELATIVE_PRESETS } from "../reporting/dates.js";
+import { checkTree, type Spec, storedSpecSchema } from "./components.js";
+import { reportDefinitionSchema } from "./definition.js";
 
-// The shape of an Insights board: a question turned into tiles. This is the
-// shape the AI builds and the shape IMM draws. It matches the saved-view
-// "board" page in apps/api/src/rpc/saved-view.ts, and rw-ui
-// apps/rw-imm/src/insights/board.ts must stay the same as this file.
+// An Insights board: a screen the AI built, saved as savedView page "board".
 //
-// A report tile holds a report definition: the same thing the report
-// explorer saves. So any tile can open in the explorer and be changed by hand.
-
-export const FILTER_OPS = [
-  "eq",
-  "neq",
-  "in",
-  "notIn",
-  "gt",
-  "gte",
-  "lt",
-  "lte",
-  "between",
-  "notBetween",
-  "contains",
-  "beginsWith",
-  "isNull",
-  "notNull",
-  "hasLabel",
-  "notHasLabel",
-] as const;
-
-export const CHART_TYPES = ["bar", "stacked-bar", "line", "area", "pie", "table"] as const;
-
-export const reportFilterSchema = z.object({
-  dimension: z
-    .string()
-    .min(1)
-    .max(64)
-    .describe("A dimension, a `<dimension>Name` for matching on a name, or a measure"),
-  op: z.enum(FILTER_OPS),
-  value: z
-    .union([z.string().max(256), z.array(z.string().max(256)).max(200)])
-    .optional()
-    .describe("One value; a list for in/notIn; two for between; none for isNull/notNull"),
-});
-
-export const dateRangeSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("all") }),
-  z.object({ kind: z.literal("relative"), preset: z.enum(RELATIVE_PRESETS) }),
-  z.object({
-    kind: z.literal("absolute"),
-    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  }),
-]);
-
-/** A report definition, as the explorer saves it. */
-export const reportDefinitionSchema = z.object({
-  v: z.literal(1),
-  fact: z.string().min(1).max(64),
-  measures: z.array(z.string().max(64)).min(1).max(20),
-  dimensions: z.array(z.string().max(64)).max(10),
-  filters: z.array(reportFilterSchema).max(20),
-  segments: z.array(z.string().max(64)).max(10).optional(),
-  dateRange: dateRangeSchema,
-  granularity: z.enum(["hour", "day", "week", "month", "year"]).optional(),
-  orderBy: z.object({ field: z.string().max(64), dir: z.enum(["asc", "desc"]) }).optional(),
-  limit: z.number().int().min(1).max(10000).optional(),
-  display: z.object({ chartType: z.enum(CHART_TYPES) }).optional(),
-});
-export type ReportDefinition = z.infer<typeof reportDefinitionSchema>;
-
-const tileBase = {
-  id: z.string().min(1).max(64),
-  width: z.enum(["full", "half"]).optional(),
-};
-
-export const boardTileSchema = z.discriminatedUnion("kind", [
-  z.object({ ...tileBase, kind: z.literal("report"), title: z.string().max(200), definition: reportDefinitionSchema }),
-  z.object({ ...tileBase, kind: z.literal("figures"), title: z.string().max(200), definition: reportDefinitionSchema }),
-  z.object({
-    ...tileBase,
-    kind: z.literal("text"),
-    tone: z.enum(["summary", "note", "caveat"]),
-    text: z.string().max(4000),
-  }),
-]);
-export type BoardTile = z.infer<typeof boardTileSchema>;
-
-export const MAX_TILES = 12;
+// v2 (now): a json-render spec of catalog components (see components.ts).
+// v1 (first cut): a flat list of tiles. Still read, and turned into a spec.
+//
+// rw-ui apps/rw-imm/src/insights/board.ts must stay the same as this file.
 
 export const boardSchema = z.object({
-  v: z.literal(1),
-  question: z.string().max(2000).optional(),
-  tiles: z.array(boardTileSchema).max(MAX_TILES),
+  v: z.literal(2),
+  title: z.string().max(200).optional(),
+  spec: storedSpecSchema,
 });
 export type Board = z.infer<typeof boardSchema>;
 
-export const emptyBoard = (): Board => ({ v: 1, tiles: [] });
+export const BOARD_ROOT = "board";
+
+export const emptyBoard = (): Board => ({
+  v: 2,
+  spec: {
+    root: BOARD_ROOT,
+    elements: { [BOARD_ROOT]: { type: "Stack", props: { direction: "column", gap: "lg" }, children: [] } },
+  },
+});
+
+/** Whether the board has anything to show under its root. */
+export function boardHasContent(board: Board): boolean {
+  const root = board.spec.elements[board.spec.root];
+  return root !== undefined && (root.children?.length ?? 1) > 0;
+}
+
+// ── v1 ────────────────────────────────────────────────────────────────────────
+
+const v1TileSchema = z.discriminatedUnion("kind", [
+  z.object({ id: z.string(), kind: z.literal("report"), title: z.string(), definition: reportDefinitionSchema }),
+  z.object({ id: z.string(), kind: z.literal("figures"), title: z.string(), definition: reportDefinitionSchema }),
+  z.object({ id: z.string(), kind: z.literal("text"), tone: z.enum(["summary", "note", "caveat"]), text: z.string() }),
+]);
+const v1BoardSchema = z.object({
+  v: z.literal(1),
+  question: z.string().optional(),
+  tiles: z.array(v1TileSchema),
+});
+
+/** Turn a v1 tile board into a spec board: a column of the same things. */
+export function v1ToBoard(v1: z.infer<typeof v1BoardSchema>): Board {
+  const board = emptyBoard();
+  const elements: Spec["elements"] = { ...board.spec.elements };
+  const children: string[] = [];
+  for (const tile of v1.tiles) {
+    const id = tile.id.replace(/[^a-zA-Z0-9_-]/g, "-");
+    children.push(id);
+    if (tile.kind === "text") {
+      elements[id] =
+        tile.tone === "summary"
+          ? { type: "Text", props: { text: tile.text, variant: "reading" } }
+          : { type: "Callout", props: { tone: tile.tone === "caveat" ? "caveat" : "info", text: tile.text } };
+    } else if (tile.kind === "figures") {
+      elements[id] = { type: "Figures", props: { title: tile.title, definition: tile.definition } };
+    } else {
+      elements[id] = {
+        type: "Report",
+        props: { title: tile.title, chart: tile.definition.display?.chartType ?? "bar", definition: tile.definition },
+      };
+    }
+  }
+  elements[BOARD_ROOT] = { ...elements[BOARD_ROOT]!, children };
+  return { v: 2, ...(v1.question ? { title: v1.question } : {}), spec: { root: BOARD_ROOT, elements } };
+}
+
+/** A board from anywhere (the page, a saved view): v2 as is, v1 converted, else null. */
+export function parseBoard(raw: unknown): Board | null {
+  const v2 = boardSchema.safeParse(raw);
+  // A board from outside may still loop or point at nothing; keep the safe copy.
+  if (v2.success) return { ...v2.data, spec: checkTree(v2.data.spec).spec };
+  const v1 = v1BoardSchema.safeParse(raw);
+  return v1.success ? v1ToBoard(v1.data) : null;
+}

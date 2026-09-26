@@ -1,118 +1,60 @@
 import { toolDefinition } from "@tanstack/ai";
 import { z } from "zod";
-import { compileReportQuery, runReportQuery } from "../reporting/compiler.js";
+import { runReportQuery } from "../reporting/compiler.js";
 import { resolveDateRange } from "../reporting/dates.js";
 import { FACTS } from "../reporting/facts.js";
 import { describeView, searchCatalog } from "../reporting/index.js";
-import type { ReportFilter, ReportQuery, ReportScope } from "../reporting/types.js";
 import { VIEWS } from "../reporting/views.js";
+import { type Board, BOARD_ROOT, emptyBoard } from "./board.js";
 import {
-  type Board,
-  type BoardTile,
-  CHART_TYPES,
-  dateRangeSchema,
-  MAX_TILES,
-  type ReportDefinition,
-  reportFilterSchema,
-} from "./board.js";
+  buildElement,
+  buildSpec,
+  checkTree,
+  type ElementInput,
+  elementInputSchema,
+  MAX_ELEMENTS,
+  type SpecElement,
+} from "./components.js";
+import { type QueryContext, toDefinition, toReportQuery, viewQuerySchema } from "./query.js";
 
 // The tools the AI uses to answer a question. Every tool is built per request
 // around the caller's own scope (site + workcenter grants), so the AI can
 // never see or ask for more than the person asking could. The model only
-// picks keys; all SQL still comes from the catalog.
+// picks keys and components; all SQL still comes from the catalog.
 
 /** The stream event carrying the new board to the page. */
 export const BOARD_EVENT = "insights.board";
 
-/** The stream event carrying one tile to show inside the answer. */
+/** The stream event carrying a small screen to show inside the answer. */
 export const INLINE_EVENT = "insights.inline";
 
 /** How many rows the AI gets to read from one query. The page shows the rest. */
 const PREVIEW_ROWS = 50;
 
-export interface InsightsToolContext {
-  scope: ReportScope;
-  timezone: string;
-  nowMs: number;
+export interface InsightsToolContext extends QueryContext {
   /** The board as it stands. update_board changes it in place. */
   board: Board;
   /** Called with the new board every time the AI changes it (tests use this). */
   onBoard?: (board: Board) => void;
 }
 
-/** What the AI sends to run or place a query: a view, not a raw fact. */
-const viewQuerySchema = z.object({
-  view: z.string().describe("A view key from the catalog, like oee or downtime"),
-  measures: z.array(z.string()).min(1).max(8),
-  dimensions: z.array(z.string()).max(4).default([]),
-  filters: z.array(reportFilterSchema).max(10).default([]),
-  segments: z.array(z.string()).max(4).optional(),
-  dateRange: dateRangeSchema.describe(
-    "Always set this. Use a relative preset when the person says things like 'last week'.",
-  ),
-  granularity: z
-    .enum(["hour", "day", "week", "month", "year"])
-    .optional()
-    .describe("Bucket size when grouping by businessDate"),
-  orderBy: z.object({ field: z.string(), dir: z.enum(["asc", "desc"]) }).optional(),
-  limit: z.number().int().min(1).max(500).optional(),
-});
-/** Input shape: defaults may not be filled in yet. */
-type ViewQuery = z.input<typeof viewQuerySchema>;
-
-type Problem = { error: string };
-
-/** Check a view query against its view, and turn it into a report definition. */
-function toDefinition(q: ViewQuery, chartType?: (typeof CHART_TYPES)[number]): ReportDefinition | Problem {
-  const view = VIEWS[q.view];
-  if (!view) return { error: `No view called ${q.view}. Use search_catalog to find one.` };
-  const allowed = (list: readonly string[], keys: string[], what: string) => {
-    const bad = keys.filter((k) => !list.includes(k));
-    return bad.length > 0 ? `View ${q.view} has no ${what}: ${bad.join(", ")}. It has: ${list.join(", ")}.` : undefined;
+/** A short outline of a board for the AI: ids, types and titles, as a tree. */
+function outline(board: Board): string[] {
+  const lines: string[] = [];
+  const walk = (id: string, depth: number) => {
+    const el = board.spec.elements[id];
+    if (!el) return;
+    const p = el.props as { title?: string; text?: string; label?: string };
+    const name = p.title ?? p.label ?? (p.text ? p.text.slice(0, 50) : "");
+    lines.push(`${"  ".repeat(depth)}${id}: ${el.type}${name ? ` "${name}"` : ""}`);
+    for (const child of el.children ?? []) walk(child, depth + 1);
   };
-  const problem =
-    allowed(view.measures, q.measures, "measure") ??
-    allowed(view.dimensions, q.dimensions ?? [], "dimension") ??
-    allowed(view.segments ?? [], q.segments ?? [], "segment");
-  if (problem) return { error: problem };
-  return {
-    v: 1,
-    fact: view.fact,
-    measures: q.measures,
-    dimensions: q.dimensions ?? [],
-    filters: q.filters ?? [],
-    ...(q.segments?.length ? { segments: q.segments } : {}),
-    dateRange: q.dateRange,
-    ...(q.granularity ? { granularity: q.granularity } : {}),
-    ...(q.orderBy ? { orderBy: q.orderBy } : {}),
-    ...(q.limit ? { limit: q.limit } : {}),
-    ...(chartType ? { display: { chartType } } : {}),
-  };
+  walk(board.spec.root, 0);
+  return lines;
 }
 
-/** A report definition as a catalog query, with the dates worked out. */
-function toReportQuery(def: ReportDefinition, ctx: InsightsToolContext): ReportQuery {
-  return {
-    fact: def.fact,
-    measures: def.measures,
-    dimensions: def.dimensions,
-    filters: def.filters as ReportFilter[],
-    segments: def.segments,
-    ...resolveDateRange(def.dateRange, ctx.timezone, ctx.nowMs),
-    dateGranularity: def.granularity,
-    orderBy: def.orderBy,
-    limit: def.limit,
-  };
-}
-
-/** Ask the compiler whether a definition is valid, without running it. */
-function checkDefinition(def: ReportDefinition, ctx: InsightsToolContext): Problem | undefined {
-  const compiled = compileReportQuery(toReportQuery(def, ctx), ctx.scope);
-  return "error" in compiled ? { error: compiled.error } : undefined;
-}
-
-let tileSeed = 0;
-const newTileId = () => `t${Date.now().toString(36)}${(tileSeed++).toString(36)}`;
+let seed = 0;
+const inlineRoot = () => `inline${Date.now().toString(36)}${(seed++).toString(36)}`;
 
 export function insightsTools(ctx: InsightsToolContext) {
   const searchCatalogTool = toolDefinition({
@@ -186,111 +128,79 @@ export function insightsTools(ctx: InsightsToolContext) {
     };
   });
 
-  const tileInputSchema = z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("report"),
-      title: z.string().max(120),
-      query: viewQuerySchema,
-      chartType: z.enum(CHART_TYPES).optional().describe("bar for categories, line for time, table for many columns"),
-      width: z.enum(["full", "half"]).optional(),
-    }),
-    z.object({
-      kind: z.literal("figures"),
-      title: z.string().max(120),
-      query: viewQuerySchema.describe("Usually no dimensions: one row of totals shown as big numbers"),
-      width: z.enum(["full", "half"]).optional(),
-    }),
-    z.object({
-      kind: z.literal("text"),
-      tone: z.enum(["summary", "note", "caveat"]),
-      text: z.string().max(1500),
-      width: z.enum(["full", "half"]).optional(),
-    }),
-  ]);
-
-  type TileInput = z.input<typeof tileInputSchema>;
-
-  /** A tile from what the AI sent, checked against the catalog and the compiler. */
-  const buildTile = (id: string, tile: TileInput): BoardTile | Problem => {
-    if (tile.kind === "text") {
-      return { id, kind: "text", tone: tile.tone, text: tile.text, ...(tile.width ? { width: tile.width } : {}) };
-    }
-    const def = toDefinition(tile.query, tile.kind === "report" ? tile.chartType : undefined);
-    if ("error" in def) return def;
-    const problem = checkDefinition(def, ctx);
-    if (problem) return problem;
-    return { id, kind: tile.kind, title: tile.title, definition: def, ...(tile.width ? { width: tile.width } : {}) };
+  const specInput = {
+    root: z.string().describe("Id of the top element"),
+    elements: z.array(elementInputSchema).min(1).max(MAX_ELEMENTS),
   };
 
   const showTool = toolDefinition({
     name: "show",
     description:
-      "Show one chart, table or row of figures right inside your answer. Use it for small answers: one number, one comparison, one trend. It does not touch the board. The tile fetches its own numbers.",
-    inputSchema: z.object({
-      tile: z.discriminatedUnion("kind", [
-        z.object({
-          kind: z.literal("report"),
-          title: z.string().max(120),
-          query: viewQuerySchema,
-          chartType: z.enum(CHART_TYPES).optional(),
-        }),
-        z.object({ kind: z.literal("figures"), title: z.string().max(120), query: viewQuerySchema }),
-      ]),
-    }),
-  }).server(async ({ tile }, toolContext) => {
-    const built = buildTile(newTileId(), tile);
-    if ("error" in built) return { error: built.error, hint: "Fix the query and call show again." };
-    toolContext?.emitCustomEvent(INLINE_EVENT, { tile: built });
-    return { shown: built.id };
+      "Show a small screen right inside your answer: one to four elements, like a Figure, a Grid of Figures, or one Report. Use it for small answers. It does not touch the board. Data components fetch their own numbers.",
+    inputSchema: z.object(specInput),
+  }).server(async (input, toolContext) => {
+    // Inline screens get fresh ids so two answers never collide.
+    const prefix = inlineRoot();
+    const rename = (id: string) => `${prefix}-${id}`;
+    const renamed = {
+      root: rename(input.root),
+      elements: (input.elements as ElementInput[]).map((el) => ({
+        ...el,
+        id: rename(el.id),
+        ...(el.children ? { children: el.children.map(rename) } : {}),
+      })),
+    };
+    const { spec, problems } = buildSpec(renamed, ctx);
+    if (problems.length > 0) return { problems, hint: "Fix these and call show again." };
+    toolContext?.emitCustomEvent(INLINE_EVENT, { spec });
+    return { shown: Object.keys(spec.elements).length };
   });
 
   const updateBoardTool = toolDefinition({
     name: "update_board",
-    description:
-      "Change the board the person sees. Add, replace or remove tiles, or clear the board to start fresh. Report and figures tiles fetch their own numbers, so never type numbers into them. Text tiles may only use numbers you read from run_query.",
+    description: `Change the board that opens beside the chat. The board's top element is "${BOARD_ROOT}", a column. To add things, set new elements and set "${BOARD_ROOT}" again with its new children list. To change one thing (like making a chart weekly), set just that element again with the same id. Remove drops elements by id. Clear starts from an empty board.`,
     inputSchema: z.object({
       clear: z
         .boolean()
         .optional()
-        .describe("Remove every tile first. Use it when the new question is about something else."),
-      remove: z.array(z.string()).max(MAX_TILES).optional().describe("Tile ids to remove"),
-      upsert: z
-        .array(
-          z.object({
-            id: z.string().optional().describe("Give an existing id to replace that tile"),
-            tile: tileInputSchema,
-          }),
-        )
-        .max(MAX_TILES)
-        .optional(),
-      question: z.string().max(500).optional().describe("A short title for the board"),
+        .describe("Start from an empty board first. Use it when the new question is about something else."),
+      set: z.array(elementInputSchema).max(MAX_ELEMENTS).optional().describe("Elements to add or replace, by id"),
+      remove: z.array(z.string()).max(MAX_ELEMENTS).optional().describe("Element ids to remove"),
+      title: z.string().max(200).optional().describe("A short title for the board"),
     }),
-  }).server(async ({ clear, remove, upsert, question }, toolContext) => {
-    let tiles: BoardTile[] = clear ? [] : [...ctx.board.tiles];
-    if (remove?.length) tiles = tiles.filter((t) => !remove.includes(t.id));
+  }).server(async ({ clear, set, remove, title }, toolContext) => {
+    const base = clear ? emptyBoard() : ctx.board;
+    const elements: Record<string, SpecElement> = { ...base.spec.elements };
     const problems: string[] = [];
-    for (const [i, { id, tile }] of (upsert ?? []).entries()) {
-      const tileId = id ?? newTileId();
-      const next = buildTile(tileId, tile);
-      if ("error" in next) {
-        problems.push(`upsert[${i}]${tile.kind === "text" ? "" : ` "${tile.title}"`}: ${next.error}`);
-        continue;
+    const removed = new Set<string>();
+    for (const id of remove ?? []) {
+      if (id === BOARD_ROOT) problems.push(`The root "${BOARD_ROOT}" can't be removed; set its children instead.`);
+      else {
+        delete elements[id];
+        removed.add(id);
       }
-      const at = tiles.findIndex((t) => t.id === tileId);
-      if (at >= 0) tiles[at] = next;
-      else tiles.push(next);
     }
-    if (tiles.length > MAX_TILES) {
-      problems.push(`A board holds at most ${MAX_TILES} tiles; the last ones were dropped.`);
-      tiles = tiles.slice(0, MAX_TILES);
+    for (const input of (set ?? []) as ElementInput[]) {
+      const built = buildElement(input, ctx);
+      if ("error" in built) problems.push(`${input.id}: ${built.error}`);
+      else elements[input.id] = built;
     }
-    ctx.board = { ...ctx.board, ...(question ? { question } : {}), tiles };
+    // Removed children quietly leave their parents' lists; any other missing
+    // child is reported by checkTree.
+    for (const [id, el] of Object.entries(elements)) {
+      if (el.children?.some((child) => removed.has(child))) {
+        elements[id] = { ...el, children: el.children.filter((child) => !removed.has(child)) };
+      }
+    }
+    const tree = checkTree({ root: BOARD_ROOT, elements });
+    problems.push(...tree.problems);
+    ctx.board = { v: 2, ...(title ? { title } : base.title ? { title: base.title } : {}), spec: tree.spec };
     // The page listens for this event and redraws the board.
     toolContext?.emitCustomEvent(BOARD_EVENT, { board: ctx.board });
     ctx.onBoard?.(ctx.board);
     return {
-      tiles: tiles.map((t) => ({ id: t.id, kind: t.kind, title: t.kind === "text" ? t.text.slice(0, 60) : t.title })),
-      ...(problems.length ? { problems, hint: "Fix these tiles and call update_board again." } : {}),
+      board: outline(ctx.board),
+      ...(problems.length ? { problems, hint: "Fix these and call update_board again." } : {}),
     };
   });
 

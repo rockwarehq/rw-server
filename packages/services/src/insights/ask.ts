@@ -3,7 +3,7 @@ import { chat, maxIterations, type ModelMessage, type StreamChunk, type UIMessag
 import { anthropicText } from "@tanstack/ai-anthropic";
 import { openaiText } from "@tanstack/ai-openai";
 import type { ReportScope } from "../reporting/types.js";
-import { type Board, boardSchema, emptyBoard } from "./board.js";
+import { type Board, emptyBoard, parseBoard } from "./board.js";
 import { stableInstructions, turnInstructions } from "./prompt.js";
 import { insightsTools } from "./tools.js";
 
@@ -78,8 +78,8 @@ export async function askInsights(input: AskInput): Promise<AsyncIterable<Stream
   const site = await prisma.site.findUnique({ where: { id: input.siteId }, select: { timezone: true } });
   const timezone = site?.timezone ?? "UTC";
   const nowMs = Date.now();
-  const parsed = boardSchema.safeParse(input.board);
-  const board: Board = parsed.success ? parsed.data : emptyBoard();
+  // A v1 board from an older page is turned into a spec here.
+  const board: Board = parseBoard(input.board) ?? emptyBoard();
 
   const abortController = new AbortController();
   input.signal?.addEventListener("abort", () => abortController.abort(), { once: true });

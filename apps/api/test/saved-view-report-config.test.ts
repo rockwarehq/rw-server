@@ -176,6 +176,29 @@ describe("saved view board config schema", () => {
     }
   });
 
+  it("accepts a v1 board without filters, as the page saves it", () => {
+    const { filters: _filters, ...noFilters } = board;
+    expect(createInputSchema.safeParse({ ...baseCreate, page: "board", config: noFilters }).success).toBe(true);
+  });
+
+  it("accepts a v2 spec board and caps its size", () => {
+    const spec = {
+      root: "board",
+      elements: {
+        board: { type: "Stack", props: { direction: "column", gap: "lg" }, children: ["answer"] },
+        answer: { type: "Callout", props: { tone: "info", text: "Hi" } },
+      },
+    };
+    expect(
+      createInputSchema.safeParse({ ...baseCreate, page: "board", config: { v: 2, title: "T", spec } }).success,
+    ).toBe(true);
+    const huge = Object.fromEntries(Array.from({ length: 81 }, (_, i) => [`e${i}`, { type: "Text", props: {} }]));
+    expect(
+      createInputSchema.safeParse({ ...baseCreate, page: "board", config: { v: 2, spec: { root: "e0", elements: huge } } })
+        .success,
+    ).toBe(false);
+  });
+
   it("lets a board update carry only a new name", () => {
     const parsed = updateInputSchema.safeParse({ id: VIEW_ID, page: "board", name: "Renamed" });
     expect(parsed.success).toBe(true);

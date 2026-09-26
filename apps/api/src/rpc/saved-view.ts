@@ -144,13 +144,37 @@ const boardTileSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-const boardConfigSchema = z.object({
+const boardV1ConfigSchema = z.object({
   v: z.literal(1),
   question: z.string().max(2000).optional(),
   dateRange: reportDateRangeSchema.optional(),
-  filters: reportFiltersSchema,
+  filters: reportFiltersSchema.optional(),
   tiles: z.array(boardTileSchema).max(24),
 });
+
+// v2: a json-render spec of Insights components (rw-server
+// packages/services/src/insights/components.ts). Shape and size are checked
+// here; component props are checked when the board is drawn, like reports.
+const specIdSchema = z.string().min(1).max(64);
+const boardV2ConfigSchema = z.object({
+  v: z.literal(2),
+  title: z.string().max(200).optional(),
+  spec: z.object({
+    root: specIdSchema,
+    elements: z
+      .record(
+        specIdSchema,
+        z.object({
+          type: z.string().min(1).max(32),
+          props: z.record(z.string(), z.unknown()),
+          children: z.array(specIdSchema).max(24).optional(),
+        }),
+      )
+      .refine((elements) => Object.keys(elements).length <= 80, "At most 80 elements"),
+  }),
+});
+
+const boardConfigSchema = z.discriminatedUnion("v", [boardV1ConfigSchema, boardV2ConfigSchema]);
 
 // One member per page that supports saved views.
 const pageConfigSchema = z.discriminatedUnion("page", [
