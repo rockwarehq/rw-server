@@ -61,9 +61,14 @@ export const ask = userRequired
       throw new ORPCError("TOO_MANY_REQUESTS", { message: "Too many questions. Wait a few minutes and try again." });
     }
 
+    // The setup tools run the real procedures as this person (apps/api/src/setup).
+    // Loaded here, not at the top, because they read the router this file is part of.
+    const setup = await import("../setup/tools.js");
     const stream = await askInsights({
       siteId: input.siteId,
       scope,
+      extraTools: setup.setupTools(context, input.siteId),
+      extraInstructions: setup.SETUP_INSTRUCTIONS,
       // The chat runner checks each message; the schema above only bounds size.
       messages: input.messages as unknown as Parameters<typeof askInsights>[0]["messages"],
       board: input.board,
@@ -71,5 +76,43 @@ export const ask = userRequired
     });
     for await (const chunk of stream) {
       yield chunk as { type: string };
+    }
+  });
+
+/**
+ * Apply a setup plan the assistant proposed, after the person reviewed it.
+ * Runs each step as the person (every procedure checks access itself) and
+ * streams one result per step. Dangerous steps run only when listed in
+ * `confirm`. No AI is involved here.
+ */
+export const applyPlan = userRequired
+  .input(
+    z.object({
+      siteId: z.uuid(),
+      planId: z.uuid(),
+      confirm: z.array(z.string().max(32)).max(60).default([]),
+    }),
+  )
+  .output(
+    eventIterator(
+      z.object({
+        stepId: z.string(),
+        ok: z.boolean(),
+        skipped: z.boolean().optional(),
+        resultId: z.string().optional(),
+        error: z.string().optional(),
+      }),
+    ),
+  )
+  .handler(async function* ({ input, context }) {
+    // Seeing the plant is enough to start; each step checks its own access.
+    context.access.list("VIEW", input.siteId, "WORKCENTER");
+    const plans = await import("../setup/plans.js");
+    const plan = plans.planFor(input.planId, context.current.user.id);
+    if ("error" in plan) throw new ORPCError("NOT_FOUND", { message: plan.error });
+    if (plan.siteId !== input.siteId)
+      throw new ORPCError("BAD_REQUEST", { message: "This plan is for another plant." });
+    for await (const result of plans.applyPlan(context, plan, new Set(input.confirm))) {
+      yield "skipped" in result ? { stepId: result.skipped, ok: false, skipped: true, error: result.reason } : result;
     }
   });

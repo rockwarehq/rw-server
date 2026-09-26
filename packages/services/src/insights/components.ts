@@ -33,6 +33,39 @@ interface ComponentDef {
 
 const text = (max = 2000) => z.string().min(1).max(max);
 
+/** Kinds of saved things an EntityCard can show; each has a "<kind>.get" RPC taking { id }. */
+export const ENTITY_KINDS = [
+  "workcenter",
+  "station",
+  "stationProfile",
+  "job",
+  "product",
+  "tool",
+  "material",
+  "label",
+  "statusCategory",
+  "statusReason",
+  "disposition",
+  "dispositionReason",
+  "productionMode",
+  "callDefinition",
+  "notificationGroup",
+  "employee",
+  "customer",
+  "order",
+  "dashboard",
+  "shiftPattern",
+  "integration",
+  "gateway",
+  "datasource",
+] as const;
+
+/** A setup component: plain props (ids), stored as sent. */
+function idComponent(description: string, shape: z.ZodRawShape): ComponentDef {
+  const props = z.object(shape);
+  return { description, children: false, input: props, stored: props };
+}
+
 /** A data component: its `query` turns into a checked `definition`. */
 function dataComponent(
   description: string,
@@ -168,6 +201,25 @@ export const COMPONENTS = {
       return undefined;
     },
   ),
+
+  // ── Setup (show what's set up; they fetch the saved thing by id) ──
+  EntityCard: idComponent(
+    "A card with the main facts of one saved thing, like a job, product, station or call type. Use it after a plan is applied to show what was made.",
+    { kind: z.enum(ENTITY_KINDS), id: z.uuid(), title: text(120).optional() },
+  ),
+  WorkcenterLayout: idComponent("A workcenter with its stations as tiles: name, profile and speed.", {
+    workcenterId: z.uuid(),
+  }),
+  ShiftRotation: idComponent("A shift pattern as a grid: each day of the rotation and its shifts.", {
+    patternId: z.uuid(),
+  }),
+  StationProfile: idComponent("A station profile: how the machine counts, with its speed.", { profileId: z.uuid() }),
+  CallType: idComponent("A call type: its severity color, and who can open and answer it.", {
+    callDefinitionId: z.uuid(),
+  }),
+  AndonRule: idComponent("An andon color rule: a sample station tile in its color, with its condition.", {
+    ruleId: z.uuid(),
+  }),
 } satisfies Record<string, ComponentDef>;
 
 export type ComponentType = keyof typeof COMPONENTS;

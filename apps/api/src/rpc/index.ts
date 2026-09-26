@@ -526,6 +526,7 @@ export const router = {
   insights: {
     status: insights.status,
     ask: insights.ask,
+    applyPlan: insights.applyPlan,
   },
   historian: {
     query: historian.query,

@@ -58,8 +58,8 @@ const effort = (fallback: Effort): Effort => {
   return value && EFFORTS.includes(value) ? value : fallback;
 };
 
-/** The most tool rounds one question may take. */
-const MAX_ROUNDS = 12;
+/** The most tool rounds one question may take. Setup needs more than reporting: it reads, describes actions, then plans. */
+const MAX_ROUNDS = 30;
 
 export interface AskInput {
   siteId: string;
@@ -69,6 +69,12 @@ export interface AskInput {
   /** The board on screen now. Follow-up questions change it. */
   board?: unknown;
   signal?: AbortSignal;
+  /**
+   * More tools and instructions from the caller, like the setup tools the API
+   * builds around the person's own RPC context (apps/api/src/setup).
+   */
+  extraTools?: unknown[];
+  extraInstructions?: string;
 }
 
 export async function askInsights(input: AskInput): Promise<AsyncIterable<StreamChunk>> {
@@ -86,11 +92,15 @@ export async function askInsights(input: AskInput): Promise<AsyncIterable<Stream
 
   const shared = {
     messages: input.messages,
-    tools: insightsTools({ scope: input.scope, timezone, nowMs, board }),
+    tools: [
+      ...insightsTools({ scope: input.scope, timezone, nowMs, board }),
+      ...(input.extraTools ?? []),
+    ] as ReturnType<typeof insightsTools>,
     agentLoopStrategy: maxIterations(MAX_ROUNDS),
     abortController,
   };
-  const stable = stableInstructions();
+  // The extra instructions don't change between questions either, so they cache.
+  const stable = stableInstructions() + (input.extraInstructions ?? "");
   const turn = turnInstructions({ timezone, nowMs, board });
 
   if (chosen === "openai") {
