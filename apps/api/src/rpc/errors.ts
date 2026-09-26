@@ -18,6 +18,7 @@ export type OrpcErrorCode =
   | "FORBIDDEN"
   | "NOT_FOUND"
   | "CONFLICT"
+  | "TIMEOUT"
   | "INTERNAL_SERVER_ERROR";
 
 export type CodeOverrides = Record<string, OrpcErrorCode>;
@@ -96,6 +97,9 @@ const EXACT: Record<string, OrpcErrorCode> = {
   JOB_REQUIRED: "BAD_REQUEST",
   NO_CHANGE: "BAD_REQUEST",
   RANGE_TOO_LARGE: "BAD_REQUEST",
+
+  // A report ran past its statement timeout. The ask was fine, just too big.
+  QUERY_TIMEOUT: "TIMEOUT",
 
   EXECUTION_ENQUEUE_FAILED: "INTERNAL_SERVER_ERROR",
   INTERNAL_SERVER_ERROR: "INTERNAL_SERVER_ERROR",

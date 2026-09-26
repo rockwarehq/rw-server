@@ -25,6 +25,7 @@ import {
   toolDim,
   workcenterDim,
 } from "./dimensions.js";
+import { applyCatalogText } from "./catalog-text.js";
 import type { DimensionDef, FactDef, FieldDef, MeasureDef, ValueFormat } from "./types.js";
 
 // One catalog entry per star-stamped fact table. Grain and caveats are stated
@@ -818,3 +819,6 @@ for (const fact of Object.values(FACTS)) {
     fact.defaultFilters = [...(fact.defaultFilters ?? []), { dimension: "scheduled", op: "eq", value: "true" }];
   }
 }
+
+// Descriptions, other names, AI tips, segments and required dimensions.
+applyCatalogText(FACTS);
