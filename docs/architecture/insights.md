@@ -32,7 +32,7 @@ The words that describe each item (descriptions, other names, tips for the AI) a
 sequenceDiagram
   participant Page as IMM Insights page
   participant API as insights.ask
-  participant AI as Claude (via TanStack AI)
+  participant AI as AI model (via TanStack AI)
   participant Cat as Report catalog
   Page->>API: chat so far + board on screen
   API->>AI: instructions + views + question
@@ -57,13 +57,19 @@ The AI never types the numbers into a chart. Chart and figure tiles hold a repor
 
 ## Setup
 
-Insights is off until the API has a key:
+Insights is off until the API has a key for OpenAI or Anthropic. The tools, instructions and board are the same for both. Only the model changes.
 
 ```sh
-ANTHROPIC_API_KEY=...        # turns Insights on
-INSIGHTS_MODEL=claude-opus-5 # optional
-INSIGHTS_EFFORT=high         # optional: low, medium, high, max
+OPENAI_API_KEY=...           # turns Insights on with OpenAI (gpt-5.5)
+# or
+ANTHROPIC_API_KEY=...        # turns Insights on with Anthropic (claude-opus-5)
+
+INSIGHTS_PROVIDER=openai     # optional; picks one when both keys are set (OpenAI wins otherwise)
+INSIGHTS_MODEL=gpt-5.5       # optional
+INSIGHTS_EFFORT=medium       # optional: low, medium, high
 ```
+
+The provider switch is in `packages/services/src/insights/ask.ts`.
 
 `insights.status` tells the page whether Insights is on.
 
