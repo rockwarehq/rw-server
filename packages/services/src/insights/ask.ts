@@ -43,6 +43,14 @@ export function insightsEnabled(): boolean {
   return chosen !== undefined && Boolean(process.env[KEY_BY_PROVIDER[chosen]]);
 }
 
+const DEFAULT_MODEL: Record<Provider, string> = { openai: "gpt-5.5", anthropic: "claude-opus-5" };
+
+/** The model name Insights will use, for the page to show. */
+export function insightsModel(): string | undefined {
+  const chosen = provider();
+  return chosen ? (process.env.INSIGHTS_MODEL ?? DEFAULT_MODEL[chosen]) : undefined;
+}
+
 const EFFORTS = ["low", "medium", "high"] as const;
 type Effort = (typeof EFFORTS)[number];
 const effort = (fallback: Effort): Effort => {
@@ -86,7 +94,7 @@ export async function askInsights(input: AskInput): Promise<AsyncIterable<Stream
   const turn = turnInstructions({ timezone, nowMs, board });
 
   if (chosen === "openai") {
-    const model = (process.env.INSIGHTS_MODEL ?? "gpt-5.5") as Parameters<typeof openaiText>[0];
+    const model = insightsModel() as Parameters<typeof openaiText>[0];
     return chat({
       ...shared,
       adapter: openaiText(model),
@@ -96,7 +104,7 @@ export async function askInsights(input: AskInput): Promise<AsyncIterable<Stream
     });
   }
 
-  const model = (process.env.INSIGHTS_MODEL ?? "claude-opus-5") as Parameters<typeof anthropicText>[0];
+  const model = insightsModel() as Parameters<typeof anthropicText>[0];
   return chat({
     ...shared,
     adapter: anthropicText(model),

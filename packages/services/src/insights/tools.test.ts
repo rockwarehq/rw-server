@@ -114,6 +114,28 @@ describe("update_board", () => {
   });
 });
 
+describe("show", () => {
+  it("sends one checked tile to the answer and leaves the board alone", async () => {
+    const { call, seen, events } = setup();
+    const out = await call("show", {
+      tile: { kind: "figures", title: "OEE", query: { ...oeeByStation, dimensions: [] } },
+    });
+    expect(out.shown).toBeDefined();
+    expect(events.at(-1)).toMatchObject({
+      name: "insights.inline",
+      value: { tile: { kind: "figures", definition: { fact: "stationKpis" } } },
+    });
+    expect(seen).toHaveLength(0);
+  });
+
+  it("sends a bad tile back to the AI instead of showing it", async () => {
+    const { call, events } = setup();
+    const out = await call("show", { tile: { kind: "report", title: "?", query: { ...oeeByStation, view: "nope" } } });
+    expect(out.error).toContain("nope");
+    expect(events).toHaveLength(0);
+  });
+});
+
 describe("catalog tools", () => {
   it("describe_view explains a view and refuses unknown ones", async () => {
     const { call } = setup();

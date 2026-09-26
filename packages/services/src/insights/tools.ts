@@ -24,6 +24,9 @@ import {
 /** The stream event carrying the new board to the page. */
 export const BOARD_EVENT = "insights.board";
 
+/** The stream event carrying one tile to show inside the answer. */
+export const INLINE_EVENT = "insights.inline";
+
 /** How many rows the AI gets to read from one query. The page shows the rest. */
 const PREVIEW_ROWS = 50;
 
@@ -205,6 +208,42 @@ export function insightsTools(ctx: InsightsToolContext) {
     }),
   ]);
 
+  type TileInput = z.input<typeof tileInputSchema>;
+
+  /** A tile from what the AI sent, checked against the catalog and the compiler. */
+  const buildTile = (id: string, tile: TileInput): BoardTile | Problem => {
+    if (tile.kind === "text") {
+      return { id, kind: "text", tone: tile.tone, text: tile.text, ...(tile.width ? { width: tile.width } : {}) };
+    }
+    const def = toDefinition(tile.query, tile.kind === "report" ? tile.chartType : undefined);
+    if ("error" in def) return def;
+    const problem = checkDefinition(def, ctx);
+    if (problem) return problem;
+    return { id, kind: tile.kind, title: tile.title, definition: def, ...(tile.width ? { width: tile.width } : {}) };
+  };
+
+  const showTool = toolDefinition({
+    name: "show",
+    description:
+      "Show one chart, table or row of figures right inside your answer. Use it for small answers: one number, one comparison, one trend. It does not touch the board. The tile fetches its own numbers.",
+    inputSchema: z.object({
+      tile: z.discriminatedUnion("kind", [
+        z.object({
+          kind: z.literal("report"),
+          title: z.string().max(120),
+          query: viewQuerySchema,
+          chartType: z.enum(CHART_TYPES).optional(),
+        }),
+        z.object({ kind: z.literal("figures"), title: z.string().max(120), query: viewQuerySchema }),
+      ]),
+    }),
+  }).server(async ({ tile }, toolContext) => {
+    const built = buildTile(newTileId(), tile);
+    if ("error" in built) return { error: built.error, hint: "Fix the query and call show again." };
+    toolContext?.emitCustomEvent(INLINE_EVENT, { tile: built });
+    return { shown: built.id };
+  });
+
   const updateBoardTool = toolDefinition({
     name: "update_board",
     description:
@@ -231,30 +270,11 @@ export function insightsTools(ctx: InsightsToolContext) {
     if (remove?.length) tiles = tiles.filter((t) => !remove.includes(t.id));
     const problems: string[] = [];
     for (const [i, { id, tile }] of (upsert ?? []).entries()) {
-      let next: BoardTile;
       const tileId = id ?? newTileId();
-      if (tile.kind === "text") {
-        next = {
-          id: tileId,
-          kind: "text",
-          tone: tile.tone,
-          text: tile.text,
-          ...(tile.width ? { width: tile.width } : {}),
-        };
-      } else {
-        const def = toDefinition(tile.query, tile.kind === "report" ? tile.chartType : undefined);
-        const problem = "error" in def ? def : checkDefinition(def, ctx);
-        if (problem || "error" in def) {
-          problems.push(`upsert[${i}] "${tile.title}": ${(problem ?? (def as Problem)).error}`);
-          continue;
-        }
-        next = {
-          id: tileId,
-          kind: tile.kind,
-          title: tile.title,
-          definition: def,
-          ...(tile.width ? { width: tile.width } : {}),
-        };
+      const next = buildTile(tileId, tile);
+      if ("error" in next) {
+        problems.push(`upsert[${i}]${tile.kind === "text" ? "" : ` "${tile.title}"`}: ${next.error}`);
+        continue;
       }
       const at = tiles.findIndex((t) => t.id === tileId);
       if (at >= 0) tiles[at] = next;
@@ -274,5 +294,5 @@ export function insightsTools(ctx: InsightsToolContext) {
     };
   });
 
-  return [searchCatalogTool, describeViewTool, findValuesTool, runQueryTool, updateBoardTool];
+  return [searchCatalogTool, describeViewTool, findValuesTool, runQueryTool, showTool, updateBoardTool];
 }

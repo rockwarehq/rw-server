@@ -1,6 +1,6 @@
 import { ORPCError, eventIterator } from "@orpc/server";
 import { z } from "zod";
-import { askInsights, insightsEnabled } from "@rw/services/insights/ask";
+import { askInsights, insightsEnabled, insightsModel } from "@rw/services/insights/ask";
 import { userRequired } from "./middleware.js";
 
 // Insights: ask a question in plain words, get a board of reports back.
@@ -42,7 +42,8 @@ const askSchema = z.object({
 
 export const status = userRequired.input(z.object({ siteId: z.uuid() })).handler(async ({ input, context }) => {
   context.access.list("VIEW", input.siteId, "WORKCENTER");
-  return { enabled: insightsEnabled() };
+  const enabled = insightsEnabled();
+  return { enabled, ...(enabled ? { model: insightsModel() } : {}) };
 });
 
 export const ask = userRequired
