@@ -73,6 +73,17 @@ Boards are saved as savedView page `board`, version 2 (`{ v: 2, title, spec }`).
 
 read from `run_query`.
 
+## Setting up Rockware
+
+The assistant can also set up and configure the plant (`apps/api/src/setup`).
+
+- **The setup catalog** (`manifest.ts`) lists every area in the order a plant is usually set up: the plant, labels, workcenters, profiles, stations, devices, shifts, the catalog, codes, the team, production modes, calls, automations, displays, orders, stock, documents, access, integrations, API tokens, custom entities and the live graph. Each action is a real API procedure, with plain words, the access it needs, and a warning when it's risky.
+- **Input rules come from the API itself** (`catalog.ts`): each procedure's own input schema, as JSON Schema. A test checks every catalog entry exists.
+- **Tools:** `list_setup`, `describe_action`, `read` (runs reads as the person), `plant_checklist` (what's done, what's next), `propose_plan`.
+- **Changes only happen through a plan** (`plans.ts`). `propose_plan` checks every step (a known action, the person's access, the input rules, `$step` links to earlier steps) and keeps it for an hour. The page shows it as a card. When the person presses Apply, `insights.applyPlan` runs each step by calling the real procedure as that person, so every access check still applies. Risky steps only run when ticked. No AI is involved in applying.
+- **After a plan runs**, the assistant shows the result with setup components that fetch the saved things by id: `EntityCard`, `WorkcenterLayout`, `ShiftRotation`, `StationProfile`, `CallType`, `AndonRule`.
+- **Not done here:** uploading files and logos, and inviting new users (those live on the REST API or need files).
+
 ## Setup
 
 Insights is off until the API has a key for OpenAI or Anthropic. The tools, instructions and board are the same for both. Only the model changes.
