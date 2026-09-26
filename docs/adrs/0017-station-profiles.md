@@ -150,7 +150,11 @@ certification.
 
 ### 7. Moving existing data
 
-Migration `20261004100000_station_profiles` does these steps:
+Two migrations do this. `20261004100000_station_profiles` shipped first and
+had already run on dev, so it stays exactly as it was; the default profile
+comes in `20261005100000_station_profile_default`. (Editing an applied
+migration does nothing: Prisma never runs it again. That broke dev once.)
+Together they do these steps:
 
 1. It makes one profile for each different counting setup on live stations,
    named like "Count by amount – 100 ft". The plain count-by-cycle setup
