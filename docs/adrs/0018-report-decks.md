@@ -66,7 +66,8 @@ A preview is an edition that is not saved.
 
 A link points at one edition or several (a subscription's `links: "one"`).
 Only a SHA-256 hash of its token is stored. It lasts until revoked or until
-`expiresAt` (default 7 days, may be none). `deckLink.view` is public and
+`expiresAt`: whoever makes it chooses (the app offers 7 days first), and it
+may have none. `deckLink.view` is public and
 returns only the stored snapshot; it never runs a query.
 
 Signed-in people see every edition of a deck they can see, links or not.

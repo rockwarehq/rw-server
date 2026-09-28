@@ -19,7 +19,7 @@ const plannedAt = (payload: Record<string, unknown>) => {
 };
 
 /** The automation's own site's decks among `deckIds`; any other (or deleted) is left out. */
-export async function siteDecks(deckIds: string[], siteId: string | undefined) {
+export async function siteDecks(deckIds: string[], siteId: string) {
   const rows = await prisma.reportDeck.findMany({
     where: { id: { in: deckIds }, siteId },
     select: { id: true, name: true },
@@ -40,8 +40,10 @@ export const handler: ActionHandler = {
         },
       },
       async run(inputs, ctx) {
+        const siteId = ctx.event.partition;
+        if (!siteId) throw new Error(`automation "${ctx.automation.label}": no site to make editions for`);
         const asOf = plannedAt(ctx.event.payload);
-        for (const { id } of await siteDecks(ids(inputs.deckIds), ctx.event.partition)) {
+        for (const { id } of await siteDecks(ids(inputs.deckIds), siteId)) {
           // A redelivered tick finds the edition it already made.
           const made = await prisma.reportDeckEdition.findFirst({
             where: { deckId: id, automationId: ctx.automation.id, asOf },

@@ -1,13 +1,13 @@
 import { createHash, randomBytes } from "node:crypto";
 import prisma, { type Prisma } from "@rw/db";
-import { buildEdition, type BuiltEdition } from "./edition.js";
+import { dateOnly } from "./days.js";
+import { buildEdition } from "./edition.js";
 import type { DeckRange, DeckSlide } from "./types.js";
 
 // Report decks (ADR-0018): decks, their editions, and links that open
 // editions without signing in.
 
-export { buildEdition, deckSpan, ROW_CAP } from "./edition.js";
-export { deckDays } from "./days.js";
+export { deckSpan } from "./edition.js";
 export * from "./types.js";
 
 type ServiceError = { error: string; code: string };
@@ -38,7 +38,7 @@ const EDITION_SUMMARY = {
   createdAt: true,
 } as const;
 
-const toDate = (date: Date | null) => (date ? date.toISOString().slice(0, 10) : null);
+const toDate = (date: Date | null) => (date ? dateOnly(date) : null);
 
 function presentDeck(row: Prisma.ReportDeckGetPayload<{ select: typeof DECK_SELECT }>) {
   return { ...row, range: row.range as DeckRange, slides: row.slides as unknown as DeckSlide[] };
@@ -123,15 +123,12 @@ export async function deleteDeck(id: string): Promise<boolean> {
 
 // ── Editions ───────────────────────────────────────────────────────────────
 
-const presentBuilt = (built: BuiltEdition) => ({
-  ...built,
-  asOf: built.asOf.toISOString(),
-});
-
 /** The deck worked out now, not saved. */
 export async function previewDeck(id: string) {
   const deck = await getDeck(id);
-  return deck ? presentBuilt(await buildEdition(deck, new Date())) : null;
+  if (!deck) return null;
+  const built = await buildEdition(deck, new Date());
+  return { ...built, asOf: built.asOf.toISOString() };
 }
 
 export async function makeEdition(
@@ -249,11 +246,6 @@ export async function revokeLink(id: string): Promise<boolean> {
     data: { revokedAt: new Date() },
   });
   return count > 0;
-}
-
-/** Where a link lives, for the access check. */
-export async function linkSite(id: string) {
-  return prisma.reportDeckLink.findUnique({ where: { id }, select: { siteId: true } });
 }
 
 /** What a link opens, for anyone holding its token: its editions as stored, nothing live. */

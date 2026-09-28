@@ -87,7 +87,7 @@ export const handler: ActionHandler = {
             expiresAt,
             automationId: ctx.automation.id,
           });
-          const { token } = unwrapService("error" in created ? created : created.data);
+          const { token } = unwrapService(created).data;
           links.push(`${label}: ${getAppBaseUrl()}/decks/${token}`);
         }
 

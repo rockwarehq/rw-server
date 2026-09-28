@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { FILTER_OPS } from "../reporting/types.js";
+import { reportQueryFields, reportRowsFields } from "../reporting/schema.js";
 
 // What a deck is made of (ADR-0018). A page keeps the report's own state for
 // drawing (`params`, the UI's business) and the queries it makes, without
@@ -8,33 +8,10 @@ import { FILTER_OPS } from "../reporting/types.js";
 export const DECK_RANGES = ["yesterday", "yesterday-7"] as const;
 export type DeckRange = (typeof DECK_RANGES)[number];
 
-const filterSchema = z.object({
-  dimension: z.string().min(1).max(64),
-  op: z.enum(FILTER_OPS),
-  value: z.union([z.string().max(256), z.array(z.string().max(256)).max(200)]).optional(),
-});
-
-const orderBySchema = z.object({ field: z.string().max(64), dir: z.enum(["asc", "desc"]) });
-
 /** A report.query or report.rows input with no dates. */
 export const queryTemplateSchema = z.discriminatedUnion("mode", [
-  z.object({
-    mode: z.literal("query"),
-    fact: z.string().min(1).max(64),
-    measures: z.array(z.string().max(64)).min(1).max(20),
-    dimensions: z.array(z.string().max(64)).max(10),
-    filters: z.array(filterSchema).max(20).optional(),
-    dateGranularity: z.enum(["hour", "day", "week", "month", "year"]).optional(),
-    orderBy: orderBySchema.optional(),
-    limit: z.number().int().min(1).max(10000).optional(),
-  }),
-  z.object({
-    mode: z.literal("rows"),
-    fact: z.string().min(1).max(64),
-    columns: z.array(z.string().max(64)).min(1).max(40),
-    filters: z.array(filterSchema).max(20).optional(),
-    orderBy: orderBySchema.optional(),
-  }),
+  z.object({ mode: z.literal("query"), ...reportQueryFields }),
+  z.object({ mode: z.literal("rows"), ...reportRowsFields }),
 ]);
 export type QueryTemplate = z.infer<typeof queryTemplateSchema>;
 

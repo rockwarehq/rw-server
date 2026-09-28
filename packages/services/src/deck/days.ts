@@ -17,6 +17,8 @@ export interface ShiftRow {
 
 const DAY_MS = 86_400_000;
 
+export const dateOnly = (date: Date) => date.toISOString().slice(0, 10);
+
 export const addDays = (date: string, days: number) =>
   new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
 

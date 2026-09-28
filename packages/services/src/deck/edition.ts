@@ -1,7 +1,7 @@
 import prisma from "@rw/db";
 import { FACTS, reportSchema, runReportQuery, runReportRows } from "../reporting/index.js";
 import type { ReportFilter } from "../reporting/types.js";
-import { addDays, datesBetween, deckDays, matchesShiftNames, type ShiftRow, toEditionShift } from "./days.js";
+import { addDays, dateOnly, datesBetween, deckDays, matchesShiftNames, type ShiftRow, toEditionShift } from "./days.js";
 import type { DeckRange, DeckSlide, EditionPage, EditionSetup, QueryTemplate, StoredResult } from "./types.js";
 
 // Making an edition (ADR-0018): the deck's days as of a moment, every page's
@@ -33,8 +33,6 @@ export interface BuiltEdition {
   facts: Record<string, unknown>;
 }
 
-const dateOnly = (date: Date) => date.toISOString().slice(0, 10);
-
 async function scheduledShifts(workcenterId: string, asOf: Date): Promise<ShiftRow[]> {
   const today = dateOnly(asOf);
   const rows = await prisma.shiftInstance.findMany({
@@ -57,13 +55,14 @@ async function scheduledShifts(workcenterId: string, asOf: Date): Promise<ShiftR
 /** One query, as of the page's dates, narrowed to the deck's workcenter and the page's shifts. */
 async function runQuery(
   template: QueryTemplate,
-  page: { dateFrom: string; dateTo: string },
-  shiftNames: string[],
+  page: EditionPage,
   scope: { siteId: string; workcenterIds: string[] },
 ): Promise<StoredResult> {
   const fact = FACTS[template.fact];
   if (!fact) return { error: `Unknown dataset: ${template.fact}`, code: "UNKNOWN_FACT" };
   const filters = [...(template.filters ?? [])] as ReportFilter[];
+  // The names as the calendar spells them: the slide's were matched ignoring case and spaces.
+  const shiftNames = [...new Set((page.shifts ?? []).map((shift) => shift.shiftName))];
   if (shiftNames.length > 0) {
     if (!fact.dimensions.shiftName) {
       return { error: "This report can't be narrowed to shifts.", code: "SHIFT_UNSUPPORTED" };
@@ -81,6 +80,16 @@ async function runQuery(
   }
   return "error" in result ? { error: result.error, code: result.code } : result;
 }
+
+const emptyPage = (slide: DeckSlide, dates: { dateFrom: string; dateTo: string }, message: string): EditionPage => ({
+  key: slide.id,
+  slideId: slide.id,
+  title: slide.title,
+  ...dates,
+  shifts: null,
+  message,
+  results: {},
+});
 
 /** The pages a slide makes over the deck's days: one, or one per day or shift for the kinds that show one at a time. */
 function slidePages(slide: DeckSlide, days: NonNullable<ReturnType<typeof deckDays>>): EditionPage[] {
@@ -143,16 +152,7 @@ export async function buildEdition(deck: DeckInput, asOf: Date): Promise<BuiltEd
   const days = deckDays(deck.range, await scheduledShifts(deck.workcenterId, asOf), asOf.getTime());
   if (!days) {
     const message = "No business day at this workcenter has finished yet.";
-    const pages = deck.slides.map((slide) => ({
-      key: slide.id,
-      slideId: slide.id,
-      title: slide.title,
-      dateFrom: "",
-      dateTo: "",
-      shifts: null,
-      message,
-      results: {},
-    }));
+    const pages = deck.slides.map((slide) => emptyPage(slide, { dateFrom: "", dateTo: "" }, message));
     return { asOf, dateFrom: null, dateTo: null, setup, pages, facts: {} };
   }
 
@@ -161,24 +161,19 @@ export async function buildEdition(deck: DeckInput, asOf: Date): Promise<BuiltEd
   for (const slide of deck.slides) {
     const split = slidePages(slide, days);
     if (split.length === 0) {
-      pages.push({
-        key: slide.id,
-        slideId: slide.id,
-        title: slide.title,
-        dateFrom: days.dateFrom,
-        dateTo: days.dateTo,
-        shifts: null,
-        message:
-          slide.shiftNames.length > 0
-            ? `No ${slide.shiftNames.join(" or ")} shift in these days.`
-            : "No shifts in these days.",
-        results: {},
-      });
+      const named = slide.shiftNames.length > 0;
+      pages.push(
+        emptyPage(
+          slide,
+          days,
+          named ? `No ${slide.shiftNames.join(" or ")} shift in these days.` : "No shifts in these days.",
+        ),
+      );
       continue;
     }
     for (const page of split.slice(0, MAX_PAGES)) {
       for (const [slot, template] of Object.entries(slide.queries)) {
-        page.results[slot] = await runQuery(template, page, slide.shiftNames, scope);
+        page.results[slot] = await runQuery(template, page, scope);
       }
       pages.push(page);
     }

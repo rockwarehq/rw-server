@@ -9,40 +9,19 @@
  * shop-floor screens. A wall board can have the totals, not the list.
  */
 
-import { FACTS, FILTER_OPS, reportSchema, runReportQuery, runReportRows } from "@rw/services/reporting/index";
+import { FACTS, reportSchema, runReportQuery, runReportRows } from "@rw/services/reporting/index";
+import { reportQueryFields, reportRowsFields } from "@rw/services/reporting/schema";
 import { z } from "zod";
 import { throwServiceError } from "./errors.js";
 import { userRequired, userOrDisplayRequired } from "./middleware.js";
 
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD");
 
-const filterSchema = z
-  .array(
-    z.object({
-      // A dimension, a detail field, or a measure — the catalog resolves it and
-      // refuses operators the target's type doesn't accept.
-      dimension: z.string().max(64),
-      op: z.enum(FILTER_OPS),
-      // Omitted for isNull/notNull; two values for between/notBetween.
-      value: z.union([z.string().max(256), z.array(z.string().max(256)).max(200)]).optional(),
-    }),
-  )
-  .max(20)
-  .optional();
-
 const querySchema = z.object({
   siteId: z.uuid(),
-  fact: z.string().max(64),
-  measures: z.array(z.string().max(64)).min(1).max(20),
-  // A grouped report can legitimately carry every dimension a fact has;
-  // the row limit is what bounds the result, not the width.
-  dimensions: z.array(z.string().max(64)).max(25).default([]),
-  filters: filterSchema,
+  ...reportQueryFields,
   dateFrom: dateString.optional(),
   dateTo: dateString.optional(),
-  dateGranularity: z.enum(["hour", "day", "week", "month", "year"]).optional(),
-  orderBy: z.object({ field: z.string().max(64), dir: z.enum(["asc", "desc"]) }).optional(),
-  limit: z.number().int().min(1).max(10000).optional(),
   offset: z.number().int().min(0).optional(),
   // Group count, so an aggregate log paginates like a row log.
   includeTotal: z.boolean().optional(),
@@ -50,13 +29,9 @@ const querySchema = z.object({
 
 const rowsSchema = z.object({
   siteId: z.uuid(),
-  fact: z.string().max(64),
-  // Dimension, field or measure keys, in the caller's own display order.
-  columns: z.array(z.string().max(64)).min(1).max(40),
-  filters: filterSchema,
+  ...reportRowsFields,
   dateFrom: dateString.optional(),
   dateTo: dateString.optional(),
-  orderBy: z.object({ field: z.string().max(64), dir: z.enum(["asc", "desc"]) }).optional(),
   // Defaults to a grid page in the compiler; the ceiling is here for exports.
   limit: z.number().int().min(1).max(10000).optional(),
   offset: z.number().int().min(0).optional(),
