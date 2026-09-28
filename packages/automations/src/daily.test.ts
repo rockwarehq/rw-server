@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { localTime, nextDailyRun, scheduleMatches } from "./daily.js";
+import { isScheduledRun, localTime, nextDailyRun } from "./daily.js";
 
 const CHICAGO = "America/Chicago";
 const at = (iso: string) => new Date(iso);
@@ -31,6 +31,13 @@ describe("nextDailyRun", () => {
     );
   });
 
+  it("fires an hour late, not never, when spring-forward skips the time", () => {
+    // Clocks jump 02:00 → 03:00 CST→CDT on 2027-03-14; 02:30 doesn't exist, 03:30 CDT = 08:30Z.
+    const run = nextDailyRun({ time: "02:30", days: [] }, CHICAGO, at("2027-03-14T06:00:00Z"));
+    expect(run).toEqual(at("2027-03-14T08:30:00Z"));
+    expect(isScheduledRun({ time: "02:30", days: [] }, CHICAGO, run)).toBe(true);
+  });
+
   it("uses the site's local date, not UTC's", () => {
     // 2026-09-29T02:00Z is still Monday 21:00 in Chicago.
     expect(nextDailyRun({ time: "23:00", days: [1] }, CHICAGO, at("2026-09-29T02:00:00Z"))).toEqual(
@@ -39,16 +46,16 @@ describe("nextDailyRun", () => {
   });
 });
 
-describe("localTime / scheduleMatches", () => {
+describe("localTime / isScheduledRun", () => {
   it("reads the wall clock in the timezone", () => {
     expect(localTime(at("2026-09-29T04:00:00Z"), CHICAGO)).toEqual({ date: "2026-09-28", time: "23:00", dayOfWeek: 1 });
   });
 
-  it("matches on time and allowed days", () => {
-    const monday = { date: "2026-09-28", time: "23:00", dayOfWeek: 1 };
-    expect(scheduleMatches({ time: "23:00", days: [] }, monday)).toBe(true);
-    expect(scheduleMatches({ time: "23:00", days: [1, 3] }, monday)).toBe(true);
-    expect(scheduleMatches({ time: "23:00", days: [2] }, monday)).toBe(false);
-    expect(scheduleMatches({ time: "07:00", days: [] }, monday)).toBe(false);
+  it("knows a run the schedule makes from one armed under an older schedule", () => {
+    const monday2300 = at("2026-09-29T04:00:00Z");
+    expect(isScheduledRun({ time: "23:00", days: [] }, CHICAGO, monday2300)).toBe(true);
+    expect(isScheduledRun({ time: "23:00", days: [1, 3] }, CHICAGO, monday2300)).toBe(true);
+    expect(isScheduledRun({ time: "23:00", days: [2] }, CHICAGO, monday2300)).toBe(false);
+    expect(isScheduledRun({ time: "07:00", days: [] }, CHICAGO, monday2300)).toBe(false);
   });
 });

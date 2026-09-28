@@ -7,8 +7,9 @@ import {
   RetentionPolicy,
 } from "@nats-io/jetstream";
 import { headers } from "@nats-io/transport-node";
-import { type Automation, localTime, nextDailyRun, scheduleMatches } from "@rw/automations";
-import prisma from "@rw/db";
+import { createHash } from "node:crypto";
+import { type Automation, isScheduledRun, localTime, nextDailyRun } from "@rw/automations";
+import { getSiteTimezone as siteTimezone } from "@rw/services/metrics/bucket";
 import { getAutomationFramework } from "../automations/index.js";
 import { fromClock, schema as timeDaily } from "../automations/events/time-daily.js";
 import { moduleLogger } from "../logger.js";
@@ -26,7 +27,8 @@ const STREAM = "RW_AUTOMATION_CLOCK";
 const CLOCK = "automations.clock";
 const TICK = "automations.tick";
 const DURABLE = "rw-api-automation-tick";
-const ACK_WAIT_NANOS = 60 * 1_000_000_000;
+// One tick at a time, each allowed long enough for its actions (a deck edition runs every page's queries).
+const ACK_WAIT_NANOS = 10 * 60 * 1_000_000_000;
 const WRONG_LAST_SEQUENCE = 10071;
 
 interface Tick {
@@ -61,11 +63,6 @@ function clock() {
   return ready;
 }
 
-async function siteTimezone(siteId: string): Promise<string> {
-  const site = await prisma.site.findUnique({ where: { id: siteId }, select: { timezone: true } });
-  return site?.timezone ?? "UTC";
-}
-
 /** Arm the automation's first run after `after`, unless a run is already armed. */
 async function arm(a: Clocked, after: Date): Promise<void> {
   const { js } = await clock();
@@ -90,16 +87,26 @@ export async function rearmClock(a: Automation, removed = false): Promise<void> 
   if (!removed && isClocked(a)) await arm(a, new Date());
 }
 
+/** A run's event id: a UUID derived from the automation and its planned time. */
+export function runEventId(automationId: string, runAt: Date): string {
+  const hex = createHash("sha256").update(`${automationId}:${runAt.toISOString()}`).digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
 async function onTick(tick: Tick): Promise<void> {
   const fw = await getAutomationFramework();
   const a = fw.store.get(tick.automationId);
   if (!a || !isClocked(a)) return;
   const runAt = new Date(tick.runAt);
-  const local = localTime(runAt, await siteTimezone(a.partition));
+  const timezone = await siteTimezone(a.partition);
   // A run armed under an older schedule no longer matches it; the edit armed the right one.
-  if (scheduleMatches(a.schedule, local)) {
+  if (isScheduledRun(a.schedule, timezone, runAt)) {
     await fw
-      .fire(timeDaily.type, fromClock(a.partition, runAt, local), { target: a.id })
+      .fire(timeDaily.type, fromClock(a.partition, runAt, localTime(runAt, timezone)), {
+        target: a.id,
+        // The same run always has the same event id, so a redelivered tick can't send twice.
+        id: runEventId(a.id, runAt),
+      })
       .catch((err: unknown) => log.error({ err, automationId: a.id }, "fire failed"));
   }
   await arm(a, new Date(Math.max(Date.now(), runAt.getTime())));
@@ -113,16 +120,20 @@ export async function startAutomationClock(): Promise<() => Promise<void>> {
       await arm(a, new Date()).catch((err: unknown) => log.error({ err, automationId: a.id }, "arm failed"));
   }
 
-  await jsm.consumers.info(STREAM, DURABLE).catch(() =>
-    jsm.consumers.add(STREAM, {
+  const existing = await jsm.consumers.info(STREAM, DURABLE).catch(() => null);
+  if (!existing) {
+    await jsm.consumers.add(STREAM, {
       durable_name: DURABLE,
       ack_policy: AckPolicy.Explicit,
       deliver_policy: DeliverPolicy.All,
       filter_subject: `${TICK}.>`,
       ack_wait: ACK_WAIT_NANOS,
-    }),
-  );
-  const messages = await (await js.consumers.get(STREAM, DURABLE)).consume({ max_messages: 50 });
+    });
+  } else if (existing.config.ack_wait !== ACK_WAIT_NANOS) {
+    await jsm.consumers.update(STREAM, DURABLE, { ack_wait: ACK_WAIT_NANOS });
+  }
+  // One in hand at a time: a buffered tick's ack clock would run while it waits its turn.
+  const messages = await (await js.consumers.get(STREAM, DURABLE)).consume({ max_messages: 1 });
   void (async () => {
     try {
       for await (const message of messages) {

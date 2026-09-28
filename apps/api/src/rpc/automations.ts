@@ -36,10 +36,16 @@ const scheduleSchema = z.object({
     .transform((days) => [...new Set(days)].sort()),
 });
 
-/** A schedule only means something on the clock event; a `time.daily` automation without one never fires. */
-function checkSchedule(event: string, schedule: z.infer<typeof scheduleSchema> | null | undefined) {
+/**
+ * A schedule belongs on the clock event only, and the clock event needs one: without it nothing
+ * fires. `undefined` on an update leaves the saved schedule as it is.
+ */
+function checkSchedule(event: string, schedule: z.infer<typeof scheduleSchema> | null | undefined, creating: boolean) {
   if (schedule && event !== timeDaily.type) {
     throw new ORPCError("BAD_REQUEST", { message: `schedule is only for "${timeDaily.type}" automations` });
+  }
+  if (event === timeDaily.type && (schedule === null || (creating && !schedule))) {
+    throw new ORPCError("BAD_REQUEST", { message: `a "${timeDaily.type}" automation needs a schedule` });
   }
 }
 
@@ -175,7 +181,7 @@ export const createAutomation = userRequired
       });
     }
     const actions = validateActions(fw, input.actions);
-    checkSchedule(input.event, input.schedule);
+    checkSchedule(input.event, input.schedule, true);
 
     const automation = await fw.store.upsert({
       id: fw.store.newId(),
@@ -226,7 +232,7 @@ export const updateAutomation = userRequired
     }
 
     const actions = input.actions ? validateActions(fw, input.actions) : existing.actions;
-    checkSchedule(existing.event, input.schedule);
+    checkSchedule(existing.event, input.schedule, false);
 
     const updated = await fw.store.upsert({
       ...existing,

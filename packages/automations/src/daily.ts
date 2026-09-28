@@ -38,9 +38,9 @@ export function localTime(at: Date, timeZone: string): LocalTime {
   };
 }
 
-/** Whether a wall-clock moment is one the schedule fires at. */
-export function scheduleMatches(schedule: DailySchedule, local: LocalTime): boolean {
-  return local.time === schedule.time && (schedule.days.length === 0 || schedule.days.includes(local.dayOfWeek));
+/** Whether `runAt` is a run the schedule makes — false for one armed under an older schedule. */
+export function isScheduledRun(schedule: DailySchedule, timeZone: string, runAt: Date): boolean {
+  return nextDailyRun(schedule, timeZone, new Date(runAt.getTime() - 1)).getTime() === runAt.getTime();
 }
 
 /**
@@ -55,7 +55,9 @@ export function nextDailyRun(schedule: DailySchedule, timeZone: string, after: D
     if (schedule.days.length > 0 && !schedule.days.includes(day.getUTCDay())) continue;
     const asUtc = Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), h, mi);
     const guess = asUtc - offsetMs(new Date(asUtc), timeZone);
-    const at = new Date(asUtc - offsetMs(new Date(guess), timeZone));
+    const exact = asUtc - offsetMs(new Date(guess), timeZone);
+    // In a spring-forward gap neither reading lands on the time; the later one is an hour after it.
+    const at = new Date(localTime(new Date(exact), timeZone).time === schedule.time ? exact : Math.max(guess, exact));
     if (at > after) return at;
   }
   throw new Error(`schedule ${JSON.stringify(schedule)} has no run in the week after ${after.toISOString()}`);
