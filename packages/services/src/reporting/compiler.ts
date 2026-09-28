@@ -1,5 +1,5 @@
 import prisma from "@rw/db";
-import { Prisma } from "@rw/db";
+import { Prisma, classifyDbTimeout } from "@rw/db";
 import { FACTS } from "./facts.js";
 import { compileFilter, dimSql } from "./filters.js";
 import type {
@@ -40,6 +40,40 @@ const clampLimit = (limit: number | undefined) => Math.min(Math.max(limit ?? DEF
 
 const clampDetailLimit = (limit: number | undefined) =>
   Math.min(Math.max(limit ?? DETAIL_DEFAULT_LIMIT, 1), DETAIL_MAX_LIMIT);
+
+/**
+ * How long one report statement may run before Postgres stops it. Reports read
+ * big tables, and a question typed by a person (or the AI) must never tie up
+ * the database. Override with REPORT_STATEMENT_TIMEOUT_MS.
+ */
+const STATEMENT_TIMEOUT_MS = Number(process.env.REPORT_STATEMENT_TIMEOUT_MS) || 15_000;
+
+/**
+ * Runs report statements in one short transaction with a statement timeout.
+ * SET LOCAL ends with the transaction, so the pooled connection goes back
+ * clean. The statements run one after another here; a transaction can't run
+ * two at once.
+ */
+async function runWithTimeout<T extends unknown[]>(
+  statements: { [K in keyof T]: Prisma.Sql | undefined },
+): Promise<{ [K in keyof T]: T[K] | undefined } | ServiceError> {
+  try {
+    return await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = ${Math.trunc(STATEMENT_TIMEOUT_MS)}`);
+      const results: unknown[] = [];
+      for (const statement of statements) {
+        results.push(statement ? await tx.$queryRaw(statement) : undefined);
+      }
+      return results as { [K in keyof T]: T[K] | undefined };
+    });
+  } catch (err) {
+    if (classifyDbTimeout(err) !== "statement_timeout") throw err;
+    return {
+      error: "This report took too long. Try a shorter date range or fewer groups.",
+      code: "QUERY_TIMEOUT",
+    };
+  }
+}
 
 const isValidDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value));
 
@@ -93,7 +127,7 @@ function measureSelect(fact: FactDef, key: string): string | ServiceError {
  */
 function buildWhere(
   fact: FactDef,
-  query: { filters?: ReportFilter[]; dateFrom?: string; dateTo?: string },
+  query: { filters?: ReportFilter[]; segments?: string[]; dateFrom?: string; dateTo?: string },
   scope: ReportScope,
   opts: { addressed: Set<string>; extraFilter?: string; aggregated?: boolean },
 ): { where: Prisma.Sql[]; having: Prisma.Sql[]; joins: string[] } | ServiceError {
@@ -127,6 +161,13 @@ function buildWhere(
 
   if (fact.baseFilter) where.push(Prisma.sql`${Prisma.raw(fact.baseFilter)}`);
   if (opts.extraFilter) where.push(Prisma.sql`${Prisma.raw(opts.extraFilter)}`);
+
+  // Segments are catalog SQL picked by key, so only the key comes from the caller.
+  for (const key of new Set(query.segments ?? [])) {
+    const segment = fact.segments?.[key];
+    if (!segment) return { error: `Unknown segment: ${key}`, code: "UNKNOWN_SEGMENT" };
+    where.push(Prisma.sql`(${Prisma.raw(segment.filter)})`);
+  }
 
   const dateCol = Prisma.raw(`f."${fact.dateColumn}"`);
   for (const bound of [query.dateFrom, query.dateTo]) {
@@ -250,6 +291,20 @@ function compileAggregate(
     }
   }
 
+  // Some measures only make sense split by a dimension (material quantity by
+  // unit). Grouping by it, or pinning it to one value, both keep it honest.
+  const pinned = new Set(pinnedDimensions(query.filters));
+  for (const key of query.measures) {
+    for (const needed of fact.measures[key]?.requiresDimensions ?? []) {
+      if (!query.dimensions.includes(needed) && !pinned.has(needed)) {
+        return {
+          error: `Measure ${key} must be grouped by ${needed}, or filtered to one ${needed}`,
+          code: "MISSING_REQUIRED_DIMENSION",
+        };
+      }
+    }
+  }
+
   for (const key of query.measures) {
     const select = measureSelect(fact, key);
     if (typeof select !== "string") return select;
@@ -259,7 +314,7 @@ function compileAggregate(
 
   // ── WHERE/HAVING: shared with detail mode; grouping also pins a fact default ──
   const predicates = buildWhere(fact, query, scope, {
-    addressed: new Set([...query.dimensions, ...pinnedDimensions(query.filters)]),
+    addressed: new Set([...query.dimensions, ...pinned]),
     extraFilter: fact.aggregateFilter,
     aggregated: true,
   });
@@ -328,10 +383,13 @@ export async function runReportQuery(query: ReportQuery, scope: ReportScope): Pr
   if ("error" in compiled) return compiled;
   const limit = clampLimit(query.limit);
 
-  const [rows, totals] = await Promise.all([
-    prisma.$queryRaw<ReportRow[]>(compiled.sql),
-    query.includeTotal ? prisma.$queryRaw<{ total: bigint }[]>(compiled.count) : Promise.resolve(undefined),
+  const ran = await runWithTimeout<[ReportRow[], { total: bigint }[]]>([
+    compiled.sql,
+    query.includeTotal ? compiled.count : undefined,
   ]);
+  if ("error" in ran) return ran;
+  const [found, totals] = ran;
+  const rows = found ?? [];
 
   return {
     rows: rows.slice(0, limit),
@@ -515,13 +573,16 @@ export async function runReportRows(
   if ("error" in compiled) return compiled;
   const limit = clampDetailLimit(query.limit);
 
-  // The count runs in its own snapshot, so under concurrent writes it can
+  // The count is a second statement, so under concurrent writes it can
   // disagree with the page by a row. For logs that is noise, and it beats
   // dragging COUNT(*) OVER () through every wide row.
-  const [rows, totals] = await Promise.all([
-    prisma.$queryRaw<ReportRow[]>(compiled.sql),
-    query.includeTotal === false ? Promise.resolve(undefined) : prisma.$queryRaw<{ total: bigint }[]>(compiled.count),
+  const ran = await runWithTimeout<[ReportRow[], { total: bigint }[]]>([
+    compiled.sql,
+    query.includeTotal === false ? undefined : compiled.count,
   ]);
+  if ("error" in ran) return ran;
+  const [found, totals] = ran;
+  const rows = found ?? [];
 
   return {
     rows: rows.slice(0, limit),

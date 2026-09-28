@@ -1,3 +1,4 @@
+import type { InsightsAi } from "@rw/services/insights/ask";
 import { z } from "zod";
 
 // All environment access lives here. The schema is parsed once at module load,
@@ -80,6 +81,24 @@ const EnvSchema = z.object({
         .string()
         .regex(/^[0-9a-fA-F]{64}$/, "must be 64 hex characters")
         .optional(),
+
+  // AI. Off unless AI_ENABLED=true and a key is set. The setup assistant (the
+  // AI plans changes like new stations, the person approves them) also needs
+  // CONFIG_AGENT_ENABLED=true. Set one key; the provider follows it (OpenAI
+  // first if both are set). See docs/architecture/insights.md.
+  AI_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  CONFIG_AGENT_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  OPENAI_API_KEY: z.string().optional(),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  INSIGHTS_PROVIDER: z.enum(["openai", "anthropic"]).optional(),
+  INSIGHTS_MODEL: z.string().optional(),
+  INSIGHTS_EFFORT: z.enum(["low", "medium", "high"]).optional(),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
@@ -221,4 +240,25 @@ export const storageConfig = {
 
   // URL expiry
   presignedUrlExpirySeconds: 3600, // 1 hour
+};
+
+// Which AI runs, when it's on. An empty key counts as unset.
+function insightsAi(): InsightsAi | undefined {
+  const openai = config.OPENAI_API_KEY || undefined;
+  const anthropic = config.ANTHROPIC_API_KEY || undefined;
+  const provider = config.INSIGHTS_PROVIDER ?? (openai ? "openai" : anthropic ? "anthropic" : undefined);
+  const apiKey = provider === "openai" ? openai : provider === "anthropic" ? anthropic : undefined;
+  if (!config.AI_ENABLED || !provider || !apiKey) return undefined;
+  return { provider, apiKey, model: config.INSIGHTS_MODEL, effort: config.INSIGHTS_EFFORT };
+}
+
+const ai = insightsAi();
+
+export const aiConfig = {
+  /** AI_ENABLED is on and a key is set. Turns on Insights. */
+  enabled: ai !== undefined,
+  /** The setup assistant, which can change data through approved plans. Needs `enabled` too. */
+  configAgentEnabled: ai !== undefined && config.CONFIG_AGENT_ENABLED,
+  /** Provider, key and model for askInsights. Undefined when AI is off. */
+  insights: ai,
 };

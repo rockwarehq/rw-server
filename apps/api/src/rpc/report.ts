@@ -55,6 +55,8 @@ const querySchema = z.object({
   // the row limit is what bounds the result, not the width.
   dimensions: z.array(z.string().max(64)).max(25).default([]),
   filters: filterSchema,
+  // Named filters from the catalog, by key (e.g. "unplannedDown").
+  segments: z.array(z.string().max(64)).max(10).optional(),
   dateFrom: dateString.optional(),
   dateTo: dateString.optional(),
   dateGranularity: z.enum(["hour", "day", "week", "month", "year"]).optional(),
@@ -71,6 +73,8 @@ const rowsSchema = z.object({
   // Dimension, field or measure keys, in the caller's own display order.
   columns: z.array(z.string().max(64)).min(1).max(40),
   filters: filterSchema,
+  // Named filters from the catalog, by key (e.g. "unplannedDown").
+  segments: z.array(z.string().max(64)).max(10).optional(),
   dateFrom: dateString.optional(),
   dateTo: dateString.optional(),
   orderBy: z.object({ field: z.string().max(64), dir: z.enum(["asc", "desc"]) }).optional(),

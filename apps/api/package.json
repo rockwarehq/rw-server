@@ -44,6 +44,7 @@
     "@rw/livestore": "workspace:*",
     "@rw/runtime": "workspace:*",
     "@rw/services": "workspace:*",
+    "@tanstack/ai": "0.61.0",
     "ajv": "^8.17.1",
     "bcrypt": "^6.0.0",
     "bullmq": "^5.66.5",

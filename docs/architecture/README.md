@@ -10,6 +10,7 @@ This page is the map. Each subsystem has its own deep-dive:
 - [Background Work](./workers.md) — the workers binary, job inventory, scaling rules
 - [Livestore](./livestore.md) — the reactive graph engine behind live dashboards
 - [Data Model & Metrics](./data-model.md) — schema domains, tenancy scoping, OEE math
+- [Insights](./insights.md) — ask questions in plain words, get boards of reports from the report catalog
 
 ## The big picture
 

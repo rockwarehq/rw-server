@@ -28,20 +28,40 @@
  */
 export type ValueFormat = "seconds" | "percent" | "quantity" | "count" | "text";
 
+/**
+ * Words that help people and the AI find the right thing. None of it reaches
+ * SQL. `synonyms` are other names people use ("scrap" for dispositions).
+ * `aiHint` is advice for the AI only: when to pick this, and what to watch out
+ * for.
+ */
+export interface CatalogText {
+  description?: string;
+  synonyms?: readonly string[];
+  aiHint?: string;
+}
+
+/** What every measure carries, whatever its kind. */
+interface MeasureBase extends CatalogText {
+  label: string;
+  format?: ValueFormat;
+  /**
+   * Dimensions that must be grouped by, or pinned to one value, whenever this
+   * measure is asked for. Material quantity needs `unit`, because kilograms
+   * and pounds must never be added together.
+   */
+  requiresDimensions?: readonly string[];
+}
+
 /** Additive measure, or a read-time ratio of two additive measures. */
 export type MeasureDef =
-  | { kind: "count"; label: string; description?: string; format?: ValueFormat }
-  | {
+  | (MeasureBase & { kind: "count" })
+  | (MeasureBase & {
       kind: "sum" | "min" | "max" | "avg";
-      label: string;
       /** Row-local SQL expression; reference fact columns as `f."col"`. */
       expr: string;
-      description?: string;
-      format?: ValueFormat;
-    }
-  | {
+    })
+  | (MeasureBase & {
       kind: "ratio";
-      label: string;
       /**
        * Keys of additive measures on the same fact. Arrays multiply their
        * aggregated sums, so OEE-style products of ratios stay ratio-of-sums:
@@ -49,9 +69,17 @@ export type MeasureDef =
        */
       numerator: string | string[];
       denominator: string | string[];
-      description?: string;
-      format?: ValueFormat;
-    };
+    });
+
+/**
+ * A named, ready-made filter, like "unplanned downtime". The SQL is written
+ * here in the catalog, never sent by a caller; a query only names the key.
+ */
+export interface SegmentDef extends CatalogText {
+  label: string;
+  /** Row predicate; reference fact columns as `f."col"`. */
+  filter: string;
+}
 
 export interface DimensionLookup {
   /**
@@ -84,7 +112,7 @@ export interface FieldDef {
   format?: ValueFormat;
 }
 
-export interface DimensionDef {
+export interface DimensionDef extends CatalogText {
   label: string;
   /**
    * Column on the fact table (compiler quotes it). Also the filter target and
@@ -123,9 +151,10 @@ export interface DimensionDef {
   labelJoin?: { table: string; labelColumn: "A" | "B" };
 }
 
-export interface FactDef {
+export interface FactDef extends CatalogText {
   label: string;
-  description?: string;
+  /** Sample questions this fact answers, for the AI and for suggestions. */
+  examples?: readonly string[];
   /** Unquoted table name the fact reads from. Exactly one of table/source. */
   table?: string;
   /**
@@ -176,6 +205,8 @@ export interface FactDef {
    * granularities never sum together by accident.
    */
   defaultFilters?: ReportFilter[];
+  /** Named filters a query can switch on by key. */
+  segments?: Record<string, SegmentDef>;
   measures: Record<string, MeasureDef>;
   dimensions: Record<string, DimensionDef>;
 }
@@ -231,6 +262,8 @@ export interface ReportQuery {
   measures: string[];
   dimensions: string[];
   filters?: ReportFilter[];
+  /** Segment keys; every one must match (they are ANDed). */
+  segments?: string[];
   /** Inclusive YYYY-MM-DD bounds on the fact's businessDate stamp. */
   dateFrom?: string;
   dateTo?: string;
@@ -275,6 +308,8 @@ export interface ReportRowsQuery {
    */
   columns: string[];
   filters?: ReportFilter[];
+  /** Segment keys; every one must match (they are ANDed). */
+  segments?: string[];
   /** Inclusive YYYY-MM-DD bounds on the fact's businessDate stamp. */
   dateFrom?: string;
   dateTo?: string;
