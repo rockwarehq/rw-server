@@ -18,6 +18,7 @@ import {
   productSkuDim,
   scheduledDim,
   shiftDim,
+  shiftNameDim,
   stationDim,
   statusCategoryDim,
   statusReasonDim,
@@ -201,6 +202,7 @@ function kpiFact(
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      shiftName: shiftNameDim(),
       scheduled: scheduledDim(),
       granularity: enumDim("Bucket granularity", "granularity", ["MINUTE", "HOUR", "SHIFT", "DAY"]),
       ...entityDimensions,
@@ -277,6 +279,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      shiftName: shiftNameDim(),
       scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
@@ -309,6 +312,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      shiftName: shiftNameDim(),
       scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
@@ -342,6 +346,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      shiftName: shiftNameDim(),
       scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
@@ -421,6 +426,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      shiftName: shiftNameDim(),
       scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
@@ -466,6 +472,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      shiftName: shiftNameDim(),
       scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
@@ -517,6 +524,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      shiftName: shiftNameDim(),
       scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
@@ -559,6 +567,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      shiftName: shiftNameDim(),
       scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
@@ -604,6 +613,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      shiftName: shiftNameDim(),
       scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
@@ -638,6 +648,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      shiftName: shiftNameDim(),
       scheduled: scheduledDim(),
       material: materialDim(),
       kind: enumDim("Kind", "kind", [
@@ -672,6 +683,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      shiftName: shiftNameDim(),
       scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),
@@ -703,6 +715,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      shiftName: shiftNameDim(),
       scheduled: scheduledDim(),
       order: orderDim(),
       product: productDim(),
@@ -731,6 +744,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      shiftName: shiftNameDim(),
       scheduled: scheduledDim(),
       product: productDim(),
       reason: enumDim("Reason", "reason", ["CYCLE_COUNT", "DAMAGE", "FOUND", "INITIAL", "OTHER"]),
@@ -785,6 +799,7 @@ export const FACTS: Record<string, FactDef> = {
     dimensions: {
       businessDate: businessDateDim(),
       shift: shiftDim(),
+      shiftName: shiftNameDim(),
       scheduled: scheduledDim(),
       station: stationDim(),
       workcenter: workcenterDim(),

@@ -665,3 +665,27 @@ describe("enum projection", () => {
     expect(rows({ fact: "cycles", columns: ["scheduled"] }).text).toContain(`f."isScheduled"::text AS "scheduled"`);
   });
 });
+
+describe("shift name", () => {
+  it("is on every fact that has a shift, as text", () => {
+    for (const [key, fact] of Object.entries(FACTS)) {
+      if (!fact.dimensions.shift) continue;
+      expect(fact.dimensions.shiftName?.type, key).toBe("string");
+    }
+  });
+
+  it("filters by the name, so every 2nd shift matches, not one day's", () => {
+    const { text, values } = rows({
+      fact: "cycles",
+      columns: ["start"],
+      filters: [{ dimension: "shiftName", op: "eq", value: "2nd" }],
+    });
+    expect(text).toContain(`(SELECT si."shiftName" FROM "ShiftInstance" si WHERE si."id" = f."shiftInstanceId")`);
+    expect(values).toContain("2nd");
+  });
+
+  it("groups by the name, one row per shift name", () => {
+    const { text } = agg({ fact: "cycles", measures: ["cycles"], dimensions: ["shiftName"] });
+    expect(text).toMatch(/GROUP BY \(SELECT si\."shiftName"/);
+  });
+});
