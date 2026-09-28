@@ -6,6 +6,8 @@ import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { refreshStationsRunningJob } from "../facility/station/state.js";
 import { checkOneOutputRule, resolveJobProfileFields } from "./profile.js";
 
+export { usage } from "./job-usage.js";
+
 // Work orders are gone, but shipped UIs still read a job's `_count.orders`.
 // Keep it on the wire, always 0.
 function withOrderCount<T extends { _count: object }>(job: T) {

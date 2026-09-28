@@ -321,6 +321,7 @@ export const router = {
     listItems: job.listItems,
     jobsByProductIds: job.jobsByProductIds,
     eligibleStations: job.eligibleStations,
+    usage: job.usage,
     planning: job.planning,
   },
   dashboard: {
