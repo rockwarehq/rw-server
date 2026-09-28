@@ -1,6 +1,6 @@
 # 0018 – Report Decks: Pages of Reports, Kept as Editions
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-28
 - **Deciders:** Michael St John
 
