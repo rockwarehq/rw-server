@@ -185,9 +185,9 @@ export const shiftNameDim = (column = "shiftInstanceId"): DimensionDef => ({
 export const modeDim = (column = "modeId") =>
   idDim("Production mode", column, `LEFT JOIN "ProductionMode" {a} ON {a}."id" = f."${column}"`, `{a}."name"`);
 
-export const employeeDim = (column = "employeeId") =>
+export const employeeDim = (column = "employeeId", label = "Employee") =>
   idDim(
-    "Employee",
+    label,
     column,
     `LEFT JOIN "Employee" {a} ON {a}."id" = f."${column}" LEFT JOIN "EmployeeVersion" {b} ON {b}."id" = {a}."versionId"`,
     `TRIM(CONCAT({b}."firstName", ' ', {b}."lastName"))`,

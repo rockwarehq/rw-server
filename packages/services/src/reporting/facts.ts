@@ -480,6 +480,9 @@ export const FACTS: Record<string, FactDef> = {
       product: productDim(),
       tool: toolDim(),
       mode: modeDim(),
+      source: enumDim("Source", "source", ["MANUAL", "SYSTEM"]),
+      startedBy: employeeDim("startedByEmployeeId", "Started by"),
+      endedBy: employeeDim("endedByEmployeeId", "Ended by"),
     },
   },
 
@@ -623,6 +626,8 @@ export const FACTS: Record<string, FactDef> = {
       definition: callDefinitionDim(),
       severity: enumDim("Severity", "severity", ["INFORMATION", "ALERT", "WARNING"]),
       source: enumDim("Source", "source", ["MANUAL", "SYSTEM"]),
+      openedBy: employeeDim("openedByEmployeeId", "Opened by"),
+      closedBy: employeeDim("closedByEmployeeId", "Closed by"),
     },
   },
 

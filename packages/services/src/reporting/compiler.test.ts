@@ -689,3 +689,19 @@ describe("shift name", () => {
     expect(text).toMatch(/GROUP BY \(SELECT si\."shiftName"/);
   });
 });
+
+describe("who raised it", () => {
+  it("names who opened and closed a call", () => {
+    const { text } = rows({ fact: "calls", columns: ["openedBy", "closedBy"] });
+    expect(text).toContain(`LEFT JOIN "Employee" d0 ON d0."id" = f."openedByEmployeeId"`);
+    expect(text).toContain(`LEFT JOIN "Employee" d1 ON d1."id" = f."closedByEmployeeId"`);
+    expect(text).toContain(`AS "openedByName"`);
+    expect(FACTS.calls!.dimensions.openedBy!.label).toBe("Opened by");
+  });
+
+  it("groups production modes by who started them", () => {
+    const { text } = agg({ fact: "modePeriods", measures: ["periods"], dimensions: ["startedBy", "source"] });
+    expect(text).toContain(`f."startedByEmployeeId"`);
+    expect(FACTS.modePeriods!.dimensions.endedBy!.label).toBe("Ended by");
+  });
+});
