@@ -133,6 +133,14 @@ describe("partition", () => {
   });
 });
 
+describe("target", () => {
+  it("evaluates a targeted event against that automation only", async () => {
+    const { fw } = build([automation("a", SITE_A), automation("b", SITE_A)]);
+    const r = await fw.fire("call.changed", { siteId: SITE_A, callId: "c1", action: "opened" }, { target: "b" });
+    expect(r.matched).toEqual(["b"]);
+  });
+});
+
 describe("event envelope", () => {
   it("stamps partition, scope, and a fresh chain on a root event", async () => {
     const { fw, ran } = build([automation("a", SITE_A)]);

@@ -4,6 +4,7 @@ import * as jobChanged from "./job-changed.js";
 import * as modeChanged from "./mode-changed.js";
 import * as notificationChanged from "./notification-changed.js";
 import * as stationStatusChanged from "./station-status-changed.js";
+import * as timeDaily from "./time-daily.js";
 
 type EventModule = { schema: EventSchema; contextBuilder: ContextBuilder };
 
@@ -13,6 +14,7 @@ const modules: readonly EventModule[] = [
   modeChanged,
   notificationChanged,
   stationStatusChanged,
+  timeDaily,
 ] as const;
 
 export const EVENT_SCHEMAS: Record<EventType, EventSchema> = Object.fromEntries(

@@ -73,6 +73,7 @@ export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
           a.enabled &&
           a.event === event.type &&
           (a.partition == null || a.partition === event.partition) &&
+          (event.target == null || a.id === event.target) &&
           !matched.has(a.id),
       );
   }
@@ -204,6 +205,7 @@ export function createAutomationEngine(deps: EngineDeps): AutomationEngine {
           const automation = automationId ? deps.store.get(automationId) : undefined;
           if (!automation) continue;
           if (automation.partition != null && automation.partition !== event.partition) continue;
+          if (event.target != null && automation.id !== event.target) continue;
           if (await coolingDown(automation, event)) {
             cooled.push(automation.id);
             continue;

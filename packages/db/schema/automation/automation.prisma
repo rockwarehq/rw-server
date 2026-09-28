@@ -37,6 +37,10 @@ model Automation {
   /// skipped for this long. Null = no cooldown.
   cooldownMs Int?
 
+  /// When a clock-triggered automation ("time.daily") fires: { time: "HH:MM", days: [0-6] } in the
+  /// site's timezone, 0 = Sunday, empty days = every day. Null for event-triggered automations.
+  schedule Json?
+
   cooldowns AutomationCooldown[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)

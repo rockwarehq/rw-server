@@ -59,6 +59,8 @@ export interface FireOptions {
    * domain event's id so a redelivery produces the same automation event id (stable dedupe keys).
    */
   id?: string;
+  /** Only this automation evaluates the event (a scheduled trigger addressed to it). */
+  target?: string;
 }
 
 export interface FireResult {
@@ -219,6 +221,7 @@ export function createAutomationFramework(config: AutomationFrameworkConfig): Au
         causationId: cause?.causationId,
         hop: cause ? cause.hop + 1 : 0,
       };
+      if (opts?.target) event.target = opts.target;
       const partition = partitionField ? normalized[partitionField] : undefined;
       if (partition != null) event.partition = String(partition);
       const schemaVersion = eventSchema.versions[version];
