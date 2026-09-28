@@ -23,6 +23,71 @@ export interface ProfileSpec {
   standardRatePeriod: RatePeriod;
 }
 
+/**
+ * One variation of a profile (§8): how a group of its machines signals, and
+ * which machines they are. A lone variation has no name; once a profile has
+ * two or more, each is named. Count by cycle has nothing to vary, so it keeps
+ * one variation.
+ */
+export interface VariationSpec {
+  id?: string;
+  name: string;
+  description: string | null;
+  signalAmount: number | null;
+  signalInterval: number | null;
+}
+
+/**
+ * Check a profile's variations against how it counts: at least one; one only
+ * when counting by cycle; each carries the signal fields its kind needs (the
+ * others cleared); names required and distinct once there are two or more.
+ */
+export function validateVariations(
+  cycleMode: CycleModeValue,
+  variations: VariationSpec[],
+): RuleError | { data: VariationSpec[] } {
+  if (variations.length === 0) {
+    return { error: "A profile needs at least one variation", code: "VARIATION_REQUIRED" };
+  }
+  if (cycleMode === "DISCRETE" && variations.length > 1) {
+    return {
+      error: "A profile that counts by cycle has nothing to vary, so it keeps one variation",
+      code: "VARIATIONS_NOT_FOR_CYCLE",
+    };
+  }
+  const named = variations.length > 1;
+  const seen = new Set<string>();
+  const out: VariationSpec[] = [];
+  for (const variation of variations) {
+    const name = variation.name.trim();
+    if (named) {
+      if (name === "") return { error: "Name each variation", code: "VARIATION_NAME_REQUIRED" };
+      const key = name.toLowerCase();
+      if (seen.has(key)) {
+        return { error: `Two variations are called "${name}"`, code: "VARIATION_NAME_DUPLICATE" };
+      }
+      seen.add(key);
+    }
+    let signalAmount: number | null = null;
+    let signalInterval: number | null = null;
+    if (cycleMode === "QUANTITY_PER_CYCLE") {
+      signalAmount = positive(variation.signalAmount);
+      if (signalAmount == null) {
+        return { error: "Enter how much one signal means (amount per signal)", code: "PROFILE_AMOUNT_REQUIRED" };
+      }
+    }
+    if (cycleMode === "QUANTITY_PER_INTERVAL") {
+      signalInterval = positive(variation.signalInterval);
+      if (signalInterval == null) {
+        return { error: "Enter how often the machine reports (report every)", code: "PROFILE_INTERVAL_REQUIRED" };
+      }
+    }
+    const description = variation.description?.trim() || null;
+    out.push({ ...variation, name, description, signalAmount, signalInterval });
+  }
+  return { data: out };
+}
+
 /** A speed in the shape its profile uses: seconds per cycle, or amount per time. */
 export interface Speed {
   standardCycle: number | null;
@@ -122,6 +187,8 @@ export function validateSpeedShape(
 /** The fields a station's version holds when it follows a profile. */
 export interface StationProfileFields {
   profileId: string;
+  /** The variation whose signal fields these are. */
+  variationId: string | null;
   cycleMode: CycleModeValue;
   quantityUnit: string;
   standardQuantity: number | null;
@@ -133,7 +200,8 @@ export interface StationProfileFields {
 }
 
 /**
- * What a station copies from its profile. `ownSpeed` is the station's own
+ * What a station copies from its profile and variation. `profile` carries the
+ * variation's signal fields (see toSpec). `ownSpeed` is the station's own
  * speed (null = use the profile's usual speed). The cycle engine reads these
  * StationVersion fields, so the mapping keeps each field's engine meaning:
  * standardQuantity is the amount per signal, and standardCycle is the report
@@ -143,10 +211,12 @@ export function stationFieldsFromProfile(
   profileId: string,
   profile: ProfileSpec,
   ownSpeed: Speed | null,
+  variationId: string | null = null,
 ): StationProfileFields {
   const speed = ownSpeed ?? profile;
   const base = {
     profileId,
+    variationId,
     cycleMode: profile.cycleMode,
     quantityUnit: profile.quantityUnit,
     speedFromProfile: ownSpeed == null,

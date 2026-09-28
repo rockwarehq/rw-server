@@ -62,6 +62,11 @@ const EXACT: Record<string, OrpcErrorCode> = {
   // The Discrete default can't be archived or switched to another kind.
   PROFILE_IS_DEFAULT: "CONFLICT",
   ONE_OUTPUT_PRODUCT: "CONFLICT",
+  // A profile's jobs must each make one product at ×1 before its count can be
+  // finished parts; stations still follow a variation being removed (§8).
+  PROFILE_OUTPUT_RULE: "CONFLICT",
+  VARIATION_IN_USE: "CONFLICT",
+  VARIATION_NAME_DUPLICATE: "CONFLICT",
   DEFINITION_PATTERN_MISMATCH: "CONFLICT",
   NOT_ARCHIVED: "CONFLICT",
   IN_OTHER_GROUP: "CONFLICT",

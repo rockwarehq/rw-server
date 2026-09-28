@@ -28,6 +28,8 @@ export interface CreateStationInput {
   inStationCalculations?: boolean;
   /** Follow this profile (ADR-0017): how the station counts comes from it. null = stop following. */
   profileId?: string | null;
+  /** Which of the profile's variations (§8); omitted = the current one, or the first. */
+  variationId?: string;
   /** Drop the station's own speed and use the profile's usual speed. */
   useProfileSpeed?: boolean;
 }
@@ -54,6 +56,8 @@ export interface UpdateStationInput {
   inStationCalculations?: boolean;
   /** Follow this profile (ADR-0017): how the station counts comes from it. null = stop following. */
   profileId?: string | null;
+  /** Which of the profile's variations (§8); omitted = the current one, or the first. */
+  variationId?: string;
   /** Drop the station's own speed and use the profile's usual speed. */
   useProfileSpeed?: boolean;
 }
@@ -88,6 +92,7 @@ const stationInclude = {
       profile: {
         select: { id: true, name: true, cycleMode: true, countedAs: true, quantityUnit: true, isDefault: true },
       },
+      variation: { select: { id: true, name: true } },
     },
   },
   labels: {
@@ -431,6 +436,7 @@ export async function update(id: string, input: UpdateStationInput) {
   // Only config edits touch the profile fields; a rename makes no new version.
   const touchesConfig =
     input.profileId !== undefined ||
+    input.variationId !== undefined ||
     input.useProfileSpeed !== undefined ||
     hasVersionFields(versionInput as unknown as Record<string, unknown>);
   const profile = touchesConfig
@@ -476,6 +482,7 @@ export async function update(id: string, input: UpdateStationInput) {
             inStationCalculations !== undefined ? inStationCalculations : (oldVersion?.inStationCalculations ?? false),
           // Carried over, then set by the profile when the station follows one.
           profileId: oldVersion?.profileId ?? null,
+          variationId: oldVersion?.variationId ?? null,
           speedFromProfile: oldVersion?.speedFromProfile ?? false,
           ...profileFields,
         },

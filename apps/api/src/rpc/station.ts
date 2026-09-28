@@ -43,6 +43,9 @@ const createInputSchema = z.object({
   // Follow a profile (ADR-0017): how the station counts comes from it, and
   // only its speed can be set here. null = stop following (values stay).
   profileId: z.uuid().nullable().optional(),
+  // Which of the profile's variations (§8). Omitted = the current one, or the
+  // first when the profile changes.
+  variationId: z.uuid().optional(),
   // Drop the station's own speed and use the profile's usual speed.
   useProfileSpeed: z.boolean().optional(),
 });
@@ -71,6 +74,9 @@ const updateInputSchema = z.object({
   // Follow a profile (ADR-0017): how the station counts comes from it, and
   // only its speed can be set here. null = stop following (values stay).
   profileId: z.uuid().nullable().optional(),
+  // Which of the profile's variations (§8). Omitted = the current one, or the
+  // first when the profile changes.
+  variationId: z.uuid().optional(),
   // Drop the station's own speed and use the profile's usual speed.
   useProfileSpeed: z.boolean().optional(),
 });

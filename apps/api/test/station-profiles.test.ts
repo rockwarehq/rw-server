@@ -20,6 +20,7 @@ type Profile = {
   cycleMode: string;
   quantityUnit: string;
   signalAmount: number | null;
+  variations: { id: string; name: string; signalAmount: number | null; usage: { stations: number } }[];
   standardCycle: number | null;
   standardRate: number | null;
   usage: { stations: number; jobs: number };
@@ -28,6 +29,7 @@ type StationJson = {
   id: string;
   currentVersion: {
     profileId: string | null;
+    variationId: string | null;
     speedFromProfile: boolean;
     cycleMode: string;
     quantityUnit: string;
@@ -313,5 +315,95 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("station profiles", () => {
 
   it("a profile used by stations can't be archived", async () => {
     await call("stationProfile/archive", { id: press.id }, admin, 409);
+  });
+
+  it("variations: a profile's machines can signal differently; each station follows its own (§8)", async () => {
+    const [first] = extruder100.variations;
+    expect(extruder100.variations).toHaveLength(1);
+    expect(first).toMatchObject({ name: "", signalAmount: 100 });
+    expect(line.currentVersion.variationId).toBe(first!.id);
+
+    // A second variation needs names on both.
+    await call("stationProfile/update", { id: extruder100.id, variations: [{ id: first!.id }, { signalAmount: 30 }] }, admin, 400);
+    const two = await call<Profile>("stationProfile/update", {
+      id: extruder100.id,
+      variations: [
+        { id: first!.id, name: "Every 100 ft", signalAmount: 100 },
+        { name: "Every 30 ft", signalAmount: 30, description: "Line 4" },
+      ],
+    });
+    expect(two.variations.map((v) => v.name)).toEqual(["Every 100 ft", "Every 30 ft"]);
+    const thirty = two.variations[1]!;
+
+    // A station picks its variation; without one it gets the first.
+    const short = await station("line-30", { profileId: extruder100.id, variationId: thirty.id });
+    expect(short.currentVersion.variationId).toBe(thirty.id);
+    expect(num(short.currentVersion.standardQuantity)).toBe(30);
+
+    // A variation's edit reaches only its own stations.
+    await call("stationProfile/update", {
+      id: extruder100.id,
+      variations: [
+        { id: first!.id, name: "Every 100 ft", signalAmount: 100 },
+        { id: thirty.id, name: "Every 25 ft", signalAmount: 25 },
+      ],
+    });
+    expect(num((await call<StationJson>("station/get", { id: short.id })).currentVersion.standardQuantity)).toBe(25);
+    expect(num((await call<StationJson>("station/get", { id: line.id })).currentVersion.standardQuantity)).toBe(100);
+
+    // A variation that stations follow can't be removed.
+    await call("stationProfile/update", { id: extruder100.id, variations: [{ id: first!.id, name: "Every 100 ft", signalAmount: 100 }] }, admin, 409);
+
+    // Moving a station to another variation, and to another profile.
+    const moved = await call<StationJson>("station/update", { id: short.id, variationId: first!.id });
+    expect(num(moved.currentVersion.standardQuantity)).toBe(100);
+    await call("station/update", { id: short.id, variationId: extruder50.variations[0]!.id }, admin, 404);
+    const other = await call<StationJson>("station/update", { id: short.id, profileId: extruder50.id });
+    expect(other.currentVersion.variationId).toBe(extruder50.variations[0]!.id);
+    expect(num(other.currentVersion.standardQuantity)).toBe(50);
+
+    // Unused now, so it can go; counting by cycle has nothing to vary.
+    const one = await call<Profile>("stationProfile/update", {
+      id: extruder100.id,
+      variations: [{ id: first!.id, name: "", signalAmount: 100 }],
+    });
+    expect(one.variations).toHaveLength(1);
+    await call("stationProfile/update", { id: press.id, variations: [{ name: "A" }, { name: "B" }] }, admin, 400);
+
+    // An older client edits the first variation through the flat fields.
+    const flat = await call<Profile>("stationProfile/update", { id: extruder50.id, signalAmount: 40 });
+    expect(flat.signalAmount).toBe(40);
+    expect(flat.variations[0]!.signalAmount).toBe(40);
+
+    // Jobs never see a variation: the 50 ft job still runs on the 100 ft line.
+    await call("station/changeJob", { stationId: line.id, jobId: lineJob.id });
+  });
+
+  it("a station that stops following its profile keeps counting its own way", async () => {
+    const loose = await station("loose", { profileId: extruder50.id });
+    const detached = await call<StationJson>("station/update", { id: loose.id, profileId: null });
+    expect(detached.currentVersion).toMatchObject({ profileId: null, variationId: null, speedFromProfile: false });
+    // An unrelated edit must not snap it back to the Discrete default.
+    const edited = await call<StationJson>("station/update", { id: loose.id, slowDetect: 0.25 });
+    expect(edited.currentVersion).toMatchObject({ profileId: null, cycleMode: "QUANTITY_PER_CYCLE", quantityUnit: "ft" });
+    expect(num(edited.currentVersion.standardQuantity)).toBe(40);
+  });
+
+  it("a profile in use may switch between parts and strokes once its jobs allow it (ADR §7)", async () => {
+    // The header's one job makes one product at ×1, so either way is fine.
+    await call("stationProfile/update", { id: header.id, countedAs: "CYCLES" });
+    await call("stationProfile/update", { id: header.id, countedAs: "OUTPUT" });
+
+    const strokes = await profile({ name: `${P}-rivets`, cycleMode: "QUANTITY_PER_INTERVAL", quantityUnit: "ea", signalInterval: 60, countedAs: "CYCLES" });
+    const rj = await job("rivets", { profileId: strokes.id });
+    const product = await prisma.product.create({ data: { siteId }, select: { id: true } });
+    productIds.push(product.id);
+    const v = await prisma.productVersion.create({ data: { productId: product.id, version: 1, sku: `${P}-sku-3` }, select: { id: true } });
+    await prisma.product.update({ where: { id: product.id }, data: { currentVersionId: v.id } });
+    await call("job/addItem", { jobId: rj.id, productId: product.id, quantity: 4 });
+    // Four parts per stroke can't become one finished-parts count.
+    const refused = await rpcCall(server, "stationProfile/update", { id: strokes.id, countedAs: "OUTPUT" }, admin);
+    expect(refused.statusCode).toBe(409);
+    expect(JSON.stringify(refused.json)).toContain("one product at ×1");
   });
 });
