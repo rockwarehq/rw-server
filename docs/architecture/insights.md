@@ -86,21 +86,28 @@ The assistant can also set up and configure the plant (`apps/api/src/setup`).
 
 ## Setup
 
-Insights is off until the API has a key for OpenAI or Anthropic. The tools, instructions and board are the same for both. Only the model changes.
+Insights is off unless two things are true: `AI_ENABLED=true`, and the API has a key for OpenAI or Anthropic. This lets the code live on main while it's still being built. Leave the flag off in production until it's ready.
+
+The setup assistant (plans that change data) has its own flag, `CONFIG_AGENT_ENABLED=true`. It only works when `AI_ENABLED` is on too. With it off, the AI answers questions and builds boards, but it gets no setup tools and `insights.applyPlan` is refused.
+
+The tools, instructions and board are the same for both providers. Only the model changes.
 
 ```sh
-OPENAI_API_KEY=...           # turns Insights on with OpenAI (gpt-5.5)
+AI_ENABLED=true              # the main switch (default off)
+CONFIG_AGENT_ENABLED=true    # optional: the setup assistant (default off)
+
+OPENAI_API_KEY=...           # use OpenAI (gpt-5.5)
 # or
-ANTHROPIC_API_KEY=...        # turns Insights on with Anthropic (claude-opus-5)
+ANTHROPIC_API_KEY=...        # use Anthropic (claude-opus-5)
 
 INSIGHTS_PROVIDER=openai     # optional; picks one when both keys are set (OpenAI wins otherwise)
 INSIGHTS_MODEL=gpt-5.5       # optional
 INSIGHTS_EFFORT=medium       # optional: low, medium, high
 ```
 
-The provider switch is in `packages/services/src/insights/ask.ts`.
+The flags and keys are read in `apps/api/src/config.ts` (`aiConfig`). The provider switch is in `packages/services/src/insights/ask.ts`. When AI is off, the server never loads the AI libraries.
 
-`insights.status` tells the page whether Insights is on.
+`insights.status` tells the page what is on: `{ enabled, configAgent, model }`. The page hides Insights when `enabled` is false.
 
 ## Limits
 

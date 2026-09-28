@@ -1,7 +1,5 @@
 import prisma from "@rw/db";
-import { chat, maxIterations, type ModelMessage, type StreamChunk, type UIMessage } from "@tanstack/ai";
-import { anthropicText } from "@tanstack/ai-anthropic";
-import { openaiText } from "@tanstack/ai-openai";
+import type { ModelMessage, StreamChunk, UIMessage } from "@tanstack/ai";
 import type { ReportScope } from "../reporting/types.js";
 import { type Board, emptyBoard, parseBoard } from "./board.js";
 import { stableInstructions, turnInstructions } from "./prompt.js";
@@ -15,53 +13,31 @@ import { insightsTools } from "./tools.js";
  * Which AI runs Insights. The tools, instructions and board are the same for
  * every provider; only the adapter and its settings change.
  *
- *   INSIGHTS_PROVIDER  "openai" or "anthropic". Defaults to whichever key is set
- *                      (OpenAI first).
- *   INSIGHTS_MODEL     Model name. Defaults: gpt-5.5 / claude-opus-5.
- *   INSIGHTS_EFFORT    How hard the model thinks: low, medium or high.
- *
- * Keys: OPENAI_API_KEY or ANTHROPIC_API_KEY.
+ * The API reads these from its env (AI_ENABLED, OPENAI_API_KEY or
+ * ANTHROPIC_API_KEY, INSIGHTS_PROVIDER, INSIGHTS_MODEL, INSIGHTS_EFFORT; see
+ * apps/api/src/config.ts) and passes them in.
  */
-type Provider = "openai" | "anthropic";
-
-function provider(): Provider | undefined {
-  const chosen = process.env.INSIGHTS_PROVIDER;
-  if (chosen === "openai" || chosen === "anthropic") return chosen;
-  if (chosen) return undefined;
-  if (process.env.OPENAI_API_KEY) return "openai";
-  if (process.env.ANTHROPIC_API_KEY) return "anthropic";
-  return undefined;
+export interface InsightsAi {
+  provider: "openai" | "anthropic";
+  apiKey: string;
+  /** Model name. Defaults: gpt-5.5 / claude-opus-5. */
+  model?: string;
+  /** How hard the model thinks. Defaults: medium (OpenAI) / high (Anthropic). */
+  effort?: "low" | "medium" | "high";
 }
 
-const KEY_BY_PROVIDER: Record<Provider, string> = {
-  openai: "OPENAI_API_KEY",
-  anthropic: "ANTHROPIC_API_KEY",
-};
-
-export function insightsEnabled(): boolean {
-  const chosen = provider();
-  return chosen !== undefined && Boolean(process.env[KEY_BY_PROVIDER[chosen]]);
-}
-
-const DEFAULT_MODEL: Record<Provider, string> = { openai: "gpt-5.5", anthropic: "claude-opus-5" };
+const DEFAULT_MODEL: Record<InsightsAi["provider"], string> = { openai: "gpt-5.5", anthropic: "claude-opus-5" };
 
 /** The model name Insights will use, for the page to show. */
-export function insightsModel(): string | undefined {
-  const chosen = provider();
-  return chosen ? (process.env.INSIGHTS_MODEL ?? DEFAULT_MODEL[chosen]) : undefined;
+export function insightsModel(ai: InsightsAi): string {
+  return ai.model ?? DEFAULT_MODEL[ai.provider];
 }
-
-const EFFORTS = ["low", "medium", "high"] as const;
-type Effort = (typeof EFFORTS)[number];
-const effort = (fallback: Effort): Effort => {
-  const value = process.env.INSIGHTS_EFFORT as Effort | undefined;
-  return value && EFFORTS.includes(value) ? value : fallback;
-};
 
 /** The most tool rounds one question may take. Setup needs more than reporting: it reads, describes actions, then plans. */
 const MAX_ROUNDS = 30;
 
 export interface AskInput {
+  ai: InsightsAi;
   siteId: string;
   scope: ReportScope;
   /** The chat so far, as the page keeps it, ending with the new question. */
@@ -78,8 +54,9 @@ export interface AskInput {
 }
 
 export async function askInsights(input: AskInput): Promise<AsyncIterable<StreamChunk>> {
-  const chosen = provider();
-  if (!chosen || !insightsEnabled()) throw new Error("Insights has no AI provider set up.");
+  const { ai } = input;
+  // Loaded here so a server with AI off never loads the AI libraries.
+  const { chat, maxIterations } = await import("@tanstack/ai");
 
   const site = await prisma.site.findUnique({ where: { id: input.siteId }, select: { timezone: true } });
   const timezone = site?.timezone ?? "UTC";
@@ -103,21 +80,23 @@ export async function askInsights(input: AskInput): Promise<AsyncIterable<Stream
   const stable = stableInstructions() + (input.extraInstructions ?? "");
   const turn = turnInstructions({ timezone, nowMs, board });
 
-  if (chosen === "openai") {
-    const model = insightsModel() as Parameters<typeof openaiText>[0];
+  if (ai.provider === "openai") {
+    const { createOpenaiChat } = await import("@tanstack/ai-openai");
+    const model = insightsModel(ai) as Parameters<typeof createOpenaiChat>[0];
     return chat({
       ...shared,
-      adapter: openaiText(model),
+      adapter: createOpenaiChat(model, ai.apiKey),
       // OpenAI caches a repeated prefix on its own; stable text goes first.
       systemPrompts: [stable, turn],
-      modelOptions: { reasoning: { effort: effort("medium") } } as never,
+      modelOptions: { reasoning: { effort: ai.effort ?? "medium" } } as never,
     });
   }
 
-  const model = insightsModel() as Parameters<typeof anthropicText>[0];
+  const { createAnthropicChat } = await import("@tanstack/ai-anthropic");
+  const model = insightsModel(ai) as Parameters<typeof createAnthropicChat>[0];
   return chat({
     ...shared,
-    adapter: anthropicText(model),
+    adapter: createAnthropicChat(model, ai.apiKey),
     systemPrompts: [
       // Same text every time, so it caches.
       { content: stable, metadata: { cache_control: { type: "ephemeral" } } },
@@ -125,7 +104,7 @@ export async function askInsights(input: AskInput): Promise<AsyncIterable<Stream
     ],
     modelOptions: {
       thinking: { type: "adaptive" },
-      output_config: { effort: effort("high") },
+      output_config: { effort: ai.effort ?? "high" },
       max_tokens: 16000,
     },
   });
