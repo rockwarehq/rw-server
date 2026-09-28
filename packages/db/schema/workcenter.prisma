@@ -18,6 +18,7 @@ model Workcenter {
 
   // Relations
   stations            Station[]
+  reportDecks         ReportDeck[]
   shiftAssignment     ShiftAssignment[]
   shiftInstances      ShiftInstance[]
   shiftOverrides      ShiftOverride[]

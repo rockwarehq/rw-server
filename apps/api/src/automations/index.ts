@@ -2,6 +2,7 @@ import { type AutomationFramework, createAutomationFramework, createRefRegistry 
 import { createDbCooldownStore } from "@rw/services/automation/cooldown-store";
 import { createDbRunRecorder } from "@rw/services/automation/recorder";
 import { createDbAutomationStore } from "@rw/services/automation/store";
+import { decksAutomationRef } from "@rw/services/deck/automation-ref";
 import { callDefinitionsAutomationRef } from "@rw/services/facility/call/automation-ref";
 import { productionModesAutomationRef } from "@rw/services/facility/production-mode/automation-ref";
 import { stationsAutomationRef } from "@rw/services/facility/station/automation-ref";
@@ -36,7 +37,8 @@ export async function createAppAutomationFramework(): Promise<AutomationFramewor
     .register(productionModesAutomationRef)
     .register(notificationGroupsAutomationRef)
     .register(employeesAutomationRef)
-    .register(shiftNamesAutomationRef);
+    .register(shiftNamesAutomationRef)
+    .register(decksAutomationRef);
 
   return createAutomationFramework({
     eventSchemas: EVENT_SCHEMAS,

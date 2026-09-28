@@ -60,6 +60,7 @@ model Site {
   objectInstances         ObjectInstance[]
   apiTokens               ApiToken[]
   savedViews              SavedView[]
+  reportDecks             ReportDeck[]
   integrations            Integration[]
   integrationTriggers     IntegrationTrigger[]
   callDefinitions         CallDefinition[]

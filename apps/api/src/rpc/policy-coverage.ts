@@ -43,6 +43,10 @@ export const EXCLUDED_PROCEDURES: ReadonlySet<string> = new Set([
   "display.register",
   "display.get",
   "display.heartbeat",
+  // ── report deck links (ADR-0018): the unguessable token is the only
+  // credential (only its hash is stored); it returns the stored snapshot of
+  // the editions it names, never runs a query, and honours revoke/expiry.
+  "deck.viewLink",
   // ── static per-deploy catalogs with no tenant data.
   "graph.hook.eventCatalog",
   "graph.introspect.manifest",

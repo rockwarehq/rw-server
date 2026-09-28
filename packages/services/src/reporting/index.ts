@@ -3,6 +3,7 @@ import type { FactDef, MeasureDef, ReportFilter, ValueFormat } from "./types.js"
 
 export { compileReportQuery, compileReportRows, runReportQuery, runReportRows } from "./compiler.js";
 export { FACTS } from "./facts.js";
+export { FILTER_OPS } from "./types.js";
 export type {
   FactDef,
   FieldDef,

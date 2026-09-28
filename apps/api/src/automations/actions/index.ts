@@ -1,11 +1,21 @@
 import { type ActionHandler, type ActionRegistry, type ActionSchema, createActionRegistry } from "@rw/automations";
 import * as clearMode from "./clear-mode.js";
 import * as closeCall from "./close-call.js";
+import * as deckMakeEditions from "./deck-make-editions.js";
+import * as deckSendLatest from "./deck-send-latest.js";
 import * as forceMode from "./force-mode.js";
 import * as notify from "./notify.js";
 import * as openCall from "./open-call.js";
 
-const modules: readonly { handler: ActionHandler }[] = [notify, openCall, closeCall, forceMode, clearMode] as const;
+const modules: readonly { handler: ActionHandler }[] = [
+  notify,
+  openCall,
+  closeCall,
+  forceMode,
+  clearMode,
+  deckMakeEditions,
+  deckSendLatest,
+] as const;
 
 /** Catalog view: strip `run` from each version so schemas are serializable + don't leak code. */
 function toActionSchema(h: ActionHandler): ActionSchema {

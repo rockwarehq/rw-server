@@ -9,7 +9,7 @@
  * shop-floor screens. A wall board can have the totals, not the list.
  */
 
-import { FACTS, reportSchema, runReportQuery, runReportRows } from "@rw/services/reporting/index";
+import { FACTS, FILTER_OPS, reportSchema, runReportQuery, runReportRows } from "@rw/services/reporting/index";
 import { z } from "zod";
 import { throwServiceError } from "./errors.js";
 import { userRequired, userOrDisplayRequired } from "./middleware.js";
@@ -22,24 +22,7 @@ const filterSchema = z
       // A dimension, a detail field, or a measure — the catalog resolves it and
       // refuses operators the target's type doesn't accept.
       dimension: z.string().max(64),
-      op: z.enum([
-        "eq",
-        "neq",
-        "in",
-        "notIn",
-        "gt",
-        "gte",
-        "lt",
-        "lte",
-        "between",
-        "notBetween",
-        "contains",
-        "beginsWith",
-        "isNull",
-        "notNull",
-        "hasLabel",
-        "notHasLabel",
-      ]),
+      op: z.enum(FILTER_OPS),
       // Omitted for isNull/notNull; two values for between/notBetween.
       value: z.union([z.string().max(256), z.array(z.string().max(256)).max(200)]).optional(),
     }),

@@ -57,6 +57,21 @@ export const RESOLVERS = {
     prisma.call.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
   dispositionLog: (id: string) =>
     prisma.itemDispositionLog.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
+  reportDeck: (id: string) =>
+    prisma.reportDeck.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
+  reportDeckEdition: (id: string) =>
+    prisma.reportDeckEdition
+      .findUnique({ where: { id }, select: { deck: { select: { siteId: true, workcenterId: true } } } })
+      .then((r) => viaStation(r?.deck)),
+  // A link is checked on its first edition's deck: it only ever holds editions of one site.
+  reportDeckLink: (id: string) =>
+    prisma.reportDeckLinkEdition
+      .findFirst({
+        where: { linkId: id },
+        orderBy: { position: "asc" },
+        select: { edition: { select: { deck: { select: { siteId: true, workcenterId: true } } } } },
+      })
+      .then((r) => viaStation(r?.edition.deck)),
   shiftComment: (id: string) =>
     prisma.shiftComment.findUnique({ where: { id }, select: { siteId: true, workcenterId: true } }).then(one),
 
@@ -241,6 +256,9 @@ export const NOT_FOUND_MESSAGES: Record<RowKind, string> = {
   objectSchema: "Schema not found",
   objectInstance: "Instance not found",
   automation: "Automation not found",
+  reportDeck: "Deck not found",
+  reportDeckEdition: "Edition not found",
+  reportDeckLink: "Link not found",
   point: "Point not found",
   pointGroup: "Point group not found",
 };
