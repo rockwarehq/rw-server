@@ -22,7 +22,7 @@ const emptyStore: AutomationStore = {
 
 function framework() {
   const refs = createRefRegistry();
-  for (const key of ["workCenters", "stations", "jobs", "callDefinitions", "productionModes", "notificationGroups", "employees", "shiftNames"]) {
+  for (const key of ["workCenters", "stations", "jobs", "callDefinitions", "productionModes", "notificationGroups", "employees", "shiftNames", "decks"]) {
     refs.register({ key, list: async () => [] });
   }
   return createAutomationFramework({
@@ -105,6 +105,14 @@ describe("automation bridge events", () => {
     const fw = framework();
     const catalog = fw.catalog("notification.changed", "notify");
     expect(catalog.facts.find((f) => f.id === "event.payload.sent")?.type).toBe("number");
-    expect(catalog.actions.map((a) => a.type).sort()).toEqual(["clearMode", "closeCall", "forceMode", "notify", "openCall"]);
+    expect(catalog.actions.map((a) => a.type).sort()).toEqual([
+      "clearMode",
+      "closeCall",
+      "deck.makeEditions",
+      "deck.sendLatest",
+      "forceMode",
+      "notify",
+      "openCall",
+    ]);
   });
 });

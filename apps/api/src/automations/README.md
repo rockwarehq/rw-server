@@ -47,12 +47,15 @@ own site's events. When an action calls into another domain that will raise its 
 | `mode.changed` | `modes.>` stream | station |
 | `notification.changed` | `notifications.>` stream | notification |
 | `station.status.changed` | `stations.*.*.status` stream | station; `statusSince` anchors delays |
+| `time.daily` | the automation clock, at the automation's `schedule` | — (fired at one automation only) |
 
 | Action | Does |
 | --- | --- |
 | `notify` | `notification.send` to groups and/or people; dedupe key = event id + automation + action index |
 | `openCall` / `closeCall` | open (or close the open) call of a definition at a station |
 | `forceMode` / `clearMode` | force a station into / out of a production mode |
+| `deck.makeEditions` | make an edition of each report deck as of the event's `scheduledAt` (a late run still covers the right days); a redelivery finds the edition it made |
+| `deck.sendLatest` | email the latest edition of each deck: a link per deck (or one for all, `links: "one"`) after the message |
 
 Every domain call an action makes is `source: SYSTEM`, `sourceType: "automation"`, `sourceRef: <automation id>`,
 with `causeOf(event)` attached, so the domain's own outbound event continues the chain. Station-targeting
@@ -85,6 +88,14 @@ redelivery yields the same automation event id.
   `engine.startScheduled()`. No polling. NATS is required — the framework does not build without it.
   Deleting or editing an automation leaves armed entries in place; a due entry runs against the
   current definition and is dropped if the automation or action is gone.
+- **Clock triggers.** A `time.daily` automation carries `schedule: { time: "HH:MM", days: [0-6] }`
+  (site-local, 0 = Sunday, empty = every day). `src/nats/automation-clock.ts` keeps one JetStream `@at`
+  message armed per automation for its next run (computed in the site's timezone, so DST holds); when
+  due it fires the event with `target` set, so only that automation evaluates it, then arms the next.
+  The RPC handlers re-arm on every create/update/delete; boot arms any automation missing its run.
+  Known gaps: a tick that fails is logged and acked, not retried or recorded in run history; the RPC
+  handlers save first and re-arm after, so with NATS down a save succeeds but the call errors; two
+  automations due the same minute run in no set order (put "make, then send" in one automation).
 - **In-memory + reload.** Automations are cached in memory; every create/update/delete must call
   `engine.reload()` (the RPC handlers do this). A write that bypasses them runs against stale rules.
 - **Horizontal scaling — not implemented.** The cache is per-instance, so a config upsert/delete only

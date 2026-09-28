@@ -168,12 +168,26 @@ export const shiftDim = (column = "shiftInstanceId") =>
     `{a}."startTime"`,
   );
 
+/**
+ * The shift's NAME ("2nd") as text, beside `shift`, which is one shift
+ * instance. Filtering "2nd" by name keeps every 2nd shift, whatever the date
+ * range; filtering `shift` pins one day's instance. The old logs filtered by
+ * name, and reports must too. A primary-key lookup per row, so it needs no
+ * join and filters, groups and sorts like any text column.
+ */
+export const shiftNameDim = (column = "shiftInstanceId"): DimensionDef => ({
+  label: "Shift name",
+  column,
+  expr: `(SELECT si."shiftName" FROM "ShiftInstance" si WHERE si."id" = f."${column}")`,
+  type: "string",
+});
+
 export const modeDim = (column = "modeId") =>
   idDim("Production mode", column, `LEFT JOIN "ProductionMode" {a} ON {a}."id" = f."${column}"`, `{a}."name"`);
 
-export const employeeDim = (column = "employeeId") =>
+export const employeeDim = (column = "employeeId", label = "Employee") =>
   idDim(
-    "Employee",
+    label,
     column,
     `LEFT JOIN "Employee" {a} ON {a}."id" = f."${column}" LEFT JOIN "EmployeeVersion" {b} ON {b}."id" = {a}."versionId"`,
     `TRIM(CONCAT({b}."firstName", ' ', {b}."lastName"))`,

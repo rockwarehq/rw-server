@@ -1,0 +1,108 @@
+/// Report decks (ADR-0018): report pages that share one range and one
+/// workcenter, made into editions on a schedule or by hand.
+
+/// Who sees a deck. SITE is everyone with access to its workcenter; PRIVATE
+/// (its creator only) is reserved and not offered yet.
+enum ReportDeckVisibility {
+  SITE
+  PRIVATE
+}
+
+enum ReportDeckEditionSource {
+  MANUAL
+  SCHEDULE
+}
+
+model ReportDeck {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  workcenterId String     @db.Uuid
+  workcenter   Workcenter @relation(fields: [workcenterId], references: [id], onDelete: Cascade)
+
+  name   String
+  /// "yesterday" | "yesterday-7".
+  range  String
+  /// The pages: [{ id, kind, title, params, shiftNames, queries }], validated at the RPC boundary.
+  slides Json   @default("[]")
+
+  visibility  ReportDeckVisibility @default(SITE)
+  /// Creator's user id. No relation: a deck outlives its creator.
+  createdById String?              @db.Uuid
+
+  editions ReportDeckEdition[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([siteId])
+  @@index([workcenterId])
+}
+
+/// A deck worked out at one moment and kept as it was: never updated.
+model ReportDeckEdition {
+  id String @id @default(uuid()) @db.Uuid
+
+  deckId String     @db.Uuid
+  deck   ReportDeck @relation(fields: [deckId], references: [id], onDelete: Cascade)
+  siteId String     @db.Uuid
+
+  /// The moment its days were worked out for (a schedule's planned time).
+  asOf         DateTime                @db.Timestamptz(3)
+  dateFrom     DateTime?               @db.Date
+  dateTo       DateTime?               @db.Date
+  source       ReportDeckEditionSource
+  /// The automation that made it, for a scheduled edition.
+  automationId String?                 @db.Uuid
+  createdById  String?                 @db.Uuid
+
+  /// The deck as it was: { name, range, workcenterId, workcenterName, slides }.
+  setup Json
+  /// Every page: dates, shifts, and the stored results of its queries.
+  pages Json
+  /// The report schema of each dataset its pages used, keyed by fact.
+  facts Json @default("{}")
+
+  links ReportDeckLinkEdition[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([deckId, asOf])
+  @@index([siteId])
+}
+
+/// A link that opens one or more editions without signing in.
+model ReportDeckLink {
+  id     String @id @default(uuid()) @db.Uuid
+  siteId String @db.Uuid
+
+  /// SHA-256 of the token, hex. The token itself is shown once and never stored.
+  tokenHash    String    @unique
+  label        String
+  /// Null: until revoked.
+  expiresAt    DateTime? @db.Timestamptz(3)
+  revokedAt    DateTime? @db.Timestamptz(3)
+  createdById  String?   @db.Uuid
+  /// The subscription automation that sent it, if any.
+  automationId String?   @db.Uuid
+
+  editions ReportDeckLinkEdition[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([siteId])
+}
+
+model ReportDeckLinkEdition {
+  linkId    String            @db.Uuid
+  link      ReportDeckLink    @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  editionId String            @db.Uuid
+  edition   ReportDeckEdition @relation(fields: [editionId], references: [id], onDelete: Cascade)
+  /// Order within the link.
+  position  Int
+
+  @@id([linkId, editionId])
+  @@index([editionId])
+}

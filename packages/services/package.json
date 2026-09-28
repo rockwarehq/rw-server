@@ -11,6 +11,7 @@
     "./cycle/*": "./dist/cycle/*.js",
     "./dashboard/*": "./dist/dashboard/*.js",
     "./device/*": "./dist/device/*.js",
+    "./deck/*": "./dist/deck/*.js",
     "./display/*": "./dist/display/*.js",
     "./document/*": "./dist/document/*.js",
     "./email/*": "./dist/email/*.js",

@@ -16,6 +16,8 @@ export interface AppEvent {
   cooldownScope?: string;
   /** ISO value of the schema version's `sinceKey` field — when the condition began; delayed actions measure from it. */
   since?: string;
+  /** Set when the event is addressed to one automation (a scheduled trigger); no other automation evaluates it. */
+  target?: string;
   /** Id of the root event of the chain this event belongs to. Equals `id` for a root event. */
   correlationId: string;
   /** Id of the event that directly caused this one. Absent for a root event. */
@@ -122,6 +124,14 @@ export interface Automation {
   partition?: string | null;
   /** After firing for a cooldown scope, ignore further matches for that scope this long. Null/0 = none. */
   cooldownMs?: number | null;
+  /** When a clock-triggered automation fires. Null/absent for automations triggered by domain events. */
+  schedule?: DailySchedule | null;
+}
+
+/** Fire once a day at `time` (HH:MM, the partition's local time) on `days` (0 = Sunday … 6 = Saturday; empty = every day). */
+export interface DailySchedule {
+  time: string;
+  days: number[];
 }
 
 export interface Catalog {

@@ -185,25 +185,27 @@ export interface FactDef {
  * (see filters.ts) — ordering a uuid or substring-matching a date is refused
  * rather than silently coerced.
  */
-export type FilterOp =
-  | "eq"
-  | "neq"
-  | "in"
-  | "notIn"
-  | "gt"
-  | "gte"
-  | "lt"
-  | "lte"
-  | "between"
-  | "notBetween"
-  | "contains"
-  | "beginsWith"
-  | "isNull"
-  | "notNull"
+export const FILTER_OPS = [
+  "eq",
+  "neq",
+  "in",
+  "notIn",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "between",
+  "notBetween",
+  "contains",
+  "beginsWith",
+  "isNull",
+  "notNull",
   // Carries at least one of the given labels — available on dimensions whose
   // entity is labelable. Value is a list of label ids.
-  | "hasLabel"
-  | "notHasLabel";
+  "hasLabel",
+  "notHasLabel",
+] as const;
+export type FilterOp = (typeof FILTER_OPS)[number];
 
 export interface ReportFilter {
   /**

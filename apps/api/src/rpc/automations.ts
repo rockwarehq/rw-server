@@ -3,6 +3,8 @@ import type { Automation, AutomationAction, AutomationFramework } from "@rw/auto
 import * as z from "zod";
 import { listAutomationRuns } from "@rw/services/automation/runs";
 import { getAutomationFramework } from "../automations/index.js";
+import { schema as timeDaily } from "../automations/events/time-daily.js";
+import { rearmClock } from "../nats/automation-clock.js";
 import { userRequired } from "./middleware.js";
 
 // Automations belong to a site (the engine's `partition`). Handlers resolve the single shared
@@ -24,6 +26,28 @@ const actionSchema = z.object({
   delayMs: z.number().int().min(0).nullable().optional(),
   repeat: z.boolean().nullable().optional(),
 });
+
+/** When a `time.daily` automation fires, site-local. `days`: 0 = Sunday … 6 = Saturday; empty = every day. */
+const scheduleSchema = z.object({
+  time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "time must be HH:MM"),
+  days: z
+    .array(z.number().int().min(0).max(6))
+    .default([])
+    .transform((days) => [...new Set(days)].sort()),
+});
+
+/**
+ * A schedule belongs on the clock event only, and the clock event needs one: without it nothing
+ * fires. `undefined` on an update leaves the saved schedule as it is.
+ */
+function checkSchedule(event: string, schedule: z.infer<typeof scheduleSchema> | null | undefined, creating: boolean) {
+  if (schedule && event !== timeDaily.type) {
+    throw new ORPCError("BAD_REQUEST", { message: `schedule is only for "${timeDaily.type}" automations` });
+  }
+  if (event === timeDaily.type && (schedule === null || (creating && !schedule))) {
+    throw new ORPCError("BAD_REQUEST", { message: `a "${timeDaily.type}" automation needs a schedule` });
+  }
+}
 
 /** An automation has one or more actions, run sequentially when conditions match. */
 const actionsSchema = z.array(actionSchema).min(1);
@@ -141,6 +165,7 @@ export const createAutomation = userRequired
       // automation and the user configures actions afterward in the editor.
       actions: z.array(actionSchema).default([]),
       cooldownMs: z.number().int().min(0).nullable().optional(),
+      schedule: scheduleSchema.nullable().optional(),
     }),
   )
   .handler(async ({ input, context }) => {
@@ -156,6 +181,7 @@ export const createAutomation = userRequired
       });
     }
     const actions = validateActions(fw, input.actions);
+    checkSchedule(input.event, input.schedule, true);
 
     const automation = await fw.store.upsert({
       id: fw.store.newId(),
@@ -167,8 +193,10 @@ export const createAutomation = userRequired
       conditions: input.conditions,
       actions,
       cooldownMs: input.cooldownMs || null,
+      schedule: input.schedule ?? null,
     });
     fw.engine.reload();
+    await rearmClock(automation);
     return present(automation);
   });
 
@@ -182,6 +210,7 @@ export const updateAutomation = userRequired
       conditions: conditionsSchema.optional(),
       actions: actionsSchema.optional(),
       cooldownMs: z.number().int().min(0).nullable().optional(),
+      schedule: scheduleSchema.nullable().optional(),
     }),
   )
   .handler(async ({ input, context }) => {
@@ -203,6 +232,7 @@ export const updateAutomation = userRequired
     }
 
     const actions = input.actions ? validateActions(fw, input.actions) : existing.actions;
+    checkSchedule(existing.event, input.schedule, false);
 
     const updated = await fw.store.upsert({
       ...existing,
@@ -212,8 +242,10 @@ export const updateAutomation = userRequired
       conditions: input.conditions ?? existing.conditions,
       actions,
       cooldownMs: input.cooldownMs === undefined ? existing.cooldownMs : input.cooldownMs || null,
+      schedule: input.schedule === undefined ? existing.schedule : input.schedule,
     });
     fw.engine.reload();
+    await rearmClock(updated);
     return present(updated);
   });
 
@@ -221,8 +253,12 @@ export const deleteAutomation = userRequired.input(z.object({ id: z.string() }))
   await context.access.require("ADMIN", { automation: input.id });
 
   const fw = await getAutomationFramework();
-  if (!(await fw.store.remove(input.id))) throw new ORPCError("NOT_FOUND", { message: "automation not found" });
+  const existing = fw.store.get(input.id);
+  if (!existing || !(await fw.store.remove(input.id))) {
+    throw new ORPCError("NOT_FOUND", { message: "automation not found" });
+  }
   fw.engine.reload();
+  await rearmClock(existing, true);
   return { ok: true };
 });
 

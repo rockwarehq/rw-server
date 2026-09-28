@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { Automation, AutomationAction, AutomationStore, RuleGroupType } from "@rw/automations";
-import prisma from "@rw/db";
+import type { Automation, AutomationAction, AutomationStore, DailySchedule, RuleGroupType } from "@rw/automations";
+import prisma, { Prisma } from "@rw/db";
 
 /**
  * Prisma-backed implementation of @rw/automations' `AutomationStore`.
@@ -34,6 +34,7 @@ export async function createDbAutomationStore(): Promise<AutomationStore> {
           typeof prisma.automation.upsert
         >[0]["update"]["conditions"],
         actions: automation.actions as unknown as Parameters<typeof prisma.automation.upsert>[0]["update"]["actions"],
+        schedule: automation.schedule ? { ...automation.schedule } : Prisma.DbNull,
       };
       const row = await prisma.automation.upsert({
         where: { id: automation.id },
@@ -75,6 +76,7 @@ function rowToAutomation(row: {
   cooldownMs: number | null;
   conditions: unknown;
   actions: unknown;
+  schedule: unknown;
 }): Automation {
   return {
     id: row.id,
@@ -86,5 +88,6 @@ function rowToAutomation(row: {
     cooldownMs: row.cooldownMs,
     conditions: row.conditions as RuleGroupType,
     actions: row.actions as AutomationAction[],
+    schedule: row.schedule as DailySchedule | null,
   };
 }

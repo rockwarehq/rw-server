@@ -25,6 +25,7 @@ import * as pointValue from "./point-value.js";
 import * as shiftRecap from "./shift-recap.js";
 import * as logs from "./logs.js";
 import * as report from "./report.js";
+import * as deck from "./deck.js";
 import * as historian from "./historian.js";
 import * as employee from "./employee.js";
 import * as employeeRole from "./employee-role.js";
@@ -521,6 +522,23 @@ export const router = {
     schema: report.schema,
     query: report.query,
     rows: report.rows,
+  },
+  deck: {
+    list: deck.list,
+    get: deck.get,
+    create: deck.create,
+    update: deck.update,
+    delete: deck.remove,
+    preview: deck.preview,
+    span: deck.span,
+    makeEdition: deck.makeEdition,
+    listEditions: deck.listEditions,
+    getEdition: deck.getEdition,
+    deleteEdition: deck.deleteEdition,
+    createLink: deck.createLink,
+    listLinks: deck.listLinks,
+    revokeLink: deck.revokeLink,
+    viewLink: deck.viewLink,
   },
   historian: {
     query: historian.query,
