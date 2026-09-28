@@ -49,6 +49,10 @@ model StationVersion {
   /// true = the speed fields are the profile's usual speed and follow it when
   /// the profile changes; false = the station's own speed.
   speedFromProfile Boolean         @default(false)
+  /// The profile variation this station follows (§8): its amount per signal
+  /// or report interval. Null exactly when profileId is null.
+  variationId      String?                  @db.Uuid
+  variation        StationProfileVariation? @relation(fields: [variationId], references: [id], onDelete: NoAction)
 
   stationId String  @db.Uuid
   station   Station @relation("StationVersions", fields: [stationId], references: [id], onDelete: Cascade)
@@ -65,4 +69,5 @@ model StationVersion {
   @@unique([stationId, version])
   @@index([stationId])
   @@index([profileId])
+  @@index([variationId])
 }

@@ -178,6 +178,61 @@ Run `packages/db/scripts/preflight-station-profiles.sql` on a copy of
 production first. It lists the stations and jobs a person should look at,
 including the jobs this change affects (point 4).
 
+### 8. Variations: one kind of machine, several ways to signal
+
+A profile mixed two things: what a job depends on (how the machine counts,
+its unit, parts or strokes, the usual speed) and how one group of machines
+signals (the amount per signal, the report interval). So two extruders that
+differ only in encoder spacing, 30 ft and 100 ft, needed two profiles, and a
+job had to pick one of them for no reason: `canRunJob` already lets it run on
+both.
+
+A profile now has one or more **variations** (`StationProfileVariation`):
+
+- A variation holds a name, a description ("which machines"), and the signal
+  field its kind uses: `signalAmount` (count by amount) or `signalInterval`
+  (count by time). The profile keeps `cycleMode`, `quantityUnit`,
+  `countedAs` and the usual speed. So no two variations of a profile ever
+  differ in anything a job sees.
+- Most profiles have exactly one, unnamed. Once there are two, each is
+  named, and names are distinct. Count by cycle has nothing to vary, so it
+  keeps one; so does the Discrete default.
+- A station follows one variation: `StationVersion.variationId`, set with
+  `profileId` and null exactly when it is. The copy onto the station (§3)
+  takes the profile's fields and that variation's signal. A variation's edit
+  reaches only its own stations. `station.create/update` take `variationId`:
+  - omitted on a profile change: the first variation;
+  - omitted otherwise: the current one.
+- `stationProfile.create/update` take the whole `variations` list:
+  - an entry with an `id` edits that variation;
+  - one without adds one;
+  - a live one left out is archived, which is refused
+    (`VARIATION_IN_USE`) while stations follow it.
+
+  Older clients' flat `description` / `signalAmount` / `signalInterval` set
+  the first variation, and outputs still carry the first variation's values
+  at the top level.
+- Jobs are unchanged: they point at the profile. Planning never needed the
+  signal fields.
+
+Migration `20261006100000_station_profile_variations` gives every profile one
+variation holding its description and signal fields. It points every station
+version on a profile at that variation, then drops the three columns from
+`StationProfile`. It ends with a check.
+
+Two fixes went in with it:
+
+- A station that stopped following its profile (`profileId: null`) used to be
+  snapped to the Discrete default by its next unrelated edit. That rewrote how
+  a count-by-amount or count-by-time station counts. It now stays hand-set,
+  and detaching clears `speedFromProfile`.
+- §7 says to switch a count-by-time profile to finished parts once its jobs
+  each have one product. But `update` refused any `countedAs` change while
+  the profile was in use. Now switching to strokes is always allowed.
+  Switching to finished parts is allowed once every job on the profile makes
+  one active product at ×1; otherwise the server refuses with
+  `PROFILE_OUTPUT_RULE`.
+
 ## What this sets up for later
 
 The boxscore, the timeline and reports should show speed the way each machine

@@ -1,0 +1,32 @@
+/// One setup of a station profile (ADR-0017 §8). The profile is the kind of
+/// machine a job is made for; a variation is how one group of those machines
+/// signals — its amount per signal (count by amount) or report interval
+/// (count by time) — and which machines it is for. Most profiles have one
+/// variation; an extruder profile might have "Every 30 ft" and "Every 100 ft".
+/// A station follows one variation of its profile; jobs never see variations.
+model StationProfileVariation {
+  id          String  @id @default(uuid()) @db.Uuid
+  /// Empty while the profile has only this one variation.
+  name        String  @default("")
+  description String?
+
+  /// Count by amount only: how much one signal means (e.g. 100 ft).
+  signalAmount   Decimal? @db.Decimal(18, 4)
+  /// Count by time only: seconds between reports (e.g. 60).
+  signalInterval Decimal? @db.Decimal(10, 2)
+
+  /// Order on the profile page; the first live variation is the one new
+  /// stations get.
+  position Int @default(0)
+
+  profileId String         @db.Uuid
+  profile   StationProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  stationVersions StationVersion[]
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  @@index([profileId])
+}

@@ -4,19 +4,35 @@ import { stationProfile } from "@rw/services/facility/index";
 import { throwServiceError, unwrap } from "./errors.js";
 
 // Station profiles (ADR-0017): named kinds of machine — how the signal
-// counts, its unit, and the usual speed for new jobs.
+// counts, its unit, and the usual speed for new jobs — each with one or more
+// variations (§8): how a group of its machines signals.
 
 const cycleModeSchema = z.enum(["DISCRETE", "QUANTITY_PER_CYCLE", "QUANTITY_PER_INTERVAL"]);
 const ratePeriodSchema = z.enum(["SECOND", "MINUTE", "HOUR"]);
 
-const fields = {
-  name: z.string().min(1),
+const variationSchema = z.object({
+  // An existing variation to edit (update only); omitted = a new one.
+  id: z.uuid().optional(),
+  // Required once a profile has two or more variations.
+  name: z.string().optional(),
+  // Which machines this is, so people pick the right one.
   description: z.string().nullable().optional(),
-  cycleMode: cycleModeSchema,
-  quantityUnit: z.string().optional(),
   // Count by amount: how much one signal means (e.g. 100 ft).
   signalAmount: z.number().positive().nullable().optional(),
   // Count by time: seconds between reports.
+  signalInterval: z.number().positive().nullable().optional(),
+});
+
+const fields = {
+  name: z.string().min(1),
+  cycleMode: cycleModeSchema,
+  quantityUnit: z.string().optional(),
+  // The whole list, in page order. On update, a live variation left out is
+  // archived (refused while stations follow it).
+  variations: z.array(variationSchema).min(1).optional(),
+  // Older clients with no variations: these set the one (first) variation.
+  description: z.string().nullable().optional(),
+  signalAmount: z.number().positive().nullable().optional(),
   signalInterval: z.number().positive().nullable().optional(),
   // Count by time: finished parts (OUTPUT) or machine strokes (CYCLES).
   countedAs: z.enum(["OUTPUT", "CYCLES"]).optional(),

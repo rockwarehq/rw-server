@@ -1,9 +1,12 @@
 import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
+import { LIVE_VARIATIONS } from "../facility/station-profile/spec.js";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { refreshStationsRunningJob } from "../facility/station/state.js";
 import { checkOneOutputRule, resolveJobProfileFields } from "./profile.js";
+
+export { usage } from "./job-usage.js";
 
 // Work orders are gone, but shipped UIs still read a job's `_count.orders`.
 // Keep it on the wire, always 0.
@@ -17,15 +20,19 @@ const PROFILE_SUMMARY = {
   name: true,
   cycleMode: true,
   quantityUnit: true,
-  signalAmount: true,
-  signalInterval: true,
   countedAs: true,
   standardCycle: true,
   standardRate: true,
   standardRateUnit: true,
   standardRatePeriod: true,
   isDefault: true,
-} as const;
+  // How its stations signal (ADR-0017 §8). A job never picks one; these say
+  // what the profile covers.
+  variations: {
+    ...LIVE_VARIATIONS,
+    select: { id: true, name: true, description: true, signalAmount: true, signalInterval: true },
+  },
+} satisfies Prisma.StationProfileSelect;
 
 // ============================================================================
 // Types - Job

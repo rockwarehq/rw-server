@@ -30,10 +30,10 @@ export async function ensureDefaultProfile(siteId: string, client: Client = pris
         name: (await client.stationProfile.findFirst({ where: { siteId, name: DEFAULT_PROFILE_NAME } }))
           ? `${DEFAULT_PROFILE_NAME} (default)`
           : DEFAULT_PROFILE_NAME,
-        description: "Counts by cycle; the target is a cycle time in seconds.",
         cycleMode: "DISCRETE",
         countedAs: "CYCLES",
         isDefault: true,
+        variations: { create: { description: "Counts by cycle; the target is a cycle time in seconds." } },
       },
     });
   } catch (err) {

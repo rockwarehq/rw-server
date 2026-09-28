@@ -7,6 +7,7 @@ import {
   speedDisplay,
   stationFieldsFromProfile,
   validateProfile,
+  validateVariations,
 } from "./rules.js";
 
 const press: ProfileSpec = {
@@ -169,6 +170,62 @@ describe("planningRate — a job's target with no station", () => {
     expect(planningRate({ ...press, standardCycle: null }, noSpeed, 1)).toMatchObject({
       source: null,
       outputPerHour: null,
+    });
+  });
+});
+
+describe("validateVariations (§8)", () => {
+  const every = (signalAmount: number, name = "") => ({ name, description: null, signalAmount, signalInterval: null });
+
+  it("a lone variation needs no name", () => {
+    expect(validateVariations("QUANTITY_PER_CYCLE", [every(100)])).toMatchObject({
+      data: [{ name: "", signalAmount: 100 }],
+    });
+  });
+
+  it("needs at least one", () => {
+    expect(validateVariations("QUANTITY_PER_CYCLE", [])).toMatchObject({ code: "VARIATION_REQUIRED" });
+  });
+
+  it("names each one once there are two, and no two alike", () => {
+    expect(validateVariations("QUANTITY_PER_CYCLE", [every(100, "Every 100 ft"), every(30)])).toMatchObject({
+      code: "VARIATION_NAME_REQUIRED",
+    });
+    expect(validateVariations("QUANTITY_PER_CYCLE", [every(100, "Lines"), every(30, " lines ")])).toMatchObject({
+      code: "VARIATION_NAME_DUPLICATE",
+    });
+    expect(
+      validateVariations("QUANTITY_PER_CYCLE", [every(100, " Every 100 ft "), every(30, "Every 30 ft")]),
+    ).toMatchObject({ data: [{ name: "Every 100 ft" }, { name: "Every 30 ft" }] });
+  });
+
+  it("each variation carries the signal field its kind needs, and only that", () => {
+    expect(validateVariations("QUANTITY_PER_CYCLE", [every(0)])).toMatchObject({ code: "PROFILE_AMOUNT_REQUIRED" });
+    expect(
+      validateVariations("QUANTITY_PER_INTERVAL", [
+        { name: "", description: " ", signalAmount: 5, signalInterval: 60 },
+      ]),
+    ).toMatchObject({ data: [{ signalAmount: null, signalInterval: 60, description: null }] });
+  });
+
+  it("count by cycle has nothing to vary", () => {
+    const plain = { name: "", description: null, signalAmount: null, signalInterval: null };
+    expect(validateVariations("DISCRETE", [plain])).toMatchObject({ data: [plain] });
+    expect(
+      validateVariations("DISCRETE", [
+        { ...plain, name: "A" },
+        { ...plain, name: "B" },
+      ]),
+    ).toMatchObject({ code: "VARIATIONS_NOT_FOR_CYCLE" });
+  });
+});
+
+describe("stationFieldsFromProfile names the variation it copied", () => {
+  it("carries the variation id alongside the profile", () => {
+    expect(stationFieldsFromProfile("p", { ...extruder, signalAmount: 30 }, null, "v30")).toMatchObject({
+      profileId: "p",
+      variationId: "v30",
+      standardQuantity: 30,
     });
   });
 });

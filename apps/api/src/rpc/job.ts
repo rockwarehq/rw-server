@@ -445,6 +445,16 @@ export const eligibleStations = userOrDisplayRequired.input(jobIdInputSchema).ha
   return unwrap(await station.eligibleStations(input.id));
 });
 
+/**
+ * Where a job is running now — each station running it, since when — or
+ * when it last ran.
+ */
+export const usage = userOrDisplayRequired.input(jobIdInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { job: input.id });
+
+  return unwrap(await job.usage(input.id), { notFoundMessage: "Job not found" });
+});
+
 /** The job's target with no station: its speed (or its profile's) and output per hour. */
 export const planning = userOrDisplayRequired.input(jobIdInputSchema).handler(async ({ input, context }) => {
   await context.access.require("VIEW", { job: input.id });
