@@ -530,6 +530,7 @@ export const router = {
     update: deck.update,
     delete: deck.remove,
     preview: deck.preview,
+    span: deck.span,
     makeEdition: deck.makeEdition,
     listEditions: deck.listEditions,
     getEdition: deck.getEdition,

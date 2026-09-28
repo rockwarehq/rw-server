@@ -6,7 +6,7 @@ import type { DeckRange, DeckSlide } from "./types.js";
 // Report decks (ADR-0018): decks, their editions, and links that open
 // editions without signing in.
 
-export { buildEdition, ROW_CAP } from "./edition.js";
+export { buildEdition, deckSpan, ROW_CAP } from "./edition.js";
 export { deckDays } from "./days.js";
 export * from "./types.js";
 

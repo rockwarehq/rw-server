@@ -74,6 +74,14 @@ export const preview = userRequired.input(idInput).handler(async ({ input, conte
   return found(await deck.previewDeck(input.id), "Deck not found");
 });
 
+/** The days a deck would cover now, and their shifts: what the builder shows its pages for. */
+export const span = userRequired
+  .input(z.object({ range: deckFields.range, workcenterId: z.uuid() }))
+  .handler(async ({ input, context }) => {
+    await context.access.require("VIEW", { workcenter: input.workcenterId });
+    return deck.deckSpan(input.range, input.workcenterId, new Date());
+  });
+
 // ── Editions ───────────────────────────────────────────────────────────────
 
 export const makeEdition = userRequired.input(z.object({ deckId: z.uuid() })).handler(async ({ input, context }) => {

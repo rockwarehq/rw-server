@@ -124,6 +124,12 @@ function slidePages(slide: DeckSlide, days: NonNullable<ReturnType<typeof deckDa
   return [page("all", slide.title, days.dateFrom, days.dateTo, named ? shifts : null)];
 }
 
+/** The days a deck with this range and workcenter covers as of `asOf`, without running anything. */
+export async function deckSpan(range: DeckRange, workcenterId: string, asOf: Date) {
+  const days = deckDays(range, await scheduledShifts(workcenterId, asOf), asOf.getTime());
+  return days && { dateFrom: days.dateFrom, dateTo: days.dateTo, shifts: days.shifts.map(toEditionShift) };
+}
+
 /** Work out a deck as of `asOf` and run every page's queries. Nothing is saved. */
 export async function buildEdition(deck: DeckInput, asOf: Date): Promise<BuiltEdition> {
   const workcenter = await prisma.workcenter.findUnique({ where: { id: deck.workcenterId }, select: { name: true } });

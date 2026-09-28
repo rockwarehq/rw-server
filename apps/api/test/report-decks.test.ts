@@ -104,6 +104,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("report decks (Tier 2)", () => {
     expect((await rpcCall(server, "deck/get", { id: deckId }, outsiderToken)).statusCode).toBe(403);
   });
 
+  it("says which days the deck covers now", async () => {
+    const span = await rpcCall(server, "deck/span", { range: "yesterday-7", workcenterId }, managerToken);
+    expect(span.json).toMatchObject({ dateTo: yesterday, shifts: [{ shiftName: "1st" }] });
+  });
+
   it("makes an edition covering yesterday with every query's results stored", async () => {
     const made = await rpcCall(server, "deck/makeEdition", { deckId }, managerToken);
     expect(made.statusCode).toBe(200);
