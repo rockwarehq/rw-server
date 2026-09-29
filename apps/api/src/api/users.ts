@@ -203,6 +203,8 @@ const getMeResponseSchema = {
         firstName: { type: "string", nullable: true },
         lastName: { type: "string", nullable: true },
         avatarUrl: { type: "string", nullable: true },
+        // Front Chat identity verification hash for this email; null when unconfigured.
+        frontChatHash: { type: "string", nullable: true },
       },
     },
     employee: employeeProfileSchema,

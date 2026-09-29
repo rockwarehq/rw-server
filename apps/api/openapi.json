@@ -832,6 +832,10 @@
                         "avatarUrl": {
                           "type": "string",
                           "nullable": true
+                        },
+                        "frontChatHash": {
+                          "type": "string",
+                          "nullable": true
                         }
                       }
                     },

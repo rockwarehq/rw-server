@@ -36,6 +36,14 @@ describe("config validation", () => {
     expect(config.env.isDevelopment).toBe(false);
   });
 
+  it("Front Chat verification is optional and gates frontChatConfig", async () => {
+    for (const [key, value] of Object.entries(PROD_BASELINE)) vi.stubEnv(key, value);
+    expect((await loadConfig()).frontChatConfig.enabled).toBe(false);
+    vi.stubEnv("FRONT_CHAT_VERIFICATION_SECRET", "front-secret");
+    const config = await loadConfig();
+    expect(config.frontChatConfig).toEqual({ verificationSecret: "front-secret", enabled: true });
+  });
+
   it("reflects any origin by default, even in production", async () => {
     for (const [key, value] of Object.entries(PROD_BASELINE)) vi.stubEnv(key, value);
     const config = await loadConfig();

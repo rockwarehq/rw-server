@@ -164,5 +164,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("auth flows (Tier 2)", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ user: { email: TEST_ADMIN_EMAIL } });
+    // The schema must list frontChatHash or Fastify's serializer drops it.
+    expect(res.json().user).toHaveProperty("frontChatHash");
   });
 });
