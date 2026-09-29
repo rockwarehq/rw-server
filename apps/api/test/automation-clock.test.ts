@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runEventId } from "../src/nats/automation-clock.js";
+import { runEventId } from "../src/automations/clock.js";
 
 // Tier 1: a clock run's event id is the same every time the run is delivered,
 // so a redelivered tick dedupes instead of sending again.

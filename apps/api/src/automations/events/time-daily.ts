@@ -4,7 +4,7 @@ export const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday"
 
 /**
  * `time.daily` — a clock trigger. Each automation on this event carries a `schedule` (time of day +
- * days of the week, site-local); `src/nats/automation-clock.ts` fires the event at that automation
+ * days of the week, site-local); `src/automations/clock.ts` fires the event at that automation
  * alone when the time comes.
  */
 export const schema: EventSchema = {
