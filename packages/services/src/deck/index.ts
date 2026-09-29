@@ -1,8 +1,17 @@
 import { createHash, randomBytes } from "node:crypto";
 import prisma, { type Prisma } from "@rw/db";
 import { dateOnly } from "./days.js";
+import * as shiftRecap from "../facility/shift/shift-recap.js";
 import { buildEdition } from "./edition.js";
-import type { DeckRange, DeckSlide } from "./types.js";
+import {
+  type DeckKind,
+  type DeckRange,
+  type DeckSlide,
+  deckShapeProblem,
+  type EditionPage,
+  type EditionSetup,
+  SHIFT_RECAP_SLIDE,
+} from "./types.js";
 
 // Report decks (ADR-0018): decks, their editions, and links that open
 // editions without signing in.
@@ -17,6 +26,7 @@ const DECK_SELECT = {
   id: true,
   siteId: true,
   workcenterId: true,
+  kind: true,
   name: true,
   range: true,
   slides: true,
@@ -50,10 +60,20 @@ function presentEdition<T extends { dateFrom: Date | null; dateTo: Date | null }
 
 // ── Decks ──────────────────────────────────────────────────────────────────
 
-/** A site's decks, each with when its latest edition was made. */
-export async function listDecks(scope: { siteId: string; workcenterIds?: string[] }) {
+/** A site's decks of one kind (DECK unless asked), each with when its latest edition was made. */
+export async function listDecks(
+  scope: { siteId: string; workcenterIds?: string[] },
+  filter: { kind?: DeckKind; workcenterId?: string } = {},
+) {
+  const workcenterIds = filter.workcenterId
+    ? (scope.workcenterIds ?? [filter.workcenterId]).filter((id) => id === filter.workcenterId)
+    : scope.workcenterIds;
   const rows = await prisma.reportDeck.findMany({
-    where: { siteId: scope.siteId, ...(scope.workcenterIds ? { workcenterId: { in: scope.workcenterIds } } : {}) },
+    where: {
+      siteId: scope.siteId,
+      kind: filter.kind ?? "DECK",
+      ...(workcenterIds ? { workcenterId: { in: workcenterIds } } : {}),
+    },
     orderBy: { name: "asc" },
     select: {
       ...DECK_SELECT,
@@ -80,14 +100,20 @@ async function checkWorkcenter(siteId: string, workcenterId: string): Promise<Se
     : { error: "The workcenter isn't at this site.", code: "WORKCENTER_NOT_FOUND" };
 }
 
+const shapeError = (problem: string | null): ServiceError | null =>
+  problem ? { error: problem, code: "INVALID_DECK" } : null;
+
 export async function createDeck(input: {
   siteId: string;
+  kind?: DeckKind;
   name: string;
   range: DeckRange;
   workcenterId: string;
   slides: DeckSlide[];
   createdById: string | null;
 }) {
+  const bad = shapeError(deckShapeProblem(input.kind ?? "DECK", input.range, input.slides));
+  if (bad) return bad;
   const invalid = await checkWorkcenter(input.siteId, input.workcenterId);
   if (invalid) return invalid;
   const row = await prisma.reportDeck.create({
@@ -101,8 +127,20 @@ export async function updateDeck(
   id: string,
   patch: { name?: string; range?: DeckRange; workcenterId?: string; slides?: DeckSlide[] },
 ) {
-  const deck = await prisma.reportDeck.findUnique({ where: { id }, select: { siteId: true } });
+  const deck = await prisma.reportDeck.findUnique({
+    where: { id },
+    select: { siteId: true, kind: true, range: true, slides: true },
+  });
   if (!deck) return { error: "Deck not found", code: "DECK_NOT_FOUND" };
+  // A deck keeps its kind; what changes must still fit it.
+  const bad = shapeError(
+    deckShapeProblem(
+      deck.kind,
+      patch.range ?? (deck.range as DeckRange),
+      patch.slides ?? (deck.slides as unknown as DeckSlide[]),
+    ),
+  );
+  if (bad) return bad;
   if (patch.workcenterId) {
     const invalid = await checkWorkcenter(deck.siteId, patch.workcenterId);
     if (invalid) return invalid;
@@ -248,8 +286,8 @@ export async function revokeLink(id: string): Promise<boolean> {
   return count > 0;
 }
 
-/** What a link opens, for anyone holding its token: its editions as stored, nothing live. */
-export async function viewLink(token: string, now = new Date()) {
+/** A link by its token, if it still opens: not revoked, not expired. */
+async function openLink(token: string, now: Date) {
   const link = await prisma.reportDeckLink.findUnique({
     where: { tokenHash: hashToken(token) },
     select: {
@@ -260,9 +298,18 @@ export async function viewLink(token: string, now = new Date()) {
       editions: { orderBy: { position: "asc" }, select: { edition: { select: EDITION_FULL } } },
     },
   });
-  if (!link) return { error: "Link not found", code: "LINK_NOT_FOUND" };
-  if (link.revokedAt) return { error: "This link was turned off.", code: "LINK_REVOKED" };
-  if (link.expiresAt && link.expiresAt <= now) return { error: "This link has expired.", code: "LINK_EXPIRED" };
+  const fail = (error: string, code: string): ServiceError => ({ error, code });
+  if (!link) return fail("Link not found", "LINK_NOT_FOUND");
+  if (link.revokedAt) return fail("This link was turned off.", "LINK_REVOKED");
+  if (link.expiresAt && link.expiresAt <= now) return fail("This link has expired.", "LINK_EXPIRED");
+  return { data: link };
+}
+
+/** What a link opens, for anyone holding its token: its editions as stored, nothing live. */
+export async function viewLink(token: string, now = new Date()) {
+  const opened = await openLink(token, now);
+  if ("error" in opened) return opened;
+  const link = opened.data;
   const site = await prisma.site.findUnique({ where: { id: link.siteId }, select: { name: true, timezone: true } });
   return {
     data: {
@@ -272,4 +319,36 @@ export async function viewLink(token: string, now = new Date()) {
       editions: link.editions.map(({ edition }) => presentEdition(edition)),
     },
   };
+}
+
+/**
+ * The one shift a shift-recap page of an edition covers, and its workcenter —
+ * both from the edition as it was kept, never from the caller — or null.
+ */
+export function recapPageScope(
+  edition: { siteId?: string; setup: unknown; pages: unknown },
+  pageKey: string,
+): { workCenterId: string; shiftInstanceId: string } | null {
+  const setup = edition.setup as Partial<EditionSetup>;
+  const page = (edition.pages as EditionPage[]).find((entry) => entry.key === pageKey);
+  const slide = setup.slides?.find((entry) => entry.id === page?.slideId);
+  const shift = page?.shifts?.length === 1 ? page.shifts[0] : null;
+  if (!page || slide?.kind !== SHIFT_RECAP_SLIDE || !shift || !setup.workcenterId) return null;
+  return { workCenterId: setup.workcenterId, shiftInstanceId: shift.id };
+}
+
+/**
+ * A link's shift recap page, read live (ADR-0018 amendment): the only
+ * query a link runs, and only for the workcenter and shift its edition kept.
+ */
+export async function linkRecap(token: string, editionId: string, pageKey: string, now = new Date()) {
+  const opened = await openLink(token, now);
+  if ("error" in opened) return opened;
+  const edition = opened.data.editions.find(({ edition }) => edition.id === editionId)?.edition;
+  const scope = edition ? recapPageScope(edition, pageKey) : null;
+  if (!edition || !scope) {
+    const missing: ServiceError = { error: "This page isn't in the link.", code: "PAGE_NOT_FOUND" };
+    return missing;
+  }
+  return shiftRecap.recapForShift({ siteId: opened.data.siteId, ...scope });
 }

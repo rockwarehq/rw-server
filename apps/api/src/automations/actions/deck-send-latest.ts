@@ -2,7 +2,7 @@ import type { ActionHandler } from "@rw/automations";
 import * as deck from "@rw/services/deck/index";
 import * as notification from "@rw/services/notification/index";
 import { getAppBaseUrl } from "@rw/runtime/email";
-import { DECKS_INPUT, ids, siteDecks } from "./deck-make-editions.js";
+import { DECKS_INPUT, ids, makeScheduledEdition, plannedAt, siteDecks } from "./deck-make-editions.js";
 import { systemSource, unwrapService } from "./shared.js";
 
 const fill = (template: string, decks: string) => template.split("{{decks}}").join(decks);
@@ -18,7 +18,8 @@ export const handler: ActionHandler = {
         properties: {
           deckIds: {
             ...DECKS_INPUT,
-            description: "The latest edition of each, new or not; a deck with none is left out.",
+            description:
+              "The latest edition of each, new or not; a deck with none is left out. A shift recap is made fresh, as of the scheduled time.",
           },
           groupIds: {
             type: "array",
@@ -62,11 +63,17 @@ export const handler: ActionHandler = {
         const siteId = ctx.event.partition;
         if (!siteId) throw new Error(`automation "${ctx.automation.label}": no site to send from`);
 
+        const decks = await siteDecks(ids(inputs.deckIds), siteId);
+        // A shift recap sends its last shift as of the scheduled time, so it is
+        // made here rather than by a separate schedule; a deck sends its latest.
+        const asOf = plannedAt(ctx.event.payload);
+        for (const { id, kind } of decks) {
+          if (kind === "SHIFT_RECAP") await makeScheduledEdition(id, ctx.automation.id, asOf);
+        }
+
         const latest = (
           await Promise.all(
-            (
-              await siteDecks(ids(inputs.deckIds), siteId)
-            ).map(async (row) => ({
+            decks.map(async (row) => ({
               name: row.name,
               edition: await deck.latestEdition(row.id),
             })),

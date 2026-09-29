@@ -31,6 +31,12 @@ export interface MeasureSchema {
   rowLocal: boolean;
   /** How to render the number — seconds and percentages aren't plain counts. */
   format: ValueFormat;
+  /**
+   * The dimension whose value is this amount's unit ("ft", "lb"); absent for
+   * counts, durations and ratios. Group by it (or filter it to one value) to
+   * show the unit — and so that no total adds two units together.
+   */
+  unitDimension?: string;
 }
 
 /** A measure with no declared format is a plain tally; a ratio is a percentage. */
@@ -70,6 +76,8 @@ export interface FieldSchema {
   description?: string;
   /** How to render the value; defaults by type when the field doesn't say. */
   format: ValueFormat;
+  /** The dimension whose value is this row's unit; select it beside the field. */
+  unitDimension?: string;
 }
 
 export interface FactSchema {
@@ -110,6 +118,7 @@ export function reportSchema(): FactSchema[] {
       description: m.description,
       rowLocal: isRowLocal(fact, m),
       format: measureFormat(m),
+      ...(m.kind !== "count" && m.kind !== "ratio" && m.unitDimension ? { unitDimension: m.unitDimension } : {}),
     })),
     dimensions: Object.entries(fact.dimensions).map(([dKey, d]) => ({
       key: dKey,
@@ -125,6 +134,7 @@ export function reportSchema(): FactSchema[] {
       type: f.type,
       description: f.description,
       format: f.format ?? (f.type === "decimal" || f.type === "number" ? "quantity" : "text"),
+      ...(f.unitDimension ? { unitDimension: f.unitDimension } : {}),
     })),
   }));
 }

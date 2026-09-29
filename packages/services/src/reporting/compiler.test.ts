@@ -734,3 +734,138 @@ describe("date buckets follow the site calendar", () => {
     }
   });
 });
+
+describe("what a shift recap reads", () => {
+  const SHIFT = "44444444-4444-4444-8444-444444444444";
+  const oneShift = [{ dimension: "shift", op: "eq" as const, value: SHIFT }];
+
+  it("lists a shift's comments with their text and who wrote them", () => {
+    const { text, values } = rows({
+      fact: "shiftComments",
+      columns: ["station", "text", "writtenBy", "writtenByEmployee", "createdAt"],
+      filters: oneShift,
+    });
+    // The date comes from the shift: a comment carries none of its own.
+    expect(text).toContain(`JOIN "ShiftInstance" si ON si."id" = n."shiftInstanceId"`);
+    expect(text).toContain(`n."deletedAt" IS NULL`);
+    expect(text).toContain(`f."text" AS "text"`);
+    expect(text).toContain(`LEFT JOIN "User"`);
+    expect(text).toContain(`AS "writtenByName"`);
+    // A user is named by name only: an email would leave through a deck link.
+    expect(text).not.toContain(`"email"`);
+    expect(text).toContain(`AS "writtenByEmployeeName"`);
+    expect(values).toContain(SHIFT);
+  });
+
+  it("tells a shift note from a station comment by the missing station", () => {
+    const { text } = rows({
+      fact: "shiftComments",
+      columns: ["text"],
+      filters: [{ dimension: "station", op: "isNull" }],
+    });
+    expect(text).toContain(`f."stationId" IS NULL`);
+  });
+
+  it("keeps comment text out of totals, which count comments", () => {
+    const { text } = agg({ fact: "shiftComments", measures: ["comments"], dimensions: ["station"] });
+    expect(text).toContain("COUNT(*)");
+    expect(text).not.toContain(`AS "text"`);
+  });
+
+  it("finds a shift's sign-off, and who and when", () => {
+    const { text } = rows({
+      fact: "shiftSignoffs",
+      columns: ["workcenter", "signedOffBy", "postedAt"],
+      filters: oneShift,
+    });
+    expect(text).toContain(`FROM "ShiftSignoff" n`);
+    // A reopened shift soft-deletes its sign-off.
+    expect(text).toContain(`n."deletedAt" IS NULL`);
+    expect(text).toContain(`AS "signedOffByName"`);
+    expect(text).not.toContain(`"email"`);
+  });
+
+  it("narrows comments and sign-offs to granted workcenters", () => {
+    for (const fact of ["shiftComments", "shiftSignoffs"]) {
+      const { text, values } = rows({ fact, columns: ["id"] }, restricted);
+      expect(text).toContain(`f."workcenterId" = ANY(?`);
+      expect(values).toContainEqual([WORKCENTER]);
+    }
+  });
+
+  it("marks job runs written by a job history amendment", () => {
+    const { text } = rows({ fact: "jobRuns", columns: ["job", "startTime", "endTime", "amendment"] });
+    expect(text).toContain(`f."amendmentId" AS "amendment"`);
+    expect(agg({ fact: "jobRuns", measures: ["amendedPeriods"], dimensions: [] }).text).toContain(
+      `f."amendmentId" IS NOT NULL`,
+    );
+  });
+
+  it("gives downtime its reason's color and class beside the period's own flag", () => {
+    const { text } = rows({
+      fact: "statePeriods",
+      columns: ["statusReason", "statusReasonColor", "statusReasonPlanned", "isPlannedDown"],
+      filters: [{ dimension: "state", op: "eq", value: "DOWN" }],
+    });
+    expect(text).toContain(`s."attrs"->'statusReasonColors'->'colors'->>(f."statusReasonId"::text)`);
+    expect(text).toContain(`(SELECT r."isPlannedDown" FROM "StatusReason" r WHERE r."id" = f."statusReasonId")::text`);
+  });
+
+  it("finds uncoded downtime — the recap's open items", () => {
+    const { text } = rows({
+      fact: "statePeriods",
+      columns: ["station", "startTime"],
+      filters: [
+        { dimension: "state", op: "eq", value: "DOWN" },
+        { dimension: "statusReason", op: "isNull" },
+      ],
+    });
+    expect(text).toContain(`f."statusReasonId" IS NULL`);
+  });
+});
+
+describe("units", () => {
+  it("names only a dimension its own fact has", () => {
+    for (const [key, fact] of Object.entries(FACTS)) {
+      const named = [
+        ...Object.values(fact.measures).flatMap((m) =>
+          "unitDimension" in m && m.unitDimension ? [m.unitDimension] : [],
+        ),
+        ...Object.values(fact.fields ?? {}).flatMap((f) => (f.unitDimension ? [f.unitDimension] : [])),
+      ];
+      for (const dimension of named) expect(fact.dimensions[dimension], `${key} → ${dimension}`).toBeDefined();
+    }
+  });
+
+  it("says which amounts are in a station's unit, and leaves counts, time and ratios alone", () => {
+    const measures = (fact: string) =>
+      Object.fromEntries(
+        reportSchema()
+          .find((f) => f.key === fact)!
+          .measures.map((m) => [m.key, m.unitDimension]),
+      );
+    expect(measures("stationKpis")).toMatchObject({ goodItems: "unit", expectedItems: "unit" });
+    expect(measures("stationKpis").totalCycles).toBeUndefined();
+    expect(measures("stationKpis").runSeconds).toBeUndefined();
+    expect(measures("stationKpis").quality).toBeUndefined();
+    expect(measures("jobKpis").goodItems).toBe("unit");
+    // A workcenter's buckets mix its stations' units.
+    expect(measures("workcenterKpis").goodItems).toBeUndefined();
+    expect(measures("production")).toMatchObject({ produced: "unit", scrapped: "unit", netQuantity: "unit" });
+    expect(measures("production").scrapRate).toBeUndefined();
+    expect(measures("dispositions").quantity).toBe("unit");
+    expect(measures("materialUsage").quantity).toBe("unit");
+    const itemFields = reportSchema().find((f) => f.key === "items")!.fields;
+    expect(itemFields.find((f) => f.key === "quantity")?.unitDimension).toBe("unit");
+  });
+
+  it("reads the unit from the station's current version, empty meaning plain items", () => {
+    const station = agg({ fact: "stationKpis", measures: ["goodItems"], dimensions: ["station", "unit"] }).text;
+    expect(station).toContain(
+      `(SELECT NULLIF(sv."quantityUnit", '') FROM "Station" s JOIN "StationVersion" sv ON sv."id" = s."currentVersionId" WHERE s."id" = f."entityId")`,
+    );
+    const job = agg({ fact: "jobKpis", measures: ["goodItems"], dimensions: ["unit"] }).text;
+    expect(job).toContain(`WHERE s."id" = substring(f."path" from 'station\\.([0-9a-f-]{36})')::uuid)`);
+    expect(rows({ fact: "items", columns: ["quantity", "unit"] }).text).toContain(`WHERE s."id" = f."stationId")`);
+  });
+});

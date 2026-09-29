@@ -2,7 +2,8 @@
  * Report decks (ADR-0018). A deck is workcenter data: VIEW on its workcenter
  * to see it and its editions, MANAGE to change it, make editions and create
  * or revoke links. `viewLink` is public: it returns a stored snapshot for
- * anyone holding the token and never runs a query.
+ * anyone holding the token and never runs a query. `linkRecap` is the one
+ * public read that does: a shift recap page's shift, live, and nothing else.
  */
 
 import * as deck from "@rw/services/deck/index";
@@ -30,9 +31,21 @@ const unwrap = <T>(result: { data: T } | { error: string; code: string }): T =>
 
 // ── Decks ──────────────────────────────────────────────────────────────────
 
-export const list = userRequired.input(z.object({ siteId: z.uuid() })).handler(async ({ input, context }) => {
-  return deck.listDecks(context.access.list("VIEW", input.siteId, "WORKCENTER"));
-});
+export const list = userRequired
+  .input(
+    z.object({
+      siteId: z.uuid(),
+      /** DECK unless asked: a SHIFT_RECAP is listed from its recap page. */
+      kind: z.enum(deck.DECK_KINDS).optional(),
+      workcenterId: z.uuid().optional(),
+    }),
+  )
+  .handler(async ({ input, context }) => {
+    return deck.listDecks(context.access.list("VIEW", input.siteId, "WORKCENTER"), {
+      kind: input.kind,
+      workcenterId: input.workcenterId,
+    });
+  });
 
 export const get = userRequired.input(idInput).handler(async ({ input, context }) => {
   await context.access.require("VIEW", { reportDeck: input.id });
@@ -40,7 +53,7 @@ export const get = userRequired.input(idInput).handler(async ({ input, context }
 });
 
 export const create = userRequired
-  .input(z.object({ siteId: z.uuid(), ...deckFields }))
+  .input(z.object({ siteId: z.uuid(), kind: z.enum(deck.DECK_KINDS).optional(), ...deckFields }))
   .handler(async ({ input, context }) => {
     await context.access.require("MANAGE", { workcenter: input.workcenterId });
     return unwrap(await deck.createDeck({ ...input, createdById: context.current.user.id }));
@@ -76,10 +89,17 @@ export const preview = userRequired.input(idInput).handler(async ({ input, conte
 
 /** The days a deck would cover now, and their shifts: what the builder shows its pages for. */
 export const span = userRequired
-  .input(z.object({ range: deckFields.range, workcenterId: z.uuid() }))
+  .input(
+    z.object({
+      range: deckFields.range,
+      workcenterId: z.uuid(),
+      /** The shift names "last-shift" picks among. */
+      shiftNames: z.array(z.string().min(1).max(64)).max(10).optional(),
+    }),
+  )
   .handler(async ({ input, context }) => {
     await context.access.require("VIEW", { workcenter: input.workcenterId });
-    return deck.deckSpan(input.range, input.workcenterId, new Date());
+    return deck.deckSpan(input.range, input.workcenterId, new Date(), input.shiftNames);
   });
 
 // ── Editions ───────────────────────────────────────────────────────────────
@@ -156,3 +176,11 @@ export const revokeLink = userRequired.input(idInput).handler(async ({ input, co
 export const viewLink = publicProcedure
   .input(z.object({ token: z.string().min(16).max(128) }))
   .handler(async ({ input }) => unwrap(await deck.viewLink(input.token)));
+
+/**
+ * Public: a link's shift recap page, read live — only the workcenter and
+ * shift its edition kept. The token is the only credential.
+ */
+export const linkRecap = publicProcedure
+  .input(z.object({ token: z.string().min(16).max(128), editionId: z.uuid(), pageKey: z.string().min(1).max(200) }))
+  .handler(async ({ input }) => unwrap(await deck.linkRecap(input.token, input.editionId, input.pageKey)));

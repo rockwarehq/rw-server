@@ -38,6 +38,12 @@ export type MeasureDef =
       expr: string;
       description?: string;
       format?: ValueFormat;
+      /**
+       * The dimension holding the unit this amount is counted in ("ft", "lb").
+       * Rows only have one unit when that dimension is grouped by or filtered
+       * to one value; summing across it adds feet to pounds.
+       */
+      unitDimension?: string;
     }
   | {
       kind: "ratio";
@@ -82,6 +88,8 @@ export interface FieldDef {
   type: "timestamp" | "decimal" | "number" | "string" | "id" | "boolean";
   description?: string;
   format?: ValueFormat;
+  /** The dimension holding the unit this row's amount is counted in. */
+  unitDimension?: string;
 }
 
 export interface DimensionDef {

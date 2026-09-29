@@ -1,5 +1,9 @@
+import { randomUUID } from "node:crypto";
+import type { ActionContext } from "@rw/automations";
 import prisma from "@rw/db";
+import * as notification from "@rw/services/notification/index";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { handler as sendLatest } from "../src/automations/actions/deck-send-latest.js";
 import { ensureWorkcenterBucket, makeUser } from "./helpers/access.js";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
 import { rpcCall } from "./helpers/rpc-call.js";
@@ -143,5 +147,132 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("report decks (Tier 2)", () => {
     expect((await rpcCall(server, "deck/revokeLink", { id }, outsiderToken)).statusCode).toBe(403);
     expect((await rpcCall(server, "deck/revokeLink", { id }, managerToken)).statusCode).toBe(200);
     expect((await rpcCall(server, "deck/viewLink", { token })).statusCode).not.toBe(200);
+  });
+
+  it("keeps shift recaps out of the Decks list, and lists them by kind", async () => {
+    const recap = await rpcCall(
+      server,
+      "deck/create",
+      {
+        siteId,
+        kind: "SHIFT_RECAP",
+        name: "decks-wc 1st shift recap",
+        range: "last-shift",
+        workcenterId,
+        slides: [{ id: "r1", kind: "shift-recap", title: "Shift recap", shiftNames: ["1st"] }],
+      },
+      managerToken,
+    );
+    expect(recap.statusCode).toBe(200);
+    const recapId = (recap.json as { id: string }).id;
+
+    const decks = (await rpcCall(server, "deck/list", { siteId }, managerToken)).json as { id: string }[];
+    expect(decks.map((deck) => deck.id)).not.toContain(recapId);
+    const recaps = (await rpcCall(server, "deck/list", { siteId, kind: "SHIFT_RECAP", workcenterId }, managerToken))
+      .json as { id: string }[];
+    expect(recaps.map((deck) => deck.id)).toEqual([recapId]);
+
+    // A recap is one recap page over the last shift; a deck never is.
+    const toDays = await rpcCall(server, "deck/update", { id: recapId, range: "yesterday" }, managerToken);
+    expect(toDays.statusCode).toBe(400);
+    const deckOverShift = await rpcCall(
+      server,
+      "deck/create",
+      { siteId, name: "Nope", range: "last-shift", workcenterId, slides: [] },
+      managerToken,
+    );
+    expect(deckOverShift.statusCode).toBe(400);
+  });
+
+  it("opens a recap edition's shift live from its link, and nothing else", async () => {
+    const [recap] = (await rpcCall(server, "deck/list", { siteId, kind: "SHIFT_RECAP" }, managerToken)).json as {
+      id: string;
+    }[];
+    const made = await rpcCall(server, "deck/makeEdition", { deckId: recap!.id }, managerToken);
+    const editionId = (made.json as { id: string }).id;
+    const edition = (await rpcCall(server, "deck/getEdition", { id: editionId }, managerToken)).json as {
+      pages: { key: string; shifts: { shiftName: string; businessDate: string }[] }[];
+    };
+    expect(edition.pages).toHaveLength(1);
+    expect(edition.pages[0]?.shifts).toMatchObject([{ shiftName: "1st", businessDate: yesterday }]);
+
+    const link = await rpcCall(
+      server,
+      "deck/createLink",
+      { editionIds: [editionId], label: "Recap test", expiresInHours: 24 },
+      managerToken,
+    );
+    const { id, token } = link.json as { id: string; token: string };
+    const pageKey = edition.pages[0]!.key;
+
+    const read = await rpcCall(server, "deck/linkRecap", { token, editionId, pageKey });
+    expect(read.statusCode).toBe(200);
+    expect(read.json).toMatchObject({ shift: { shiftName: "1st" }, workcenter: { id: workcenterId } });
+    // Each station comes with the unit its items are counted in.
+    for (const station of (read.json as { stations: Record<string, unknown>[] }).stations) {
+      expect(station).toHaveProperty("quantityUnit");
+      expect(station).not.toHaveProperty("siteId");
+    }
+
+    // Only a page of an edition the link names.
+    expect((await rpcCall(server, "deck/linkRecap", { token, editionId, pageKey: "other" })).statusCode).toBe(404);
+    const [deckEdition] = (await rpcCall(server, "deck/listEditions", { deckId }, managerToken)).json as {
+      id: string;
+    }[];
+    expect(
+      (await rpcCall(server, "deck/linkRecap", { token, editionId: deckEdition!.id, pageKey })).statusCode,
+    ).toBe(404);
+
+    await rpcCall(server, "deck/revokeLink", { id }, managerToken);
+    expect((await rpcCall(server, "deck/linkRecap", { token, editionId, pageKey })).statusCode).not.toBe(200);
+  });
+
+  it("sends a recap subscription's last shift, made fresh as of the scheduled time", async () => {
+    const [recap] = (await rpcCall(server, "deck/list", { siteId, kind: "SHIFT_RECAP" }, managerToken)).json as {
+      id: string;
+    }[];
+    const site = await prisma.site.findUniqueOrThrow({ where: { id: siteId }, select: { workspaceId: true } });
+    const person = await prisma.employee.create({ data: { workspaceId: site.workspaceId }, select: { id: true } });
+    const version = await prisma.employeeVersion.create({
+      data: { employeeId: person.id, version: 1, firstName: "Recap", lastName: "Reader", email: "decks-recap@test.local" },
+      select: { id: true },
+    });
+    await prisma.employee.update({ where: { id: person.id }, data: { versionId: version.id } });
+
+    const sent: string[] = [];
+    const email = notification.notifier.adapter("EMAIL");
+    notification.setChannelAdapter("EMAIL", {
+      async send(_to, message) {
+        sent.push(message.body);
+        return { ok: true, providerMessageId: "m" };
+      },
+    });
+    const automationId = randomUUID();
+    const scheduledAt = new Date().toISOString();
+    const ctx = {
+      automation: { id: automationId, label: "Recap subscription" },
+      event: { id: randomUUID(), type: "time.daily", version: "1", ts: scheduledAt, payload: { scheduledAt }, partition: siteId },
+      eventId: randomUUID(),
+      actionIdx: 0,
+    } as unknown as ActionContext;
+    const inputs = { deckIds: [recap!.id], employeeIds: [person.id], subject: "Recap", body: "Last shift:" };
+    try {
+      await sendLatest.versions["1"]!.run(inputs, ctx);
+      // A redelivered tick finds the edition it already made.
+      await sendLatest.versions["1"]!.run(inputs, ctx);
+    } finally {
+      if (email) notification.setChannelAdapter("EMAIL", email);
+    }
+
+    const made = await prisma.reportDeckEdition.findMany({
+      where: { deckId: recap!.id, automationId },
+      select: { source: true, asOf: true },
+    });
+    expect(made).toEqual([{ source: "SCHEDULE", asOf: new Date(scheduledAt) }]);
+    expect(sent[0]).toMatch(/^Last shift:\n.+: .+\/decks\/[A-Za-z0-9_-]{32}$/);
+
+    await prisma.employee.update({ where: { id: person.id }, data: { versionId: null } });
+    await prisma.employeeVersion.deleteMany({ where: { employeeId: person.id } });
+    await prisma.employee.delete({ where: { id: person.id } });
   });
 });
