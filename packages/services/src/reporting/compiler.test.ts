@@ -751,6 +751,8 @@ describe("what a shift recap reads", () => {
     expect(text).toContain(`f."text" AS "text"`);
     expect(text).toContain(`LEFT JOIN "User"`);
     expect(text).toContain(`AS "writtenByName"`);
+    // A user is named by name only: an email would leave through a deck link.
+    expect(text).not.toContain(`"email"`);
     expect(text).toContain(`AS "writtenByEmployeeName"`);
     expect(values).toContain(SHIFT);
   });
@@ -780,6 +782,7 @@ describe("what a shift recap reads", () => {
     // A reopened shift soft-deletes its sign-off.
     expect(text).toContain(`n."deletedAt" IS NULL`);
     expect(text).toContain(`AS "signedOffByName"`);
+    expect(text).not.toContain(`"email"`);
   });
 
   it("narrows comments and sign-offs to granted workcenters", () => {

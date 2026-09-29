@@ -216,13 +216,17 @@ export const employeeDim = (column = "employeeId", label = "Employee") =>
     `TRIM(CONCAT({b}."firstName", ' ', {b}."lastName"))`,
   );
 
-/** A signed-in user (not an employee): whoever wrote or signed off in the app. */
+/**
+ * A signed-in user (not an employee): whoever wrote or signed off in the app.
+ * Named by name only, null when they have none — never their email, since
+ * report results are kept in deck editions that links show to anyone.
+ */
 export const userDim = (column: string, label: string) =>
   idDim(
     label,
     column,
     `LEFT JOIN "User" {a} ON {a}."id" = f."${column}"`,
-    `COALESCE(NULLIF(TRIM(CONCAT({a}."firstName", ' ', {a}."lastName")), ''), {a}."email")`,
+    `NULLIF(TRIM(CONCAT({a}."firstName", ' ', {a}."lastName")), '')`,
   );
 
 export const orderDim = (column = "orderId") =>
