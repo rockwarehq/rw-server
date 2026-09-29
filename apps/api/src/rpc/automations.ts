@@ -4,7 +4,7 @@ import * as z from "zod";
 import { listAutomationRuns } from "@rw/services/automation/runs";
 import { getAutomationFramework } from "../automations/index.js";
 import { schema as timeDaily } from "../automations/events/time-daily.js";
-import { rearmClock } from "../nats/automation-clock.js";
+import { rearmClock } from "../automations/clock.js";
 import { userRequired } from "./middleware.js";
 
 // Automations belong to a site (the engine's `partition`). Handlers resolve the single shared

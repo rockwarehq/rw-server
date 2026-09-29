@@ -44,7 +44,7 @@ import {
   startUiChangePublisher,
 } from "./nats/domain-event-publishers.js";
 import { getAutomationFramework } from "./automations/index.js";
-import { startAutomationClock } from "./nats/automation-clock.js";
+import { startAutomationClock } from "./automations/clock.js";
 import { startAutomationEventConsumer } from "./nats/automation-event-consumer.js";
 import { startCommandBus } from "./nats/command-bus.js";
 import { closeNatsConnection } from "./nats/util.js";
