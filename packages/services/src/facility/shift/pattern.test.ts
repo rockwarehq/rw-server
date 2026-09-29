@@ -19,7 +19,7 @@ describe.skipIf(!process.env.DATABASE_URL)("schedule week start follows the site
 
   async function created(input: { totalDaysInRotation?: number; startOnDayOfWeek?: string }) {
     const result = await create({ name: "P", siteId, ...input });
-    if (!("data" in result)) throw new Error(result.error);
+    if (result.error !== undefined) throw new Error(result.error);
     return result.data;
   }
 
@@ -39,10 +39,10 @@ describe.skipIf(!process.env.DATABASE_URL)("schedule week start follows the site
   test("becoming weekly takes the site's week start; an existing choice stays", async () => {
     const pattern = await created({ totalDaysInRotation: 8 });
     const weekly = await update(pattern.id, { totalDaysInRotation: 7 });
-    expect("data" in weekly && weekly.data.startOnDayOfWeek).toBe("SUNDAY");
+    expect(weekly.data?.startOnDayOfWeek).toBe("SUNDAY");
 
     const starter = await created({ totalDaysInRotation: 7, startOnDayOfWeek: "MONDAY" });
     const longer = await update(starter.id, { totalDaysInRotation: 14 });
-    expect("data" in longer && longer.data.startOnDayOfWeek).toBe("MONDAY");
+    expect(longer.data?.startOnDayOfWeek).toBe("MONDAY");
   });
 });
