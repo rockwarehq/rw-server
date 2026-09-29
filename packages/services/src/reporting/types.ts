@@ -238,16 +238,16 @@ export interface ReportQuery {
   dateTo?: string;
   /**
    * Bucket size for the fact's date dimension when it is selected. day (the
-   * default), week, month, and year truncate businessDate; hour truncates the
-   * fact's event timestamp (UTC-pinned) and requires the fact to declare a
-   * timeColumn.
+   * default), month and year truncate businessDate; week steps businessDate
+   * back to the site's weekStart; hour buckets the fact's event timestamp
+   * (requires a timeColumn) by site-local hour WITHIN its businessDate.
    *
-   * Client contract: day/week/month/year buckets are business-calendar
-   * 'YYYY-MM-DD' strings — render verbatim, never parse as instants. Hour
-   * buckets are UTC ISO timestamps — convert to the site zone for display.
-   * The two grains deliberately disagree at midnight: a night shift's rows
-   * share one businessDate while their hours span two calendar dates, so 24
-   * hourly buckets need not sum to a businessDate day total.
+   * Client contract: every bucket is a site-calendar string to render
+   * verbatim, never parse as an instant — 'YYYY-MM-DD' for day/week/month/
+   * year (week named by its first date), 'YYYY-MM-DDTHH:00' site-local wall
+   * clock for hour. Hour rows also carry `<key>BusinessDate`: a night shift's
+   * pre-midnight hours sit under the next business date, so a business date's
+   * hourly buckets always sum to its day total.
    */
   dateGranularity?: "hour" | "day" | "week" | "month" | "year";
   /** A selected dimension key or measure key. */

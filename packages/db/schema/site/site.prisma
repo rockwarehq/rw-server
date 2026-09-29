@@ -1,9 +1,13 @@
 model Site {
-  id          String  @id @default(uuid()) @db.Uuid
+  id          String    @id @default(uuid()) @db.Uuid
   name        String
   description String?
-  timezone    String  @default("UTC")
-  attrs       Json    @default("{}")
+  timezone    String    @default("UTC")
+  /// First day of the site's week. Only decides which week a business date
+  /// falls in (weekly reports, week views, new weekly schedules) — never how a
+  /// row's business date is chosen.
+  weekStart   WeekStart @default(MONDAY)
+  attrs       Json      @default("{}")
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -79,4 +83,9 @@ model Site {
 
   @@unique([workspaceId, name])
   @@index([workspaceId])
+}
+
+enum WeekStart {
+  SUNDAY
+  MONDAY
 }

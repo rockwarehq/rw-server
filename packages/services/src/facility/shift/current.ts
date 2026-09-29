@@ -4,7 +4,8 @@
 // Resolution priority (mirrors metrics/shift.ts):
 //   1. Workcenter-level ShiftInstance (if workCenterId provided)
 //   2. Site-level ShiftInstance (workCenterId IS NULL)
-//   3. No active shift — business date derived from site timezone
+//   3. Business date only: the latest one any workcenter's shift is on now
+//   4. No active shift — business date derived from site timezone
 
 import prisma from "@rw/db";
 import { getLocalCalendarDate } from "@rw/services/metrics/bucket";
@@ -24,7 +25,8 @@ export interface CurrentShiftResult {
  * Get the current business date and active shift for a site.
  *
  * When a workCenterId is provided, workcenter-level shift assignments
- * are checked first before falling back to site-level assignments.
+ * are checked first before falling back to site-level assignments. Without
+ * one, the site's business date is the one its workcenters are on now.
  *
  * When no shift covers the current time, the business date is derived
  * from the site's IANA timezone (local calendar date).
@@ -99,6 +101,19 @@ export async function getCurrentShift(
         timezone,
       },
     };
+  }
+
+  // 3. Sites are scheduled per workcenter, so the site's business date is the
+  // one its workcenters are working on. Worked shifts outrank "Not Scheduled"
+  // gaps; when lines disagree (a night shift already on tomorrow's date while
+  // a day line has not started it), the latest date is the one underway.
+  const running = await prisma.shiftInstance.findFirst({
+    where: { siteId, startTime: { lte: now }, endTime: { gt: now } },
+    orderBy: [{ isScheduled: "desc" }, { businessDate: "desc" }],
+    select: { businessDate: true },
+  });
+  if (running) {
+    return { success: true, data: { businessDate: formatDate(running.businessDate), shift: null, timezone } };
   }
 
   // 4. No active shift — derive business date from local calendar date

@@ -705,3 +705,32 @@ describe("who raised it", () => {
     expect(FACTS.modePeriods!.dimensions.endedBy!.label).toBe("Ended by");
   });
 });
+
+describe("date buckets follow the site calendar", () => {
+  const bucketed = (dateGranularity: ReportQuery["dateGranularity"]) =>
+    agg({ fact: "cycles", measures: ["cycles"], dimensions: ["businessDate"], dateGranularity });
+
+  it("starts a week on the site's week start, named by its first date", () => {
+    const { text } = bucketed("week");
+    expect(text).toContain(`JOIN "Site" site ON site."id" = f."siteId"`);
+    expect(text).toContain(`CASE site."weekStart" WHEN 'SUNDAY' THEN 7 ELSE 1 END`);
+    expect(text).not.toContain("date_trunc('week'");
+  });
+
+  it("groups hours inside their business date, labelled by site-local wall clock", () => {
+    const { text } = bucketed("hour");
+    expect(text).toContain(
+      `to_char(date_trunc('hour', f."end" AT TIME ZONE site."timezone"), 'YYYY-MM-DD"T"HH24:00') AS "businessDate"`,
+    );
+    expect(text).toContain(`to_char(f."businessDate", 'YYYY-MM-DD') AS "businessDateBusinessDate"`);
+    // Both keys group, so a business date's hours always sum to its day.
+    expect(text).toMatch(/GROUP BY .*to_char\(f\."businessDate", 'YYYY-MM-DD'\).*date_trunc\('hour'/);
+    expect(text).toContain(`ORDER BY MIN(f."end") ASC`);
+  });
+
+  it("leaves day, month and year as plain calendar math with no site join", () => {
+    for (const grain of ["day", "month", "year"] as const) {
+      expect(bucketed(grain).text).not.toContain(`JOIN "Site"`);
+    }
+  });
+});
