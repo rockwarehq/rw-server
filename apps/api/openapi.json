@@ -833,7 +833,7 @@
                           "type": "string",
                           "nullable": true
                         },
-                        "frontChatHash": {
+                        "supportSignature": {
                           "type": "string",
                           "nullable": true
                         }

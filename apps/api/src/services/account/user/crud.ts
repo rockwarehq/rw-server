@@ -4,7 +4,7 @@ import type { UserCurrent } from "@rw/auth/context";
 import { describeAccess, staffLabel, visibleSites } from "@rw/auth/iam/access";
 import { logEvent } from "@rw/services/audit/index";
 import { resolveAvatarUrl } from "./avatar.js";
-import { frontChatUserHash } from "./front-chat.js";
+import { supportIdentitySignature } from "./support-identity.js";
 
 export interface CreateUserInput {
   email: string;
@@ -124,7 +124,7 @@ export async function getMe(me: UserCurrent) {
     firstName: user.firstName,
     lastName: user.lastName,
     avatarUrl: await resolveAvatarUrl(user.avatarKey),
-    frontChatHash: frontChatUserHash(user.email),
+    supportSignature: supportIdentitySignature(user.email),
   };
 
   const workspace = await prisma.workspace.findUnique({

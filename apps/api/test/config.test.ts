@@ -36,12 +36,12 @@ describe("config validation", () => {
     expect(config.env.isDevelopment).toBe(false);
   });
 
-  it("Front Chat verification is optional and gates frontChatConfig", async () => {
+  it("the support identity secret is optional and gates supportConfig", async () => {
     for (const [key, value] of Object.entries(PROD_BASELINE)) vi.stubEnv(key, value);
-    expect((await loadConfig()).frontChatConfig.enabled).toBe(false);
-    vi.stubEnv("FRONT_CHAT_VERIFICATION_SECRET", "front-secret");
+    expect((await loadConfig()).supportConfig.enabled).toBe(false);
+    vi.stubEnv("SUPPORT_IDENTITY_SECRET", "beacon-secret");
     const config = await loadConfig();
-    expect(config.frontChatConfig).toEqual({ verificationSecret: "front-secret", enabled: true });
+    expect(config.supportConfig).toEqual({ identitySecret: "beacon-secret", enabled: true });
   });
 
   it("reflects any origin by default, even in production", async () => {
