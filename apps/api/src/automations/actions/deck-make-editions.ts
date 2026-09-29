@@ -22,7 +22,7 @@ export const plannedAt = (payload: Record<string, unknown>) => {
 export async function siteDecks(deckIds: string[], siteId: string) {
   const rows = await prisma.reportDeck.findMany({
     where: { id: { in: deckIds }, siteId },
-    select: { id: true, name: true, kind: true },
+    select: { id: true, name: true },
   });
   return deckIds.flatMap((id) => rows.filter((row) => row.id === id));
 }
