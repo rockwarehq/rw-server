@@ -3,6 +3,7 @@ import type { ActionContext } from "@rw/automations";
 import prisma from "@rw/db";
 import * as notification from "@rw/services/notification/index";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { handler as makeEditions } from "../src/automations/actions/deck-make-editions.js";
 import { handler as sendLatest } from "../src/automations/actions/deck-send-latest.js";
 import { ensureWorkcenterBucket, makeUser } from "./helpers/access.js";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
@@ -227,7 +228,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("report decks (Tier 2)", () => {
     expect((await rpcCall(server, "deck/linkRecap", { token, editionId, pageKey })).statusCode).not.toBe(200);
   });
 
-  it("sends a recap subscription's last shift, made fresh as of the scheduled time", async () => {
+  it("makes a recap's edition on its schedule, and a subscription sends the latest, like a deck", async () => {
     const [recap] = (await rpcCall(server, "deck/list", { siteId, kind: "SHIFT_RECAP" }, managerToken)).json as {
       id: string;
     }[];
@@ -247,28 +248,63 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("report decks (Tier 2)", () => {
         return { ok: true, providerMessageId: "m" };
       },
     });
-    const automationId = randomUUID();
-    const scheduledAt = new Date().toISOString();
-    const ctx = {
-      automation: { id: automationId, label: "Recap subscription" },
-      event: { id: randomUUID(), type: "time.daily", version: "1", ts: scheduledAt, payload: { scheduledAt }, partition: siteId },
-      eventId: randomUUID(),
-      actionIdx: 0,
-    } as unknown as ActionContext;
+    const tick = (label: string) => {
+      const scheduledAt = new Date().toISOString();
+      return {
+        scheduledAt,
+        ctx: {
+          automation: { id: randomUUID(), label },
+          event: {
+            id: randomUUID(),
+            type: "time.daily",
+            version: "1",
+            ts: scheduledAt,
+            payload: { scheduledAt },
+            partition: siteId,
+          },
+          eventId: randomUUID(),
+          actionIdx: 0,
+        } as unknown as ActionContext,
+      };
+    };
+    const schedule = tick("Recap schedule");
+    const subscription = tick("Recap subscription");
     const inputs = { deckIds: [recap!.id], employeeIds: [person.id], subject: "Recap", body: "Last shift:" };
     try {
-      await sendLatest.versions["1"]!.run(inputs, ctx);
+      // A subscription alone makes nothing: it sends the latest edition.
+      await sendLatest.versions["1"]!.run(inputs, subscription.ctx);
+      expect(
+        await prisma.reportDeckEdition.count({
+          where: { deckId: recap!.id, automationId: subscription.ctx.automation.id },
+        }),
+      ).toBe(0);
+
+      await makeEditions.versions["1"]!.run({ deckIds: [recap!.id] }, schedule.ctx);
       // A redelivered tick finds the edition it already made.
-      await sendLatest.versions["1"]!.run(inputs, ctx);
+      await makeEditions.versions["1"]!.run({ deckIds: [recap!.id] }, schedule.ctx);
+      sent.length = 0;
+      // The next day's tick of the same subscription: a new event, so not a redelivery.
+      const nextTick = {
+        ...subscription.ctx,
+        event: { ...subscription.ctx.event, id: randomUUID() },
+      } as ActionContext;
+      await sendLatest.versions["1"]!.run(inputs, nextTick);
     } finally {
       if (email) notification.setChannelAdapter("EMAIL", email);
     }
 
     const made = await prisma.reportDeckEdition.findMany({
-      where: { deckId: recap!.id, automationId },
-      select: { source: true, asOf: true },
+      where: { deckId: recap!.id, automationId: schedule.ctx.automation.id },
+      select: { id: true, source: true, asOf: true },
     });
-    expect(made).toEqual([{ source: "SCHEDULE", asOf: new Date(scheduledAt) }]);
+    expect(made).toMatchObject([{ source: "SCHEDULE", asOf: new Date(schedule.scheduledAt) }]);
+    const latest = await prisma.reportDeckEdition.findFirstOrThrow({
+      where: { deckId: recap!.id },
+      orderBy: { asOf: "desc" },
+      select: { id: true },
+    });
+    expect(latest.id).toBe(made[0]!.id);
+    expect(sent).toHaveLength(1);
     expect(sent[0]).toMatch(/^Last shift:\n.+: .+\/decks\/[A-Za-z0-9_-]{32}$/);
 
     await prisma.employee.update({ where: { id: person.id }, data: { versionId: null } });

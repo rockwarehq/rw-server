@@ -102,10 +102,11 @@ moment. It has editions, links, expiry and revoke like any deck. It is listed
 only when asked for (`deck.list { kind: "SHIFT_RECAP" }`), from the recap page,
 never in the Decks list; a deck never uses `"last-shift"`.
 
-Its subscription is `deck.sendLatest`: for a `SHIFT_RECAP` the action makes
-the edition as of the event's `scheduledAt` first, then sends it, so one
-automation does both and the recap is always the last shift. When the shift
-ends is not consulted: a send set before that shift ends sends the one before.
+Its schedules and subscriptions are a deck's: `deck.makeEditions` makes an
+edition of the last shift as of the schedule's time, and `deck.sendLatest`
+emails a link to the latest edition, so a subscription is set a little after
+the schedule it follows. When the shift ends is not consulted: a schedule set
+before that shift ends makes the one before.
 
 A recap page stores no results. Its link reads the recap **live** through
 `deck.linkRecap { token, editionId, pageKey }`, the one public read that runs
