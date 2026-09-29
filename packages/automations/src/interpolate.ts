@@ -5,8 +5,13 @@ import type { AppEvent } from "./types.js";
  *   - `event.payload.x`, `event.type`, `event.id`, `event.ts` -> the raised event
  *   - `sys.timestamp` -> now (ISO)
  * Add a new source by adding a case in `resolveToken`.
+ *
+ * A recognized source that resolves to nothing becomes "" (an absent optional event field drops
+ * out). A token whose source we DON'T recognize is left untouched, so a later layer's own `{{...}}`
+ * placeholder survives — e.g. deck.sendLatest fills `{{decks}}` itself after this runs.
  */
 const TOKEN_RE = /\{\{\s*([^}]+?)\s*\}\}/g;
+const KNOWN_SOURCE = (token: string) => token.startsWith("event.") || token === "sys.timestamp";
 
 export interface VariableContext {
   event: AppEvent;
@@ -28,8 +33,10 @@ export function interpolateInputs<T extends Record<string, unknown>>(inputs: T, 
 
 function interpolateString(raw: string, ctx: VariableContext): string {
   if (!raw.includes("{{")) return raw;
-  return raw.replace(TOKEN_RE, (_full, token: string) => {
-    const value = resolveToken(token.trim(), ctx);
+  return raw.replace(TOKEN_RE, (full, token: string) => {
+    const trimmed = token.trim();
+    if (!KNOWN_SOURCE(trimmed)) return full;
+    const value = resolveToken(trimmed, ctx);
     return value == null ? "" : String(value);
   });
 }
