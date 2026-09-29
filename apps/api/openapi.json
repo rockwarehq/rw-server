@@ -832,6 +832,10 @@
                         "avatarUrl": {
                           "type": "string",
                           "nullable": true
+                        },
+                        "supportSignature": {
+                          "type": "string",
+                          "nullable": true
                         }
                       }
                     },

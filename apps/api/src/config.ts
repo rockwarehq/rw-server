@@ -54,6 +54,10 @@ const EnvSchema = z.object({
   // rw-hub carries SMS (holds the Twilio credentials); unset = the SMS channel records SKIPPED.
   HUB_URL: z.string().optional(),
   HUB_API_KEY: z.string().optional(),
+  // Support widget identity (Help Scout Beacon Secure Mode: Beacons → Contact →
+  // "Enable cross-device history"). Unset = /users/me supportSignature is null
+  // and the widget treats users as anonymous visitors.
+  SUPPORT_IDENTITY_SECRET: z.string().optional(),
   BUCKET_NAME: z.string().optional(),
   AWS_REGION: z.string().default("auto"),
   AWS_ENDPOINT_URL_S3: z.string().default("https://fly.storage.tigris.dev"),
@@ -132,6 +136,11 @@ export const emailConfig = {
   fromAddress: config.EMAIL_FROM,
   baseUrl: config.APP_BASE_URL,
   enabled: !!config.RESEND_API_KEY,
+};
+
+export const supportConfig = {
+  identitySecret: config.SUPPORT_IDENTITY_SECRET ?? "",
+  enabled: !!config.SUPPORT_IDENTITY_SECRET,
 };
 
 export const securityConfig = {
