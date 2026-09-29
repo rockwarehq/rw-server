@@ -28,7 +28,7 @@ export function datesBetween(from: string, to: string): string[] {
   return dates;
 }
 
-const RANGE_DAYS: Record<DeckRange, number> = { yesterday: 1, "yesterday-7": 7 };
+const RANGE_DAYS: Record<Exclude<DeckRange, "last-shift">, number> = { yesterday: 1, "yesterday-7": 7 };
 
 export interface DeckDays {
   dateFrom: string;
@@ -37,8 +37,23 @@ export interface DeckDays {
   shifts: ShiftRow[];
 }
 
-/** The deck's days as of `asOfMs`, or null when no business day has finished in the listing. */
-export function deckDays(range: DeckRange, shifts: readonly ShiftRow[], asOfMs: number): DeckDays | null {
+/**
+ * The deck's days as of `asOfMs`, or null when no business day has finished in the listing.
+ * "last-shift" is the one latest shift that had ended, among those named `shiftNames`.
+ */
+export function deckDays(
+  range: DeckRange,
+  shifts: readonly ShiftRow[],
+  asOfMs: number,
+  shiftNames: readonly string[] = [],
+): DeckDays | null {
+  if (range === "last-shift") {
+    const last = shifts
+      .filter((shift) => shift.endMs <= asOfMs && matchesShiftNames(shift, shiftNames))
+      .sort((a, b) => a.endMs - b.endMs)
+      .at(-1);
+    return last ? { dateFrom: last.businessDate, dateTo: last.businessDate, shifts: [last] } : null;
+  }
   const endsBy = new Map<string, number>();
   for (const shift of shifts) {
     endsBy.set(shift.businessDate, Math.max(endsBy.get(shift.businessDate) ?? 0, shift.endMs));

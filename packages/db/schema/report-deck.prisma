@@ -8,6 +8,13 @@ enum ReportDeckVisibility {
   PRIVATE
 }
 
+/// What a deck is: pages over a range (DECK), or one workcenter's latest
+/// shift recap for one shift name (SHIFT_RECAP) — a deck in disguise, sent
+/// from the recap page and kept out of the Decks list.
+enum ReportDeckKind {
+  DECK
+  SHIFT_RECAP
+}
 enum ReportDeckEditionSource {
   MANUAL
   SCHEDULE
@@ -22,8 +29,9 @@ model ReportDeck {
   workcenterId String     @db.Uuid
   workcenter   Workcenter @relation(fields: [workcenterId], references: [id], onDelete: Cascade)
 
+  kind   ReportDeckKind @default(DECK)
   name   String
-  /// "yesterday" | "yesterday-7".
+  /// "yesterday" | "yesterday-7", or "last-shift" for a SHIFT_RECAP.
   range  String
   /// The pages: [{ id, kind, title, params, shiftNames, queries }], validated at the RPC boundary.
   slides Json   @default("[]")
@@ -37,7 +45,7 @@ model ReportDeck {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  @@index([siteId])
+  @@index([siteId, kind])
   @@index([workcenterId])
 }
 

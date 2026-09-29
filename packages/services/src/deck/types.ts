@@ -5,8 +5,18 @@ import { reportQueryFields, reportRowsFields } from "../reporting/schema.js";
 // drawing (`params`, the UI's business) and the queries it makes, without
 // dates: the edition fills those in.
 
-export const DECK_RANGES = ["yesterday", "yesterday-7"] as const;
+/**
+ * "yesterday" and "yesterday-7" are a DECK's; "last-shift" is a SHIFT_RECAP's:
+ * the latest finished shift with its page's shift name.
+ */
+export const DECK_RANGES = ["yesterday", "yesterday-7", "last-shift"] as const;
 export type DeckRange = (typeof DECK_RANGES)[number];
+
+export const DECK_KINDS = ["DECK", "SHIFT_RECAP"] as const;
+export type DeckKind = (typeof DECK_KINDS)[number];
+
+/** The slide kind a SHIFT_RECAP's one page is. */
+export const SHIFT_RECAP_SLIDE = "shift-recap";
 
 /** A report.query or report.rows input with no dates. */
 export const queryTemplateSchema = z.discriminatedUnion("mode", [
@@ -62,9 +72,27 @@ export interface EditionPage {
 
 /** The deck as an edition keeps it. */
 export interface EditionSetup {
+  /** Absent on editions made before deck kinds: a DECK. */
+  kind?: DeckKind;
   name: string;
   range: DeckRange;
   workcenterId: string;
   workcenterName: string;
   slides: DeckSlide[];
+}
+
+/**
+ * Why a deck of this kind can't have this range and these pages, or null.
+ * A SHIFT_RECAP is one shift-recap page for one shift name over "last-shift";
+ * a DECK never uses "last-shift", which covers one shift, not days.
+ */
+export function deckShapeProblem(kind: DeckKind, range: DeckRange, slides: readonly DeckSlide[]): string | null {
+  if (kind === "DECK") {
+    return range === "last-shift" ? "A deck covers days: yesterday, or the previous 7 days." : null;
+  }
+  if (range !== "last-shift") return "A shift recap covers the last shift.";
+  const [page, ...rest] = slides;
+  if (!page || rest.length > 0 || page.kind !== SHIFT_RECAP_SLIDE) return "A shift recap is one shift recap page.";
+  if (page.shiftNames.length !== 1) return "A shift recap names one shift.";
+  return null;
 }

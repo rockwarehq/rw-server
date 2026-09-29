@@ -42,3 +42,25 @@ describe("deckDays", () => {
     expect(deckDays("yesterday", SHIFTS, at("2026-09-24T13:00Z"))).toBeNull();
   });
 });
+
+describe("deckDays: last shift", () => {
+  it("is the latest finished shift of that name, whatever day it was", () => {
+    // Monday morning: the last 3rd shift is Friday's, which ended Saturday.
+    const days = deckDays("last-shift", SHIFTS, at("2026-09-28T07:00Z"), ["3rd"]);
+    expect(days).toMatchObject({ dateFrom: "2026-09-25", dateTo: "2026-09-25" });
+    expect(days?.shifts.map((s) => s.id)).toEqual(["fri-3"]);
+  });
+
+  it("waits for the shift to end, and falls back to the one before", () => {
+    expect(deckDays("last-shift", SHIFTS, at("2026-09-28T13:00Z"), ["1st"])?.shifts[0]?.id).toBe("fri-1");
+    expect(deckDays("last-shift", SHIFTS, at("2026-09-28T14:00Z"), ["1st"])?.shifts[0]?.id).toBe("mon-1");
+  });
+
+  it("matches the name ignoring case and spaces", () => {
+    expect(deckDays("last-shift", SHIFTS, at("2026-09-28T07:00Z"), [" 2ND "])?.shifts[0]?.id).toBe("thu-2");
+  });
+
+  it("has none when no shift of that name has finished", () => {
+    expect(deckDays("last-shift", SHIFTS, at("2026-09-28T07:00Z"), ["Weekend"])).toBeNull();
+  });
+});

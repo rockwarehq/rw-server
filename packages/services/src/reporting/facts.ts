@@ -1,6 +1,7 @@
 import {
   BUCKET_WORKCENTER_EXPR,
   bucketStationDim,
+  bucketStationUnitDim,
   bucketWorkcenterDim,
   businessDateDim,
   callDefinitionDim,
@@ -20,10 +21,14 @@ import {
   shiftDim,
   shiftNameDim,
   stationDim,
+  stationUnitDim,
   statusCategoryDim,
+  statusReasonColorDim,
   statusReasonDim,
+  statusReasonPlannedDim,
   toolCavityDim,
   toolDim,
+  userDim,
   workcenterDim,
 } from "./dimensions.js";
 import type { DimensionDef, FactDef, FieldDef, MeasureDef, ValueFormat } from "./types.js";
@@ -67,6 +72,21 @@ const PRODUCTION_SOURCE = `
   SELECT ${PRODUCTION_COLUMNS}, -"quantity", 'SCRAPPED' AS "entryType"
   FROM "ItemDispositionLog" WHERE "deletedAt" IS NULL AND "businessDate" IS NOT NULL`;
 
+// ── Shift notes: comments and sign-offs ─────────────────────────────────────
+// Both hang off a shift instance and carry no business-date stamp of their
+// own, so the source takes the shift's date and scheduled flag. Soft-deleted
+// rows are gone: a deleted comment, a reopened sign-off.
+const shiftNoteSource = (table: string, columns: string) => `
+  SELECT ${columns}, n."siteId", n."shiftInstanceId", n."workcenterId",
+    si."businessDate", si."isScheduled"
+  FROM "${table}" n JOIN "ShiftInstance" si ON si."id" = n."shiftInstanceId"
+  WHERE n."deletedAt" IS NULL`;
+const COMMENT_SOURCE = shiftNoteSource(
+  "ShiftComment",
+  `n."id", n."stationId", n."text", n."createdById", n."createdByEmployeeId", n."createdAt", n."updatedAt"`,
+);
+const SIGNOFF_SOURCE = shiftNoteSource("ShiftSignoff", `n."id", n."postedById", n."postedAt"`);
+
 // ── KPI facts: MetricBucket ∪ MetricBucketLog ────────────────────────────────
 // Active buckets plus archived history. The NOT EXISTS guards the
 // replay-unarchive window where a bucket id exists in both tables — the
@@ -81,11 +101,12 @@ const kpiSource = (entityType: string) => `
   WHERE l."entityType" = '${entityType}'
     AND NOT EXISTS (SELECT 1 FROM "MetricBucket" a WHERE a."id" = l."id")`;
 
-const sumOf = (label: string, column: string, format: ValueFormat = "count"): MeasureDef => ({
+const sumOf = (label: string, column: string, format: ValueFormat = "count", unitDimension?: string): MeasureDef => ({
   kind: "sum",
   label,
   expr: `f."${column}"`,
   format,
+  ...(unitDimension ? { unitDimension } : {}),
 });
 
 // ── Detail-only fields ───────────────────────────────────────────────────────
@@ -121,6 +142,9 @@ function kpiFact(
   label: string,
   entityDimensions: Record<string, DimensionDef>,
 ): FactDef {
+  // Items are counted in the station's unit; a workcenter's buckets mix
+  // stations, so theirs have no one unit to name.
+  const itemsUnit = entityDimensions.unit ? "unit" : undefined;
   return {
     label,
     description:
@@ -152,10 +176,10 @@ function kpiFact(
       goodCycles: sumOf("Good cycles", "goodCycles"),
       badCycles: sumOf("Bad cycles", "badCycles"),
       expectedCycles: sumOf("Expected cycles", "expectedCycles"),
-      totalItems: sumOf("Total items", "totalItems"),
-      goodItems: sumOf("Good items", "goodItems"),
-      badItems: sumOf("Bad items", "badItems"),
-      expectedItems: sumOf("Expected items (target)", "expectedItems"),
+      totalItems: sumOf("Total items", "totalItems", "count", itemsUnit),
+      goodItems: sumOf("Good items", "goodItems", "count", itemsUnit),
+      badItems: sumOf("Bad items", "badItems", "count", itemsUnit),
+      expectedItems: sumOf("Expected items (target)", "expectedItems", "count", itemsUnit),
       runSeconds: sumOf("Run (s)", "runSeconds", "seconds"),
       downSeconds: sumOf("Down (s)", "downSeconds", "seconds"),
       plannedDownSeconds: sumOf("Planned down (s)", "plannedDownSeconds", "seconds"),
@@ -230,7 +254,7 @@ export const FACTS: Record<string, FactDef> = {
       id: idField,
       start: instant("Start", "start"),
       end: instant("Stop", "end", "Null while the cycle is still running."),
-      quantity: { label: "Quantity", column: "quantity", type: "decimal", format: "quantity" },
+      quantity: { label: "Quantity", column: "quantity", type: "decimal", format: "quantity", unitDimension: "unit" },
       standardCycle: {
         label: "Standard cycle (s)",
         column: "standardCycle",
@@ -241,7 +265,13 @@ export const FACTS: Record<string, FactDef> = {
     },
     measures: {
       cycles: { kind: "count", label: "Cycles" },
-      quantity: { kind: "sum", label: "Quantity", expr: `COALESCE(f."quantity", 1)`, format: "quantity" },
+      quantity: {
+        kind: "sum",
+        label: "Quantity",
+        expr: `COALESCE(f."quantity", 1)`,
+        format: "quantity",
+        unitDimension: "unit",
+      },
       goodCycles: {
         kind: "sum",
         label: "Good cycles",
@@ -282,6 +312,7 @@ export const FACTS: Record<string, FactDef> = {
       shiftName: shiftNameDim(),
       scheduled: scheduledDim(),
       station: stationDim(),
+      unit: stationUnitDim(),
       workcenter: workcenterDim(),
       job: jobDim(),
       mode: modeDim(),
@@ -302,11 +333,17 @@ export const FACTS: Record<string, FactDef> = {
     fields: {
       id: idField,
       createdAt: instant("Recorded", "createdAt"),
-      quantity: { label: "Quantity", column: "quantity", type: "decimal", format: "quantity" },
+      quantity: { label: "Quantity", column: "quantity", type: "decimal", format: "quantity", unitDimension: "unit" },
     },
     measures: {
       rows: { kind: "count", label: "Item rows" },
-      quantity: { kind: "sum", label: "Produced quantity", expr: `f."quantity"`, format: "quantity" },
+      quantity: {
+        kind: "sum",
+        label: "Produced quantity",
+        expr: `f."quantity"`,
+        format: "quantity",
+        unitDimension: "unit",
+      },
       amendedItems: { kind: "sum", label: "Amended items", expr: amendedRow, description: AMENDED_DESCRIPTION },
     },
     dimensions: {
@@ -315,6 +352,7 @@ export const FACTS: Record<string, FactDef> = {
       shiftName: shiftNameDim(),
       scheduled: scheduledDim(),
       station: stationDim(),
+      unit: stationUnitDim(),
       workcenter: workcenterDim(),
       job: jobDim(),
       product: productDim(),
@@ -337,11 +375,17 @@ export const FACTS: Record<string, FactDef> = {
     fields: {
       id: idField,
       createdAt: instant("Recorded", "createdAt"),
-      quantity: { label: "Quantity", column: "quantity", type: "decimal", format: "quantity" },
+      quantity: { label: "Quantity", column: "quantity", type: "decimal", format: "quantity", unitDimension: "unit" },
     },
     measures: {
       entries: { kind: "count", label: "Entries" },
-      quantity: { kind: "sum", label: "Scrapped quantity", expr: `f."quantity"`, format: "quantity" },
+      quantity: {
+        kind: "sum",
+        label: "Scrapped quantity",
+        expr: `f."quantity"`,
+        format: "quantity",
+        unitDimension: "unit",
+      },
     },
     dimensions: {
       businessDate: businessDateDim(),
@@ -349,6 +393,7 @@ export const FACTS: Record<string, FactDef> = {
       shiftName: shiftNameDim(),
       scheduled: scheduledDim(),
       station: stationDim(),
+      unit: stationUnitDim(),
       workcenter: workcenterDim(),
       job: jobDim(),
       product: productDim(),
@@ -435,6 +480,8 @@ export const FACTS: Record<string, FactDef> = {
       state: enumDim("State", "state", ["UP", "DOWN"]),
       status: enumDim("Status", "status", ["FAST", "SLOW", "UP", "DOWN"]),
       statusReason: statusReasonDim(),
+      statusReasonColor: statusReasonColorDim(),
+      statusReasonPlanned: statusReasonPlannedDim(),
       statusCategory: statusCategoryDim(),
     },
   },
@@ -523,6 +570,12 @@ export const FACTS: Record<string, FactDef> = {
         expr: periodSeconds("startTime", "endTime"),
         format: "seconds",
       },
+      amendedPeriods: {
+        kind: "sum",
+        label: "Amended periods",
+        expr: amendedRow,
+        description: "Per-shift pieces written by a job history amendment (manual override).",
+      },
     },
     dimensions: {
       businessDate: businessDateDim(),
@@ -532,6 +585,7 @@ export const FACTS: Record<string, FactDef> = {
       station: stationDim(),
       workcenter: workcenterDim(),
       job: jobDim(),
+      amendment: amendmentDim,
     },
   },
 
@@ -642,13 +696,25 @@ export const FACTS: Record<string, FactDef> = {
     fields: {
       id: idField,
       createdAt: instant("Recorded", "createdAt"),
-      quantity: { label: "Quantity (signed)", column: "quantity", type: "decimal", format: "quantity" },
+      quantity: {
+        label: "Quantity (signed)",
+        column: "quantity",
+        type: "decimal",
+        format: "quantity",
+        unitDimension: "unit",
+      },
       reference: { label: "Reference", column: "reference", type: "string" },
       note: { label: "Note", column: "note", type: "string" },
     },
     measures: {
       entries: { kind: "count", label: "Entries" },
-      quantity: { kind: "sum", label: "Quantity (signed)", expr: `f."quantity"`, format: "quantity" },
+      quantity: {
+        kind: "sum",
+        label: "Quantity (signed)",
+        expr: `f."quantity"`,
+        format: "quantity",
+        unitDimension: "unit",
+      },
     },
     dimensions: {
       businessDate: businessDateDim(),
@@ -679,10 +745,22 @@ export const FACTS: Record<string, FactDef> = {
     rowKey: "id",
     fields: {
       id: idField,
-      quantity: { label: "Consumed quantity", column: "quantity", type: "decimal", format: "quantity" },
+      quantity: {
+        label: "Consumed quantity",
+        column: "quantity",
+        type: "decimal",
+        format: "quantity",
+        unitDimension: "unit",
+      },
     },
     measures: {
-      quantity: { kind: "sum", label: "Consumed quantity", expr: `f."quantity"`, format: "quantity" },
+      quantity: {
+        kind: "sum",
+        label: "Consumed quantity",
+        expr: `f."quantity"`,
+        format: "quantity",
+        unitDimension: "unit",
+      },
       itemCount: { kind: "sum", label: "Items", expr: `f."itemCount"`, format: "count" },
     },
     dimensions: {
@@ -777,6 +855,7 @@ export const FACTS: Record<string, FactDef> = {
         column: "quantity",
         type: "decimal",
         description: "Negative on scrap rows.",
+        unitDimension: "unit",
       },
     },
     measures: {
@@ -785,14 +864,22 @@ export const FACTS: Record<string, FactDef> = {
         format: "quantity",
         label: "Produced",
         expr: `CASE WHEN f."entryType" = 'PRODUCED' THEN f."quantity" ELSE 0 END`,
+        unitDimension: "unit",
       },
       scrapped: {
         kind: "sum",
         format: "quantity",
         label: "Scrapped",
         expr: `CASE WHEN f."entryType" = 'SCRAPPED' THEN -f."quantity" ELSE 0 END`,
+        unitDimension: "unit",
       },
-      netQuantity: { kind: "sum", label: "Net quantity", expr: `f."quantity"`, format: "quantity" },
+      netQuantity: {
+        kind: "sum",
+        label: "Net quantity",
+        expr: `f."quantity"`,
+        format: "quantity",
+        unitDimension: "unit",
+      },
       scrapRate: {
         kind: "ratio",
         format: "percent",
@@ -807,6 +894,7 @@ export const FACTS: Record<string, FactDef> = {
       shiftName: shiftNameDim(),
       scheduled: scheduledDim(),
       station: stationDim(),
+      unit: stationUnitDim(),
       workcenter: workcenterDim(),
       job: jobDim(),
       product: productDim(),
@@ -817,13 +905,72 @@ export const FACTS: Record<string, FactDef> = {
     },
   },
 
+  shiftComments: {
+    label: "Shift comments",
+    description:
+      "One row per comment left on a shift at a workcenter. A comment with no station is a note on the whole shift.",
+    source: COMMENT_SOURCE,
+    dateColumn: "businessDate",
+    timeColumn: "createdAt",
+    workcenterColumn: "workcenterId",
+    rowKey: "id",
+    fields: {
+      id: idField,
+      createdAt: instant("Written", "createdAt"),
+      updatedAt: instant("Edited", "updatedAt"),
+      text: { label: "Comment", column: "text", type: "string", format: "text" },
+    },
+    measures: {
+      comments: { kind: "count", label: "Comments" },
+    },
+    dimensions: {
+      businessDate: businessDateDim(),
+      shift: shiftDim(),
+      shiftName: shiftNameDim(),
+      scheduled: scheduledDim(),
+      station: stationDim(),
+      workcenter: workcenterDim(),
+      // Written in the app by a user, or at a terminal by an employee: one of the two.
+      writtenBy: userDim("createdById", "Written by"),
+      writtenByEmployee: employeeDim("createdByEmployeeId", "Written by (operator)"),
+    },
+  },
+
+  shiftSignoffs: {
+    label: "Shift sign-offs",
+    description:
+      "One row per shift signed off at a workcenter — at most one each. Reopening a shift removes its row until it is signed off again.",
+    source: SIGNOFF_SOURCE,
+    dateColumn: "businessDate",
+    timeColumn: "postedAt",
+    workcenterColumn: "workcenterId",
+    rowKey: "id",
+    fields: {
+      id: idField,
+      postedAt: instant("Signed off", "postedAt"),
+    },
+    measures: {
+      signoffs: { kind: "count", label: "Sign-offs" },
+    },
+    dimensions: {
+      businessDate: businessDateDim(),
+      shift: shiftDim(),
+      shiftName: shiftNameDim(),
+      scheduled: scheduledDim(),
+      workcenter: workcenterDim(),
+      signedOffBy: userDim("postedById", "Signed off by"),
+    },
+  },
+
   stationKpis: kpiFact("STATION", "Station KPIs", {
     station: stationDim("entityId"),
+    unit: stationUnitDim("entityId"),
     workcenter: bucketWorkcenterDim(),
   }),
   workcenterKpis: kpiFact("WORKCENTER", "Workcenter KPIs", { workcenter: workcenterDim("entityId") }),
   jobKpis: kpiFact("JOB", "Job KPIs (per station)", {
     station: bucketStationDim(),
+    unit: bucketStationUnitDim(),
     workcenter: bucketWorkcenterDim(),
     // JOB bucket entityIds are synthetic hashes of (station, job) — the
     // bucket's own entityName is the only label; there is no Job FK to join.

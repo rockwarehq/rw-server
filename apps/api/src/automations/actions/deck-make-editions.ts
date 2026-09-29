@@ -13,7 +13,7 @@ export const DECKS_INPUT = {
 export const ids = (value: unknown) => (Array.isArray(value) ? value.map(String).filter(Boolean) : []);
 
 /** The event's planned moment (a clock trigger's `scheduledAt`), so a late run still covers the right days. */
-const plannedAt = (payload: Record<string, unknown>) => {
+export const plannedAt = (payload: Record<string, unknown>) => {
   const at = typeof payload.scheduledAt === "string" ? new Date(payload.scheduledAt) : null;
   return at && !Number.isNaN(at.getTime()) ? at : new Date();
 };
@@ -22,9 +22,19 @@ const plannedAt = (payload: Record<string, unknown>) => {
 export async function siteDecks(deckIds: string[], siteId: string) {
   const rows = await prisma.reportDeck.findMany({
     where: { id: { in: deckIds }, siteId },
-    select: { id: true, name: true },
+    select: { id: true, name: true, kind: true },
   });
   return deckIds.flatMap((id) => rows.filter((row) => row.id === id));
+}
+
+/** An edition of a deck as of `asOf` for this automation; a redelivered tick finds the one it already made. */
+export async function makeScheduledEdition(deckId: string, automationId: string, asOf: Date) {
+  const made = await prisma.reportDeckEdition.findFirst({
+    where: { deckId, automationId, asOf },
+    select: { id: true },
+  });
+  if (made) return;
+  unwrapService(await deck.makeEdition(deckId, { asOf, source: "SCHEDULE", automationId }));
 }
 
 export const handler: ActionHandler = {
@@ -44,13 +54,7 @@ export const handler: ActionHandler = {
         if (!siteId) throw new Error(`automation "${ctx.automation.label}": no site to make editions for`);
         const asOf = plannedAt(ctx.event.payload);
         for (const { id } of await siteDecks(ids(inputs.deckIds), siteId)) {
-          // A redelivered tick finds the edition it already made.
-          const made = await prisma.reportDeckEdition.findFirst({
-            where: { deckId: id, automationId: ctx.automation.id, asOf },
-            select: { id: true },
-          });
-          if (made) continue;
-          unwrapService(await deck.makeEdition(id, { asOf, source: "SCHEDULE", automationId: ctx.automation.id }));
+          await makeScheduledEdition(id, ctx.automation.id, asOf);
         }
       },
     },

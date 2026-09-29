@@ -46,7 +46,8 @@ only place that turns a report into queries.
 Making an edition:
 
 1. works out the days (above),
-2. splits each page (catalog and Explore: one page for the whole span),
+2. splits each page (one page for the whole span; a shift recap, a page per
+   shift),
 3. runs every query with scope `{ siteId, workcenterIds: [deck.workcenterId] }`
    (the compiler's own workcenter narrowing, so no page can show another
    workcenter), and narrows by `shiftName` when the page names shifts,
@@ -91,10 +92,35 @@ Both are `time.daily` automations (the clock trigger):
   `links: "one"`. The message is followed by a `Deck name: link` line per link.
   Delivery is `notification.send`.
 
+### A shift recap is a deck in disguise (2026-09-29)
+
+A workcenter's shift recap is sent the way a deck is, and kept as one:
+`ReportDeck.kind` is `DECK` or `SHIFT_RECAP`. A `SHIFT_RECAP` is one
+`shift-recap` page naming one shift, over the range `"last-shift"`: the latest
+shift with that name at the workcenter that had ended as of the edition's
+moment. It has editions, links, expiry and revoke like any deck. It is listed
+only when asked for (`deck.list { kind: "SHIFT_RECAP" }`), from the recap page,
+never in the Decks list; a deck never uses `"last-shift"`.
+
+Its subscription is `deck.sendLatest`: for a `SHIFT_RECAP` the action makes
+the edition as of the event's `scheduledAt` first, then sends it, so one
+automation does both and the recap is always the last shift. When the shift
+ends is not consulted: a send set before that shift ends sends the one before.
+
+A recap page stores no results. Its link reads the recap **live** through
+`deck.linkRecap { token, editionId, pageKey }`, the one public read that runs
+queries: the token must still open, the edition must be one the link names,
+and the workcenter and shift come from the edition as kept, never from the
+caller. It returns what the recap page draws, with people by name only (no
+emails, user ids or employee numbers). The signed-in `shiftRecap.*`
+procedures and the link share one set of reads
+(`services/facility/shift/shift-recap.ts`).
+
 ## Not yet
 
-- Daily production and shift recap pages: their pages are worked out and
-  stored, but their figures are not; they need their data stored the same way.
+- Shift recap pages keep no figures: a link reads them live (above).
+  (Production, formerly Daily production, is catalog queries since 2026-09-29, so it is kept like
+  any other page.)
 - The order of two automations due the same minute is not defined; making
   before sending on one tick needs both actions in one automation.
 - A failed clock run is logged, not retried or shown in run history.

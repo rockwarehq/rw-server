@@ -540,6 +540,7 @@ export const router = {
     listLinks: deck.listLinks,
     revokeLink: deck.revokeLink,
     viewLink: deck.viewLink,
+    linkRecap: deck.linkRecap,
   },
   historian: {
     query: historian.query,

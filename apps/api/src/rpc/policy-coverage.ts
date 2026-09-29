@@ -47,6 +47,9 @@ export const EXCLUDED_PROCEDURES: ReadonlySet<string> = new Set([
   // credential (only its hash is stored); it returns the stored snapshot of
   // the editions it names, never runs a query, and honours revoke/expiry.
   "deck.viewLink",
+  // The same token, for one shift recap page of an edition it names: reads
+  // that page's kept workcenter and shift live, and nothing the caller names.
+  "deck.linkRecap",
   // ── static per-deploy catalogs with no tenant data.
   "graph.hook.eventCatalog",
   "graph.introspect.manifest",

@@ -137,6 +137,21 @@ export const BUCKET_WORKCENTER_EXPR = `substring(f."path" from 'workcenter\\.([0
  */
 export const BUCKET_STATION_EXPR = `substring(f."path" from 'station\\.([0-9a-f-]{36})')::uuid`;
 
+/**
+ * The unit a station counts in ("ft", "lb"), from its current version; null
+ * for a station that counts plain items. It is the station's unit NOW: a
+ * station whose unit was changed shows its new unit on old rows too.
+ */
+const stationUnitExpr = (station: string) =>
+  `(SELECT NULLIF(sv."quantityUnit", '') FROM "Station" s JOIN "StationVersion" sv ON sv."id" = s."currentVersionId" WHERE s."id" = ${station})`;
+
+export const stationUnitDim = (column = "stationId"): DimensionDef => ({
+  label: "Unit",
+  column,
+  expr: stationUnitExpr(`f."${column}"`),
+  type: "string",
+});
+
 export const bucketStationDim = (): DimensionDef => ({
   label: "Station",
   column: "path",
@@ -146,6 +161,14 @@ export const bucketStationDim = (): DimensionDef => ({
     join: `LEFT JOIN "Station" {a} ON {a}."id" = ${BUCKET_STATION_EXPR}`,
     name: `{a}."name"`,
   },
+});
+
+/** A bucket's station's unit, the station read from its path (job buckets too). */
+export const bucketStationUnitDim = (): DimensionDef => ({
+  label: "Unit",
+  column: "path",
+  expr: stationUnitExpr(BUCKET_STATION_EXPR),
+  type: "string",
 });
 
 export const bucketWorkcenterDim = (): DimensionDef => ({
@@ -193,6 +216,15 @@ export const employeeDim = (column = "employeeId", label = "Employee") =>
     `TRIM(CONCAT({b}."firstName", ' ', {b}."lastName"))`,
   );
 
+/** A signed-in user (not an employee): whoever wrote or signed off in the app. */
+export const userDim = (column: string, label: string) =>
+  idDim(
+    label,
+    column,
+    `LEFT JOIN "User" {a} ON {a}."id" = f."${column}"`,
+    `COALESCE(NULLIF(TRIM(CONCAT({a}."firstName", ' ', {a}."lastName")), ''), {a}."email")`,
+  );
+
 export const orderDim = (column = "orderId") =>
   idDim("Order", column, `LEFT JOIN "Order" {a} ON {a}."id" = f."${column}"`, `{a}."orderNumber"`);
 
@@ -218,6 +250,29 @@ export const statusReasonDim = (column = "statusReasonId") =>
     undefined,
     labels("_LabelToStatusReason", "A"),
   );
+
+/**
+ * The color the site gives a status reason, as `#rrggbb` text, or null when
+ * it has none. Colors live in the site's settings
+ * (`attrs.statusReasonColors.colors`, keyed by reason id), not on the reason,
+ * so this reads them there for the row's own site. Unvalidated: a client
+ * checks it is a color before drawing with it.
+ */
+export const statusReasonColorDim = (column = "statusReasonId"): DimensionDef => ({
+  label: "Status reason color",
+  column,
+  expr: `(SELECT s."attrs"->'statusReasonColors'->'colors'->>(f."${column}"::text) FROM "Site" s WHERE s."id" = f."siteId")`,
+  type: "string",
+});
+
+/** Whether the status reason itself is planned downtime — its class, beside the period's own flag. */
+export const statusReasonPlannedDim = (column = "statusReasonId"): DimensionDef => ({
+  label: "Reason is planned",
+  column,
+  expr: `(SELECT r."isPlannedDown" FROM "StatusReason" r WHERE r."id" = f."${column}")`,
+  type: "enum",
+  enumValues: ["true", "false"],
+});
 
 export const callDefinitionDim = (column = "definitionId") =>
   idDim("Call type", column, `LEFT JOIN "CallDefinition" {a} ON {a}."id" = f."${column}"`, `{a}."name"`);

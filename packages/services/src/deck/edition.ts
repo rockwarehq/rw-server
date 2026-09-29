@@ -1,8 +1,16 @@
 import prisma from "@rw/db";
 import { FACTS, reportSchema, runReportQuery, runReportRows } from "../reporting/index.js";
 import type { ReportFilter } from "../reporting/types.js";
-import { addDays, dateOnly, datesBetween, deckDays, matchesShiftNames, type ShiftRow, toEditionShift } from "./days.js";
-import type { DeckRange, DeckSlide, EditionPage, EditionSetup, QueryTemplate, StoredResult } from "./types.js";
+import { addDays, dateOnly, deckDays, matchesShiftNames, type ShiftRow, toEditionShift } from "./days.js";
+import type {
+  DeckKind,
+  DeckRange,
+  DeckSlide,
+  EditionPage,
+  EditionSetup,
+  QueryTemplate,
+  StoredResult,
+} from "./types.js";
 
 // Making an edition (ADR-0018): the deck's days as of a moment, every page's
 // queries run with the deck's workcenter as the scope, and the results kept.
@@ -18,6 +26,7 @@ const MAX_PAGES = 31;
 
 export interface DeckInput {
   siteId: string;
+  kind: DeckKind;
   name: string;
   range: DeckRange;
   workcenterId: string;
@@ -91,7 +100,7 @@ const emptyPage = (slide: DeckSlide, dates: { dateFrom: string; dateTo: string }
   results: {},
 });
 
-/** The pages a slide makes over the deck's days: one, or one per day or shift for the kinds that show one at a time. */
+/** The pages a slide makes over the deck's days: one, or one per shift for a shift recap, which shows one at a time. */
 function slidePages(slide: DeckSlide, days: NonNullable<ReturnType<typeof deckDays>>): EditionPage[] {
   const shifts = days.shifts.filter((shift) => matchesShiftNames(shift, slide.shiftNames));
   const named = slide.shiftNames.length > 0;
@@ -116,26 +125,15 @@ function slidePages(slide: DeckSlide, days: NonNullable<ReturnType<typeof deckDa
       ),
     );
   }
-  if (slide.kind === "daily-production") {
-    const worked = new Set(shifts.map((shift) => shift.businessDate));
-    return datesBetween(days.dateFrom, days.dateTo)
-      .filter((date) => worked.has(date))
-      .map((date) =>
-        page(
-          date,
-          `${slide.title} · ${date}`,
-          date,
-          date,
-          named ? shifts.filter((shift) => shift.businessDate === date) : null,
-        ),
-      );
-  }
   return [page("all", slide.title, days.dateFrom, days.dateTo, named ? shifts : null)];
 }
 
+/** The shift names a "last-shift" range picks among: its pages'. */
+const rangeShiftNames = (slides: readonly DeckSlide[]) => [...new Set(slides.flatMap((slide) => slide.shiftNames))];
+
 /** The days a deck with this range and workcenter covers as of `asOf`, without running anything. */
-export async function deckSpan(range: DeckRange, workcenterId: string, asOf: Date) {
-  const days = deckDays(range, await scheduledShifts(workcenterId, asOf), asOf.getTime());
+export async function deckSpan(range: DeckRange, workcenterId: string, asOf: Date, shiftNames: string[] = []) {
+  const days = deckDays(range, await scheduledShifts(workcenterId, asOf), asOf.getTime(), shiftNames);
   return days && { dateFrom: days.dateFrom, dateTo: days.dateTo, shifts: days.shifts.map(toEditionShift) };
 }
 
@@ -143,15 +141,25 @@ export async function deckSpan(range: DeckRange, workcenterId: string, asOf: Dat
 export async function buildEdition(deck: DeckInput, asOf: Date): Promise<BuiltEdition> {
   const workcenter = await prisma.workcenter.findUnique({ where: { id: deck.workcenterId }, select: { name: true } });
   const setup: EditionSetup = {
+    kind: deck.kind,
     name: deck.name,
     range: deck.range,
     workcenterId: deck.workcenterId,
     workcenterName: workcenter?.name ?? "",
     slides: deck.slides,
   };
-  const days = deckDays(deck.range, await scheduledShifts(deck.workcenterId, asOf), asOf.getTime());
+  const days = deckDays(
+    deck.range,
+    await scheduledShifts(deck.workcenterId, asOf),
+    asOf.getTime(),
+    rangeShiftNames(deck.slides),
+  );
   if (!days) {
-    const message = "No business day at this workcenter has finished yet.";
+    const names = rangeShiftNames(deck.slides);
+    const message =
+      deck.range === "last-shift"
+        ? `No ${names.join(" or ")} shift at this workcenter has finished yet.`
+        : "No business day at this workcenter has finished yet.";
     const pages = deck.slides.map((slide) => emptyPage(slide, { dateFrom: "", dateTo: "" }, message));
     return { asOf, dateFrom: null, dateTo: null, setup, pages, facts: {} };
   }
