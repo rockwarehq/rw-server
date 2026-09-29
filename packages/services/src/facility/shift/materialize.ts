@@ -23,6 +23,7 @@ import type { Prisma } from "@rw/db";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { getSiteTimezone, getLocalCalendarDate } from "../../metrics/bucket.js";
+import { getCurrentShift } from "./current.js";
 import { getTimezoneOffsetMs } from "../../metrics/shift.js";
 import { isMetricBucketTable, SHIFT_REFERENCING_TABLES } from "./stamped-facts.js";
 
@@ -596,9 +597,15 @@ export async function previewShiftInstances(
   });
   const now = new Date();
   if (!assignment) return { today: now.toISOString().slice(0, 10), now, rows: [] };
-  const today = getLocalCalendarDate(now, await getSiteTimezone(assignment.siteId))
-    .toISOString()
-    .slice(0, 10);
+  // Today is the business date the calendar's workcenter is on, not the
+  // clock's date: a night shift already working tomorrow's date shows it.
+  const current = await getCurrentShift(assignment.siteId, assignment.workCenterId ?? undefined);
+  const today =
+    "data" in current
+      ? current.data.businessDate
+      : getLocalCalendarDate(now, await getSiteTimezone(assignment.siteId))
+          .toISOString()
+          .slice(0, 10);
   const fromMs = floorToDay(from).getTime();
   const days = Math.max(0, Math.round((floorToDay(to).getTime() - fromMs) / MS_PER_DAY));
   // A day of lead so the first date's gaps are anchored like the tick builds

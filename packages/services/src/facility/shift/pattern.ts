@@ -57,6 +57,9 @@ const withPublished = <T extends { assignment: { rotationEndDate: Date | null } 
     !!pattern.assignment && (!pattern.assignment.rotationEndDate || pattern.assignment.rotationEndDate > new Date()),
 });
 
+/** A rotation that repeats by whole weeks, so its days carry weekday names. */
+const isWeekly = (totalDaysInRotation: number) => totalDaysInRotation > 1 && totalDaysInRotation % 7 === 0;
+
 /**
  * Create a new shift pattern
  */
@@ -65,19 +68,22 @@ export async function create(input: CreateShiftPatternInput) {
 
   const site = await prisma.site.findUnique({
     where: { id: siteId },
-    select: { id: true },
+    select: { id: true, weekStart: true },
   });
 
   if (!site) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
 
+  // A weekly schedule starts on the site's week start unless the caller lays
+  // its days out for another day (a starter template).
+  const days = totalDaysInRotation ?? 8;
   const pattern = await prisma.shiftPattern.create({
     data: {
       name,
       siteId,
-      totalDaysInRotation: totalDaysInRotation ?? 8,
-      startOnDayOfWeek: startOnDayOfWeek ?? null,
+      totalDaysInRotation: days,
+      startOnDayOfWeek: startOnDayOfWeek ?? (isWeekly(days) ? site.weekStart : null),
       useEndDateForBusinessDate: useEndDateForBusinessDate ?? true,
     },
     include: patternInclude,
@@ -143,7 +149,10 @@ export async function getById(id: string) {
 export async function update(id: string, input: UpdateShiftPatternInput) {
   const { name, totalDaysInRotation, startOnDayOfWeek, useEndDateForBusinessDate } = input;
 
-  const current = await prisma.shiftPattern.findUnique({ where: { id }, select: { id: true } });
+  const current = await prisma.shiftPattern.findUnique({
+    where: { id },
+    select: { id: true, startOnDayOfWeek: true, site: { select: { weekStart: true } } },
+  });
 
   if (!current) {
     return { error: "Shift pattern not found", code: "SHIFT_PATTERN_NOT_FOUND" };
@@ -153,6 +162,11 @@ export async function update(id: string, input: UpdateShiftPatternInput) {
   if (name !== undefined) updateData.name = name;
   if (totalDaysInRotation !== undefined) updateData.totalDaysInRotation = totalDaysInRotation;
   if (startOnDayOfWeek !== undefined) updateData.startOnDayOfWeek = startOnDayOfWeek;
+  // Becoming weekly names its days, from the site's week start. An existing
+  // choice stays: the days are already laid out against it.
+  else if (totalDaysInRotation !== undefined && isWeekly(totalDaysInRotation) && !current.startOnDayOfWeek) {
+    updateData.startOnDayOfWeek = current.site.weekStart;
+  }
   if (useEndDateForBusinessDate !== undefined) updateData.useEndDateForBusinessDate = useEndDateForBusinessDate;
 
   const pattern = await prisma.shiftPattern.update({

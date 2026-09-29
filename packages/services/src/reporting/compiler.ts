@@ -41,6 +41,9 @@ const clampLimit = (limit: number | undefined) => Math.min(Math.max(limit ?? DEF
 const clampDetailLimit = (limit: number | undefined) =>
   Math.min(Math.max(limit ?? DETAIL_DEFAULT_LIMIT, 1), DETAIL_MAX_LIMIT);
 
+/** Alias of the joined Site row that date buckets read their calendar from. */
+const SITE = "site";
+
 const isValidDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value));
 
 /** COUNT(*)/SUM(expr)/AVG(expr)/... for a non-ratio measure (ratio handled by the caller). */
@@ -199,6 +202,15 @@ function compileAggregate(
     return { error: `Fact ${query.fact} has no event timestamp; hourly bucketing unavailable`, code: "INVALID_QUERY" };
   }
 
+  // The site row, joined once when a date bucket needs its calendar settings.
+  let siteJoined = false;
+  const joinSite = () => {
+    if (siteJoined) return;
+    siteJoined = true;
+    joins.push(`JOIN "Site" ${SITE} ON ${SITE}."id" = f."siteId"`);
+  };
+  let dateSortExpr: string | undefined;
+
   for (const [i, key] of query.dimensions.entries()) {
     const dim = fact.dimensions[key];
     if (!dim) return { error: `Unknown dimension: ${key}`, code: "UNKNOWN_DIMENSION" };
@@ -211,17 +223,37 @@ function compileAggregate(
       // them as instants (new Date("YYYY-MM-DD") is UTC midnight and shifts a
       // day in negative-offset zones).
       //
-      // Hour truncates the event timestamp, pinned to UTC so bucket boundaries
-      // don't depend on the session TimeZone (half-hour-offset zones would
-      // otherwise shift them). Rendered as a UTC ISO string so every date
-      // bucket — like every other ReportRow value — crosses the wire as
-      // string|number|null; clients convert to the site zone for display.
-      const expr =
-        granularity === "hour"
-          ? `to_char(date_trunc('hour', f."${fact.timeColumn}" AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:00:00"Z"')`
-          : granularity === "day"
-            ? `to_char(${col}, 'YYYY-MM-DD')`
-            : `to_char(date_trunc('${granularity}', ${col}), 'YYYY-MM-DD')`;
+      // Week starts on the site's weekStart: a bucket is named by its first
+      // date, found by stepping back to the last start weekday (ISO dow:
+      // Monday 1 … Sunday 7). It only groups dates; a row's businessDate is
+      // never touched by it.
+      //
+      // Hour stays inside the business date: rows group by businessDate AND
+      // the site-local hour of their event time, so a business date's hours
+      // always sum to its day — a night shift's hours before midnight belong
+      // to the day they were worked for. The bucket is the local wall-clock
+      // hour 'YYYY-MM-DDTHH:00' (no zone — render verbatim, like a date),
+      // with the business date it belongs to alongside as `<key>BusinessDate`.
+      let expr: string;
+      if (granularity === "hour" || granularity === "week") joinSite();
+      if (granularity === "hour") {
+        const local = `date_trunc('hour', f."${fact.timeColumn}" AT TIME ZONE ${SITE}."timezone")`;
+        expr = `to_char(${local}, 'YYYY-MM-DD"T"HH24:00')`;
+        const businessDate = `to_char(${col}, 'YYYY-MM-DD')`;
+        selects.push(`${businessDate} AS "${key}BusinessDate"`);
+        groupBys.push(businessDate);
+        outputKeys.add(`${key}BusinessDate`);
+        // Real time order, so a repeated DST hour and a business day that
+        // opens the evening before both sort as worked.
+        dateSortExpr = `MIN(f."${fact.timeColumn}")`;
+      } else if (granularity === "week") {
+        const startDow = `CASE ${SITE}."weekStart" WHEN 'SUNDAY' THEN 7 ELSE 1 END`;
+        expr = `to_char(${col} - ((EXTRACT(ISODOW FROM ${col})::int - ${startDow} + 7) % 7), 'YYYY-MM-DD')`;
+      } else if (granularity === "day") {
+        expr = `to_char(${col}, 'YYYY-MM-DD')`;
+      } else {
+        expr = `to_char(date_trunc('${granularity}', ${col}), 'YYYY-MM-DD')`;
+      }
       selects.push(`${expr} AS "${key}"`);
       groupBys.push(expr);
     } else {
@@ -235,7 +267,11 @@ function compileAggregate(
     outputKeys.add(key);
     dimOrderExprs.set(
       key,
-      dim.sortExpr ? `MIN(${dim.sortExpr.replaceAll("{a}", `d${i}`).replaceAll("{b}", `d${i}b`)})` : `"${key}"`,
+      dim.type === "date" && dateSortExpr
+        ? dateSortExpr
+        : dim.sortExpr
+          ? `MIN(${dim.sortExpr.replaceAll("{a}", `d${i}`).replaceAll("{b}", `d${i}b`)})`
+          : `"${key}"`,
     );
     if (dim.lookup) {
       const name = dim.lookup.name.replaceAll("{a}", `d${i}`).replaceAll("{b}", `d${i}b`);

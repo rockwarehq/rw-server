@@ -20,6 +20,7 @@ const updateInputSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().optional(),
   timezone: z.string().min(1).optional(),
+  weekStart: z.enum(["SUNDAY", "MONDAY"]).optional(),
   attrs: z.record(z.string(), z.unknown()).optional(),
 });
 

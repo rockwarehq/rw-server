@@ -14,6 +14,7 @@ export interface UpdateSiteInput {
   name?: string;
   description?: string;
   timezone?: string;
+  weekStart?: "SUNDAY" | "MONDAY";
   attrs?: Record<string, unknown>;
 }
 
@@ -160,7 +161,7 @@ export async function getById(id: string) {
  * Update site
  */
 export async function update(id: string, input: UpdateSiteInput) {
-  const { name, description, timezone, attrs } = input;
+  const { name, description, timezone, weekStart, attrs } = input;
 
   // Get current site
   const current = await prisma.site.findUnique({
@@ -176,6 +177,7 @@ export async function update(id: string, input: UpdateSiteInput) {
   if (name !== undefined) updateData.name = name;
   if (description !== undefined) updateData.description = description;
   if (timezone !== undefined) updateData.timezone = timezone;
+  if (weekStart !== undefined) updateData.weekStart = weekStart;
   if (attrs !== undefined) {
     // Shallow-merge instead of replace: attrs is shared by unrelated features
     // (logo, order settings), so a caller must not clobber keys it didn't
