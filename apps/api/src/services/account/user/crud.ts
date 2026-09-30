@@ -5,6 +5,7 @@ import { describeAccess, staffLabel, visibleSites } from "@rw/auth/iam/access";
 import { logEvent } from "@rw/services/audit/index";
 import { resolveAvatarUrl } from "./avatar.js";
 import { supportIdentitySignature } from "./support-identity.js";
+import { update as updateEmployee } from "../../employee/crud.js";
 
 export interface CreateUserInput {
   email: string;
@@ -209,7 +210,7 @@ export async function update(id: string, input: UpdateUserInput) {
   if (lastName !== undefined) updateData.lastName = lastName;
   if (email !== undefined) updateData.email = email.toLowerCase();
 
-  return prisma.user.update({
+  const updated = await prisma.user.update({
     where: { id },
     data: updateData,
     select: {
@@ -221,8 +222,23 @@ export async function update(id: string, input: UpdateUserInput) {
       lastLoginAt: true,
       createdAt: true,
       updatedAt: true,
+      employeeId: true,
     },
   });
+
+  // The person's team profile carries their name (User's name fields are
+  // deprecated in its favor), so a rename or new email cuts a new version.
+  if (updated.employeeId) {
+    const profile = {
+      ...(firstName?.trim() ? { firstName: firstName.trim() } : {}),
+      ...(lastName !== undefined ? { lastName: lastName.trim() } : {}),
+      ...(email !== undefined ? { email: email.toLowerCase() } : {}),
+    };
+    if (Object.keys(profile).length) await updateEmployee(updated.employeeId, profile);
+  }
+
+  const { employeeId: _employeeId, ...user } = updated;
+  return user;
 }
 
 export async function disable(id: string, context?: UserAdminContext) {

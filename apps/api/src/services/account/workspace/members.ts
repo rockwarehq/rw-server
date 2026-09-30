@@ -1,5 +1,6 @@
 import prisma, { type Prisma } from "@rw/db";
 import type { Level as BucketLevel, UserAccess } from "@rw/auth/iam/access";
+import { syncAccountTeamMember } from "../../employee/account.js";
 
 // Member management over the bucket model. The account has one workspace,
 // so a member is simply a user: their isAccountAdmin flag plus their
@@ -126,6 +127,10 @@ export async function writeAccesses(
   }
 }
 
+async function allSiteIds(tx: Prisma.TransactionClient): Promise<string[]> {
+  return (await tx.site.findMany({ select: { id: true } })).map((site) => site.id);
+}
+
 // ── Guards ───────────────────────────────────────────────────────────────
 
 /**
@@ -237,6 +242,14 @@ export async function updateAccess(input: UpdateAccessInput): Promise<UpdateAcce
     if (remove.length) {
       await tx.bucketAccess.deleteMany({ where: { userId: member.id, bucketId: { in: remove } } });
     }
+    // The account is on each reachable plant's team; a plant it no longer
+    // reaches keeps the person in its history, inactive.
+    const lostSites = remove
+      .map((id) => check.buckets.get(id)?.siteId)
+      .filter((siteId): siteId is string => !!siteId);
+    await syncAccountTeamMember(tx, member.id, {
+      deactivateSites: input.isAccountAdmin === false ? await allSiteIds(tx) : lostSites,
+    });
   });
 
   return { success: true, access: (await getUserAccess(member.id)) as MemberAccessSummary };
@@ -254,11 +267,23 @@ export async function removeMember(userId: string) {
     return { success: false as const, error: "LAST_ACCOUNT_ADMIN" as const };
   }
 
-  await prisma.$transaction([
-    prisma.bucketAccess.deleteMany({ where: { userId: member.id } }),
-    prisma.user.update({ where: { id: member.id }, data: { status: "DISABLED", isAccountAdmin: false } }),
-    prisma.refreshToken.updateMany({ where: { userId: member.id, revokedAt: null }, data: { revokedAt: new Date() } }),
-  ]);
+  await prisma.$transaction(async (tx) => {
+    await tx.bucketAccess.deleteMany({ where: { userId: member.id } });
+    const removed = await tx.user.update({
+      where: { id: member.id },
+      data: { status: "DISABLED", isAccountAdmin: false },
+      select: { employeeId: true },
+    });
+    await tx.refreshToken.updateMany({ where: { userId: member.id, revokedAt: null }, data: { revokedAt: new Date() } });
+    // They leave every plant's team too; their name stays on what they did.
+    if (removed.employeeId) {
+      await tx.employeeSiteAccess.updateMany({
+        where: { employeeId: removed.employeeId },
+        data: { status: "INACTIVE" },
+      });
+      await tx.employee.update({ where: { id: removed.employeeId }, data: { status: "INACTIVE" } });
+    }
+  });
 
   return { success: true as const };
 }
@@ -283,7 +308,10 @@ export async function removeSiteAccess(userId: string, siteId: string) {
     }
   }
 
-  await prisma.bucketAccess.deleteMany({ where: { userId: member.id, bucket: { siteId } } });
+  await prisma.$transaction(async (tx) => {
+    await tx.bucketAccess.deleteMany({ where: { userId: member.id, bucket: { siteId } } });
+    await syncAccountTeamMember(tx, member.id, { deactivateSites: [siteId] });
+  });
   return { success: true as const };
 }
 

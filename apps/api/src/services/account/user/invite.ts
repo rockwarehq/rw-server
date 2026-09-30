@@ -6,6 +6,7 @@ import { sendInviteEmail } from "@rw/services/email/index";
 import { logEvent } from "@rw/services/audit/index";
 import { generateStrongPassword } from "./password.js";
 import { adminAt, checkBuckets, writeAccesses } from "../workspace/members.js";
+import { checkPickedRole, isAccountOnlyProfile, syncAccountTeamMember } from "../../employee/account.js";
 
 export interface CreateInviteInput {
   email: string;
@@ -24,6 +25,8 @@ export interface CreateInviteInput {
   asAccountAdmin?: boolean;
   firstName?: string;
   lastName?: string;
+  /** The invitee's team role at one of the granted plants; defaults by access level. */
+  employeeRoleId?: string;
   /** Validated http(s) origin of the inviting client, used in the email link. */
   appUrl?: string;
 }
@@ -52,12 +55,15 @@ export interface InviteContext {
 interface ResolvedInviteAccess {
   accesses: Array<{ bucketId: string; level: BucketLevel; siteId: string | null }>;
   asAccountAdmin: boolean;
+  /** The picked team role, keyed by its plant. */
+  roleIdBySite: Record<string, string>;
 }
 
 /** Resolve and validate the invite's access: bucket accesses, account admin, or both. */
 async function resolveInviteAccess(input: {
   bucketAccesses?: Array<{ bucketId: string; level: BucketLevel }>;
   asAccountAdmin?: boolean;
+  employeeRoleId?: string;
 }): Promise<{ ok: true; access: ResolvedInviteAccess } | { ok: false; error: string }> {
   const wanted = input.bucketAccesses ?? [];
   if (wanted.length === 0 && !input.asAccountAdmin) {
@@ -69,7 +75,16 @@ async function resolveInviteAccess(input: {
   );
   if (!check.ok) return { ok: false, error: check.error };
   const accesses = wanted.map((a) => ({ ...a, siteId: check.buckets.get(a.bucketId)?.siteId ?? null }));
-  return { ok: true, access: { accesses, asAccountAdmin: input.asAccountAdmin === true } };
+  const roleIdBySite: Record<string, string> = {};
+  if (input.employeeRoleId) {
+    const role = await checkPickedRole(
+      input.employeeRoleId,
+      accesses.map((a) => a.siteId),
+    );
+    if (!role.ok) return { ok: false, error: role.error };
+    roleIdBySite[role.siteId] = input.employeeRoleId;
+  }
+  return { ok: true, access: { accesses, asAccountAdmin: input.asAccountAdmin === true, roleIdBySite } };
 }
 
 /** Making account admins is an account admin's alone; buckets need ADMIN at their plant. */
@@ -211,6 +226,7 @@ export async function createInvite(
           });
 
           await writeAccesses(tx, existingUser.id, access.accesses);
+          await syncAccountTeamMember(tx, existingUser.id, { roleIdBySite: access.roleIdBySite });
 
           return updated;
         });
@@ -245,6 +261,7 @@ export async function createInvite(
         });
 
         await writeAccesses(tx, createdUser.id, access.accesses);
+        await syncAccountTeamMember(tx, createdUser.id, { roleIdBySite: access.roleIdBySite });
 
         return createdUser;
       });
@@ -337,8 +354,14 @@ export async function revokeInvite(input: {
     return { success: false, error: "FORBIDDEN" };
   }
 
-  // Bucket accesses and refresh tokens cascade
-  await prisma.user.delete({ where: { id: target.id } });
+  // Bucket accesses and refresh tokens cascade. The team profile the invite
+  // made goes too; a real team member linked by email stays, unlinked.
+  await prisma.$transaction(async (tx) => {
+    const { employeeId } = await tx.user.delete({ where: { id: target.id }, select: { employeeId: true } });
+    if (employeeId && (await isAccountOnlyProfile(tx, employeeId))) {
+      await tx.employee.delete({ where: { id: employeeId } });
+    }
+  });
 
   await logEvent({
     action: "INVITE_REVOKED",
