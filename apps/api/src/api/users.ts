@@ -88,6 +88,9 @@ const inviteBodySchema = {
     asAccountAdmin: { type: "boolean" },
     firstName: { type: "string" },
     lastName: { type: "string" },
+    // The invitee's team role at the invited plant (they join its team);
+    // omitted, it follows their access: Manager, Supervisor or Operator.
+    employeeRoleId: { type: "string", format: "uuid" },
   },
   required: ["email"],
 } as const satisfies JSONSchema;
@@ -496,7 +499,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
       const me = asUser(request.current);
       if (!me) return reply.status(401).send({ error: "Unauthorized" });
 
-      const { email, bucketAccesses, asAccountAdmin, firstName, lastName } = request.body;
+      const { email, bucketAccesses, asAccountAdmin, firstName, lastName, employeeRoleId } = request.body;
       const result = await user.createInvite({
         email,
         inviterId: me.user.id,
@@ -506,6 +509,7 @@ export default async function userRoutes(fastify: FastifyTypedInstance) {
         asAccountAdmin,
         firstName,
         lastName,
+        employeeRoleId,
         // Safe here because this route is authenticated: the origin comes
         // from the inviting admin's own browser. Never reuse on public routes.
         appUrl: validHttpOrigin(request.headers.origin),
