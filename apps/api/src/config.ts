@@ -54,9 +54,9 @@ const EnvSchema = z.object({
   // rw-hub carries SMS (holds the Twilio credentials); unset = the SMS channel records SKIPPED.
   HUB_URL: z.string().optional(),
   HUB_API_KEY: z.string().optional(),
-  // Support widget identity (Help Scout Beacon Secure Mode: Beacons → Contact →
-  // "Enable cross-device history"). Unset = /users/me supportSignature is null
-  // and the widget treats users as anonymous visitors.
+  // Support widget identity (Chatwoot website inbox → Settings → Configuration →
+  // Identity Validation token). Unset = /users/me supportSignature is null and
+  // the widget can't verify who is writing.
   SUPPORT_IDENTITY_SECRET: z.string().optional(),
   BUCKET_NAME: z.string().optional(),
   AWS_REGION: z.string().default("auto"),
