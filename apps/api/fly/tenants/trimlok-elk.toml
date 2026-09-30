@@ -24,6 +24,10 @@ required_secrets = [
   'AWS_REGION',
   'AWS_ENDPOINT_URL_S3',
   'BUCKET_NAME',
+  # IMM Support (Chatwoot): the website inbox's Identity Validation (HMAC)
+  # token, so the widget knows who's signed in. Not from the provisioner:
+  # flyctl secrets set SUPPORT_IDENTITY_SECRET=… -a trimlok-elk-api
+  'SUPPORT_IDENTITY_SECRET',
 ]
 domain = 'trimlok-elk-api.rockware.io'
 

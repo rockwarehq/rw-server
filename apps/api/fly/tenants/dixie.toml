@@ -7,6 +7,8 @@ app = 'dixie-api'
 # - HUB_URL, HUB_API_KEY (optional — unset means SMS records SKIPPED; rw-hub holds the Twilio creds)
 # - MQTT_GATEWAY_REALY_URL, MQTT_GATEWAY_REALY_USER, MQTT_GATEWAY_REALY_PASSWORD
 # - AWS_* + BUCKET_NAME (if S3 uploads enabled)
+# - SUPPORT_IDENTITY_SECRET (IMM Support: the Chatwoot website inbox's
+#   Identity Validation token, so the widget knows who's signed in)
 [_meta]
 required_secrets = [
   'DATABASE_URL',
@@ -19,6 +21,7 @@ required_secrets = [
   'MQTT_GATEWAY_REALY_USER',
   'MQTT_GATEWAY_REALY_PASSWORD',
   'INTEGRATION_ENCRYPTION_KEY',
+  'SUPPORT_IDENTITY_SECRET',
 ]
 domain = 'dixie-api.rockware.io'
 
