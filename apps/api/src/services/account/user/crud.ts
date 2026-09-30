@@ -124,7 +124,7 @@ export async function getMe(me: UserCurrent) {
     firstName: user.firstName,
     lastName: user.lastName,
     avatarUrl: await resolveAvatarUrl(user.avatarKey),
-    supportSignature: supportIdentitySignature(user.email),
+    supportSignature: supportIdentitySignature(user.id),
   };
 
   const workspace = await prisma.workspace.findUnique({

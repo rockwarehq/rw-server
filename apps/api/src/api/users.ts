@@ -203,7 +203,7 @@ const getMeResponseSchema = {
         firstName: { type: "string", nullable: true },
         lastName: { type: "string", nullable: true },
         avatarUrl: { type: "string", nullable: true },
-        // Support-widget (Help Scout Beacon) Secure Mode signature for this email;
+        // Support-widget (Chatwoot) identity signature: HMAC of this user's id;
         // null when SUPPORT_IDENTITY_SECRET is unset.
         supportSignature: { type: "string", nullable: true },
       },

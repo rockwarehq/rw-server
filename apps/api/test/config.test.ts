@@ -39,9 +39,9 @@ describe("config validation", () => {
   it("the support identity secret is optional and gates supportConfig", async () => {
     for (const [key, value] of Object.entries(PROD_BASELINE)) vi.stubEnv(key, value);
     expect((await loadConfig()).supportConfig.enabled).toBe(false);
-    vi.stubEnv("SUPPORT_IDENTITY_SECRET", "beacon-secret");
+    vi.stubEnv("SUPPORT_IDENTITY_SECRET", "inbox-token");
     const config = await loadConfig();
-    expect(config.supportConfig).toEqual({ identitySecret: "beacon-secret", enabled: true });
+    expect(config.supportConfig).toEqual({ identitySecret: "inbox-token", enabled: true });
   });
 
   it("reflects any origin by default, even in production", async () => {
