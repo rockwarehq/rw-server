@@ -104,16 +104,30 @@ export const span = userRequired
 
 // ── Editions ───────────────────────────────────────────────────────────────
 
-export const makeEdition = userRequired.input(z.object({ deckId: z.uuid() })).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { reportDeck: input.deckId });
-  return unwrap(
-    await deck.makeEdition(input.deckId, {
-      asOf: new Date(),
-      source: "MANUAL",
-      createdById: context.current.user.id,
+export const makeEdition = userRequired
+  .input(
+    z.object({
+      deckId: z.uuid(),
+      /**
+       * The moment the edition is worked out as of; now when omitted. A past
+       * moment keeps an earlier period — a shift recap as of a shift's end is
+       * THAT shift's recap, which is how any past shift is shared. Never the
+       * future: an edition is what had finished by then.
+       */
+      asOf: z.coerce.date().optional(),
     }),
-  );
-});
+  )
+  .handler(async ({ input, context }) => {
+    await context.access.require("MANAGE", { reportDeck: input.deckId });
+    const now = new Date();
+    return unwrap(
+      await deck.makeEdition(input.deckId, {
+        asOf: input.asOf && input.asOf.getTime() < now.getTime() ? input.asOf : now,
+        source: "MANUAL",
+        createdById: context.current.user.id,
+      }),
+    );
+  });
 
 export const listEditions = userRequired.input(z.object({ deckId: z.uuid() })).handler(async ({ input, context }) => {
   await context.access.require("VIEW", { reportDeck: input.deckId });

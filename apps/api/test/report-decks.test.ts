@@ -185,6 +185,68 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("report decks (Tier 2)", () => {
     expect(deckOverShift.statusCode).toBe(400);
   });
 
+  it("makes a recap edition as of an earlier moment: that shift's, not the latest", async () => {
+    const [recap] = (await rpcCall(server, "deck/list", { siteId, kind: "SHIFT_RECAP" }, managerToken)).json as {
+      id: string;
+    }[];
+    // An older "1st" shift, three days back, beside yesterday's.
+    const earlier = dateOf(Date.now() - 3 * DAY_MS);
+    const assignment = await prisma.shiftAssignment.findFirstOrThrow({
+      where: { workCenterId: workcenterId },
+      select: { id: true },
+    });
+    const shift = await prisma.shiftInstance.create({
+      data: {
+        assignmentId: assignment.id,
+        siteId,
+        workCenterId: workcenterId,
+        shiftName: "1st",
+        businessDate: new Date(earlier),
+        startTime: new Date(`${earlier}T00:00:00Z`),
+        endTime: new Date(`${earlier}T08:00:00Z`),
+      },
+      select: { id: true },
+    });
+    try {
+      const pagesOf = async (editionId: string) =>
+        (
+          (await rpcCall(server, "deck/getEdition", { id: editionId }, managerToken)).json as {
+            pages: { shifts: { shiftName: string; businessDate: string }[] }[];
+          }
+        ).pages;
+
+      // As of the earlier shift's end, the last finished "1st" shift is that one.
+      const past = await rpcCall(
+        server,
+        "deck/makeEdition",
+        { deckId: recap!.id, asOf: `${earlier}T08:00:00Z` },
+        managerToken,
+      );
+      expect(past.statusCode).toBe(200);
+      const pastEdition = past.json as { id: string; asOf: string; dateFrom: string };
+      expect(new Date(pastEdition.asOf).toISOString()).toBe(`${earlier}T08:00:00.000Z`);
+      expect(pastEdition.dateFrom).toBe(earlier);
+      expect((await pagesOf(pastEdition.id))[0]?.shifts).toMatchObject([{ shiftName: "1st", businessDate: earlier }]);
+
+      // A moment still to come is now: an edition is what had finished by then.
+      const future = await rpcCall(
+        server,
+        "deck/makeEdition",
+        { deckId: recap!.id, asOf: new Date(Date.now() + 7 * DAY_MS).toISOString() },
+        managerToken,
+      );
+      expect(future.statusCode).toBe(200);
+      const futureEdition = future.json as { id: string; asOf: string; dateFrom: string };
+      expect(new Date(futureEdition.asOf).getTime()).toBeLessThanOrEqual(Date.now());
+      expect(futureEdition.dateFrom).toBe(yesterday);
+
+      await rpcCall(server, "deck/deleteEdition", { id: pastEdition.id }, managerToken);
+      await rpcCall(server, "deck/deleteEdition", { id: futureEdition.id }, managerToken);
+    } finally {
+      await prisma.shiftInstance.delete({ where: { id: shift.id } });
+    }
+  });
+
   it("opens a recap edition's shift live from its link, and nothing else", async () => {
     const [recap] = (await rpcCall(server, "deck/list", { siteId, kind: "SHIFT_RECAP" }, managerToken)).json as {
       id: string;
