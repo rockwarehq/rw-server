@@ -14,6 +14,10 @@ export interface UpdateWorkcenterInput {
   name?: string;
   description?: string;
   attrs?: Record<string, unknown>;
+  /** Detection defaults for the workcenter's stations; null clears one. */
+  slowDetect?: number | null;
+  fastDetect?: number | null;
+  downtimeDetect?: number | null;
 }
 
 export interface ListWorkcentersFilter {
@@ -182,7 +186,7 @@ export async function getById(id: string) {
  * Update workcenter
  */
 export async function update(id: string, input: UpdateWorkcenterInput) {
-  const { name, description, attrs } = input;
+  const { name, description, attrs, slowDetect, fastDetect, downtimeDetect } = input;
 
   const current = await prisma.workcenter.findUnique({
     where: { id },
@@ -197,6 +201,11 @@ export async function update(id: string, input: UpdateWorkcenterInput) {
   if (name !== undefined) updateData.name = name;
   if (description !== undefined) updateData.description = description;
   if (attrs !== undefined) updateData.attrs = attrs;
+  // Read per cycle (the cycle path and the detection timers), so a change
+  // takes effect from each station's next cycle with nothing to re-arm.
+  if (slowDetect !== undefined) updateData.slowDetect = slowDetect;
+  if (fastDetect !== undefined) updateData.fastDetect = fastDetect;
+  if (downtimeDetect !== undefined) updateData.downtimeDetect = downtimeDetect;
 
   const workcenter = await prisma.workcenter.update({
     where: { id },

@@ -137,6 +137,83 @@ export function quantityWasSlow(std: ResolvedStandards, quantity: number | null,
   return quantity * (1 + slowFraction) < std.standardQuantity;
 }
 
+/** Interval-mode fast = quantity surplus: the inverse of {@link quantityWasSlow}. */
+export function quantityWasFast(std: ResolvedStandards, quantity: number | null, fastFraction: number | null): boolean {
+  if (std.mode !== "QUANTITY_PER_INTERVAL") return false;
+  if (quantity == null || std.standardQuantity == null) return false;
+  if (fastFraction == null || fastFraction <= 0) return false;
+  return quantity * (1 - fastFraction) > std.standardQuantity;
+}
+
+/** How a cycle ran against its standard; null = not judged. Mirrors the CyclePace enum. */
+export type CyclePaceValue = "NORMAL" | "SLOW" | "FAST";
+
+/**
+ * What decides one cycle's pace, worked out once before the transaction.
+ * The thresholds are seconds of cycle time; the quantity flags are the
+ * interval-mode outcome, already decided because the quantity is known.
+ */
+export interface PaceRule {
+  /** False = nothing to judge against (no standard): the pace stays null. */
+  judged: boolean;
+  /** Longer than this is slow; undefined = slow detection is off. */
+  slowThresholdSeconds: number | undefined;
+  /** Shorter than this is fast; undefined = fast detection is off. */
+  fastThresholdSeconds: number | undefined;
+  slowByQuantity: boolean;
+  fastByQuantity: boolean;
+}
+
+/** A pace rule that judges nothing — replays of cycles with no usable standard. */
+export const NO_PACE_RULE: PaceRule = {
+  judged: false,
+  slowThresholdSeconds: undefined,
+  fastThresholdSeconds: undefined,
+  slowByQuantity: false,
+  fastByQuantity: false,
+};
+
+/**
+ * The pace rule for one cycle. `slowFraction`/`fastFraction` are the EFFECTIVE
+ * detects (the station's own, else its workcenter's); null or 0 = off.
+ * Fast is slow's inverse: slow is longer than standard × (1 + slow), fast is
+ * shorter than standard × (1 − fast). A fast fraction of 1 or more could never
+ * be met (a cycle cannot take no time), so it is off.
+ */
+export function resolvePaceRule(
+  std: ResolvedStandards,
+  quantity: number | null,
+  slowFraction: number | null,
+  fastFraction: number | null,
+): PaceRule {
+  const standard = positive(std.standardCycleSeconds);
+  const slow = positive(slowFraction);
+  const fast = positive(fastFraction);
+  return {
+    judged: standard != null,
+    slowThresholdSeconds: standard != null && slow != null ? standard * (1 + slow) : undefined,
+    fastThresholdSeconds: standard != null && fast != null && fast < 1 ? standard * (1 - fast) : undefined,
+    slowByQuantity: quantityWasSlow(std, quantity, slowFraction),
+    fastByQuantity: quantityWasFast(std, quantity, fastFraction),
+  };
+}
+
+/**
+ * One cycle's pace. `durationSeconds` null or 0 is a cycle with no measured
+ * length (the station's first): only an interval-mode quantity can judge it.
+ * Slow wins a tie it cannot really have (a late AND oversized interval).
+ * Keep in step with {@link paceSql} in cycle.ts, which decides the same thing
+ * inside the insert.
+ */
+export function judgePace(rule: PaceRule, durationSeconds: number | null): CyclePaceValue | null {
+  if (rule.slowByQuantity) return "SLOW";
+  if (rule.fastByQuantity) return "FAST";
+  if (!rule.judged || durationSeconds == null || durationSeconds <= 0) return null;
+  if (rule.slowThresholdSeconds != null && durationSeconds > rule.slowThresholdSeconds) return "SLOW";
+  if (rule.fastThresholdSeconds != null && durationSeconds < rule.fastThresholdSeconds) return "FAST";
+  return "NORMAL";
+}
+
 function positive(value: number | null | undefined): number | null {
   return value != null && Number.isFinite(value) && value > 0 ? value : null;
 }

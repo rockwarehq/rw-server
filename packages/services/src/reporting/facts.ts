@@ -305,6 +305,18 @@ export const FACTS: Record<string, FactDef> = {
         denominator: "cycles",
       },
       amendedCycles: { kind: "sum", label: "Amended cycles", expr: amendedRow, description: AMENDED_DESCRIPTION },
+      slowCycles: {
+        kind: "sum",
+        label: "Slow cycles",
+        expr: `CASE WHEN f."pace" = 'SLOW' THEN 1 ELSE 0 END`,
+        description: "Cycles slower than standard by more than the station's slow detect.",
+      },
+      fastCycles: {
+        kind: "sum",
+        label: "Fast cycles",
+        expr: `CASE WHEN f."pace" = 'FAST' THEN 1 ELSE 0 END`,
+        description: "Cycles faster than standard by more than the station's fast detect.",
+      },
     },
     dimensions: {
       businessDate: businessDateDim(),
@@ -317,6 +329,9 @@ export const FACTS: Record<string, FactDef> = {
       job: jobDim(),
       mode: modeDim(),
       cycleStatus: enumDim("Cycle status", "cycleStatus", ["GOOD", "BAD", "DISCARD"]),
+      // Judged when the cycle recorded, by the station's slow/fast detects
+      // (its own, else its workcenter's). Empty = not judged.
+      pace: enumDim("Pace", "pace", ["NORMAL", "SLOW", "FAST"]),
       amendment: amendmentDim,
     },
   },

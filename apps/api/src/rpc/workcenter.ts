@@ -19,6 +19,17 @@ const updateInputSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().optional(),
   attrs: z.record(z.string(), z.unknown()).optional(),
+  /**
+   * Detection defaults for the workcenter's stations; a station's own value
+   * overrides. null clears one (stations without their own then have none).
+   * Slow and fast are fractions of the standard cycle (0.25 = 25%); down is
+   * seconds past the standard cycle. They take effect from each station's
+   * next cycle.
+   */
+  slowDetect: z.number().positive().nullable().optional(),
+  // A cycle cannot take no time, so 100% faster or more could never be met.
+  fastDetect: z.number().positive().lt(1).nullable().optional(),
+  downtimeDetect: z.number().positive().nullable().optional(),
 });
 
 const idInputSchema = z.object({

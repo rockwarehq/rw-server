@@ -26,6 +26,7 @@ export interface CreateStationInput {
   downtimeDetectUnit?: "SECONDS";
   slowDetect?: number;
   slowDetectUnit?: "PERCENTAGE";
+  fastDetect?: number;
   inLineCalculations?: boolean;
   inStationCalculations?: boolean;
   /** Follow this profile (ADR-0017): how the station counts comes from it. null = stop following. */
@@ -56,6 +57,7 @@ export interface UpdateStationInput {
   downtimeDetectUnit?: "SECONDS";
   slowDetect?: number | null;
   slowDetectUnit?: "PERCENTAGE";
+  fastDetect?: number | null;
   inLineCalculations?: boolean;
   inStationCalculations?: boolean;
   /** Follow this profile (ADR-0017): how the station counts comes from it. null = stop following. */
@@ -139,6 +141,7 @@ const VERSION_FIELDS = [
   "downtimeDetectUnit",
   "slowDetect",
   "slowDetectUnit",
+  "fastDetect",
   "inLineCalculations",
   "inStationCalculations",
 ] as const;
@@ -188,6 +191,7 @@ export async function create(input: CreateStationInput) {
     downtimeDetectUnit,
     slowDetect,
     slowDetectUnit,
+    fastDetect,
     inLineCalculations,
     inStationCalculations,
   } = input;
@@ -266,6 +270,7 @@ export async function create(input: CreateStationInput) {
           downtimeDetectUnit: downtimeDetectUnit ?? "SECONDS",
           slowDetect: slowDetect ?? null,
           slowDetectUnit: slowDetectUnit ?? "PERCENTAGE",
+          fastDetect: fastDetect ?? null,
           inLineCalculations: inLineCalculations ?? false,
           inStationCalculations: inStationCalculations ?? false,
           ...profileFields,
@@ -400,6 +405,7 @@ export async function update(id: string, input: UpdateStationInput) {
     downtimeDetectUnit,
     slowDetect,
     slowDetectUnit,
+    fastDetect,
     inLineCalculations,
     inStationCalculations,
   } = input;
@@ -449,6 +455,7 @@ export async function update(id: string, input: UpdateStationInput) {
     downtimeDetectUnit,
     slowDetect,
     slowDetectUnit,
+    fastDetect,
     inLineCalculations,
     inStationCalculations,
   };
@@ -495,6 +502,7 @@ export async function update(id: string, input: UpdateStationInput) {
             downtimeDetectUnit !== undefined ? downtimeDetectUnit : (oldVersion?.downtimeDetectUnit ?? "SECONDS"),
           slowDetect: slowDetect !== undefined ? slowDetect : (oldVersion?.slowDetect ?? null),
           slowDetectUnit: slowDetectUnit !== undefined ? slowDetectUnit : (oldVersion?.slowDetectUnit ?? "PERCENTAGE"),
+          fastDetect: fastDetect !== undefined ? fastDetect : (oldVersion?.fastDetect ?? null),
           inLineCalculations:
             inLineCalculations !== undefined ? inLineCalculations : (oldVersion?.inLineCalculations ?? false),
           inStationCalculations:

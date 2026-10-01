@@ -4,6 +4,14 @@ model Workcenter {
   description String?
   attrs       Json    @default("{}")
 
+  /// Detection defaults for the workcenter's stations; a station's own value
+  /// (StationVersion) overrides. Null = none here. Same units as the station's:
+  /// slow/fast are fractions of the standard cycle (0.25 = 25%), down is seconds
+  /// past the standard cycle.
+  slowDetect     Decimal? @db.Decimal(10, 2)
+  fastDetect     Decimal? @db.Decimal(10, 2)
+  downtimeDetect Decimal? @db.Decimal(10, 2)
+
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 

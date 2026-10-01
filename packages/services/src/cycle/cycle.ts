@@ -27,10 +27,13 @@ import { batchedMetricsUpdate } from "../metrics/batcher.js";
 import { incrementHourCounts } from "../metrics/cascade.js";
 import { trackReplayedCycle } from "./replay.js";
 import {
-  quantityWasSlow,
+  judgePace,
   resolveCycleActuals,
+  resolvePaceRule,
   resolveStandards,
+  type CyclePaceValue,
   type CycleStamp,
+  type PaceRule,
   type ResolvedStandards,
 } from "./standards.js";
 
@@ -95,14 +98,34 @@ function publishStockEffects(siteId: string, workspaceId: string, items: CycleIt
 }
 
 /** Result from all strategy functions — unified so post-commit publishes can share one connection. */
+/**
+ * The pace of the cycle being inserted, decided inside the insert because its
+ * start (the previous cycle's end) is only known there. Must be used in a
+ * statement with a `prev` CTE holding that end. Keep in step with judgePace.
+ */
+function paceSql(rule: PaceRule, timestamp: Date): Prisma.Sql {
+  if (rule.slowByQuantity) return Prisma.sql`'SLOW'::"CyclePace"`;
+  if (rule.fastByQuantity) return Prisma.sql`'FAST'::"CyclePace"`;
+  if (!rule.judged) return Prisma.sql`NULL::"CyclePace"`;
+  const seconds = Prisma.sql`EXTRACT(EPOCH FROM (${timestamp}::timestamptz - (SELECT "end" FROM prev)))`;
+  const slow = rule.slowThresholdSeconds ?? null;
+  const fast = rule.fastThresholdSeconds ?? null;
+  return Prisma.sql`(CASE
+    WHEN (SELECT "end" FROM prev) IS NULL OR ${seconds} <= 0 THEN NULL
+    WHEN ${slow}::float8 IS NOT NULL AND ${seconds} > ${slow}::float8 THEN 'SLOW'
+    WHEN ${fast}::float8 IS NOT NULL AND ${seconds} < ${fast}::float8 THEN 'FAST'
+    ELSE 'NORMAL'
+  END)::"CyclePace"`;
+}
+
 interface StrategyResult {
   cycle: { id: string; start: Date; end: Date | null };
   items: CycleItems;
   /** Populated only when a state-log row actually closed (period model: most cycles close nothing). */
   closedEntry: ClosedEntryInfo | null;
-  /** Open status after the cycle ("UP" or "SLOW"), or null when the
+  /** Open status after the cycle ("UP", "SLOW" or "FAST"), or null when the
    * strategy did not evaluate state (replayed paths). */
-  newStatus: "UP" | "SLOW" | null;
+  newStatus: "UP" | "SLOW" | "FAST" | null;
   /** Status/reason changed vs the prior open row — gates the entity.changes publish. */
   statusChanged: boolean;
   /** Loaded inside the tx so post-commit publishes don't check out their own connections. */
@@ -190,6 +213,7 @@ export async function complete(input: StartCycleInput) {
       currentVersionId: string | null;
       standardCycle: number | null;
       slowDetect: number | null;
+      fastDetect: number | null;
       cycleMode: string | null;
       stationStandardQuantity: number | null;
       stationQuantityUnit: string | null;
@@ -213,7 +237,9 @@ export async function complete(input: StartCycleInput) {
         j."siteId" AS "jobSiteId",
         j."currentVersionId",
         jb."standardCycle"::float8 AS "standardCycle",
-        sb."slowDetect"::float8 AS "slowDetect",
+        -- The station's own detect, else its workcenter's default.
+        COALESCE(sb."slowDetect", wc."slowDetect")::float8 AS "slowDetect",
+        COALESCE(sb."fastDetect", wc."fastDetect")::float8 AS "fastDetect",
         sb."cycleMode"::text AS "cycleMode",
         sb."standardQuantity"::float8 AS "stationStandardQuantity",
         sb."quantityUnit" AS "stationQuantityUnit",
@@ -229,6 +255,7 @@ export async function complete(input: StartCycleInput) {
       JOIN "Job" j ON j.id = ${jobId}
       LEFT JOIN "JobVersion" jb ON jb.id = j."currentVersionId"
       LEFT JOIN "StationVersion" sb ON sb."id" = s."currentVersionId"
+      LEFT JOIN "Workcenter" wc ON wc.id = s."workcenterId"
       WHERE s.id = ${stationId}
     ),
     tools AS (
@@ -242,7 +269,7 @@ export async function complete(input: StartCycleInput) {
            COALESCE(array_agg(DISTINCT t."toolVersionId") FILTER (WHERE t."toolVersionId" IS NOT NULL), '{}') AS "toolVersionIds"
     FROM setup s
     LEFT JOIN tools t ON true
-    GROUP BY s."siteId", s."workspaceId", s."workcenterId", s."jobSiteId", s."currentVersionId", s."standardCycle", s."slowDetect",
+    GROUP BY s."siteId", s."workspaceId", s."workcenterId", s."jobSiteId", s."currentVersionId", s."standardCycle", s."slowDetect", s."fastDetect",
              s."cycleMode", s."stationStandardQuantity", s."stationQuantityUnit", s."stationStandardCycle",
              s."stationStandardRate", s."stationStandardRateUnit", s."stationStandardRatePeriod",
              s."standardRate", s."standardRateUnit", s."standardRatePeriod"
@@ -262,7 +289,6 @@ export async function complete(input: StartCycleInput) {
   }
 
   const siteId = setup.siteId;
-  const slowFraction = setup.slowDetect;
 
   const std = resolveStandards({
     cycleMode: setup.cycleMode,
@@ -277,15 +303,11 @@ export async function complete(input: StartCycleInput) {
     jobStandardRateUnit: setup.standardRateUnit,
     jobStandardRatePeriod: setup.standardRatePeriod,
   });
-  const standardCycleSeconds = std.standardCycleSeconds;
   const cycleStamp = resolveCycleActuals(std, quantity ?? null);
 
-  let slowThresholdSeconds: number | undefined;
-  if (standardCycleSeconds != null && standardCycleSeconds > 0 && slowFraction != null && slowFraction > 0) {
-    slowThresholdSeconds = standardCycleSeconds * (1 + slowFraction);
-  }
-  // Interval mode: slow is a quantity shortfall, not lateness.
-  const slowByQuantity = quantityWasSlow(std, cycleStamp.quantity, slowFraction);
+  // Slow and fast against this cycle's standard; interval mode judges the
+  // quantity instead of lateness (a slow line still emits on the clock).
+  const paceRule = resolvePaceRule(std, cycleStamp.quantity, setup.slowDetect, setup.fastDetect);
 
   const versionConnects: VersionConnects = {
     jobVersionId: setup.currentVersionId,
@@ -315,6 +337,7 @@ export async function complete(input: StartCycleInput) {
           versionConnects,
           sourceEventId,
           cycleStamp,
+          paceRule,
           dims,
         )
       : await completeImmediateReplay(
@@ -325,6 +348,7 @@ export async function complete(input: StartCycleInput) {
           versionConnects,
           sourceEventId,
           cycleStamp,
+          paceRule,
           dims,
         )
     : keepOpen
@@ -336,9 +360,8 @@ export async function complete(input: StartCycleInput) {
           versionConnects,
           idealCycleIncrement,
           sourceEventId,
-          slowThresholdSeconds,
           cycleStamp,
-          slowByQuantity,
+          paceRule,
           std,
           dims,
         )
@@ -350,9 +373,8 @@ export async function complete(input: StartCycleInput) {
           versionConnects,
           idealCycleIncrement,
           sourceEventId,
-          slowThresholdSeconds,
           cycleStamp,
-          slowByQuantity,
+          paceRule,
           std,
           dims,
         );
@@ -470,9 +492,8 @@ async function completeImmediate(
   versionConnects: VersionConnects,
   idealCycleIncrement: number,
   sourceEventId: string | null,
-  slowThresholdSeconds: number | undefined,
   stamp: CycleStamp,
-  slowByQuantity: boolean,
+  paceRule: PaceRule,
   std: ResolvedStandards,
   dims: StampDims,
 ): Promise<StrategyResult | null> {
@@ -490,6 +511,7 @@ async function completeImmediate(
         cycle_id: string;
         cycle_start: Date;
         cycle_end: Date;
+        cycle_pace: CyclePaceValue | null;
         state_id: string | null;
         state_start: Date | null;
         state_state: string | null;
@@ -504,7 +526,7 @@ async function completeImmediate(
         ORDER BY "end" DESC LIMIT 1
       ),
       new_cycle AS (
-        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", quantity, "quantityUnit", "standardCycle", "standardQuantity", "siteId", "stationId", "jobVersionId", "sourceEventId", "modeId", "workcenterId", "jobId", "shiftInstanceId", "businessDate", "isScheduled", attrs, "createdAt", "updatedAt")
+        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", quantity, "quantityUnit", "standardCycle", "standardQuantity", "siteId", "stationId", "jobVersionId", "sourceEventId", "modeId", "workcenterId", "jobId", "shiftInstanceId", "businessDate", "isScheduled", pace, attrs, "createdAt", "updatedAt")
         VALUES (
           gen_random_uuid(),
           COALESCE((SELECT "end" FROM prev), ${timestamp}),
@@ -524,15 +546,16 @@ async function completeImmediate(
           ${dims.shiftInstanceId}::uuid,
           ${toDateString(dims.businessDate) ?? null}::date,
           ${dims.isScheduled},
+          ${paceSql(paceRule, timestamp)},
           '{}',
           NOW(),
           NOW()
         )
         ON CONFLICT ("sourceEventId") DO NOTHING
-        RETURNING id, start, "end"
+        RETURNING id, start, "end", pace
       )
       SELECT
-        nc.id AS cycle_id, nc.start AS cycle_start, nc."end" AS cycle_end,
+        nc.id AS cycle_id, nc.start AS cycle_start, nc."end" AS cycle_end, nc.pace::text AS cycle_pace,
         cs.id AS state_id, cs."startTime" AS state_start, cs.state AS state_state,
         cs.status AS state_status, cs."statusReasonId"::text AS state_status_reason_id,
         cs."blockId" AS state_block_id
@@ -577,14 +600,9 @@ async function completeImmediate(
     // Period model: the state log only changes on a real transition
     // (SLOW→RUNNING, DOWN→RUNNING, slow fallback) — most cycles write nothing.
     const cycleDurationSeconds = (timestamp.getTime() - cycle.start.getTime()) / 1000;
-    const isSlow =
-      (cycleDurationSeconds > 0 &&
-        slowThresholdSeconds != null &&
-        slowThresholdSeconds > 0 &&
-        cycleDurationSeconds > slowThresholdSeconds) ||
-      slowByQuantity;
+    // The insert judged the cycle (paceSql); the status follows its pace.
     const transition = await applyCycleCompleteTransition(tx, stationId, timestamp, {
-      cycleWasSlow: isSlow,
+      pace: row.cycle_pace,
       cycleStart: cycle.start,
       jobId,
       jobVersionId: versionConnects.jobVersionId,
@@ -652,9 +670,8 @@ async function completeOpenClose(
   versionConnects: VersionConnects,
   idealCycleIncrement: number,
   sourceEventId: string | null,
-  slowThresholdSeconds: number | undefined,
   stamp: CycleStamp,
-  slowByQuantity: boolean,
+  paceRule: PaceRule,
   std: ResolvedStandards,
   dims: StampDims,
 ): Promise<StrategyResult | null> {
@@ -697,6 +714,7 @@ async function completeOpenClose(
             data: {
               end: timestamp,
               ...stamp,
+              pace: judgePace(paceRule, (timestamp.getTime() - oc.start.getTime()) / 1000),
               workcenterId: closeDims.workcenterId,
               shiftInstanceId: closeDims.shiftInstanceId,
               businessDate: closeDims.businessDate,
@@ -718,6 +736,8 @@ async function completeOpenClose(
               end: timestamp,
               cycleStatus: "GOOD",
               ...stamp,
+              // No measured length: only an interval's quantity can judge it.
+              pace: judgePace(paceRule, null),
               siteId,
               stationId,
               modeId: mode?.modeId ?? null,
@@ -737,17 +757,14 @@ async function completeOpenClose(
       const scrap = await applyModeScrap(tx, siteId, stationId, mode, items, dims);
 
       const openEntry = await findOpenStateEntry(tx, stationId);
-      const cycleDurationSeconds =
-        openCycles.length > 0 ? (timestamp.getTime() - openCycles[0].start.getTime()) / 1000 : null;
-      const isSlow =
-        (cycleDurationSeconds != null &&
-          cycleDurationSeconds > 0 &&
-          slowThresholdSeconds != null &&
-          slowThresholdSeconds > 0 &&
-          cycleDurationSeconds > slowThresholdSeconds) ||
-        slowByQuantity;
+      // The cycle this event closed decides the status; with none to close
+      // (the station's first event) only an interval's quantity can.
+      const closedPace = judgePace(
+        paceRule,
+        openCycles.length > 0 ? (timestamp.getTime() - openCycles[0].start.getTime()) / 1000 : null,
+      );
       const transition = await applyCycleCompleteTransition(tx, stationId, timestamp, {
-        cycleWasSlow: isSlow,
+        pace: closedPace,
         cycleStart: openCycles[0]?.start ?? timestamp,
         jobId,
         jobVersionId: versionConnects.jobVersionId,
@@ -835,6 +852,7 @@ async function completeImmediateReplay(
   versionConnects: VersionConnects,
   sourceEventId: string | null,
   stamp: CycleStamp,
+  paceRule: PaceRule,
   dims: StampDims,
 ): Promise<StrategyResult | null> {
   return prisma.$transaction(async (tx) => {
@@ -856,7 +874,7 @@ async function completeImmediateReplay(
         ORDER BY "end" DESC LIMIT 1
       ),
       new_cycle AS (
-        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", quantity, "quantityUnit", "standardCycle", "standardQuantity", "siteId", "stationId", "jobVersionId", "sourceEventId", "modeId", "workcenterId", "jobId", "shiftInstanceId", "businessDate", "isScheduled", attrs, "createdAt", "updatedAt")
+        INSERT INTO "Cycle" (id, start, "end", "cycleStatus", quantity, "quantityUnit", "standardCycle", "standardQuantity", "siteId", "stationId", "jobVersionId", "sourceEventId", "modeId", "workcenterId", "jobId", "shiftInstanceId", "businessDate", "isScheduled", pace, attrs, "createdAt", "updatedAt")
         VALUES (
           gen_random_uuid(),
           COALESCE((SELECT "end" FROM prev), ${timestamp}),
@@ -876,12 +894,13 @@ async function completeImmediateReplay(
           ${dims.shiftInstanceId}::uuid,
           ${toDateString(dims.businessDate) ?? null}::date,
           ${dims.isScheduled},
+          ${paceSql(paceRule, timestamp)},
           '{}',
           NOW(),
           NOW()
         )
         ON CONFLICT ("sourceEventId") DO NOTHING
-        RETURNING id, start, "end"
+        RETURNING id, start, "end", pace
       )
       SELECT nc.id AS cycle_id, nc.start AS cycle_start, nc."end" AS cycle_end
       FROM new_cycle nc
@@ -940,6 +959,7 @@ async function completeOpenCloseReplay(
   versionConnects: VersionConnects,
   sourceEventId: string | null,
   stamp: CycleStamp,
+  paceRule: PaceRule,
   dims: StampDims,
 ): Promise<StrategyResult | null> {
   return prisma
@@ -975,6 +995,7 @@ async function completeOpenCloseReplay(
             data: {
               end: timestamp,
               ...stamp,
+              pace: judgePace(paceRule, (timestamp.getTime() - oc.start.getTime()) / 1000),
               workcenterId: closeDims.workcenterId,
               shiftInstanceId: closeDims.shiftInstanceId,
               businessDate: closeDims.businessDate,
@@ -996,6 +1017,8 @@ async function completeOpenCloseReplay(
               end: timestamp,
               cycleStatus: "GOOD",
               ...stamp,
+              // No measured length: only an interval's quantity can judge it.
+              pace: judgePace(paceRule, null),
               siteId,
               stationId,
               modeId: mode?.modeId ?? null,
