@@ -23,6 +23,7 @@ export {
   getById,
   update,
   move,
+  reorder,
   remove,
   exists,
   addDatasource,

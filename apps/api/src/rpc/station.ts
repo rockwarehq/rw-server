@@ -23,6 +23,7 @@ const createInputSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
   attrs: z.record(z.string(), z.unknown()).optional(),
+  sortOrder: z.number().int().optional(),
   siteId: z.uuid(),
   workcenterId: z.uuid().optional(),
   labelIds: z.array(z.uuid()).max(50).optional(),
@@ -55,6 +56,7 @@ const updateInputSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().optional(),
   attrs: z.record(z.string(), z.unknown()).optional(),
+  sortOrder: z.number().int().optional(),
   // Replaces the record's whole label list with this one.
   labelIds: z.array(z.uuid()).max(50).optional(),
   // Config fields (stored on StationVersion)
@@ -90,12 +92,20 @@ const moveInputSchema = z.object({
   workcenterId: z.uuid().nullable(),
 });
 
+const reorderInputSchema = z.object({
+  workcenterId: z.uuid(),
+  // Every station in the workcenter, in the order they should show.
+  orderedIds: z.array(z.uuid()).min(1),
+});
+
 const listInputSchema = z.object({
   siteId: z.uuid().optional(),
   workcenterId: z.uuid().optional(),
   // Only return stations that have at least one of these labels.
   labelIds: z.array(z.uuid()).max(50).optional(),
   name: z.string().optional(),
+  // Alphabetical unless asked for the stations' own order (sortOrder, then name).
+  sortBy: z.enum(["name", "sortOrder"]).default("name"),
   limit: z.number().min(0).default(50),
   offset: z.number().min(0).default(0),
 });
@@ -261,6 +271,17 @@ export const move = userRequired.input(moveInputSchema).handler(async ({ input, 
   const result = await station.move(input.id, input.workcenterId);
   if (result.error !== undefined) throwServiceError(result);
   return result.data;
+});
+
+/**
+ * Set the display order of a workcenter's stations
+ */
+export const reorder = userRequired.input(reorderInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("ADMIN", { workcenter: input.workcenterId });
+
+  const result = await station.reorder(input.workcenterId, input.orderedIds);
+  if (result.error !== undefined) throwServiceError(result);
+  return { success: true };
 });
 
 /**

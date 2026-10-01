@@ -30,6 +30,7 @@ const stationProperties = {
   name: { type: "string" },
   description: { type: "string", nullable: true },
   attrs: { type: "object", additionalProperties: true },
+  sortOrder: { type: "integer" },
   siteId: { type: "string", format: "uuid" },
   workcenterId: { type: "string", format: "uuid", nullable: true },
   createdAt: { type: "string", format: "date-time" },
@@ -51,6 +52,7 @@ const createBodySchema = {
     name: { type: "string", minLength: 1 },
     description: { type: "string" },
     attrs: { type: "object", additionalProperties: true },
+    sortOrder: { type: "integer" },
     siteId: { type: "string", format: "uuid" },
     workcenterId: { type: "string", format: "uuid" },
   },
@@ -63,6 +65,7 @@ const updateBodySchema = {
     name: { type: "string", minLength: 1 },
     description: { type: "string" },
     attrs: { type: "object", additionalProperties: true },
+    sortOrder: { type: "integer" },
   },
 } as const satisfies JSONSchema;
 
@@ -80,6 +83,7 @@ const listQuerySchema = {
     siteId: { type: "string", format: "uuid" },
     workcenterId: { type: "string", format: "uuid" },
     name: { type: "string" },
+    sortBy: { type: "string", enum: ["name", "sortOrder"], default: "name" },
     limit: { type: "number", default: 50 },
     offset: { type: "number", default: 0 },
   },
