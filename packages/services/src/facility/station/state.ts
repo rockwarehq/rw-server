@@ -28,8 +28,8 @@ export interface CycleTransitionOpenRow {
 }
 
 export interface CycleCompleteTransitionResult {
-  /** Open status after the cycle: RUNNING ("UP") or "SLOW". */
-  newStatus: "UP" | "SLOW";
+  /** Open status after the cycle: RUNNING ("UP"), "SLOW" or "FAST". */
+  newStatus: "UP" | "SLOW" | "FAST";
   /** A row was opened/closed/converted with a different resulting status. */
   statusChanged: boolean;
   /** Populated only when a row actually closed. */
@@ -536,6 +536,9 @@ async function lastCycleEndClamped(
  *   recovery cycle spans the down period, so its duration never means SLOW.
  * - RUNNING + slow cycle → fallback when the slow timer didn't fire;
  *   SLOW backdates to the start of the overlong cycle.
+ * - A fast cycle → FAST, backdated to that cycle's start the same way. There
+ *   is no fast timer: a cycle is only known to be fast once it completes.
+ * - SLOW or FAST holds until a cycle completes at another pace.
  *
  * Caller must already hold the station advisory lock in `tx`.
  */
@@ -544,8 +547,9 @@ export async function applyCycleCompleteTransition(
   stationId: string,
   timestamp: Date,
   opts: {
-    cycleWasSlow: boolean;
-    /** Start of the completed cycle (== previous cycle's end); backdates the SLOW fallback. */
+    /** How the completed cycle ran (Cycle.pace); null = not judged, treated as on pace. */
+    pace: "NORMAL" | "SLOW" | "FAST" | null;
+    /** Start of the completed cycle (== previous cycle's end); backdates a SLOW or FAST status. */
     cycleStart: Date;
     jobId?: string | null;
     jobVersionId?: string | null;
@@ -592,30 +596,35 @@ export async function applyCycleCompleteTransition(
     return { newStatus: "UP", statusChanged: true, closedEntry: closed(timestamp) };
   }
 
-  const running = openRow.status !== "SLOW"; // FAST/null on an UP row counts as RUNNING
+  // The station's status is how its LAST completed cycle ran: it goes slow
+  // (or fast) on a slow (fast) cycle and stays there until a cycle completes
+  // that was not. A cycle that was not judged counts as on pace.
+  const wanted: "UP" | "SLOW" | "FAST" = opts.pace === "SLOW" ? "SLOW" : opts.pace === "FAST" ? "FAST" : "UP";
+  const held: "UP" | "SLOW" | "FAST" = openRow.status === "SLOW" || openRow.status === "FAST" ? openRow.status : "UP";
 
-  if (running === !opts.cycleWasSlow) {
+  if (held === wanted) {
     // Status already matches the cycle outcome — the hot path writes nothing.
-    return { newStatus: running ? "UP" : "SLOW", statusChanged: false, closedEntry: null };
+    return { newStatus: held, statusChanged: false, closedEntry: null };
   }
 
-  if (!running) {
-    // SLOW + on-pace cycle → back to RUNNING, same block (state stayed UP).
+  if (wanted === "UP") {
+    // SLOW or FAST + on-pace cycle → back to RUNNING, same block (state stayed UP).
     await closeOpenStateEntries(tx, stationId, timestamp);
     await openRunning(openRow.blockId);
     return { newStatus: "UP", statusChanged: true, closedEntry: closed(timestamp) };
   }
 
-  // RUNNING + slow cycle. Backdate SLOW to the overlong cycle's start, but
-  // never before this RUNNING run began (it may span per-shift pieces).
-  const runStart = await findStatusSince(tx, stationId, "UP", openRow.blockId);
-  const slowStart = new Date(Math.min(Math.max(opts.cycleStart.getTime(), runStart.getTime()), timestamp.getTime()));
+  // A slow or fast cycle under another status. Backdate the new status to
+  // that cycle's start, but never before the current run of the held status
+  // began (it may span per-shift pieces).
+  const runStart = await findStatusSince(tx, stationId, held, openRow.blockId);
+  const since = new Date(Math.min(Math.max(opts.cycleStart.getTime(), runStart.getTime()), timestamp.getTime()));
   const current = await tx.stationStateLog.findUniqueOrThrow({ where: { id: openRow.id } });
-  await restatusFrom(tx, current, slowStart, { status: "SLOW" });
+  await restatusFrom(tx, current, since, { status: wanted });
   return {
-    newStatus: "SLOW",
+    newStatus: wanted,
     statusChanged: true,
-    closedEntry: slowStart <= runStart ? null : { ...closed(slowStart), startTime: runStart },
+    closedEntry: since <= runStart ? null : { ...closed(since), startTime: runStart },
   };
 }
 

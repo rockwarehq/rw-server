@@ -38,8 +38,13 @@ model StationVersion {
   inStationCalculations Boolean            @default(false)
   downtimeDetect        Decimal?           @db.Decimal(10, 2)
   downtimeDetectUnit    DowntimeDetectUnit @default(SECONDS)
+  /// Null on any of the three detects = the workcenter's (Workcenter.*Detect);
+  /// 0 = off for this station whatever the workcenter says.
   slowDetect            Decimal?           @db.Decimal(10, 2)
   slowDetectUnit        SlowDetectUnit     @default(PERCENTAGE)
+  /// A cycle this fraction FASTER than standard is fast (0.25 = 25%): the
+  /// inverse of slowDetect, in the same unit.
+  fastDetect            Decimal?           @db.Decimal(10, 2)
 
   /// The profile this station follows (ADR-0017). When set, cycleMode,
   /// quantityUnit, standardQuantity and (count by time) standardCycle are

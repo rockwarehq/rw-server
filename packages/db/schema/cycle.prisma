@@ -4,9 +4,20 @@ enum CycleStatus {
   GOOD
 }
 
+/// How a cycle ran against its standard, judged at record time by the
+/// station's slow/fast detects (its own, else its workcenter's).
+enum CyclePace {
+  NORMAL
+  SLOW
+  FAST
+}
+
 model Cycle {
   id          String      @id @default(uuid()) @db.Uuid
   cycleStatus CycleStatus
+  /// Null = not judged: recorded before pace was kept, the station's first
+  /// cycle, or no standard to judge against.
+  pace        CyclePace?
 
   // Timing
   start          DateTime  @db.Timestamptz(3)

@@ -20,7 +20,8 @@ export type PreparedDetection =
 
 /**
  * DB-only half of detection scheduling. Reads the station/job version
- * config and computes the slow/down fire times. Accepts a transaction
+ * config (a detect the station leaves unset is its workcenter's) and computes
+ * the slow/down fire times. Accepts a transaction
  * client so the reads can ride inside the cycle-complete transaction.
  */
 export async function prepareDetection(
@@ -40,6 +41,8 @@ export async function prepareDetection(
         slowDetectUnit: true,
         downtimeDetect: true,
         downtimeDetectUnit: true,
+        // The workcenter's defaults, for a detect the station leaves unset.
+        station: { select: { workcenter: { select: { slowDetect: true, downtimeDetect: true } } } },
       },
     }),
     // Callers on the cycle hot path pass pre-resolved standards to skip the re-query.
@@ -55,9 +58,14 @@ export async function prepareDetection(
 
   const now = Date.now();
 
+  // Fast has no timer: a cycle is only known to be fast once it completes.
+  const workcenter = version.station.workcenter;
+  const slowDetect = version.slowDetect ?? workcenter?.slowDetect ?? null;
+  const downtimeDetect = version.downtimeDetect ?? workcenter?.downtimeDetect ?? null;
+
   let slowStartAfter: Date | null = null;
-  if (version.slowDetect != null) {
-    const slowFraction = Number(version.slowDetect);
+  if (slowDetect != null) {
+    const slowFraction = Number(slowDetect);
     if (slowFraction > 0) {
       const delayMs = standardCycleSeconds * (1 + slowFraction) * 1000;
       slowStartAfter = new Date(now + delayMs);
@@ -65,8 +73,8 @@ export async function prepareDetection(
   }
 
   let downStartAfter: Date | null = null;
-  if (version.downtimeDetect != null) {
-    const downtimeSeconds = Number(version.downtimeDetect);
+  if (downtimeDetect != null) {
+    const downtimeSeconds = Number(downtimeDetect);
     if (downtimeSeconds > 0) {
       const delayMs = (standardCycleSeconds + downtimeSeconds) * 1000;
       downStartAfter = new Date(now + delayMs);

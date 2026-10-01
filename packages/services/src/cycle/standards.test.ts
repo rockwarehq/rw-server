@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { quantityWasSlow, resolveCycleActuals, resolveStandards, type StandardsConfig } from "./standards.js";
+import {
+  judgePace,
+  quantityWasFast,
+  quantityWasSlow,
+  resolveCycleActuals,
+  resolvePaceRule,
+  resolveStandards,
+  type StandardsConfig,
+} from "./standards.js";
 
 const base: StandardsConfig = {
   cycleMode: "DISCRETE",
@@ -190,5 +198,55 @@ describe("QUANTITY_PER_INTERVAL — fixed clock, variable quantity (500/min)", (
     expect(quantityWasSlow(std, 450, 0.25)).toBe(false);
     expect(quantityWasSlow(std, 200, null)).toBe(false);
     expect(quantityWasSlow(std, null, 0.25)).toBe(false);
+  });
+
+  it("fast by quantity surplus: slow's inverse", () => {
+    const std = resolveStandards(cfg);
+    // 500 expected, 25% fast: fast above 500 / 0.75 ≈ 667
+    expect(quantityWasFast(std, 700, 0.25)).toBe(true);
+    expect(quantityWasFast(std, 600, 0.25)).toBe(false);
+    expect(quantityWasFast(std, 700, null)).toBe(false);
+    expect(quantityWasFast(std, null, 0.25)).toBe(false);
+  });
+});
+
+describe("pace", () => {
+  const discrete = resolveStandards({
+    cycleMode: "DISCRETE",
+    stationStandardQuantity: null,
+    stationQuantityUnit: "",
+    stationStandardCycle: null,
+    stationStandardRate: null,
+    stationStandardRateUnit: "",
+    stationStandardRatePeriod: "MINUTE",
+    jobStandardCycle: 30,
+    jobStandardRate: null,
+    jobStandardRateUnit: "",
+    jobStandardRatePeriod: "MINUTE",
+  } as StandardsConfig);
+
+  it("slow is longer than standard × (1 + slow); fast is shorter than standard × (1 − fast)", () => {
+    const rule = resolvePaceRule(discrete, null, 0.25, 0.2);
+    expect(rule.slowThresholdSeconds).toBeCloseTo(37.5, 10);
+    expect(rule.fastThresholdSeconds).toBeCloseTo(24, 10);
+    expect(judgePace(rule, 30)).toBe("NORMAL");
+    expect(judgePace(rule, 37.5)).toBe("NORMAL");
+    expect(judgePace(rule, 37.6)).toBe("SLOW");
+    expect(judgePace(rule, 24)).toBe("NORMAL");
+    expect(judgePace(rule, 23.9)).toBe("FAST");
+  });
+
+  it("an unset or zero detect is off; a fast detect of 100% or more can never be met", () => {
+    expect(judgePace(resolvePaceRule(discrete, null, null, null), 1)).toBe("NORMAL");
+    expect(judgePace(resolvePaceRule(discrete, null, 0, 0), 900)).toBe("NORMAL");
+    expect(resolvePaceRule(discrete, null, 0.25, 1).fastThresholdSeconds).toBeUndefined();
+  });
+
+  it("does not judge a cycle with no measured length or no standard", () => {
+    const rule = resolvePaceRule(discrete, null, 0.25, 0.2);
+    expect(judgePace(rule, null)).toBeNull();
+    expect(judgePace(rule, 0)).toBeNull();
+    const noStandard = resolvePaceRule({ ...discrete, standardCycleSeconds: null }, null, 0.25, 0.2);
+    expect(judgePace(noStandard, 5)).toBeNull();
   });
 });

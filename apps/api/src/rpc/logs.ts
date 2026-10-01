@@ -1193,6 +1193,8 @@ export const cycleSearch = userRequired.input(cycleSearchInputSchema).handler(as
   type Row = {
     id: string;
     cycleStatus: "GOOD" | "BAD" | "DISCARD";
+    /** How it ran against standard, judged when it recorded; null = not judged. */
+    pace: "NORMAL" | "SLOW" | "FAST" | null;
     startTime: Date;
     endTime: Date | null;
     stationId: string;
@@ -1211,6 +1213,7 @@ export const cycleSearch = userRequired.input(cycleSearchInputSchema).handler(as
       SELECT
         c.id,
         c."cycleStatus",
+        c.pace::text       AS pace,
         c.start            AS "startTime",
         c."end"            AS "endTime",
         c."stationId",

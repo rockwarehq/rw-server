@@ -19,6 +19,12 @@ const EVENT_ACTION_OVERRIDES: CodeOverrides = { ACTION_NOT_FOUND: "BAD_REQUEST" 
 // Input Schemas
 // ============================================================================
 
+/**
+ * A fast detect is a fraction of the standard cycle a cycle must beat: 0.25 =
+ * 25% faster. 0 = off; 1 or more could never be met (a cycle cannot take no time).
+ */
+const fastDetectSchema = z.number().nonnegative().lt(1);
+
 const createInputSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
@@ -35,10 +41,12 @@ const createInputSchema = z.object({
   standardRateUnit: z.string().optional(),
   standardRatePeriod: z.enum(["SECOND", "MINUTE", "HOUR"]).optional(),
   standardQuantity: z.number().positive().nullable().optional(),
-  downtimeDetect: z.number().positive().optional(),
+  // Each detect: absent = the workcenter's default; 0 = off for this station.
+  downtimeDetect: z.number().nonnegative().optional(),
   downtimeDetectUnit: z.enum(["SECONDS"]).optional(),
-  slowDetect: z.number().positive().optional(),
+  slowDetect: z.number().nonnegative().optional(),
   slowDetectUnit: z.enum(["PERCENTAGE"]).optional(),
+  fastDetect: fastDetectSchema.optional(),
   inLineCalculations: z.boolean().optional(),
   inStationCalculations: z.boolean().optional(),
   // Follow a profile (ADR-0017): how the station counts comes from it, and
@@ -67,10 +75,12 @@ const updateInputSchema = z.object({
   standardRateUnit: z.string().optional(),
   standardRatePeriod: z.enum(["SECOND", "MINUTE", "HOUR"]).optional(),
   standardQuantity: z.number().positive().nullable().optional(),
-  downtimeDetect: z.number().positive().nullable().optional(),
+  // Each detect: null = the workcenter's default; 0 = off for this station.
+  downtimeDetect: z.number().nonnegative().nullable().optional(),
   downtimeDetectUnit: z.enum(["SECONDS"]).optional(),
-  slowDetect: z.number().positive().nullable().optional(),
+  slowDetect: z.number().nonnegative().nullable().optional(),
   slowDetectUnit: z.enum(["PERCENTAGE"]).optional(),
+  fastDetect: fastDetectSchema.nullable().optional(),
   inLineCalculations: z.boolean().optional(),
   inStationCalculations: z.boolean().optional(),
   // Follow a profile (ADR-0017): how the station counts comes from it, and
