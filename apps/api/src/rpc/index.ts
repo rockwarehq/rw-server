@@ -219,6 +219,7 @@ export const router = {
     get: station.get,
     update: station.update,
     move: station.move,
+    reorder: station.reorder,
     delete: station.remove,
     createEvent: station.createEvent,
     updateEvent: station.updateEvent,

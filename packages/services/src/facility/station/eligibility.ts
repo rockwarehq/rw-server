@@ -2,6 +2,7 @@ import prisma, { type Prisma } from "@rw/db";
 import type { CycleModeValue } from "../../cycle/standards.js";
 import { decimalToNumber } from "../../metrics/sync.js";
 import { COUNT_NAMES, type CountedAs, kindOf, kindsMatch } from "../station-profile/rules.js";
+import { type StationSortBy, stationOrderBy } from "./crud.js";
 
 // Where a job can run (ADR-0017): one check, used by changeJob, history
 // amendments, and the "which stations / which jobs" lists. Two gates:
@@ -165,13 +166,13 @@ export async function canRunJob(client: Client, stationId: string, jobId: string
 }
 
 /** Every live station on the job's site, with the reasons it can't run the job (empty = it can). */
-export async function eligibleStations(jobId: string) {
+export async function eligibleStations(jobId: string, options: { sortBy?: StationSortBy } = {}) {
   const job = await prisma.job.findUnique({ where: { id: jobId }, select: { ...jobSelect, deletedAt: true } });
   if (!job || job.deletedAt) return { error: "Job not found", code: "JOB_NOT_FOUND" };
   const stations = await prisma.station.findMany({
     where: { siteId: job.siteId, deletedAt: null, archivedAt: null },
     select: stationSelect,
-    orderBy: { name: "asc" },
+    orderBy: stationOrderBy(options.sortBy),
   });
   const j = toJob(job);
   return {

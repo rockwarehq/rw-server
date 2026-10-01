@@ -439,11 +439,13 @@ export const jobsByProductIds = userRequired.input(jobsByProductIdsInputSchema).
  * (empty = it can): PROFILE_MISMATCH (counts a different way) or
  * LABEL_FILTER_MISMATCH (the station's job filter).
  */
-export const eligibleStations = userOrDisplayRequired.input(jobIdInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("VIEW", { job: input.id });
+export const eligibleStations = userOrDisplayRequired
+  .input(jobIdInputSchema.extend({ sortBy: z.enum(["name", "sortOrder"]).default("name") }))
+  .handler(async ({ input, context }) => {
+    await context.access.require("VIEW", { job: input.id });
 
-  return unwrap(await station.eligibleStations(input.id));
-});
+    return unwrap(await station.eligibleStations(input.id, { sortBy: input.sortBy }));
+  });
 
 /**
  * Where a job is running now — each station running it, since when — or

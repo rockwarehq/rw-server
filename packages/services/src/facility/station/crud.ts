@@ -8,6 +8,8 @@ export interface CreateStationInput {
   name: string;
   description?: string;
   attrs?: Record<string, unknown>;
+  /** Display order within its workcenter; used by lists asked to sort by it. */
+  sortOrder?: number;
   siteId: string;
   workcenterId?: string;
   /** Labels to put on this record. They must come from the same site's list. */
@@ -38,6 +40,8 @@ export interface UpdateStationInput {
   name?: string;
   description?: string;
   attrs?: Record<string, unknown>;
+  /** Display order within its workcenter; used by lists asked to sort by it. */
+  sortOrder?: number;
   /** Replaces the record's whole label list with this one (same-site labels only). */
   labelIds?: string[];
   // Config fields (stored on StationVersion)
@@ -62,6 +66,15 @@ export interface UpdateStationInput {
   useProfileSpeed?: boolean;
 }
 
+/** How a station list is ordered: by name (the default), or by sortOrder then name. */
+export type StationSortBy = "name" | "sortOrder";
+
+export function stationOrderBy(sortBy: StationSortBy = "name") {
+  return sortBy === "sortOrder"
+    ? [{ sortOrder: "asc" as const }, { name: "asc" as const }]
+    : [{ name: "asc" as const }];
+}
+
 export interface ListStationsFilter {
   workspaceId?: string;
   siteId?: string;
@@ -75,6 +88,7 @@ export interface ListStationsFilter {
   /** Only return stations that have at least one of these labels. */
   labelIds?: string[];
   name?: string;
+  sortBy?: StationSortBy;
   limit?: number;
   offset?: number;
 }
@@ -159,6 +173,7 @@ export async function create(input: CreateStationInput) {
     name,
     description,
     attrs,
+    sortOrder,
     siteId,
     workcenterId,
     labelIds,
@@ -228,6 +243,7 @@ export async function create(input: CreateStationInput) {
           name,
           description,
           attrs: attrs ?? {},
+          sortOrder,
           siteId,
           workcenterId: workcenterId ?? null,
           ...(labelIds?.length ? { labels: { connect: labelIds.map((id) => ({ id })) } } : {}),
@@ -280,6 +296,7 @@ export async function create(input: CreateStationInput) {
       name,
       description,
       attrs: attrs ?? {},
+      sortOrder,
       siteId,
       workcenterId: workcenterId ?? null,
       ...(labelIds?.length ? { labels: { connect: labelIds.map((id) => ({ id })) } } : {}),
@@ -301,7 +318,7 @@ export async function create(input: CreateStationInput) {
  * List stations with optional filtering
  */
 export async function list(filter: ListStationsFilter = {}) {
-  const { workspaceId, siteId, workcenterId, workcenterIds, labelIds, name, limit = 50, offset = 0 } = filter;
+  const { workspaceId, siteId, workcenterId, workcenterIds, labelIds, name, sortBy, limit = 50, offset = 0 } = filter;
 
   const where: Record<string, unknown> = {};
 
@@ -333,7 +350,7 @@ export async function list(filter: ListStationsFilter = {}) {
       include: stationInclude,
       ...(Number(limit) > 0 ? { take: Number(limit) } : {}),
       skip: Number(offset),
-      orderBy: { name: "asc" },
+      orderBy: stationOrderBy(sortBy),
     }),
     prisma.station.count({ where }),
   ]);
@@ -370,6 +387,7 @@ export async function update(id: string, input: UpdateStationInput) {
     name,
     description,
     attrs,
+    sortOrder,
     labelIds,
     standardCycle,
     cycleMode,
@@ -413,6 +431,7 @@ export async function update(id: string, input: UpdateStationInput) {
   if (name !== undefined) stationUpdateData.name = name;
   if (description !== undefined) stationUpdateData.description = description;
   if (attrs !== undefined) stationUpdateData.attrs = attrs;
+  if (sortOrder !== undefined) stationUpdateData.sortOrder = sortOrder;
   if (labelIds !== undefined) {
     stationUpdateData.labels = { set: labelIds.map((lid) => ({ id: lid })) };
   }
@@ -590,6 +609,49 @@ export async function move(id: string, newWorkcenterId: string | null) {
   });
 
   return { data: station };
+}
+
+/**
+ * Set the display order of a workcenter's stations: sortOrder becomes each
+ * station's position in `orderedIds`, which must name every station in the
+ * workcenter exactly once.
+ */
+export async function reorder(workcenterId: string, orderedIds: string[]) {
+  const workcenter = await prisma.workcenter.findUnique({
+    where: { id: workcenterId },
+    select: { id: true, siteId: true, site: { select: { workspaceId: true } } },
+  });
+
+  if (!workcenter) {
+    return { error: "Workcenter not found", code: "WORKCENTER_NOT_FOUND" };
+  }
+
+  if (new Set(orderedIds).size !== orderedIds.length) {
+    return { error: "Ordered IDs cannot contain duplicates", code: "INVALID_ORDER" };
+  }
+
+  const existing = await prisma.station.findMany({ where: { workcenterId }, select: { id: true } });
+  const existingIds = new Set(existing.map((station) => station.id));
+
+  if (existing.length !== orderedIds.length || orderedIds.some((id) => !existingIds.has(id))) {
+    return { error: "Ordered IDs must be exactly the workcenter's stations", code: "INVALID_ORDER" };
+  }
+
+  await prisma.$transaction(
+    orderedIds.map((id, index) => prisma.station.update({ where: { id }, data: { sortOrder: index } })),
+  );
+
+  for (const stationId of orderedIds) {
+    publishStationEntityEvent({
+      action: "updated",
+      stationId,
+      siteId: workcenter.siteId,
+      workspaceId: workcenter.site.workspaceId,
+      changedFields: ["sortOrder"],
+    });
+  }
+
+  return { success: true as const };
 }
 
 /**
