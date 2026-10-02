@@ -44,12 +44,18 @@ export const EXCLUDED_PROCEDURES: ReadonlySet<string> = new Set([
   "display.get",
   "display.heartbeat",
   // ── report deck links (ADR-0018): the unguessable token is the only
-  // credential (only its hash is stored); it returns the stored snapshot of
-  // the editions it names, never runs a query, and honours revoke/expiry.
+  // credential (only its hash is stored); it returns the editions it names
+  // as kept (pages and saved queries), never runs a query, and honours
+  // revoke/expiry.
   "deck.viewLink",
   // The same token, for one shift recap page of an edition it names: reads
   // that page's kept workcenter and shift live, and nothing the caller names.
   "deck.linkRecap",
+  // The same token, for one saved query of a page in an edition it names
+  // (ADR-0018 amendment, 2026-10-02): the dataset, filters, columns, dates,
+  // workcenter and shifts are the edition's. The caller picks only which rows
+  // of that list, their order, and figures over the columns the page saved.
+  "deck.linkPage",
   // ── static per-deploy catalogs with no tenant data.
   "graph.hook.eventCatalog",
   "graph.introspect.manifest",

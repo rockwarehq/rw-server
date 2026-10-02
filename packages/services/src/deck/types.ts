@@ -51,7 +51,7 @@ export interface EditionShift {
   endTime: string;
 }
 
-/** One query's stored outcome. */
+/** One query's outcome: what a page read returns. Editions made before 2026-10-02 also stored these. */
 export type StoredResult =
   | { rows: Record<string, unknown>[]; truncated: boolean; total?: number }
   | { error: string; code: string };
@@ -67,6 +67,7 @@ export interface EditionPage {
   shifts: EditionShift[] | null;
   /** Why it has nothing to show, when it doesn't. */
   message?: string;
+  /** Always empty: results are read, not kept (ADR-0018, 2026-10-02). Older editions hold some; nothing reads them. */
   results: Record<string, StoredResult>;
 }
 

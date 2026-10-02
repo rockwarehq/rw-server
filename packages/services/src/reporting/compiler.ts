@@ -13,6 +13,9 @@ import type {
   ReportRowsQuery,
   ReportRowsResult,
   ReportScope,
+  ReportSummaryItem,
+  ReportSummaryQuery,
+  ReportSummaryResult,
 } from "./types.js";
 
 // Compiles a catalog query into one parameterized statement: a GROUP BY for
@@ -564,4 +567,92 @@ export async function runReportRows(
     truncated: rows.length > limit,
     ...(totals ? { total: Number(totals[0]?.total ?? 0) } : {}),
   };
+}
+
+// ── Summary: figures over every row a detail query matches ──────────────────
+
+/** One summary item's aggregate expression, or why it can't be computed. */
+function summaryExpr(fact: FactDef, item: ReportSummaryItem): string | ServiceError {
+  const { key, agg } = item;
+  // A count is the rows themselves, whatever any one column holds.
+  if (agg === "count") return "COUNT(*)";
+  if (key === undefined) return { error: `A ${agg} needs a column`, code: "INVALID_QUERY" };
+
+  // Resolution mirrors the detail projection: dimension, then field, then
+  // measure — the figure is over the column a log shows under this key.
+  // Own entries only: a key like "toString" is on every object's prototype.
+  const own = <T>(entries: Record<string, T> | undefined) =>
+    entries && Object.hasOwn(entries, key) ? entries[key] : undefined;
+  const field = own(fact.fields);
+  const measure = own(fact.measures);
+  const fn = agg.toUpperCase();
+
+  if (own(fact.dimensions)) {
+    return { error: `${key} is a dimension and can only be counted`, code: "INVALID_QUERY" };
+  }
+  if (field) {
+    if (field.type !== "number" && field.type !== "decimal") {
+      return { error: `${key} is not a number and can only be counted`, code: "INVALID_QUERY" };
+    }
+    return `${fn}(f."${field.column}")`;
+  }
+  if (!measure) return { error: `Unknown column: ${key}`, code: "UNKNOWN_COLUMN" };
+
+  if (measure.kind === "count") {
+    if (agg === "sum") return "COUNT(*)";
+    return { error: `Measure ${key} counts rows and has no per-row value`, code: "INVALID_MEASURE" };
+  }
+  if (measure.kind === "ratio") {
+    // Never sum a ratio, and never average per-row ratios: the average of a
+    // ratio is the ratio of its summed components.
+    if (agg === "sum") return { error: `Measure ${key} is a ratio and cannot be summed`, code: "INVALID_MEASURE" };
+    if (agg === "avg") return measureExpr(fact, key);
+  }
+  const row = rowMeasureExpr(fact, key);
+  if (typeof row !== "string") return row;
+  return `${fn}(${row})`;
+}
+
+/**
+ * Compiles a summary into one ungrouped aggregate over the detail predicate.
+ * Outputs are aliased by position — item keys only ever index the catalog.
+ */
+export function compileReportSummary(query: ReportSummaryQuery, scope: ReportScope): Prisma.Sql | ServiceError {
+  const fact = FACTS[query.fact];
+  if (!fact) return { error: `Unknown fact: ${query.fact}`, code: "UNKNOWN_FACT" };
+  if (!fact.rowKey) {
+    return { error: `Fact ${query.fact} does not expose detail rows`, code: "DETAIL_UNAVAILABLE" };
+  }
+  if (query.items.length === 0) return { error: "At least one summary item is required", code: "INVALID_QUERY" };
+
+  const selects: string[] = [];
+  for (const [i, item] of query.items.entries()) {
+    const expr = summaryExpr(fact, item);
+    if (typeof expr !== "string") return expr;
+    selects.push(`(${expr})::float8 AS "s${i}"`);
+  }
+
+  // The same predicate report.rows builds, so the figures are over the list.
+  const predicates = buildWhere(fact, query, scope, { addressed: new Set(pinnedDimensions(query.filters)) });
+  if ("error" in predicates) return predicates;
+
+  const from = fromClause(fact, query.fact);
+  if (typeof from !== "string") return from;
+
+  return Prisma.sql`
+    SELECT ${Prisma.raw(selects.join(", "))}
+    FROM ${Prisma.raw(from)} f
+    ${Prisma.raw(predicates.joins.join(" "))}
+    WHERE ${Prisma.join(predicates.where, " AND ")}
+  `;
+}
+
+export async function runReportSummary(
+  query: ReportSummaryQuery,
+  scope: ReportScope,
+): Promise<ReportSummaryResult | ServiceError> {
+  const compiled = compileReportSummary(query, scope);
+  if ("error" in compiled) return compiled;
+  const [row] = await prisma.$queryRaw<Record<string, number | null>[]>(compiled);
+  return { values: query.items.map((_, i) => row?.[`s${i}`] ?? null) };
 }

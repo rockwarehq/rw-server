@@ -1,7 +1,14 @@
 import { FACTS } from "./facts.js";
 import type { FactDef, MeasureDef, ReportFilter, ValueFormat } from "./types.js";
 
-export { compileReportQuery, compileReportRows, runReportQuery, runReportRows } from "./compiler.js";
+export {
+  compileReportQuery,
+  compileReportRows,
+  compileReportSummary,
+  runReportQuery,
+  runReportRows,
+  runReportSummary,
+} from "./compiler.js";
 export { FACTS } from "./facts.js";
 export type {
   FactDef,
@@ -15,6 +22,10 @@ export type {
   ReportRowsQuery,
   ReportRowsResult,
   ReportScope,
+  ReportSummaryItem,
+  ReportSummaryQuery,
+  ReportSummaryResult,
+  SummaryAgg,
 } from "./types.js";
 
 /** Serializable measure metadata — SQL stays server-side. */

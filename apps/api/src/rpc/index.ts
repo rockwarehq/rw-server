@@ -524,6 +524,7 @@ export const router = {
     schema: report.schema,
     query: report.query,
     rows: report.rows,
+    summary: report.summary,
   },
   deck: {
     list: deck.list,
@@ -542,6 +543,9 @@ export const router = {
     revokeLink: deck.revokeLink,
     viewLink: deck.viewLink,
     linkRecap: deck.linkRecap,
+    linkPage: deck.linkPage,
+    editionPage: deck.editionPage,
+    previewPage: deck.previewPage,
   },
   historian: {
     query: historian.query,

@@ -69,7 +69,8 @@ A link points at one edition or several (a subscription's `links: "one"`).
 Only a SHA-256 hash of its token is stored. It lasts until revoked or until
 `expiresAt`: whoever makes it chooses (the app offers 7 days first), and it
 may have none. `deckLink.view` is public and
-returns only the stored snapshot; it never runs a query.
+returns only what the edition kept; it never runs a query. (Since 2026-10-02
+that is the pages and their saved queries, read live; see below.)
 
 Signed-in people see every edition of a deck they can see, links or not.
 
@@ -116,6 +117,46 @@ caller. It returns what the recap page draws, with people by name only (no
 emails, user ids or employee numbers). The signed-in `shiftRecap.*`
 procedures and the link share one set of reads
 (`services/facility/shift/shift-recap.ts`).
+
+### An edition keeps the question, not the answer (2026-10-02)
+
+Editions no longer store results. Making one works out the days and the pages
+and keeps the deck as it was — each page's dates, workcenter, shifts and saved
+queries, and the schema of every dataset used — and runs nothing. A page's
+`results` are always empty. (There is no storage suited to kept row results
+yet; immutable editions are a later iteration.)
+
+Every report page is read when it is opened, so it shows what its saved query
+returns **today** for the edition's days: a downtime recoded after the edition
+was made shows recoded. This replaces "An edition is a snapshot" above, its
+row caps, and "nothing about an edition changes afterwards" as far as results
+go. What an edition covers still never changes. Editions made earlier still
+hold their stored results; nothing reads them.
+
+Three reads share one function (`readPage`) and differ only in who may ask:
+
+- `deck.linkPage { token, editionId, pageKey, slot, ... }`: public. The token
+  must still open and the edition must be one the link names.
+- `deck.editionPage { editionId, pageKey, slot, ... }`: VIEW on the edition.
+- `deck.previewPage { deckId, pageKey, slot, ... }`: VIEW on the deck; the
+  pages are worked out as of now and nothing is kept.
+
+`slot` picks one of the page's saved queries (`log`, `chart:0`, `result`). The
+query, page and workcenter come from the edition as kept (`savedPageQuery`),
+never from the caller: **a token does what was saved and nothing else.** The
+reader may choose only how the same rows are shown:
+
+- `limit` (at most 1,000) and `offset`: which rows of a row list,
+- `orderBy`: their order, over the saved columns,
+- `summary`: figures over every row the list matches (`report.summary`'s
+  items — sum, avg, min, max, or a row count), and only over **columns the
+  page saved** (`COLUMN_NOT_SAVED` otherwise). They are aggregates of values
+  the reader can already page through, so they are the reader's to ask for;
+  the UI sends its report's current figures, which is why none are saved with
+  a page.
+
+`deck.viewLink` and `deck.getEdition` return the edition as kept and run
+nothing; `deck.preview` works out the pages and runs nothing.
 
 ## Not yet
 

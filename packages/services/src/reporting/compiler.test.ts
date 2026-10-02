@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { compileReportQuery, compileReportRows } from "./compiler.js";
+import { compileReportQuery, compileReportRows, compileReportSummary } from "./compiler.js";
 import { FACTS } from "./facts.js";
 import { reportSchema } from "./index.js";
-import type { ReportQuery, ReportRowsQuery, ReportScope } from "./types.js";
+import type { ReportQuery, ReportRowsQuery, ReportScope, ReportSummaryQuery } from "./types.js";
 
 const SITE = "11111111-1111-4111-8111-111111111111";
 const WORKCENTER = "22222222-2222-4222-8222-222222222222";
@@ -867,5 +867,80 @@ describe("units", () => {
     const job = agg({ fact: "jobKpis", measures: ["goodItems"], dimensions: ["unit"] }).text;
     expect(job).toContain(`WHERE s."id" = substring(f."path" from 'station\\.([0-9a-f-]{36})')::uuid)`);
     expect(rows({ fact: "items", columns: ["quantity", "unit"] }).text).toContain(`WHERE s."id" = f."stationId")`);
+  });
+});
+
+describe("summary — figures over every row a log matches", () => {
+  function summary(query: ReportSummaryQuery, s: ReportScope = scope) {
+    const result = compileReportSummary(query, s);
+    if ("error" in result) throw new Error(`unexpected error: ${result.error}`);
+    return { text: flat(result), values: result.values };
+  }
+  const code = (query: ReportSummaryQuery) => failure(compileReportSummary(query, scope)).code;
+
+  it("aggregates in one ungrouped, unpaged statement, aliased by position", () => {
+    const { text } = summary({
+      fact: "cycles",
+      items: [{ agg: "count" }, { key: "cycleSeconds", agg: "avg" }, { key: "cycleSeconds", agg: "max" }],
+    });
+    expect(text).toContain('(COUNT(*))::float8 AS "s0"');
+    expect(text).toContain(`(AVG((EXTRACT(EPOCH FROM (f."end" - f."start")))::float8))::float8 AS "s1"`);
+    expect(text).toContain('AS "s2"');
+    expect(text).not.toContain("GROUP BY");
+    expect(text).not.toContain("LIMIT");
+  });
+
+  it("counts rows whatever a column holds, named or not", () => {
+    const { text } = summary({ fact: "cycles", items: [{ key: "end", agg: "count" }] });
+    expect(text).toContain('(COUNT(*))::float8 AS "s0"');
+  });
+
+  it("shares the list's predicate: a running cycle counts, a measure filter is the row's own", () => {
+    const { text } = summary({
+      fact: "cycles",
+      items: [{ agg: "count" }],
+      filters: [{ dimension: "cycleSeconds", op: "gt", value: "60" }],
+    });
+    expect(text).not.toContain('f."end" IS NOT NULL');
+    expect(text).not.toContain("HAVING");
+    expect(text).not.toContain("SUM(");
+  });
+
+  it("accepts a field filter, which an aggregate query refuses", () => {
+    const { text } = summary({
+      fact: "cycles",
+      items: [{ agg: "count" }],
+      filters: [{ dimension: "standardCycle", op: "gt", value: "10" }],
+    });
+    expect(text).toContain('f."standardCycle"');
+  });
+
+  it("summarises the field a log shows under a key shared with a measure", () => {
+    const { text } = summary({ fact: "cycles", items: [{ key: "quantity", agg: "sum" }] });
+    expect(text).toContain('(SUM(f."quantity"))::float8');
+    expect(text).not.toContain("COALESCE");
+  });
+
+  it("averages a ratio as the ratio of its summed components", () => {
+    const { text } = summary({ fact: "stationKpis", items: [{ key: "oee", agg: "avg" }] });
+    expect(text).toContain("/ NULLIF(");
+    expect(text).toContain("SUM(");
+    expect(text).not.toContain("AVG(");
+  });
+
+  it("refuses to sum a ratio, or to do arithmetic on words", () => {
+    expect(code({ fact: "stationKpis", items: [{ key: "oee", agg: "sum" }] })).toBe("INVALID_MEASURE");
+    expect(code({ fact: "cycles", items: [{ key: "start", agg: "sum" }] })).toBe("INVALID_QUERY");
+    expect(code({ fact: "cycles", items: [{ key: "station", agg: "avg" }] })).toBe("INVALID_QUERY");
+    expect(code({ fact: "cycles", items: [{ agg: "sum" }] })).toBe("INVALID_QUERY");
+    expect(code({ fact: "cycles", items: [{ key: "nope", agg: "sum" }] })).toBe("UNKNOWN_COLUMN");
+    // On every object's prototype, and in no catalog.
+    expect(code({ fact: "cycles", items: [{ key: "toString", agg: "sum" }] })).toBe("UNKNOWN_COLUMN");
+  });
+
+  it("narrows to granted workcenters like the list does", () => {
+    const { text, values } = summary({ fact: "cycles", items: [{ agg: "count" }] }, restricted);
+    expect(text).toContain('f."workcenterId" = ANY(');
+    expect(values).toContainEqual([WORKCENTER]);
   });
 });

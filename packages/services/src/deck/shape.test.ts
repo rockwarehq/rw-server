@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { recapPageScope } from "./index.js";
+import { recapPageScope, savedPageQuery } from "./index.js";
 import { type DeckSlide, deckShapeProblem } from "./types.js";
 
 const slide = (overrides: Partial<DeckSlide> = {}): DeckSlide => ({
@@ -50,5 +50,33 @@ describe("recapPageScope", () => {
     expect(recapPageScope(edition, "p:all")).toBeNull();
     expect(recapPageScope(edition, "s1:none")).toBeNull();
     expect(recapPageScope(edition, "nope")).toBeNull();
+  });
+});
+
+describe("savedPageQuery", () => {
+  const WORKCENTER = "22222222-2222-4222-8222-222222222222";
+  const log = { mode: "rows" as const, fact: "cycles", columns: ["station"] };
+  const edition = {
+    setup: { workcenterId: WORKCENTER, slides: [slide({ id: "c", kind: "catalog", queries: { log } }), slide()] },
+    pages: [
+      { key: "c:all", slideId: "c", dateFrom: "2026-09-25", dateTo: "2026-09-25", shifts: null },
+      { key: "c", slideId: "c", dateFrom: "", dateTo: "", shifts: null, message: "No business day has finished." },
+      { key: "s1:x", slideId: "s1", dateFrom: "2026-09-25", dateTo: "2026-09-25", shifts: null },
+    ],
+  };
+
+  it("reads the query, page and workcenter the edition kept", () => {
+    const saved = savedPageQuery(edition, "c:all", "log");
+    expect(saved?.template).toEqual(log);
+    expect(saved?.workcenterId).toBe(WORKCENTER);
+    expect(saved?.page.dateFrom).toBe("2026-09-25");
+  });
+
+  it("opens nothing the edition didn't keep: another slot, a page with no queries or no days, a page not there", () => {
+    expect(savedPageQuery(edition, "c:all", "chart:0")).toBeNull();
+    expect(savedPageQuery(edition, "c:all", "constructor")).toBeNull();
+    expect(savedPageQuery(edition, "s1:x", "log")).toBeNull();
+    expect(savedPageQuery(edition, "c", "log")).toBeNull();
+    expect(savedPageQuery(edition, "nope", "log")).toBeNull();
   });
 });

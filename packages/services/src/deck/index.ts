@@ -2,7 +2,8 @@ import { createHash, randomBytes } from "node:crypto";
 import prisma, { type Prisma } from "@rw/db";
 import { dateOnly } from "./days.js";
 import * as shiftRecap from "../facility/shift/shift-recap.js";
-import { buildEdition } from "./edition.js";
+import type { ReportSummaryItem } from "../reporting/types.js";
+import { buildEdition, type PageRead, runPageQuery, runPageSummary } from "./edition.js";
 import {
   type DeckKind,
   type DeckRange,
@@ -10,7 +11,9 @@ import {
   deckShapeProblem,
   type EditionPage,
   type EditionSetup,
+  type QueryTemplate,
   SHIFT_RECAP_SLIDE,
+  type StoredResult,
 } from "./types.js";
 
 // Report decks (ADR-0018): decks, their editions, and links that open
@@ -286,6 +289,38 @@ export async function revokeLink(id: string): Promise<boolean> {
   return count > 0;
 }
 
+const linkFail = (error: string, code: string): ServiceError => ({ error, code });
+
+const PAGE_MISSING: ServiceError = { error: "This page isn't here.", code: "PAGE_NOT_FOUND" };
+
+/** Why a link no longer opens, or null: revoked, or past its expiry. */
+function linkClosed(link: { revokedAt: Date | null; expiresAt: Date | null }, now: Date): ServiceError | null {
+  if (link.revokedAt) return linkFail("This link was turned off.", "LINK_REVOKED");
+  if (link.expiresAt && link.expiresAt <= now) return linkFail("This link has expired.", "LINK_EXPIRED");
+  return null;
+}
+
+/**
+ * One edition a link names, if the link still opens — what a page read needs
+ * and no more: not the link's other editions, nor their kept schemas.
+ */
+async function openLinkEdition(token: string, editionId: string, now: Date) {
+  const link = await prisma.reportDeckLink.findUnique({
+    where: { tokenHash: hashToken(token) },
+    select: {
+      expiresAt: true,
+      revokedAt: true,
+      siteId: true,
+      editions: { where: { editionId }, select: { edition: { select: { setup: true, pages: true } } } },
+    },
+  });
+  if (!link) return linkFail("Link not found", "LINK_NOT_FOUND");
+  const closed = linkClosed(link, now);
+  if (closed) return closed;
+  const edition = link.editions[0]?.edition;
+  return edition ? { data: { siteId: link.siteId, edition } } : PAGE_MISSING;
+}
+
 /** A link by its token, if it still opens: not revoked, not expired. */
 async function openLink(token: string, now: Date) {
   const link = await prisma.reportDeckLink.findUnique({
@@ -298,14 +333,13 @@ async function openLink(token: string, now: Date) {
       editions: { orderBy: { position: "asc" }, select: { edition: { select: EDITION_FULL } } },
     },
   });
-  const fail = (error: string, code: string): ServiceError => ({ error, code });
-  if (!link) return fail("Link not found", "LINK_NOT_FOUND");
-  if (link.revokedAt) return fail("This link was turned off.", "LINK_REVOKED");
-  if (link.expiresAt && link.expiresAt <= now) return fail("This link has expired.", "LINK_EXPIRED");
+  if (!link) return linkFail("Link not found", "LINK_NOT_FOUND");
+  const closed = linkClosed(link, now);
+  if (closed) return closed;
   return { data: link };
 }
 
-/** What a link opens, for anyone holding its token: its editions as stored, nothing live. */
+/** What a link opens, for anyone holding its token: its editions as kept — their pages and saved queries. Runs nothing. */
 export async function viewLink(token: string, now = new Date()) {
   const opened = await openLink(token, now);
   if ("error" in opened) return opened;
@@ -351,4 +385,91 @@ export async function linkRecap(token: string, editionId: string, pageKey: strin
     return missing;
   }
   return shiftRecap.recapForShift({ siteId: opened.data.siteId, ...scope });
+}
+
+// ── Pages, read live ───────────────────────────────────────────────────────
+
+/** What a reader asks of a page's saved query: which rows, in what order, and the figures above them. */
+export type PageReadInput = PageRead & { summary?: ReportSummaryItem[] };
+
+export interface PageReadResult {
+  result: StoredResult;
+  /** Present when figures were asked for: one value per item, or why there are none. */
+  summary?: { values: (number | null)[] } | ServiceError;
+}
+
+/**
+ * One of a page's saved queries, with the page and workcenter it runs for —
+ * all from the edition as it was kept, never from the caller — or null. A
+ * page with nothing to show (no finished day) has no dates and reads nothing.
+ */
+export function savedPageQuery(
+  edition: { setup: unknown; pages: unknown },
+  pageKey: string,
+  slot: string,
+): { template: QueryTemplate; page: EditionPage; workcenterId: string } | null {
+  const setup = edition.setup as Partial<EditionSetup>;
+  const page = (edition.pages as EditionPage[]).find((entry) => entry.key === pageKey);
+  const slide = setup.slides?.find((entry) => entry.id === page?.slideId);
+  const template = slide?.queries && Object.hasOwn(slide.queries, slot) ? slide.queries[slot] : undefined;
+  if (!page?.dateFrom || !template || !setup.workcenterId) return null;
+  return { template, page, workcenterId: setup.workcenterId };
+}
+
+/**
+ * Runs a page's saved query now. The dates, workcenter, shifts, filters and
+ * columns are the edition's; the reader chooses only which rows of a list to
+ * see, their order, and the figures over them.
+ */
+async function readPage(
+  siteId: string,
+  edition: { setup: unknown; pages: unknown },
+  pageKey: string,
+  slot: string,
+  read: PageReadInput,
+): Promise<Result<PageReadResult>> {
+  const saved = savedPageQuery(edition, pageKey, slot);
+  if (!saved) return PAGE_MISSING;
+  const scope = { siteId, workcenterIds: [saved.workcenterId] };
+  const { summary: items, ...rows } = read;
+  const [result, summary] = await Promise.all([
+    runPageQuery(saved.template, saved.page, scope, rows),
+    items ? runPageSummary(saved.template, saved.page, scope, items) : undefined,
+  ]);
+  return { data: { result, ...(summary ? { summary } : {}) } };
+}
+
+/**
+ * A link's page, read live (ADR-0018 amendment, 2026-10-02): the saved query
+ * of a page in an edition the link names, and nothing else.
+ */
+export async function linkPage(
+  token: string,
+  editionId: string,
+  pageKey: string,
+  slot: string,
+  read: PageReadInput,
+  now = new Date(),
+) {
+  const opened = await openLinkEdition(token, editionId, now);
+  if ("error" in opened) return opened;
+  return readPage(opened.data.siteId, opened.data.edition, pageKey, slot, read);
+}
+
+/** An edition's page, read live, for someone signed in. */
+export async function editionPage(editionId: string, pageKey: string, slot: string, read: PageReadInput) {
+  const edition = await prisma.reportDeckEdition.findUnique({
+    where: { id: editionId },
+    select: { siteId: true, setup: true, pages: true },
+  });
+  if (!edition) return PAGE_MISSING;
+  return readPage(edition.siteId, edition, pageKey, slot, read);
+}
+
+/** A page of the deck as it stands now, read live: a preview's. */
+export async function previewPage(deckId: string, pageKey: string, slot: string, read: PageReadInput) {
+  const deck = await getDeck(deckId);
+  if (!deck) return PAGE_MISSING;
+  const built = await buildEdition(deck, new Date());
+  return readPage(deck.siteId, built, pageKey, slot, read);
 }

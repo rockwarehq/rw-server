@@ -114,19 +114,18 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("report decks (Tier 2)", () => {
     expect(span.json).toMatchObject({ dateTo: yesterday, shifts: [{ shiftName: "1st" }] });
   });
 
-  it("makes an edition covering yesterday with every query's results stored", async () => {
+  it("makes an edition covering yesterday that keeps its pages and stores no results", async () => {
     const made = await rpcCall(server, "deck/makeEdition", { deckId }, managerToken);
     expect(made.statusCode).toBe(200);
     const edition = await rpcCall(server, "deck/getEdition", { id: (made.json as { id: string }).id }, managerToken);
     const body = edition.json as {
       dateFrom: string;
       dateTo: string;
-      pages: { results: Record<string, { rows?: unknown[]; total?: number }> }[];
+      pages: { key: string; dateFrom: string; results: Record<string, unknown> }[];
       facts: Record<string, unknown>;
     };
     expect(body).toMatchObject({ dateFrom: yesterday, dateTo: yesterday });
-    expect(body.pages[0]?.results.result?.rows).toHaveLength(1);
-    expect(body.pages[0]?.results.log).toMatchObject({ rows: [], total: 0 });
+    expect(body.pages[0]).toMatchObject({ key: "s1:all", dateFrom: yesterday, results: {} });
     expect(Object.keys(body.facts)).toEqual(["cycles"]);
   });
 
@@ -148,6 +147,76 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("report decks (Tier 2)", () => {
     expect((await rpcCall(server, "deck/revokeLink", { id }, outsiderToken)).statusCode).toBe(403);
     expect((await rpcCall(server, "deck/revokeLink", { id }, managerToken)).statusCode).toBe(200);
     expect((await rpcCall(server, "deck/viewLink", { token })).statusCode).not.toBe(200);
+  });
+
+  it("reads a page's saved query live — in the app, in a preview, and from a link — and nothing it didn't save", async () => {
+    const [edition] = (await rpcCall(server, "deck/listEditions", { deckId }, managerToken)).json as { id: string }[];
+    const editionId = edition!.id;
+    const read = { pageKey: "s1:all", slot: "log" };
+    type Read = { result: { rows?: unknown[]; total?: number; code?: string }; summary?: { values?: unknown[]; code?: string } };
+
+    // In the app: VIEW on the edition, and no one else.
+    const inApp = await rpcCall(server, "deck/editionPage", { editionId, ...read, summary: [{ agg: "count" }] }, managerToken);
+    expect(inApp.statusCode).toBe(200);
+    expect(inApp.json as Read).toMatchObject({ result: { rows: [], total: 0 }, summary: { values: [0] } });
+    expect((await rpcCall(server, "deck/editionPage", { editionId, ...read }, outsiderToken)).statusCode).toBe(403);
+    expect((await rpcCall(server, "deck/editionPage", { editionId, ...read })).statusCode).toBe(401);
+
+    // A preview: the deck as it stands now.
+    const preview = await rpcCall(server, "deck/previewPage", { deckId, ...read }, managerToken);
+    expect((preview.json as Read).result).toMatchObject({ rows: [], total: 0 });
+    expect((await rpcCall(server, "deck/previewPage", { deckId, ...read }, outsiderToken)).statusCode).toBe(403);
+
+    // From a link: the token alone.
+    const link = await rpcCall(
+      server,
+      "deck/createLink",
+      { editionIds: [editionId], label: "Decks live", expiresInHours: 168 },
+      managerToken,
+    );
+    const { id, token } = link.json as { id: string; token: string };
+    const linked = await rpcCall(server, "deck/linkPage", {
+      token,
+      editionId,
+      ...read,
+      limit: 10,
+      orderBy: { field: "start", dir: "asc" },
+      summary: [{ agg: "count" }],
+    });
+    expect(linked.statusCode).toBe(200);
+    expect(linked.json as Read).toMatchObject({ result: { rows: [], total: 0 }, summary: { values: [0] } });
+    // The page's other saved query, grouped: read as saved.
+    const grouped = await rpcCall(server, "deck/linkPage", { token, editionId, pageKey: "s1:all", slot: "result" });
+    expect((grouped.json as Read).result.rows).toHaveLength(1);
+
+    // Figures only over the columns the page saved; the rows still come back.
+    const unsaved = await rpcCall(server, "deck/linkPage", {
+      token,
+      editionId,
+      ...read,
+      summary: [{ key: "cycleSeconds", agg: "sum" }],
+    });
+    expect(unsaved.json as Read).toMatchObject({ result: { rows: [] }, summary: { code: "COLUMN_NOT_SAVED" } });
+    // A sort the page didn't save a column for is the query's own refusal.
+    const badSort = await rpcCall(server, "deck/linkPage", {
+      token,
+      editionId,
+      ...read,
+      orderBy: { field: "cycleSeconds", dir: "asc" },
+    });
+    expect((badSort.json as Read).result.code).toBe("INVALID_QUERY");
+
+    // Nothing the edition didn't keep, and nothing the caller names instead.
+    const call = (input: Record<string, unknown>) => rpcCall(server, "deck/linkPage", { token, editionId, ...read, ...input });
+    expect((await call({ slot: "nope" })).statusCode).toBe(404);
+    expect((await call({ pageKey: "other" })).statusCode).toBe(404);
+    expect((await call({ editionId: randomUUID() })).statusCode).toBe(404);
+    expect((await call({ token: `${token}x` })).statusCode).toBe(404);
+    const smuggled = await call({ fact: "production", filters: [], dateFrom: "2000-01-01", workcenterId: otherWorkcenterId });
+    expect((smuggled.json as Read).result).toMatchObject({ rows: [], total: 0 });
+
+    expect((await rpcCall(server, "deck/revokeLink", { id }, managerToken)).statusCode).toBe(200);
+    expect((await call({})).statusCode).not.toBe(200);
   });
 
   it("keeps shift recaps out of the Decks list, and lists them by kind", async () => {

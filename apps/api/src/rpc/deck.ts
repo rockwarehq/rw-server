@@ -1,12 +1,16 @@
 /**
  * Report decks (ADR-0018). A deck is workcenter data: VIEW on its workcenter
  * to see it and its editions, MANAGE to change it, make editions and create
- * or revoke links. `viewLink` is public: it returns a stored snapshot for
- * anyone holding the token and never runs a query. `linkRecap` is the one
- * public read that does: a shift recap page's shift, live, and nothing else.
+ * or revoke links. `viewLink` is public: it returns the editions a link names
+ * (their pages and saved queries, no results) for anyone holding the token,
+ * and never runs a query. Two public reads do, and
+ * only what the edition kept: `linkRecap`, a shift recap page's shift, and
+ * `linkPage`, one of a page's saved queries. The caller never names a dataset,
+ * a filter, a date or a workcenter — a token does what was saved and no more.
  */
 
 import * as deck from "@rw/services/deck/index";
+import { reportOrderBySchema, reportSummaryItemsSchema } from "@rw/services/reporting/schema";
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { throwServiceError } from "./errors.js";
@@ -81,7 +85,7 @@ export const remove = userRequired.input(idInput).handler(async ({ input, contex
   return { ok: await deck.deleteDeck(input.id) };
 });
 
-/** The deck worked out now, results and all, without keeping it. */
+/** The deck worked out now — its days and pages — without keeping it. Pages are read with `previewPage`. */
 export const preview = userRequired.input(idInput).handler(async ({ input, context }) => {
   await context.access.require("VIEW", { reportDeck: input.id });
   return found(await deck.previewDeck(input.id), "Deck not found");
@@ -198,3 +202,48 @@ export const viewLink = publicProcedure
 export const linkRecap = publicProcedure
   .input(z.object({ token: z.string().min(16).max(128), editionId: z.uuid(), pageKey: z.string().min(1).max(200) }))
   .handler(async ({ input }) => unwrap(await deck.linkRecap(input.token, input.editionId, input.pageKey)));
+
+// ── Pages, read live ───────────────────────────────────────────────────────
+
+/** Which saved query of which page, and what a reader may ask of it. */
+const pageReadFields = {
+  pageKey: z.string().min(1).max(200),
+  slot: z.string().min(1).max(40),
+  /** A row list: which rows, and their order. Which rows MATCH is the page's. */
+  limit: z.number().int().min(1).max(1000).optional(),
+  // Deep enough for any log a person pages through; a public read stays bounded.
+  offset: z.number().int().min(0).max(100_000).optional(),
+  orderBy: reportOrderBySchema.optional(),
+  /** Figures over every row the list matches. */
+  summary: reportSummaryItemsSchema.optional(),
+};
+
+const pageRead = ({ limit, offset, orderBy, summary }: z.infer<z.ZodObject<typeof pageReadFields>>) => ({
+  limit,
+  offset,
+  orderBy,
+  summary,
+});
+
+/** Public: a page of a link's edition, read live. The token is the only credential. */
+export const linkPage = publicProcedure
+  .input(z.object({ token: z.string().min(16).max(128), editionId: z.uuid(), ...pageReadFields }))
+  .handler(async ({ input }) =>
+    unwrap(await deck.linkPage(input.token, input.editionId, input.pageKey, input.slot, pageRead(input))),
+  );
+
+/** An edition's page, read live. */
+export const editionPage = userRequired
+  .input(z.object({ editionId: z.uuid(), ...pageReadFields }))
+  .handler(async ({ input, context }) => {
+    await context.access.require("VIEW", { reportDeckEdition: input.editionId });
+    return unwrap(await deck.editionPage(input.editionId, input.pageKey, input.slot, pageRead(input)));
+  });
+
+/** A page of the deck as it stands now, read live: a preview's. */
+export const previewPage = userRequired
+  .input(z.object({ deckId: z.uuid(), ...pageReadFields }))
+  .handler(async ({ input, context }) => {
+    await context.access.require("VIEW", { reportDeck: input.deckId });
+    return unwrap(await deck.previewPage(input.deckId, input.pageKey, input.slot, pageRead(input)));
+  });
