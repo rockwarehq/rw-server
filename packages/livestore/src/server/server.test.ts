@@ -319,6 +319,16 @@ describe("/graph/live", () => {
     expect(messages.filter((m) => m.op === "value")).toHaveLength(0);
   });
 
+  it("answers an app-level ping with a pong (browsers can't see protocol pings)", async () => {
+    const { wsUrl } = await startServer();
+    const { ws, messages } = await openAuthedSocket(wsUrl);
+
+    ws.send(JSON.stringify({ op: "ping" }));
+    await waitFor(() => messages.some((m) => m.op === "pong"));
+
+    expect(messages.some((m) => m.code === "INVALID_MESSAGE")).toBe(false);
+  });
+
   it("terminates connections that stop answering pings", async () => {
     const { wsUrl } = await startServer({ heartbeatIntervalMs: 40, maxMissedPongs: 1 });
     const { ws } = await openSocket(wsUrl, { autoPong: false, headers: { authorization: `Bearer ${USER_TOKEN_A}` } });
