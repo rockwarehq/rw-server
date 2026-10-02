@@ -58,14 +58,16 @@ export const get = publicProcedure.input(idInputSchema).handler(async ({ input }
 
 /**
  * Heartbeat - update lastSeenAt timestamp
- * Called by the TV/tablet periodically
+ * Called by the TV/tablet periodically. Answers with the server's clock
+ * (epoch ms, read last) so a display can show times in server time even when
+ * its own clock drifts — plant networks often block NTP.
  */
 export const heartbeat = publicProcedure.input(idInputSchema).handler(async ({ input }) => {
   // No token check on purpose: requiring the display's own token raced
   // with claiming (a display heartbeats before it has its token).
   const result = await display.heartbeat(input.id);
   if (result.error !== undefined) throwServiceError(result);
-  return { success: true };
+  return { success: true, serverTime: Date.now() };
 });
 
 // ============================================================================
