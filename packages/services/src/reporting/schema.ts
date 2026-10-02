@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { FILTER_OPS } from "./types.js";
+import { FILTER_OPS, SUMMARY_AGGS } from "./types.js";
 
 // The wire shape of a report query, shared by report.query / report.rows and
 // the queries a deck page keeps (ADR-0018), so the two can't drift.
@@ -18,7 +18,8 @@ export const reportFiltersSchema = z
   .max(20)
   .optional();
 
-const orderBy = z.object({ field: z.string().max(64), dir: z.enum(["asc", "desc"]) }).optional();
+export const reportOrderBySchema = z.object({ field: z.string().max(64), dir: z.enum(["asc", "desc"]) });
+const orderBy = reportOrderBySchema.optional();
 
 /** A grouped query, without its dates. */
 export const reportQueryFields = {
@@ -40,4 +41,17 @@ export const reportRowsFields = {
   columns: z.array(z.string().max(64)).min(1).max(40),
   filters: reportFiltersSchema,
   orderBy,
+};
+
+/** The figures a summary asks for: what to do, and with which field or measure. */
+export const reportSummaryItemsSchema = z
+  .array(z.object({ key: z.string().max(64).optional(), agg: z.enum(SUMMARY_AGGS) }))
+  .min(1)
+  .max(20);
+
+/** Figures over every row a listing matches, without its dates. */
+export const reportSummaryFields = {
+  fact: z.string().max(64),
+  items: reportSummaryItemsSchema,
+  filters: reportFiltersSchema,
 };

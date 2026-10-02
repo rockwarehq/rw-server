@@ -7,10 +7,14 @@
  * `rows` is `userRequired`, not `userOrDisplayRequired`: aggregates hide
  * individuals, detail rows don't, and display tokens are unattended
  * shop-floor screens. A wall board can have the totals, not the list.
+ *
+ * `summary` is the figures over everything `rows` would list — the totals a
+ * log shows above its pages. It takes row-level filters, so it sits behind
+ * the same `userRequired` as the list it summarises.
  */
 
-import { FACTS, reportSchema, runReportQuery, runReportRows } from "@rw/services/reporting/index";
-import { reportQueryFields, reportRowsFields } from "@rw/services/reporting/schema";
+import { FACTS, reportSchema, runReportQuery, runReportRows, runReportSummary } from "@rw/services/reporting/index";
+import { reportQueryFields, reportRowsFields, reportSummaryFields } from "@rw/services/reporting/schema";
 import { z } from "zod";
 import { throwServiceError } from "./errors.js";
 import { userRequired, userOrDisplayRequired } from "./middleware.js";
@@ -36,6 +40,13 @@ const rowsSchema = z.object({
   limit: z.number().int().min(1).max(10000).optional(),
   offset: z.number().int().min(0).optional(),
   includeTotal: z.boolean().optional(),
+});
+
+const summarySchema = z.object({
+  siteId: z.uuid(),
+  ...reportSummaryFields,
+  dateFrom: dateString.optional(),
+  dateTo: dateString.optional(),
 });
 
 export const schema = userOrDisplayRequired
@@ -64,6 +75,17 @@ export const rows = userRequired.input(rowsSchema).handler(async ({ input, conte
 
   const { siteId, ...rowsQuery } = input;
   const result = await runReportRows(rowsQuery, scope);
+  if ("error" in result) throwServiceError(result);
+  return result;
+});
+
+export const summary = userRequired.input(summarySchema).handler(async ({ input, context }) => {
+  const fact = FACTS[input.fact];
+  if (!fact) throwServiceError({ error: `Unknown fact: ${input.fact}`, code: "UNKNOWN_FACT" });
+  const scope = context.access.list("VIEW", input.siteId, "WORKCENTER");
+
+  const { siteId, ...summaryQuery } = input;
+  const result = await runReportSummary(summaryQuery, scope);
   if ("error" in result) throwServiceError(result);
   return result;
 });

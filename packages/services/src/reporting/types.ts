@@ -324,3 +324,43 @@ export interface ReportResult {
   /** Present when includeTotal was requested: how many groups matched. */
   total?: number;
 }
+
+/** What a summary can do with a column. */
+export const SUMMARY_AGGS = ["sum", "avg", "min", "max", "count"] as const;
+export type SummaryAgg = (typeof SUMMARY_AGGS)[number];
+
+export interface ReportSummaryItem {
+  /**
+   * A field or measure key, resolved in the order detail rows resolve a
+   * column, so a figure summarises the column a log shows under that key.
+   * Not needed for `count`, which counts the rows whatever they hold.
+   */
+  key?: string;
+  agg: SummaryAgg;
+}
+
+/**
+ * Figures over EVERY row a detail query matches, whatever page is on screen.
+ *
+ * It shares the detail predicate rather than the aggregate one, so it answers
+ * for the list a log shows: a measure filter is the row's own value, field
+ * filters work, and the fact's `aggregateFilter` does not apply. Like detail
+ * rows it always reads the base table, outside the rollup guarantee.
+ *
+ * A ratio measure's `avg` is the ratio of its summed components — the only
+ * correct average of a ratio — and its `sum` is refused.
+ */
+export interface ReportSummaryQuery {
+  fact: string;
+  /** At least one; values come back in this order. */
+  items: ReportSummaryItem[];
+  filters?: ReportFilter[];
+  /** Inclusive YYYY-MM-DD bounds on the fact's businessDate stamp. */
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+export interface ReportSummaryResult {
+  /** One value per requested item, in order; null when no row had a value. */
+  values: (number | null)[];
+}
