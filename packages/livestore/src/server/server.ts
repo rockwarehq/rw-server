@@ -388,6 +388,11 @@ export function registerGraphRoutes(
           return;
         }
 
+        if (message.op === "ping") {
+          sendJson({ op: "pong" });
+          return;
+        }
+
         if (message.op === "subscribe") {
           // Per-subscription tenancy check: unknown and cross-site ids are
           // rejected identically (no existence oracle).
@@ -451,7 +456,10 @@ export function registerGraphRoutes(
 type ClientMessage =
   | { op: "subscribe" | "unsubscribe"; propertyIds: string[] }
   | { op: "auth"; token: string }
-  | { op: "subscribe-changes" };
+  | { op: "subscribe-changes" }
+  // App-level liveness: browsers can't see protocol pings, so clients ping
+  // and treat any frame back as proof the socket is alive.
+  | { op: "ping" };
 
 const changeDecoder = new TextDecoder();
 
@@ -478,7 +486,7 @@ function isClientMessage(value: unknown): value is ClientMessage {
   if (typeof value !== "object" || value === null) return false;
   const message = value as { op?: unknown; propertyIds?: unknown; token?: unknown };
   if (message.op === "auth") return typeof message.token === "string" && message.token.length > 0;
-  if (message.op === "subscribe-changes") return true;
+  if (message.op === "subscribe-changes" || message.op === "ping") return true;
   if (message.op !== "subscribe" && message.op !== "unsubscribe") return false;
   return (
     Array.isArray(message.propertyIds) && message.propertyIds.every((propertyId) => typeof propertyId === "string")
