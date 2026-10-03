@@ -3,6 +3,7 @@ import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import type { RatePeriod } from "../../lib/units/quantity.js";
 import { decimalToNumber } from "../../metrics/sync.js";
+import { STATION_SPEED_FIELDS } from "../station/speed.js";
 import { refreshStationStandards } from "../station/state.js";
 import { ensureDefaultProfile } from "./default.js";
 import { LIVE_VARIATIONS, toSpec } from "./spec.js";
@@ -83,7 +84,19 @@ export async function applyProfileToStations(profileId: string): Promise<number>
       variation.id,
     );
     const same = COPIED.every((key) => String(fields[key] ?? "") === String(normalizeCurrent(current[key]) ?? ""));
-    if (same) continue;
+    if (same) {
+      // Nothing copied changed, but the speed fields read the profile itself
+      // (its rate period, parts vs strokes), so have them re-read.
+      publishEntityEvent({
+        action: "updated",
+        entityKey: SYSTEM_ENTITY_KEYS.Station,
+        entityId: station.id,
+        siteId: station.siteId,
+        workspaceId: station.site.workspaceId,
+        changedFields: [...STATION_SPEED_FIELDS],
+      });
+      continue;
+    }
 
     await prisma.$transaction(async (tx) => {
       const latest = await tx.stationVersion.findFirst({
@@ -105,7 +118,7 @@ export async function applyProfileToStations(profileId: string): Promise<number>
       entityId: station.id,
       siteId: station.siteId,
       workspaceId: station.site.workspaceId,
-      changedFields: [...COPIED],
+      changedFields: [...COPIED, ...STATION_SPEED_FIELDS],
     });
     if (station.currentJobId) {
       await refreshStationStandards(station.id, station.currentJobId, new Date()).catch((err) => {

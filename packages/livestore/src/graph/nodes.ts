@@ -5,6 +5,7 @@ import { normalizeGraphTypeToken, parseGraphTypeRef } from "../catalog/graph-typ
 
 import { SYSTEM_ENTITY_KEYS, systemEntityCatalogEntryByKey } from "@rw/services/entity/registry";
 import { resolveEffectiveStandards } from "@rw/services/facility/station/effective-standards";
+import { stationSpeed } from "@rw/services/facility/station/speed";
 import { findStatusSince } from "@rw/services/facility/station/status-events";
 import { publishGraphDefinitionEvent } from "./definition-events.js";
 import { activeHookIdsForProperties } from "./hooks.js";
@@ -343,7 +344,9 @@ async function resolveSystemEntityRecord(
   if (entityKey === SYSTEM_ENTITY_KEYS.Station) {
     const station = await prisma.station.findFirst({
       where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null },
-      include: { currentVersion: true },
+      include: {
+        currentVersion: { include: { profile: { select: { countedAs: true, standardRatePeriod: true } } } },
+      },
     });
     if (!station) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
     // Items per cycle mirrors inventory.createFromCycle: standard quantity per
@@ -407,7 +410,7 @@ async function resolveSystemEntityRecord(
       prisma.cycle.findFirst({
         where: { stationId: station.id, end: { not: null } },
         orderBy: { end: "desc" },
-        select: { start: true, end: true },
+        select: { start: true, end: true, quantity: true },
       }),
       prisma.call.count({ where: { stationId: station.id, closedAt: null, deletedAt: null } }),
       prisma.call.findFirst({
@@ -420,6 +423,21 @@ async function resolveSystemEntityRecord(
       lastCycle?.end != null
         ? Math.round(((lastCycle.end.getTime() - lastCycle.start.getTime()) / 1000) * 10) / 10
         : null;
+    const lastCycleQuantity = lastCycle?.quantity != null ? Number(lastCycle.quantity) : null;
+    const { profile, ...version } = station.currentVersion ?? { profile: null };
+    // Speed in the machine's shape (cycle time, or e.g. ft/min); the profile
+    // decides the period and parts-vs-strokes, a hand-set station its own period.
+    const speed = station.currentVersion
+      ? stationSpeed({
+          cycleMode: station.currentVersion.cycleMode,
+          quantityUnit: station.currentVersion.quantityUnit,
+          countedAs: profile?.countedAs ?? null,
+          ratePeriod: profile?.standardRatePeriod ?? station.currentVersion.standardRatePeriod,
+          lastCycle: lastCycle ? { start: lastCycle.start, end: lastCycle.end, quantity: lastCycleQuantity } : null,
+          secondsPerUnit: currentSecondsPerUnit,
+          standardCycleSeconds: currentStandardCycleSeconds,
+        })
+      : null;
     return {
       data: {
         ...station,
@@ -444,9 +462,15 @@ async function resolveSystemEntityRecord(
         callsUpdatedAt: lastCallChange?.updatedAt ?? null,
         lastCycleSeconds,
         lastCycleCompletedAt: lastCycle?.end ?? null,
+        lastCycleQuantity,
+        speedShape: speed?.speedShape ?? null,
+        speedUnit: speed?.speedUnit ?? null,
+        speedPeriod: speed?.speedPeriod ?? null,
+        currentSpeed: speed?.currentSpeed ?? null,
+        standardSpeed: speed?.standardSpeed ?? null,
         currentVersion: station.currentVersion
           ? {
-              ...station.currentVersion,
+              ...version,
               standardCycle: station.currentVersion.standardCycle?.toNumber() ?? null,
               standardQuantity: station.currentVersion.standardQuantity?.toNumber() ?? null,
               standardRate: station.currentVersion.standardRate?.toNumber() ?? null,
@@ -714,6 +738,8 @@ async function prepareTypeFields(args: {
   typeRef: string | null;
   typeContext: Record<string, unknown>;
   scope: GraphScope;
+  /** Prepare only these field keys (siblings still get ids, for expr refs). */
+  only?: ReadonlySet<string>;
 }): Promise<ServiceResult<PreparedTypeField[]>> {
   if (!args.typeRef) return { data: [] };
   const typeResult = await nodeTypes.resolve(args.typeRef, args.scope);
@@ -734,6 +760,7 @@ async function prepareTypeFields(args: {
 
   const prepared: PreparedTypeField[] = [];
   for (const field of typeResult.data.fields) {
+    if (args.only && !args.only.has(field.key)) continue;
     const expanded = expandTemplate(field.resolver, args.typeContext);
     if (isServiceError(expanded)) return expanded;
     if (!isRecord(expanded))
@@ -1140,6 +1167,148 @@ export async function update(
   });
   publishGraphDefinitionEvent({ entity: "node", action: "updated", entityId: id, siteId: scope.siteId });
   return { data: node };
+}
+
+/**
+ * Type field keys a node has no property for, by name. A deleted property
+ * still holds its name: someone removed that field, so it stays removed.
+ */
+export function missingTypeFieldKeys(fieldKeys: string[], existingNames: Iterable<string>): string[] {
+  const existing = new Set(existingNames);
+  return fieldKeys.filter((key) => !existing.has(key));
+}
+
+/** Split prepared fields into those safe to add and those depending on a deleted property. */
+export function partitionAddableFields<T extends { dependencyIds: string[] }>(
+  fields: T[],
+  deletedPropertyIds: ReadonlySet<string>,
+): { addable: T[]; blocked: T[] } {
+  const addable: T[] = [];
+  const blocked: T[] = [];
+  for (const field of fields) {
+    (field.dependencyIds.some((id) => deletedPropertyIds.has(id)) ? blocked : addable).push(field);
+  }
+  return { addable, blocked };
+}
+
+export interface AddMissingTypeFieldsResult {
+  nodes: number;
+  added: Array<{ nodeId: string; node: string; fields: string[] }>;
+  blocked: Array<{ nodeId: string; node: string; fields: string[] }>;
+  failed: Array<{ nodeId: string; node: string; code: string; error: string }>;
+}
+
+/**
+ * Give every typed node the type fields added to its type after it was made.
+ * Create-only: an existing property is never changed, and a field whose name
+ * a deleted property holds is left out. Only nodes that materialize type
+ * fields take part (as in update()). Idempotent — the API seed runs it on
+ * every deploy; livestore picks the rows up from the definition event or its
+ * updatedAt reconcile. One node failing doesn't stop the rest.
+ */
+export async function addMissingTypeFields(options: { dryRun?: boolean } = {}): Promise<AddMissingTypeFieldsResult> {
+  const typedNodes = await prisma.graphNode.findMany({
+    where: {
+      isDeleted: false,
+      typeRef: { not: null },
+      properties: { some: { typeFieldKey: { not: null }, isDeleted: false } },
+    },
+    select: {
+      id: true,
+      name: true,
+      typeRef: true,
+      typeContext: true,
+      siteId: true,
+      site: { select: { workspaceId: true } },
+      properties: { select: { id: true, name: true, isDeleted: true } },
+    },
+    orderBy: { name: "asc" },
+  });
+
+  const result: AddMissingTypeFieldsResult = { nodes: typedNodes.length, added: [], blocked: [], failed: [] };
+  const fail = (node: { id: string; name: string }, code: string, error: string) =>
+    result.failed.push({ nodeId: node.id, node: node.name, code, error });
+
+  for (const node of typedNodes) {
+    const scope = { siteId: node.siteId, workspaceId: node.site.workspaceId };
+    try {
+      const typeResult = await nodeTypes.resolve(node.typeRef as string, scope);
+      if ("error" in typeResult) {
+        fail(node, typeResult.code, typeResult.error);
+        continue;
+      }
+      const missing = missingTypeFieldKeys(
+        typeResult.data.fields.map((field) => field.key),
+        node.properties.map((property) => property.name),
+      );
+      if (missing.length === 0) continue;
+
+      const typeContext = normalizeTypeContext(node.typeContext);
+      if (isServiceError(typeContext)) {
+        fail(node, typeContext.code, typeContext.error);
+        continue;
+      }
+      const prepared = await prepareTypeFields({
+        nodeId: node.id,
+        typeRef: node.typeRef,
+        typeContext,
+        scope,
+        only: new Set(missing),
+      });
+      if ("error" in prepared) {
+        fail(node, prepared.code, prepared.error);
+        continue;
+      }
+      const deletedIds = new Set(node.properties.filter((property) => property.isDeleted).map((p) => p.id));
+      const { addable, blocked } = partitionAddableFields(prepared.data, deletedIds);
+      if (blocked.length > 0)
+        result.blocked.push({ nodeId: node.id, node: node.name, fields: blocked.map((field) => field.name) });
+      if (addable.length === 0) continue;
+
+      let created = addable;
+      if (!options.dryRun) {
+        created = await prisma.$transaction(async (tx) => {
+          // Re-check inside the transaction: a property made since the read
+          // above wins, and is not touched.
+          const taken = await tx.graphProperty.findMany({
+            where: { nodeId: node.id, name: { in: addable.map((field) => field.name) } },
+            select: { name: true },
+          });
+          const takenNames = new Set(taken.map((property) => property.name));
+          const fresh = addable.filter((field) => !takenNames.has(field.name));
+          for (const field of fresh) {
+            await tx.graphProperty.create({
+              data: {
+                id: field.id,
+                nodeId: node.id,
+                name: field.name,
+                typeFieldKey: field.typeFieldKey,
+                resolverType: field.resolverType,
+                resolver: field.resolver as Prisma.InputJsonValue,
+                sampleRateMs: field.sampleRateMs,
+              },
+            });
+          }
+          // Properties first: an edge may point at an in-batch sibling.
+          const edges = fresh.flatMap((field) =>
+            [...new Set(field.dependencyIds)].map((dependencyId) => ({
+              fromPropertyId: dependencyId,
+              toPropertyId: field.id,
+            })),
+          );
+          if (edges.length > 0) await tx.graphEdge.createMany({ data: edges, skipDuplicates: true });
+          return fresh;
+        });
+        if (created.length > 0)
+          publishGraphDefinitionEvent({ entity: "node", action: "updated", entityId: node.id, siteId: node.siteId });
+      }
+      if (created.length > 0)
+        result.added.push({ nodeId: node.id, node: node.name, fields: created.map((field) => field.name) });
+    } catch (err) {
+      fail(node, "UNEXPECTED", err instanceof Error ? err.message : String(err));
+    }
+  }
+  return result;
 }
 
 export async function remove(id: string, scope: GraphScope): Promise<ServiceResult<{ success: true }>> {

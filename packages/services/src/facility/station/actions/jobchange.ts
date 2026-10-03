@@ -169,6 +169,7 @@ export const jobChangeAction: StationActionDefinition<JobChangeInput> = {
         "currentSecondsPerUnit",
         "currentStandardQuantity",
         "currentStandardCycleSeconds",
+        "standardSpeed",
       ],
     });
 

@@ -9,6 +9,7 @@ import { publishUiChange } from "../../events/ui-changes.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import type { StationStatus } from "@rw/runtime/station-status-events";
 import { emitStationStatusChanged, findStatusSince } from "./status-events.js";
+import { STATION_LAST_CYCLE_SPEED_FIELDS } from "./speed.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { findOpenModeLog } from "../production-mode/open-log.js";
 import { resolveShiftStamp, type ShiftStamp } from "../work-context.js";
@@ -418,8 +419,12 @@ function publishStationLastCycleMetricEvent(
     path: ctx.path,
   });
   // Unlike status, published every cycle: the entity resolver only re-reads
-  // properties bound to these two fields, so the fan-out stays surgical.
-  publishStationStatusEntityEvent(ctx, ["lastCycleSeconds", "lastCycleCompletedAt"]);
+  // properties bound to these fields, so the fan-out stays surgical.
+  publishStationStatusEntityEvent(ctx, [
+    "lastCycleSeconds",
+    "lastCycleCompletedAt",
+    ...STATION_LAST_CYCLE_SPEED_FIELDS,
+  ]);
 }
 
 async function publishStationLastCycleMetric(
@@ -899,6 +904,7 @@ export async function refreshStationStandards(stationId: string, jobId: string, 
       "currentSecondsPerUnit",
       "currentStandardQuantity",
       "currentStandardCycleSeconds",
+      "standardSpeed",
     ]);
 }
 
