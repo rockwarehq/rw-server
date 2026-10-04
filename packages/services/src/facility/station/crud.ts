@@ -3,6 +3,7 @@ import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { crewFilter } from "../../lib/crew-filter.js";
 import { resolveStationProfileFields } from "../station-profile/apply.js";
+import { STATION_SPEED_FIELDS } from "./speed.js";
 
 export interface CreateStationInput {
   name: string;
@@ -537,6 +538,8 @@ export async function update(id: string, input: UpdateStationInput) {
           .filter(([, value]) => value !== undefined)
           .map(([key]) => key),
         ...Object.keys(profileFields),
+        // Derived from the version (mode, unit, period, profile).
+        ...STATION_SPEED_FIELDS,
       ],
     });
 

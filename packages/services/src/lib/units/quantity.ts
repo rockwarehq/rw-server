@@ -46,6 +46,11 @@ const RATE_PERIOD_SECONDS: Record<RatePeriod, number> = {
   HOUR: 3600,
 };
 
+/** Seconds in a rate period; null for a value outside RatePeriod (bad stored data). */
+export function ratePeriodSeconds(period: RatePeriod | string): number | null {
+  return RATE_PERIOD_SECONDS[period as RatePeriod] ?? null;
+}
+
 /** Dimension of a unit token, or null for unknown/blank units. */
 export function dimensionOf(unit: string): QuantityDimension | null {
   return UNITS[normalize(unit)]?.dimension ?? null;

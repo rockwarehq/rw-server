@@ -1,6 +1,7 @@
 import "dotenv/config";
 import prisma, { ensureAccountWorkspace } from "@rw/db";
 import { hashPassword } from "@rw/auth/password";
+import { addMissingTypeFields } from "@rw/livestore/graph/nodes";
 import { ensureBuckets } from "./seed-buckets.js";
 
 // Bootstrap a tenant database with the default workspace, an owner user,
@@ -35,6 +36,28 @@ async function ensureScrapDisposition(siteId: string): Promise<void> {
 //
 // Run locally:   pnpm --filter @rw/api db:seed        (tsx src/seed.ts)
 // Run compiled:  node dist/seed.js                    (used by fly release_command)
+// Livestore type fields added since a node was made (e.g. new station fields)
+// reach existing nodes on deploy. Create-only, never edits or revives a
+// property. A failure is logged, not thrown: a missing dashboard field must
+// not abort a release.
+async function syncTypeFields(): Promise<void> {
+  try {
+    const result = await addMissingTypeFields();
+    for (const node of result.added) console.log(`Seed: added type fields to ${node.node}: ${node.fields.join(", ")}`);
+    for (const node of result.blocked)
+      console.warn(
+        `Seed: skipped type fields on ${node.node} (depend on a deleted property): ${node.fields.join(", ")}`,
+      );
+    for (const node of result.failed)
+      console.warn(`Seed: type field sync failed for ${node.node}: ${node.code} ${node.error}`);
+    console.log(
+      `Seed: type field sync checked ${result.nodes} node(s); added to ${result.added.length}, failed ${result.failed.length}.`,
+    );
+  } catch (err) {
+    console.error("Seed: type field sync failed (deploy continues):", err);
+  }
+}
+
 async function seed() {
   console.log("Starting database seed...");
 
@@ -54,6 +77,7 @@ async function seed() {
       `Seed: ensured Scrap dispositions for ${allSites.length} site(s); ` +
         `${existingUsers} user(s) already exist — skipping bootstrap.`,
     );
+    await syncTypeFields();
     return;
   }
 

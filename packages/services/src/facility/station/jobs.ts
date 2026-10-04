@@ -283,6 +283,7 @@ export async function publishJobChangeSideEffects(args: {
       "currentSecondsPerUnit",
       "currentStandardQuantity",
       "currentStandardCycleSeconds",
+      "standardSpeed",
     ],
   });
 
