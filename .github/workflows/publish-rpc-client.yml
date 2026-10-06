@@ -43,21 +43,43 @@ jobs:
         run: pnpm build
         working-directory: packages/rpc-client
 
+      # A release version (0.51.0) publishes only from main, as `latest`. A
+      # prerelease (0.51.0-agents.0) can publish from any branch, under a
+      # dist-tag named for its identifier (`agents`), so it never becomes what
+      # a plain install picks up. Pin it exactly to use it.
       - name: Display version to publish
         id: version
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          echo "Publishing @rockwarehq/rpc-client@${VERSION}"
+          case "$VERSION" in
+            *-*)
+              PREID=$(echo "$VERSION" | sed -E 's/^[^-]+-([A-Za-z0-9]+).*/\1/')
+              TAG="$PREID"
+              ;;
+            *)
+              if [ "$GITHUB_REF_NAME" != "main" ]; then
+                echo "::error::${VERSION} is a release version; publish it from main, or use a prerelease (e.g. ${VERSION}-name.0) on a branch."
+                exit 1
+              fi
+              TAG="latest"
+              ;;
+          esac
+          if [ "$TAG" = "latest" ] && [ "$GITHUB_REF_NAME" != "main" ]; then
+            echo "::error::Only main publishes under the latest tag; rename the prerelease."
+            exit 1
+          fi
+          echo "Publishing @rockwarehq/rpc-client@${VERSION} (tag ${TAG}) from ${GITHUB_REF_NAME}"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
         working-directory: packages/rpc-client
 
       - name: Publish to GitHub Packages
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "Dry run enabled - running npm publish --dry-run"
-            pnpm publish --no-git-checks --dry-run
+            pnpm publish --no-git-checks --tag "${{ steps.version.outputs.tag }}" --dry-run
           else
-            pnpm publish --no-git-checks
+            pnpm publish --no-git-checks --tag "${{ steps.version.outputs.tag }}"
           fi
         working-directory: packages/rpc-client
         env:
@@ -68,11 +90,11 @@ jobs:
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "### Dry Run Complete" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Would have published \`@rockwarehq/rpc-client@${{ steps.version.outputs.version }}\` to GitHub Packages." >> $GITHUB_STEP_SUMMARY
+            echo "Would have published \`@rockwarehq/rpc-client@${{ steps.version.outputs.version }}\` (tag \`${{ steps.version.outputs.tag }}\`) to GitHub Packages." >> $GITHUB_STEP_SUMMARY
           else
             echo "### Published Successfully" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Published \`@rockwarehq/rpc-client@${{ steps.version.outputs.version }}\` to GitHub Packages." >> $GITHUB_STEP_SUMMARY
+            echo "Published \`@rockwarehq/rpc-client@${{ steps.version.outputs.version }}\` (tag \`${{ steps.version.outputs.tag }}\`) to GitHub Packages." >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "Install with:" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
