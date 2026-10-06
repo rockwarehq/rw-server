@@ -1,0 +1,89 @@
+{
+  "name": "s7plus",
+  "displayName": "Siemens S7 (Symbolic)",
+  "description": "Connect to Siemens S7-1200/1500 PLCs over S7CommPlus with symbolic addressing: tags are addressed by name (e.g. DB_OUT.GoodParts), so optimized data blocks work and PUT/GET does not need to be enabled. Values are pushed by PLC-side subscriptions at the point group's poll rate.",
+  "version": "1.0.0",
+  "vendor": "Rockware",
+  "category": "device",
+  "status": "active",
+  "connectionSchema": {
+    "type": "object",
+    "properties": {
+      "host": {
+        "type": "string",
+        "title": "IP Address",
+        "examples": ["192.168.0.2"]
+      },
+      "port": {
+        "type": "integer",
+        "title": "Port",
+        "default": 102,
+        "minimum": 1,
+        "maximum": 65535
+      },
+      "security": {
+        "type": "string",
+        "title": "Security",
+        "description": "tls for TIA Portal V17+ firmware (S7-1200 V4.5+, S7-1500 V2.9+); legacy for older firmware",
+        "enum": ["tls", "legacy"],
+        "default": "tls"
+      },
+      "password": {
+        "type": "string",
+        "title": "PLC Password",
+        "description": "Only if the CPU's access protection requires a password to read; leave empty otherwise"
+      },
+      "mode": {
+        "type": "string",
+        "title": "Acquisition",
+        "description": "subscribe: the PLC pushes changes each cycle (recommended); poll: batched reads each cycle",
+        "enum": ["subscribe", "poll"],
+        "default": "subscribe"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "title": "Timeout (ms)",
+        "default": 5000,
+        "minimum": 500
+      }
+    },
+    "required": ["host"]
+  },
+  "pointSchema": {
+    "type": "object",
+    "properties": {
+      "address": {
+        "type": "string",
+        "title": "Symbol",
+        "description": "The tag's symbolic name as shown in TIA Portal: <DataBlock>.<Member> (e.g. DB_OUT.GoodParts, Motor_DB.axis[2].speed) or a global PLC tag by name (e.g. AlwaysTRUE). Quote names containing a dot: \"Clock_0.5Hz\". The tag must be accessible from HMI/OPC UA.",
+        "examples": ["DB_OUT.GoodParts", "Motor_DB.axis[2].speed", "AlwaysTRUE"]
+      },
+      "dataType": {
+        "type": "string",
+        "title": "Data Type",
+        "description": "Informational — the type is read from the PLC's symbol table",
+        "enum": ["bool", "int16", "uint16", "int32", "uint32", "float", "string"]
+      }
+    },
+    "required": ["address"]
+  },
+  "capabilities": {
+    "read": true,
+    "write": false,
+    "subscribe": true,
+    "browse": false
+  },
+  "ui": {
+    "connectionForm": {
+      "layout": "grid",
+      "fieldOrder": ["host", "port", "security", "password", "mode", "timeoutMs"],
+      "fieldGroups": {
+        "Connection": ["host", "port"],
+        "Security": ["security", "password"],
+        "Advanced": ["mode", "timeoutMs"]
+      }
+    },
+    "icon": "⚙️",
+    "color": "#0EA5E9"
+  }
+}
