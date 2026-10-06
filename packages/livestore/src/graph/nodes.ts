@@ -846,7 +846,23 @@ async function applyPreparedTypeFields(
   }
 }
 
-export async function create(input: CreateGraphNodeInput, scope: GraphScope): Promise<ServiceResult<unknown>> {
+// A validated node creation, ready to write. Split from the write so a
+// changeset can validate every item first and then commit them all in one
+// transaction (see changeset.ts).
+export interface PreparedGraphNodeCreate {
+  nodeId: string;
+  existingId: string | null;
+  name: string;
+  typeRef: string | null;
+  typeContext: Record<string, unknown>;
+  facets: Record<string, unknown>;
+  fields: PreparedTypeField[];
+}
+
+export async function prepareCreate(
+  input: CreateGraphNodeInput,
+  scope: GraphScope,
+): Promise<ServiceResult<PreparedGraphNodeCreate>> {
   const name = input.name.trim();
   if (!name) return errorResult("INVALID_NAME", "Graph node name is required");
 
@@ -882,34 +898,41 @@ export async function create(input: CreateGraphNodeInput, scope: GraphScope): Pr
     : { data: [] as PreparedTypeField[] };
   if ("error" in fieldsResult) return fieldsResult;
 
-  const node = await prisma.$transaction(async (tx) => {
-    const next = existing
-      ? await tx.graphNode.update({
-          where: { id: existing.id },
-          data: {
-            name,
-            siteId: scope.siteId,
-            typeRef,
-            typeContext: typeContext as Prisma.InputJsonValue,
-            facets: facetsResult.data as Prisma.InputJsonValue,
-            isDeleted: false,
-          },
-        })
-      : await tx.graphNode.create({
-          data: {
-            id: nodeId,
-            name,
-            siteId: scope.siteId,
-            typeRef,
-            typeContext: typeContext as Prisma.InputJsonValue,
-            facets: facetsResult.data as Prisma.InputJsonValue,
-          },
-        });
+  return {
+    data: {
+      nodeId,
+      existingId: existing?.id ?? null,
+      name,
+      typeRef,
+      typeContext,
+      facets: facetsResult.data,
+      fields: fieldsResult.data,
+    },
+  };
+}
 
-    await applyPreparedTypeFields(tx, next.id, fieldsResult.data);
+export async function writeCreate(tx: Prisma.TransactionClient, prepared: PreparedGraphNodeCreate, scope: GraphScope) {
+  const data = {
+    name: prepared.name,
+    siteId: scope.siteId,
+    typeRef: prepared.typeRef,
+    typeContext: prepared.typeContext as Prisma.InputJsonValue,
+    facets: prepared.facets as Prisma.InputJsonValue,
+  };
+  const next = prepared.existingId
+    ? await tx.graphNode.update({ where: { id: prepared.existingId }, data: { ...data, isDeleted: false } })
+    : await tx.graphNode.create({ data: { id: prepared.nodeId, ...data } });
 
-    return next;
-  });
+  await applyPreparedTypeFields(tx, next.id, prepared.fields);
+
+  return next;
+}
+
+export async function create(input: CreateGraphNodeInput, scope: GraphScope): Promise<ServiceResult<unknown>> {
+  const prepared = await prepareCreate(input, scope);
+  if ("error" in prepared) return prepared;
+
+  const node = await prisma.$transaction((tx) => writeCreate(tx, prepared.data, scope));
 
   const created = await prisma.graphNode.findUnique({ where: { id: node.id }, include: graphNodeInclude });
   publishGraphDefinitionEvent({ entity: "node", action: "created", entityId: node.id, siteId: scope.siteId });

@@ -1,0 +1,232 @@
+/// A site's custom agent. Built-in agents (build, explore, investigator) are
+/// defined in code; a custom agent extends one (baseKey) and overrides its
+/// instructions, model, step budget and permission rules.
+model AgentDefinition {
+  id                  String   @id @default(uuid()) @db.Uuid
+  siteId              String   @db.Uuid
+  key                 String
+  baseKey             String
+  name                String
+  description         String?
+  instructions        String?
+  model               String?
+  effort              String?
+  maxSteps            Int?
+  /// Permission rules layered over the base agent's: [{ permission, pattern, action }].
+  permissions         Json     @default("[]")
+  /// Who is notified when an unattended run of this agent needs approval.
+  notificationGroupId String?  @db.Uuid
+  /// Unattended runs act as this user, capped by the agent's permissions.
+  runAsUserId         String?  @db.Uuid
+  enabled             Boolean  @default(true)
+  version             Int      @default(1)
+  isDeleted           Boolean  @default(false)
+  createdById         String?  @db.Uuid
+  createdAt           DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime @updatedAt @db.Timestamptz(3)
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, key])
+}
+
+enum AgentTriggerKind {
+  HOOK_EVENT
+  SCHEDULE
+}
+
+/// Starts an agent run on a LiveStore hook event or on a daily schedule.
+/// Modelled on IntegrationTrigger: the prompt is a template whose
+/// { "$from": "field" } values come from the event payload.
+model AgentTrigger {
+  id             String           @id @default(uuid()) @db.Uuid
+  siteId         String           @db.Uuid
+  agentKey       String
+  name           String
+  enabled        Boolean          @default(true)
+  kind           AgentTriggerKind
+  prompt         Json
+  eventNamespace String?
+  eventName      String?
+  eventVersion   String?
+  hookId         String?          @db.Uuid
+  /// DailySchedule { time: "HH:mm", days: number[] } for SCHEDULE triggers.
+  schedule       Json?
+  cooldownMs     Int              @default(0)
+  maxRunsPerHour Int              @default(6)
+  lastFiredAt    DateTime?        @db.Timestamptz(3)
+  isDeleted      Boolean          @default(false)
+  createdById    String?          @db.Uuid
+  createdAt      DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime         @updatedAt @db.Timestamptz(3)
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@index([siteId, kind, enabled])
+  @@index([siteId, eventNamespace, eventName, eventVersion, enabled])
+}
+
+enum AgentSessionTrigger {
+  CHAT
+  HOOK_EVENT
+  SCHEDULE
+  AGENT
+}
+
+enum AgentSessionStatus {
+  IDLE
+  QUEUED
+  RUNNING
+  WAITING_APPROVAL
+  FAILED
+}
+
+/// One agent run history: a chat, or a run started by a trigger or by a
+/// parent agent. Tools run as actorUserId (the chatting user, or the agent's
+/// run-as user), capped by the agent's permissions.
+model AgentSession {
+  id              String              @id @default(uuid()) @db.Uuid
+  siteId          String              @db.Uuid
+  agentKey        String
+  agentVersion    Int                 @default(0)
+  parentSessionId String?             @db.Uuid
+  trigger         AgentSessionTrigger @default(CHAT)
+  /// The trigger id, hook event id or parent tool call that started the run.
+  triggerRef      String?
+  actorUserId     String              @db.Uuid
+  title           String
+  status          AgentSessionStatus  @default(IDLE)
+  /// The api node running the session and until when; a node that dies
+  /// stops renewing, and the session can be claimed again.
+  leaseOwner      String?
+  leaseExpiresAt  DateTime?           @db.Timestamptz(3)
+  lastSeq         Int                 @default(0)
+  /// Running totals: { inputTokens, outputTokens, cacheReadInputTokens }.
+  usage           Json                @default("{}")
+  createdAt       DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime            @updatedAt @db.Timestamptz(3)
+
+  site       Site                     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  parent     AgentSession?            @relation("AgentSessionChildren", fields: [parentSessionId], references: [id], onDelete: Cascade)
+  children   AgentSession[]           @relation("AgentSessionChildren")
+  events     AgentEvent[]
+  inputs     AgentInput[]
+  messages   AgentMessage[]
+  requests   AgentPermissionRequest[]
+  changesets GraphChangeset[]
+
+  @@unique([siteId, triggerRef])
+  @@index([siteId, actorUserId, updatedAt])
+  @@index([siteId, status])
+  @@index([parentSessionId])
+}
+
+/// The session's durable, append-only event log. Clients replay it from a
+/// seq cursor and then follow it live; streaming deltas are never stored.
+model AgentEvent {
+  id        String   @id @default(uuid()) @db.Uuid
+  sessionId String   @db.Uuid
+  seq       Int
+  type      String
+  payload   Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  session AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, seq])
+}
+
+enum AgentInputStatus {
+  ADMITTED
+  CONSUMED
+}
+
+/// A prompt waiting to be run. The client supplies the id, so a retried
+/// submission is a no-op.
+model AgentInput {
+  id        String           @id @db.Uuid
+  sessionId String           @db.Uuid
+  text      String
+  context   Json             @default("[]")
+  status    AgentInputStatus @default(ADMITTED)
+  createdAt DateTime         @default(now()) @db.Timestamptz(3)
+
+  session AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, status, createdAt])
+}
+
+enum AgentMessageRole {
+  USER
+  ASSISTANT
+}
+
+/// One Messages API turn, stored verbatim and append-only (content is the
+/// exact content block array sent to or returned by the model). The model's
+/// history; the UI reads AgentEvent.
+model AgentMessage {
+  id        String           @id @default(uuid()) @db.Uuid
+  sessionId String           @db.Uuid
+  seq       Int
+  role      AgentMessageRole
+  content   Json
+  usage     Json?
+  model     String?
+  createdAt DateTime         @default(now()) @db.Timestamptz(3)
+
+  session AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, seq])
+}
+
+enum AgentPermissionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+/// A tool call waiting for a person. The run parks until it is answered;
+/// the answer is the tool's result.
+model AgentPermissionRequest {
+  id          String                @id @default(uuid()) @db.Uuid
+  sessionId   String                @db.Uuid
+  siteId      String                @db.Uuid
+  toolUseId   String
+  toolName    String
+  toolInput   Json
+  permission  String
+  patterns    String[]
+  /// What the reviewer needs, e.g. { changesetId, title }.
+  metadata    Json                  @default("{}")
+  status      AgentPermissionStatus @default(PENDING)
+  reply       String?
+  feedback    String?
+  repliedById String?               @db.Uuid
+  repliedAt   DateTime?             @db.Timestamptz(3)
+  notifiedAt  DateTime?             @db.Timestamptz(3)
+  expiresAt   DateTime              @db.Timestamptz(3)
+  createdAt   DateTime              @default(now()) @db.Timestamptz(3)
+
+  session AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, toolUseId])
+  @@index([siteId, status, createdAt])
+}
+
+/// An "always" answer saved from an approval: later matching requests in the
+/// site (optionally only for one agent) are allowed or denied without asking.
+model AgentPermissionRule {
+  id          String   @id @default(uuid()) @db.Uuid
+  siteId      String   @db.Uuid
+  agentKey    String?
+  permission  String
+  pattern     String
+  action      String
+  createdById String?  @db.Uuid
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@index([siteId, permission])
+}

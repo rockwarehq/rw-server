@@ -1,0 +1,43 @@
+enum GraphChangesetStatus {
+  DRAFT
+  APPLIED
+  DISCARDED
+}
+
+enum GraphChangesetAuthor {
+  USER
+  AGENT
+}
+
+/// A proposed batch of graph creations (nodes, properties, hooks), validated by
+/// the planner and applied in one transaction once a person approves it. The
+/// agent only ever writes these; it never edits the graph directly.
+model GraphChangeset {
+  id             String                 @id @default(uuid()) @db.Uuid
+  siteId         String                 @db.Uuid
+  title          String
+  rationale      String?
+  status         GraphChangesetStatus   @default(DRAFT)
+  author         GraphChangesetAuthor   @default(USER)
+  /// The plan input (GraphPlanInput) exactly as proposed.
+  spec           Json
+  /// The latest GraphPlanResult for spec.
+  planResult     Json
+  /// planResult.graphVersion, kept as its own column for stale checks.
+  graphVersion   Json
+  sessionId      String?                @db.Uuid
+  createdById    String?                @db.Uuid
+  appliedById    String?                @db.Uuid
+  appliedAt      DateTime?              @db.Timestamptz(3)
+  /// Ids written on apply: { nodes: {ref: id}, properties: [id], hooks: [id] }.
+  appliedResult  Json?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  site         Site               @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  session AgentSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@index([siteId, status, createdAt])
+  @@index([sessionId])
+}

@@ -22,6 +22,8 @@ export default defineConfig({
     fileParallelism: false,
     env: {
       NODE_ENV: "test",
+      // The suite covers the agent surface; agent-flag.test.ts covers it off.
+      AGENTS_ENABLED: "true",
       ...(process.env.TEST_DATABASE_URL ? { DATABASE_URL: process.env.TEST_DATABASE_URL } : {}),
     },
   },

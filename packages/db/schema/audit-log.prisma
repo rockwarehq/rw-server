@@ -37,6 +37,9 @@ enum AuditAction {
   // Customer/app API tokens
   API_TOKEN_CREATED
   API_TOKEN_REVOKED
+
+  // Graph changesets
+  GRAPH_CHANGESET_APPLIED
 }
 
 model AuditLog {

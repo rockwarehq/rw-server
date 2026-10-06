@@ -38,6 +38,9 @@ const PUBLIC_REST_ROUTES = new Set(
     "POST /edge/connect",
     "POST /edge/sync",
     "POST /edge/disconnect",
+    // agent tools over MCP: authenticates in-handler (user session or
+    // graph:read API token) and answers 401 without one
+    "POST /mcp",
   ].map((s) => s.toUpperCase()),
 );
 

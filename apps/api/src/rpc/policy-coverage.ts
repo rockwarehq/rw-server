@@ -15,6 +15,10 @@ export const EXCLUDED_PROCEDURES: ReadonlySet<string> = new Set([
   // the members service (ADMIN at the touched bucket's plant, last-owner
   // and last-plant-admin guards) — a second inline check would be theater.
   "bucket.list",
+  // ── agent.status reports whether the Console agent is configured on this
+  // deploy (a boolean and a model name); it names no target to authorize.
+  // Every other agent procedure checks the site inline.
+  "agent.status",
   "bucket.setAccess",
   "bucket.removeAccess",
   // ── operator.* — display-identity-bound shop-floor flows. The principal is
@@ -92,6 +96,11 @@ export const PUBLIC_REST_ROUTES: ReadonlySet<string> = new Set(
  */
 export const SELF_SERVICE_REST_ROUTES: ReadonlySet<string> = new Set(
   [
+    // Console agent tools over MCP. Users and graph:read API tokens both
+    // reach it, so it can't take the user-only access-token guard; the
+    // handler checks VIEW on the token's site, and every tool then calls a
+    // policy-checked procedure as the caller.
+    "POST /mcp",
     // current-user self service
     "GET /users/me",
     "PUT /users/me",
