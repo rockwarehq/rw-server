@@ -252,6 +252,22 @@ export const sessionDelete = agentsRequired.input(sessionInputSchema).handler(as
   return { success: true };
 });
 
+/** A chat's owner renames it (chat history in Console). */
+export const sessionRename = agentsRequired
+  .input(sessionInputSchema.extend({ title: z.string().trim().min(1).max(120) }))
+  .handler(async ({ input, context }) => {
+    await context.access.require("VIEW", { site: input.siteId });
+    const session = await viewableSession(context, input.siteId, input.id);
+    if (session.trigger !== "CHAT" || session.actorUserId !== userId(context)) {
+      throw new ORPCError("FORBIDDEN", { message: "Only a chat's owner can rename it" });
+    }
+    return prisma.agentSession.update({
+      where: { id: session.id },
+      data: { title: input.title },
+      select: sessionSelect,
+    });
+  });
+
 // ── Definitions ────────────────────────────────────────────────────────────
 
 const definitionFields = {
@@ -539,7 +555,7 @@ export const agentRouter = {
   prompt,
   subscribe,
   interrupt,
-  session: { list: sessionList, get: sessionGet, delete: sessionDelete },
+  session: { list: sessionList, get: sessionGet, rename: sessionRename, delete: sessionDelete },
   definition: {
     list: definitionList,
     create: definitionCreate,

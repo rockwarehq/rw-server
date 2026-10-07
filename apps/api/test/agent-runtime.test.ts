@@ -219,6 +219,25 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("agent runtime (Tier 2)", () => 
     expect((mine.json as Array<{ id: string }>).some((s) => s.id === sessionId)).toBe(true);
   });
 
+  it("lets a chat's owner rename it, and nobody else", async () => {
+    const sessionId = await prompt("Hello rename");
+    const renamed = await rpcCall(
+      server,
+      "agent/session/rename",
+      { siteId, id: sessionId, title: "  Scrap tracking  " },
+      adminToken,
+    );
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json).toMatchObject({ id: sessionId, title: "Scrap tracking" });
+    const asViewer = await rpcCall(
+      server,
+      "agent/session/rename",
+      { siteId, id: sessionId, title: "Mine now" },
+      viewerToken,
+    );
+    expect(asViewer.statusCode).toBe(404);
+  });
+
   it("starts an agent run when a hook fires, once per event", async () => {
     const definition = await rpcCall(
       server,
