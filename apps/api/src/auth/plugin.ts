@@ -126,6 +126,15 @@ async function isAccountWorkspace(workspaceId: string): Promise<boolean> {
   return workspaceId === accountWorkspaceId;
 }
 
+/**
+ * The Current a user would have with a token for this site, without a token:
+ * how agent runs act as a person (the chatting user, or an agent's run-as
+ * user). Same checks as a request: active, unlocked, can still see the site.
+ */
+export async function loadUserCurrent(userId: string, workspaceId: string, siteId: string): Promise<Current | null> {
+  return authenticateUser({ id: userId, email: "", workspaceId, siteId });
+}
+
 async function authenticateUser(token: AccessTokenPayload): Promise<Current | null> {
   const workspaceId = token.workspaceId;
   if (!workspaceId || !(await isAccountWorkspace(workspaceId))) return null;

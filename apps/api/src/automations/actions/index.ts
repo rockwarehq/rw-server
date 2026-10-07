@@ -6,6 +6,8 @@ import * as deckSendLatest from "./deck-send-latest.js";
 import * as forceMode from "./force-mode.js";
 import * as notify from "./notify.js";
 import * as openCall from "./open-call.js";
+import * as runAgent from "./run-agent.js";
+import { agentConfig } from "../../config.js";
 
 const modules: readonly { handler: ActionHandler }[] = [
   notify,
@@ -15,6 +17,8 @@ const modules: readonly { handler: ActionHandler }[] = [
   clearMode,
   deckMakeEditions,
   deckSendLatest,
+  // In development: only offered where agents are switched on.
+  ...(agentConfig.available ? [runAgent] : []),
 ] as const;
 
 /** Catalog view: strip `run` from each version so schemas are serializable + don't leak code. */

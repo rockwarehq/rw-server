@@ -80,6 +80,11 @@ model Site {
   stationJobLogs          StationJobLog[]
   jobHistoryAmendments    JobHistoryAmendment[]
   stationLogonSessions    StationLogonSession[]
+  graphChangesets         GraphChangeset[]
+  agentSessions           AgentSession[]
+  agentDefinitions        AgentDefinition[]
+  agentTriggers           AgentTrigger[]
+  agentPermissionRules    AgentPermissionRule[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId])

@@ -40,14 +40,24 @@ export interface ValidateGraphPropertyInput extends CreateGraphPropertyInput {
   id?: string;
 }
 
-async function buildResolver(args: { resolverType?: string; resolver?: Record<string, unknown>; scope: GraphScope }) {
+async function buildResolver(args: {
+  resolverType?: string;
+  resolver?: Record<string, unknown>;
+  scope: GraphScope;
+  knownPropertyIds?: ReadonlySet<string>;
+}) {
   const resolverType = args.resolverType;
   const resolver = args.resolver;
 
   if (!resolverType || !resolver || !isRecordResolver(resolver))
     return errorResult("RESOLVER_REQUIRED", "resolverType and resolver are required");
 
-  return validateResolverConfig({ resolverType, resolver, scope: args.scope });
+  return validateResolverConfig({
+    resolverType,
+    resolver,
+    scope: args.scope,
+    knownPropertyIds: args.knownPropertyIds,
+  });
 }
 
 function validateSampleRate(sampleRateMs: number | null | undefined) {
@@ -57,10 +67,35 @@ function validateSampleRate(sampleRateMs: number | null | undefined) {
     : errorResult("INVALID_SAMPLE_RATE", "sampleRateMs must be a positive integer");
 }
 
-export async function create(input: CreateGraphPropertyInput, scope: GraphScope): Promise<ServiceResult<unknown>> {
-  const nodeResult = await getGraphNodeForSite(input.nodeId, scope);
-  if (!nodeResult) return errorResult("GRAPH_NODE_NOT_FOUND", "Graph node not found");
-  if ("error" in nodeResult) return nodeResult;
+// Batch context for a changeset: nodes and properties that will be written in
+// the same transaction, so they don't exist in the database yet.
+export interface PrepareGraphPropertyOptions {
+  plannedNodeIds?: ReadonlySet<string>;
+  knownPropertyIds?: ReadonlySet<string>;
+}
+
+export interface PreparedGraphPropertyCreate {
+  propertyId: string;
+  existingId: string | null;
+  nodeId: string;
+  name: string;
+  typeFieldKey: string | null;
+  resolverType: string;
+  resolver: Record<string, unknown>;
+  dependencyIds: string[];
+  sampleRateMs: number | null;
+}
+
+export async function prepareCreate(
+  input: CreateGraphPropertyInput,
+  scope: GraphScope,
+  options: PrepareGraphPropertyOptions = {},
+): Promise<ServiceResult<PreparedGraphPropertyCreate>> {
+  if (!options.plannedNodeIds?.has(input.nodeId)) {
+    const nodeResult = await getGraphNodeForSite(input.nodeId, scope);
+    if (!nodeResult) return errorResult("GRAPH_NODE_NOT_FOUND", "Graph node not found");
+    if ("error" in nodeResult) return nodeResult;
+  }
 
   const name = input.name.trim();
   if (!name) return errorResult("INVALID_NAME", "Graph property name is required");
@@ -89,6 +124,7 @@ export async function create(input: CreateGraphPropertyInput, scope: GraphScope)
     resolverType: input.resolverType,
     resolver: input.resolver,
     scope,
+    knownPropertyIds: options.knownPropertyIds,
   });
   if ("error" in resolverResult) return resolverResult;
 
@@ -99,41 +135,57 @@ export async function create(input: CreateGraphPropertyInput, scope: GraphScope)
   });
   if ("error" in cycleResult) return cycleResult;
 
+  return {
+    data: {
+      propertyId,
+      existingId: existing?.id ?? null,
+      nodeId: input.nodeId,
+      name,
+      typeFieldKey: input.typeFieldKey ?? null,
+      resolverType: resolverResult.data.resolver.type as string,
+      resolver: resolverResult.data.resolver,
+      dependencyIds: resolverResult.data.dependencyIds,
+      sampleRateMs: input.sampleRateMs ?? null,
+    },
+  };
+}
+
+// Rows and edges are written separately: inside a changeset every row must
+// exist before any edge, because an edge may point at an in-batch sibling.
+export async function writeCreateRow(tx: Prisma.TransactionClient, prepared: PreparedGraphPropertyCreate) {
+  const data = {
+    nodeId: prepared.nodeId,
+    name: prepared.name,
+    typeFieldKey: prepared.typeFieldKey,
+    resolverType: prepared.resolverType,
+    resolver: prepared.resolver as Prisma.InputJsonValue,
+    sampleRateMs: prepared.sampleRateMs,
+  };
+  return prepared.existingId
+    ? tx.graphProperty.update({ where: { id: prepared.existingId }, data: { ...data, isDeleted: false } })
+    : tx.graphProperty.create({ data: { id: prepared.propertyId, ...data } });
+}
+
+export async function writeCreateEdges(tx: Prisma.TransactionClient, prepared: PreparedGraphPropertyCreate) {
+  await tx.graphEdge.deleteMany({ where: { toPropertyId: prepared.propertyId } });
+  if (prepared.dependencyIds.length > 0) {
+    await tx.graphEdge.createMany({
+      data: [...new Set(prepared.dependencyIds)].map((dependencyId) => ({
+        fromPropertyId: dependencyId,
+        toPropertyId: prepared.propertyId,
+      })),
+      skipDuplicates: true,
+    });
+  }
+}
+
+export async function create(input: CreateGraphPropertyInput, scope: GraphScope): Promise<ServiceResult<unknown>> {
+  const prepared = await prepareCreate(input, scope);
+  if ("error" in prepared) return prepared;
+
   const property = await prisma.$transaction(async (tx) => {
-    const next = existing
-      ? await tx.graphProperty.update({
-          where: { id: existing.id },
-          data: {
-            nodeId: input.nodeId,
-            name,
-            typeFieldKey: input.typeFieldKey ?? null,
-            resolverType: resolverResult.data.resolver.type as string,
-            resolver: resolverResult.data.resolver as Prisma.InputJsonValue,
-            sampleRateMs: input.sampleRateMs ?? null,
-            isDeleted: false,
-          },
-        })
-      : await tx.graphProperty.create({
-          data: {
-            id: propertyId,
-            nodeId: input.nodeId,
-            name,
-            typeFieldKey: input.typeFieldKey ?? null,
-            resolverType: resolverResult.data.resolver.type as string,
-            resolver: resolverResult.data.resolver as Prisma.InputJsonValue,
-            sampleRateMs: input.sampleRateMs ?? null,
-          },
-        });
-    await tx.graphEdge.deleteMany({ where: { toPropertyId: next.id } });
-    if (resolverResult.data.dependencyIds.length > 0) {
-      await tx.graphEdge.createMany({
-        data: [...new Set(resolverResult.data.dependencyIds)].map((dependencyId) => ({
-          fromPropertyId: dependencyId,
-          toPropertyId: next.id,
-        })),
-        skipDuplicates: true,
-      });
-    }
+    const next = await writeCreateRow(tx, prepared.data);
+    await writeCreateEdges(tx, prepared.data);
     return next;
   });
 

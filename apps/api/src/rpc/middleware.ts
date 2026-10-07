@@ -2,7 +2,7 @@ import { os, ORPCError } from "@orpc/server";
 import { timingSafeEqual } from "node:crypto";
 import { AccessDenied } from "@rw/auth/iam/access";
 import type { Current } from "@rw/auth/context";
-import { processorConfig } from "../config.js";
+import { agentConfig, processorConfig } from "../config.js";
 import type { CallerContext, RPCContext } from "./context.js";
 
 // Access denials keep their pre-policy wire codes (observable error codes
@@ -46,6 +46,13 @@ function allow<K extends Current["kind"]>(kinds: readonly K[], message = "Authen
 
 // Signed-in users only
 export const userRequired = allow(["user"]);
+
+// Signed-in users on a deploy with agents switched on (AGENTS_ENABLED). Off,
+// the agent surface answers as if it did not exist.
+export const agentsRequired = userRequired.use(async ({ next }) => {
+  if (!agentConfig.available) throw new ORPCError("NOT_FOUND", { message: "Not found" });
+  return next();
+});
 
 // A user or a display
 export const userOrDisplayRequired = allow(["user", "display"]);
