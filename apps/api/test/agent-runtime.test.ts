@@ -11,6 +11,7 @@ vi.hoisted(() => {
 import { readEvents } from "../src/agent/events.js";
 import { drainLocalRuns, setRunner } from "../src/agent/queue.js";
 import { runSession, setAnthropicClient } from "../src/agent/runner.js";
+import { appendMessage, history } from "../src/agent/sessions.js";
 import { fireHookEvent } from "../src/agent/triggers.js";
 import { makeUser } from "./helpers/access.js";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
@@ -297,5 +298,27 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("agent runtime (Tier 2)", () => 
     const failed = (await readEvents(sessionId, 0, 1000)).find((e) => e.type === "tool.failed");
     expect(failed).toMatchObject({ toolUseId, interrupted: true });
     expect(await status(sessionId)).toBe("IDLE");
+  });
+
+  // History is replayed to the model on every new prompt and every resume, so
+  // it must come back byte for byte: tool inputs are rendered into the prompt,
+  // and re-sorted keys (as jsonb stores them) miss the prompt cache.
+  it("replays stored history byte for byte", async () => {
+    const sessionId = await prompt("Hello cache");
+    const message: BetaMessageParam = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Looking.", citations: null } as never,
+        {
+          type: "tool_use",
+          id: `toolu_${randomUUID().slice(0, 12)}`,
+          name: "graph_search",
+          input: { query: "press", limit: 5, nodeIds: ["b", "a"], filter: { zeta: 1, alpha: { y: 2, b: 3 } } },
+        },
+      ],
+    };
+    await prisma.$transaction((tx) => appendMessage(tx, sessionId, message));
+    const replayed = (await history(sessionId)).at(-1);
+    expect(JSON.stringify(replayed)).toBe(JSON.stringify(message));
   });
 });

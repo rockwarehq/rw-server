@@ -34,6 +34,9 @@ BUCKET_NAME = 'rw-dev'
 # Agents (Console AI) are in development: on for dev only. Needs the
 # ANTHROPIC_API_KEY secret to call the model (flyctl secrets set -a rw-dev-api).
 AGENTS_ENABLED = 'true'
+# Records why each agent request missed the prompt cache (beta cache
+# diagnosis) on step.finished events. Dev only, while tuning agent cost.
+AGENT_CACHE_DIAGNOSTICS = 'true'
 # DEV_CYCLE_SIMULATOR is local-dev only. On fly, cycles ALWAYS come from
 # workers/processor (MQTT ingest). Do not set DEV_CYCLE_SIMULATOR here.
 

@@ -68,6 +68,12 @@ const EnvSchema = z.object({
     .default("false")
     .transform((v) => v === "true"),
   ANTHROPIC_API_KEY: z.string().optional(),
+  // Ask the API why a request missed the prompt cache (beta cache diagnosis);
+  // recorded on each step.finished. For finding cache breakers, not for prod.
+  AGENT_CACHE_DIAGNOSTICS: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   AGENT_MODEL: z.string().default("claude-opus-5"),
   BUCKET_NAME: z.string().optional(),
   AWS_REGION: z.string().default("auto"),
@@ -161,6 +167,7 @@ export const agentConfig = {
   model: config.AGENT_MODEL,
   /** Available and able to call the model. */
   enabled: config.AGENTS_ENABLED && !!config.ANTHROPIC_API_KEY,
+  cacheDiagnostics: config.AGENT_CACHE_DIAGNOSTICS,
 };
 
 export const securityConfig = {

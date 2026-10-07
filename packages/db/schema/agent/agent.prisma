@@ -169,7 +169,10 @@ model AgentMessage {
   sessionId String           @db.Uuid
   seq       Int
   role      AgentMessageRole
-  content   Json
+  /// The API's content blocks, byte for byte. `json`, not `jsonb`: jsonb
+  /// re-sorts object keys, and tool_use inputs are rendered into the prompt,
+  /// so a re-sorted history misses the prompt cache when it is replayed.
+  content   Json             @db.Json
   usage     Json?
   model     String?
   createdAt DateTime         @default(now()) @db.Timestamptz(3)

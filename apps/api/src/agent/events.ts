@@ -57,7 +57,15 @@ export type DurableEvent =
   | { type: "changeset.applied"; changesetId: string; title: string }
   | { type: "subagent.started"; childSessionId: string; agentKey: string; toolUseId: string }
   | { type: "subagent.finished"; childSessionId: string; status: string }
-  | { type: "step.finished"; usage: AgentUsage; model: string }
+  | {
+      type: "step.finished";
+      usage: AgentUsage;
+      model: string;
+      /** The API's response id; with cache diagnostics, the next request's comparison point. */
+      messageId?: string;
+      /** Why this request missed the prompt cache, when diagnostics are on and it did. */
+      cacheMiss?: unknown;
+    }
   | { type: "retry"; attempt: number; nextAt: string; message: string }
   | { type: "error"; message: string }
   | { type: "turn.finished"; stopReason: string };

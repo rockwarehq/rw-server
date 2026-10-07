@@ -339,6 +339,17 @@ async function stepsUsed(sessionId: string): Promise<number> {
   });
 }
 
+/** The session's last model response id: where cache diagnosis compares from. */
+async function lastMessageId(sessionId: string): Promise<string | null> {
+  const step = await prisma.agentEvent.findFirst({
+    where: { sessionId, type: { startsWith: "step.finished." } },
+    orderBy: { seq: "desc" },
+    select: { payload: true },
+  });
+  const id = (step?.payload as { messageId?: unknown } | null)?.messageId;
+  return typeof id === "string" ? id : null;
+}
+
 /**
  * Make all the progress a session can make right now. Safe to call at any
  * time and from any node: without the lease it does nothing.
@@ -453,6 +464,9 @@ export async function runSession(sessionId: string, options: RunOptions = {}): P
         emitLive: (event) => publishLive(sessionId, event),
         commit: (events, entries) => commitMessages(sessionId, events, entries),
         handleToolCalls: (calls) => handleCalls(run, calls, recent),
+        ...(agentConfig.cacheDiagnostics
+          ? { cacheDiagnostics: { previousMessageId: await lastMessageId(sessionId) } }
+          : {}),
       });
       if (outcome === "parked") {
         finalStatus = "WAITING_APPROVAL";

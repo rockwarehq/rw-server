@@ -41,6 +41,11 @@ export interface TurnHost {
   handleToolCalls: (calls: BetaToolUseBlock[]) => Promise<BetaToolResultBlockParam[] | "parked">;
   /** Waits between retries; injectable for tests. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Ask the API why each request missed the prompt cache, comparing against
+   * this session's previous response (null before its first).
+   */
+  cacheDiagnostics?: { previousMessageId: string | null };
 }
 
 export type TurnOutcome = "end_turn" | "parked" | "aborted" | "refusal" | "max_tokens" | "error" | "max_steps";
@@ -103,6 +108,7 @@ export async function runTurn(host: TurnHost): Promise<TurnOutcome> {
   const messages = [...host.history];
   const sleep = host.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   let stepsLeft = host.stepsLeft;
+  let previousMessageId = host.cacheDiagnostics?.previousMessageId ?? null;
 
   while (true) {
     if (host.signal.aborted) return "aborted";
@@ -116,8 +122,11 @@ export async function runTurn(host: TurnHost): Promise<TurnOutcome> {
         {
           model: host.model,
           max_tokens: MAX_TOKENS,
-          betas: ["server-side-fallback-2026-07-01"],
+          betas: host.cacheDiagnostics
+            ? ["server-side-fallback-2026-07-01", "cache-diagnosis-2026-04-07"]
+            : ["server-side-fallback-2026-07-01"],
           fallbacks: "default",
+          ...(host.cacheDiagnostics ? { diagnostics: { previous_message_id: previousMessageId } } : {}),
           thinking: { type: "adaptive", display: "summarized" },
           output_config: { effort: host.effort },
           // Tools and system are stable per agent and render first, so they
@@ -170,7 +179,14 @@ export async function runTurn(host: TurnHost): Promise<TurnOutcome> {
       if (block.type === "thinking" && block.thinking) events.push({ type: "thinking.ended", text: block.thinking });
       if (block.type === "text" && block.text) events.push({ type: "text.ended", text: block.text });
     }
-    events.push({ type: "step.finished", usage, model: message.model });
+    events.push({
+      type: "step.finished",
+      usage,
+      model: message.model,
+      messageId: message.id,
+      ...(message.diagnostics?.cache_miss_reason ? { cacheMiss: message.diagnostics.cache_miss_reason } : {}),
+    });
+    previousMessageId = message.id;
 
     if (message.stop_reason === "refusal") {
       await host.commit(

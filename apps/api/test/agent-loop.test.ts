@@ -142,6 +142,33 @@ describe("runTurn", () => {
     expect(JSON.stringify(last.content)).toContain(STEP_LIMIT_NOTE.slice(0, 40));
   });
 
+  it("asks why each request missed the cache, comparing with the response before it", async () => {
+    const miss = { type: "messages_changed", cache_missed_input_tokens: 4200 };
+    const { anthropic, calls } = fakeAnthropic([
+      { id: "msg_1", stop_reason: "tool_use", content: [toolUse("t1", "graph_search", {})], diagnostics: { cache_miss_reason: miss } } as Partial<BetaMessage>,
+      { id: "msg_2", stop_reason: "end_turn", content: [text("done")], diagnostics: { cache_miss_reason: null } } as Partial<BetaMessage>,
+    ]);
+    const { turnHost, committed } = host(anthropic, { cacheDiagnostics: { previousMessageId: "msg_0" } });
+    expect(await runTurn(turnHost)).toBe("end_turn");
+
+    const sent = calls as unknown as Array<{ betas: string[]; diagnostics: { previous_message_id: string | null } }>;
+    expect(sent[0].betas).toContain("cache-diagnosis-2026-04-07");
+    expect(sent.map((call) => call.diagnostics.previous_message_id)).toEqual(["msg_0", "msg_1"]);
+    const steps = committed.filter((event) => event.type === "step.finished");
+    expect(steps[0]).toMatchObject({ messageId: "msg_1", cacheMiss: miss });
+    expect(steps[1]).toMatchObject({ messageId: "msg_2" });
+    expect(steps[1]).not.toHaveProperty("cacheMiss");
+  });
+
+  it("leaves cache diagnostics off unless asked", async () => {
+    const { anthropic, calls } = fakeAnthropic([{ stop_reason: "end_turn", content: [text("ok")] }]);
+    const { turnHost } = host(anthropic);
+    await runTurn(turnHost);
+    const sent = calls[0] as unknown as { betas: string[]; diagnostics?: unknown };
+    expect(sent.betas).not.toContain("cache-diagnosis-2026-04-07");
+    expect(sent).not.toHaveProperty("diagnostics");
+  });
+
   it("retries an overloaded model and records the retry", async () => {
     const overloaded = new Anthropic.APIError(529, { type: "overloaded_error" }, "Overloaded", new Headers());
     const { anthropic } = fakeAnthropic([() => overloaded, { stop_reason: "end_turn", content: [text("ok")] }]);
