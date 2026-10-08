@@ -53,6 +53,10 @@ const metricSubscriptions = gauge("livestore_metric_subscription_count", "Active
 
 // Hook health — are matched conditions publishing to JetStream?
 const hookMatched = gauge("livestore_hook_matched_total", "Cumulative hook conditions matched + queued");
+const hookThrottled = gauge(
+  "livestore_hook_throttled_total",
+  "Cumulative hook matches dropped by the condition's minIntervalMs",
+);
 const hookPublished = gauge("livestore_hook_published_total", "Cumulative hook events published to JetStream");
 const hookPublishFailures = gauge("livestore_hook_publish_failures_total", "Cumulative hook event publish failures");
 const hookLastPublished = gauge(
@@ -91,6 +95,7 @@ function sample(runtime: GraphRuntime): void {
   setNum(metricSubscriptions, subscriptions.metric);
 
   setNum(hookMatched, hooks.matchedTotal);
+  setNum(hookThrottled, hooks.throttledTotal);
   setNum(hookPublished, hooks.publishedTotal);
   setNum(hookPublishFailures, hooks.publishFailuresTotal);
   setSeconds(hookLastPublished, hooks.lastPublishedAt);

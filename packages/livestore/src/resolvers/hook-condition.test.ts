@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { GraphHookCondition } from "../catalog/hook-conditions.js";
 
-import { evaluateHookCondition } from "./hook-condition.js";
+import { evaluateHookCondition, throttleAllows } from "./hook-condition.js";
 import type { Quality, ValueEnvelope } from "../types/index.js";
 
 const env = (value: unknown, quality: Quality = "good"): ValueEnvelope => ({
@@ -52,5 +52,24 @@ describe("evaluateHookCondition", () => {
     expect(
       evaluateHookCondition(condition({ operator: "notEquals", value: "RUNNING" }), env("IDLE"), env("IDLE")),
     ).toBe(true);
+  });
+});
+
+describe("throttleAllows", () => {
+  const throttled = condition({ operator: "increases", minIntervalMs: 1000 });
+
+  it("always allows without a minIntervalMs, or before the first firing", () => {
+    expect(throttleAllows(condition({ operator: "increases" }), 5000, 5001)).toBe(true);
+    expect(throttleAllows(condition({ operator: "increases", minIntervalMs: 0 }), 5000, 5001)).toBe(true);
+    expect(throttleAllows(throttled, null, 5001)).toBe(true);
+  });
+
+  it("drops a match inside the interval and allows one at or past it", () => {
+    expect(throttleAllows(throttled, 5000, 5999)).toBe(false);
+    expect(throttleAllows(throttled, 5000, 6000)).toBe(true);
+  });
+
+  it("lets an older (replayed) sample through", () => {
+    expect(throttleAllows(throttled, 5000, 4500)).toBe(true);
   });
 });

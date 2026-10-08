@@ -400,7 +400,7 @@ export class FoldResolver {
       }
       if (state.triggerPropertyId !== undefined && state.triggerPropertyId !== triggerPropertyId) {
         this.logger.warn({ propertyId }, "livestore totalizer trigger changed — resetting trigger baseline");
-        state = { ...state, lastTriggerValue: null, lastTriggerTs: 0 };
+        state = { ...state, lastTriggerValue: null, lastTriggerTs: 0, lastTriggerFiredTs: undefined };
       }
       if (state.resetPropertyId !== undefined && state.resetPropertyId !== (resetPropertyId ?? undefined)) {
         this.logger.warn({ propertyId }, "livestore totalizer reset input changed — resetting reset baseline");
