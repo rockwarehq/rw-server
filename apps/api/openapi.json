@@ -1541,6 +1541,10 @@
                   },
                   "lastName": {
                     "type": "string"
+                  },
+                  "employeeRoleId": {
+                    "type": "string",
+                    "format": "uuid"
                   }
                 },
                 "required": [
@@ -5841,6 +5845,9 @@
                     "type": "object",
                     "additionalProperties": true
                   },
+                  "sortOrder": {
+                    "type": "integer"
+                  },
                   "siteId": {
                     "type": "string",
                     "format": "uuid"
@@ -5885,6 +5892,9 @@
                     "attrs": {
                       "type": "object",
                       "additionalProperties": true
+                    },
+                    "sortOrder": {
+                      "type": "integer"
                     },
                     "siteId": {
                       "type": "string",
@@ -6047,6 +6057,19 @@
           },
           {
             "schema": {
+              "type": "string",
+              "enum": [
+                "name",
+                "sortOrder"
+              ],
+              "default": "name"
+            },
+            "in": "query",
+            "name": "sortBy",
+            "required": false
+          },
+          {
+            "schema": {
               "type": "number",
               "default": 50
             },
@@ -6096,6 +6119,9 @@
                           "attrs": {
                             "type": "object",
                             "additionalProperties": true
+                          },
+                          "sortOrder": {
+                            "type": "integer"
                           },
                           "siteId": {
                             "type": "string",
@@ -6237,6 +6263,9 @@
                       "type": "object",
                       "additionalProperties": true
                     },
+                    "sortOrder": {
+                      "type": "integer"
+                    },
                     "siteId": {
                       "type": "string",
                       "format": "uuid"
@@ -6356,6 +6385,9 @@
                   "attrs": {
                     "type": "object",
                     "additionalProperties": true
+                  },
+                  "sortOrder": {
+                    "type": "integer"
                   }
                 }
               }
@@ -6400,6 +6432,9 @@
                     "attrs": {
                       "type": "object",
                       "additionalProperties": true
+                    },
+                    "sortOrder": {
+                      "type": "integer"
                     },
                     "siteId": {
                       "type": "string",
@@ -6708,6 +6743,9 @@
                     "attrs": {
                       "type": "object",
                       "additionalProperties": true
+                    },
+                    "sortOrder": {
+                      "type": "integer"
                     },
                     "siteId": {
                       "type": "string",
@@ -9784,6 +9822,10 @@
                   "pollRateMs": {
                     "type": "number"
                   },
+                  "publishIntervalMs": {
+                    "type": "number",
+                    "nullable": true
+                  },
                   "config": {
                     "type": "object",
                     "additionalProperties": true
@@ -9828,6 +9870,10 @@
                     },
                     "pollRateMs": {
                       "type": "number"
+                    },
+                    "publishIntervalMs": {
+                      "type": "number",
+                      "nullable": true
                     },
                     "config": {
                       "type": "object",
@@ -9989,6 +10035,10 @@
                       },
                       "pollRateMs": {
                         "type": "number"
+                      },
+                      "publishIntervalMs": {
+                        "type": "number",
+                        "nullable": true
                       },
                       "config": {
                         "type": "object",
@@ -11279,6 +11329,10 @@
                     "pollRateMs": {
                       "type": "number"
                     },
+                    "publishIntervalMs": {
+                      "type": "number",
+                      "nullable": true
+                    },
                     "config": {
                       "type": "object",
                       "additionalProperties": true
@@ -11415,6 +11469,10 @@
                   "pollRateMs": {
                     "type": "number"
                   },
+                  "publishIntervalMs": {
+                    "type": "number",
+                    "nullable": true
+                  },
                   "config": {
                     "type": "object",
                     "additionalProperties": true
@@ -11456,6 +11514,10 @@
                     },
                     "pollRateMs": {
                       "type": "number"
+                    },
+                    "publishIntervalMs": {
+                      "type": "number",
+                      "nullable": true
                     },
                     "config": {
                       "type": "object",
