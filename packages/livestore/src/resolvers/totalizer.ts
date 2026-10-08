@@ -1,6 +1,6 @@
 import { parseGraphHookCondition, type GraphHookCondition } from "../catalog/hook-conditions.js";
 
-import { evaluateHookCondition } from "./hook-condition.js";
+import { evaluateHookCondition, throttleAllows } from "./hook-condition.js";
 import {
   isStatefulResolverType,
   usableValue,
@@ -42,6 +42,8 @@ export type TotalizerTriggerResult = {
 
 // Evaluate the trigger against the last GOOD trigger sample (not the raw
 // previous envelope), so a quality flap mid-high can't fake or mask an edge.
+// The trigger's minIntervalMs drops a firing too soon after the last one, so a
+// double-fired signal can't add twice.
 export function foldTotalizerTrigger(
   state: TotalizerState,
   input: ValueEnvelope,
@@ -52,10 +54,15 @@ export function foldTotalizerTrigger(
     quality: state.lastTriggerTs > 0 ? "good" : "uncertain",
     timestamp: state.lastTriggerTs,
   };
-  const fires = evaluateHookCondition(trigger, previous, input);
-  const next =
+  const lastFired = state.lastTriggerFiredTs ?? null;
+  const fires = evaluateHookCondition(trigger, previous, input) && throttleAllows(trigger, lastFired, input.timestamp);
+  const seen =
     input.quality === "good" ? { ...state, lastTriggerValue: input.value, lastTriggerTs: input.timestamp } : state;
-  if (!fires) return { state: next, added: false, skipped: false };
+  if (!fires) return { state: seen, added: false, skipped: false };
+  const next = {
+    ...seen,
+    lastTriggerFiredTs: lastFired === null ? input.timestamp : Math.max(lastFired, input.timestamp),
+  };
   if (next.latestSourceValue === null) return { state: next, added: false, skipped: true };
   return {
     state: {

@@ -241,6 +241,12 @@ const HOOK_CONDITION_JSON_SCHEMA: Record<string, unknown> = {
       minimum: 0,
       description: "Minimum numeric change for changed / increases / decreases to fire.",
     },
+    minIntervalMs: {
+      type: "number",
+      minimum: 0,
+      description:
+        "Leading-edge throttle: a match within this many ms of the last firing (by source timestamp) is dropped. Any operator.",
+    },
   },
   required: ["source", "operator"],
   allOf: [

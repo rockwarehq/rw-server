@@ -68,6 +68,18 @@ export function evaluateHookCondition(
   }
 }
 
+/**
+ * Leading-edge throttle (`minIntervalMs`) on source timestamps: a match within
+ * the interval of the last firing is dropped. Only a firing restarts the clock,
+ * so a chattering signal can't hold the condition off forever. An older sample
+ * (a buffered replay) always passes. `lastFiredTs` null = never fired.
+ */
+export function throttleAllows(condition: GraphHookCondition, lastFiredTs: number | null, ts: number): boolean {
+  if (!condition.minIntervalMs || lastFiredTs === null) return true;
+  const elapsed = ts - lastFiredTs;
+  return elapsed < 0 || elapsed >= condition.minIntervalMs;
+}
+
 function compareCurrent(
   rawValue: unknown,
   threshold: number,
