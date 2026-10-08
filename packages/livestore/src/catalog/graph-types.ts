@@ -429,7 +429,7 @@ export const IMM_GRAPH_TYPE_NAMESPACE = {
         entityField(
           "currentSpeed",
           "Current Speed",
-          "Speed of the most recent completed cycle in the machine's shape: cycle seconds (count by cycle), else quantity per speed period, e.g. ft/min (to the tenth)",
+          "Speed of the most recent completed cycle in the machine's shape: cycle seconds (count by cycle), else quantity per speed period, e.g. ft/min (to the tenth); null while the station is down",
           "imm.station",
           "$input.stationId",
           "currentSpeed",

@@ -16,6 +16,8 @@ export const STATION_SPEED_FIELDS = [
 ] as const;
 /** The ones that move with each completed cycle. */
 export const STATION_LAST_CYCLE_SPEED_FIELDS = ["lastCycleQuantity", "currentSpeed"] as const;
+/** The ones that move when the station goes down or comes back up. */
+export const STATION_STATUS_SPEED_FIELDS = ["currentSpeed"] as const;
 
 export interface StationSpeedInput {
   cycleMode: CycleModeValue | string | null | undefined;
@@ -25,6 +27,8 @@ export interface StationSpeedInput {
   /** The profile's rate period, else the station's own. */
   ratePeriod: RatePeriod | string | null | undefined;
   lastCycle: { start: Date; end: Date | null; quantity: number | null } | null;
+  /** Down for any reason: the last cycle no longer says how fast it is running. */
+  down: boolean;
   /** Effective standard for the running job; null without a job or a usable rate. */
   secondsPerUnit: number | null;
   standardCycleSeconds: number | null;
@@ -34,7 +38,7 @@ export interface StationSpeed {
   speedShape: "CYCLE_TIME" | "RATE";
   speedUnit: string;
   speedPeriod: RatePeriod;
-  /** Last completed cycle: its seconds (cycle time) or quantity per period (rate), to the tenth. */
+  /** Last completed cycle: its seconds (cycle time) or quantity per period (rate), to the tenth; null while down. */
   currentSpeed: number | null;
   /** The running job's standard, in the same shape, to the tenth. */
   standardSpeed: number | null;
@@ -53,7 +57,7 @@ export function stationSpeed(input: StationSpeedInput): StationSpeed {
     standardRatePeriod: (input.ratePeriod ?? "MINUTE") as RatePeriod,
   });
   const base = { speedShape: display.shape, speedUnit: display.unit, speedPeriod: display.period };
-  const seconds = cycleSeconds(input.lastCycle);
+  const seconds = input.down ? null : cycleSeconds(input.lastCycle);
 
   if (display.shape === "CYCLE_TIME") {
     return {

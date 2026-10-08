@@ -434,6 +434,7 @@ async function resolveSystemEntityRecord(
           countedAs: profile?.countedAs ?? null,
           ratePeriod: profile?.standardRatePeriod ?? station.currentVersion.standardRatePeriod,
           lastCycle: lastCycle ? { start: lastCycle.start, end: lastCycle.end, quantity: lastCycleQuantity } : null,
+          down: openState?.state === "DOWN",
           secondsPerUnit: currentSecondsPerUnit,
           standardCycleSeconds: currentStandardCycleSeconds,
         })
