@@ -43,6 +43,7 @@ export async function buildSpec(gatewayId: string) {
           id: pg.id,
           name: pg.name,
           pollRateMs: pg.pollRateMs,
+          publishIntervalMs: pg.publishIntervalMs,
           config: pg.config,
           points: pg.points.map((p: Point) => ({
             id: p.id,

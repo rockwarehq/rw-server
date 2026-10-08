@@ -30,6 +30,7 @@ const pointGroupProperties = {
   name: { type: "string" },
   description: { type: "string", nullable: true },
   pollRateMs: { type: "number" },
+  publishIntervalMs: { type: "number", nullable: true },
   config: { type: "object", additionalProperties: true },
   datasourceId: { type: "string", format: "uuid" },
   createdAt: { type: "string", format: "date-time" },
@@ -47,6 +48,7 @@ const updateGroupBodySchema = {
     name: { type: "string" },
     description: { type: "string" },
     pollRateMs: { type: "number" },
+    publishIntervalMs: { type: "number", nullable: true },
     config: { type: "object", additionalProperties: true },
   },
 } as const satisfies JSONSchema;
@@ -69,6 +71,7 @@ function getStatusForCode(code: string): 404 | 400 | 500 {
     case "DATASOURCE_NOT_FOUND":
       return 404;
     case "VALIDATION_FAILED":
+    case "INVALID_PUBLISH_INTERVAL":
       return 400;
     default:
       return 500;
