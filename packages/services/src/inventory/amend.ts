@@ -29,7 +29,7 @@ interface ItemRow {
  * scrap row is what the operator entered and only they change it.
  */
 export async function reassignItems(ctx: AmendContext, cycleIds: string[]): Promise<ReassignItemsSummary> {
-  const { tx, siteId, stationId, from, toEff, job, amendmentId } = ctx;
+  const { tx, siteId, stationId, job, amendmentId } = ctx;
   const summary: ReassignItemsSummary = { itemsRemoved: 0, itemsCreated: 0, ledgerAdjustments: 0 };
   if (!job || cycleIds.length === 0) return summary;
 

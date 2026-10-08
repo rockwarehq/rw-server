@@ -244,9 +244,7 @@ export async function updateAccess(input: UpdateAccessInput): Promise<UpdateAcce
     }
     // The account is on each reachable plant's team; a plant it no longer
     // reaches keeps the person in its history, inactive.
-    const lostSites = remove
-      .map((id) => check.buckets.get(id)?.siteId)
-      .filter((siteId): siteId is string => !!siteId);
+    const lostSites = remove.map((id) => check.buckets.get(id)?.siteId).filter((siteId): siteId is string => !!siteId);
     await syncAccountTeamMember(tx, member.id, {
       deactivateSites: input.isAccountAdmin === false ? await allSiteIds(tx) : lostSites,
     });
@@ -274,7 +272,10 @@ export async function removeMember(userId: string) {
       data: { status: "DISABLED", isAccountAdmin: false },
       select: { employeeId: true },
     });
-    await tx.refreshToken.updateMany({ where: { userId: member.id, revokedAt: null }, data: { revokedAt: new Date() } });
+    await tx.refreshToken.updateMany({
+      where: { userId: member.id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
     // They leave every plant's team too; their name stays on what they did.
     if (removed.employeeId) {
       await tx.employeeSiteAccess.updateMany({
