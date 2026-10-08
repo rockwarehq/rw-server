@@ -11,6 +11,7 @@ const extruder: StationSpeedInput = {
   countedAs: "OUTPUT",
   ratePeriod: "MINUTE",
   lastCycle: { start, end: endAt(31_736), quantity: 30 },
+  down: false,
   secondsPerUnit: 0.4615001215283654,
   standardCycleSeconds: 13.845,
 };
@@ -21,6 +22,7 @@ const press: StationSpeedInput = {
   countedAs: "CYCLES",
   ratePeriod: "MINUTE",
   lastCycle: { start, end: endAt(28_449), quantity: null },
+  down: false,
   secondsPerUnit: null,
   standardCycleSeconds: 28,
 };
@@ -66,6 +68,11 @@ describe("stationSpeed", () => {
     expect(stationSpeed({ ...interval, countedAs: "OUTPUT" }).speedUnit).toBe("ea");
     // No profile: count by time reads as strokes.
     expect(stationSpeed({ ...interval, countedAs: null }).speedUnit).toBe("strokes");
+  });
+
+  it("shows no current speed while down, in either shape, but keeps the standard", () => {
+    expect(stationSpeed({ ...extruder, down: true })).toMatchObject({ currentSpeed: null, standardSpeed: 130 });
+    expect(stationSpeed({ ...press, down: true })).toMatchObject({ currentSpeed: null, standardSpeed: 28 });
   });
 
   describe("never divides by zero or returns Infinity/NaN", () => {
