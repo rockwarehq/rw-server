@@ -46,6 +46,7 @@ import {
 import { getAutomationFramework } from "./automations/index.js";
 import { startAutomationClock } from "./automations/clock.js";
 import { startAutomationEventConsumer } from "./nats/automation-event-consumer.js";
+import { startAnnounceBus } from "./nats/announce-bus.js";
 import { startCommandBus } from "./nats/command-bus.js";
 import { closeNatsConnection } from "./nats/util.js";
 import { rootLogger } from "./logger.js";
@@ -117,6 +118,7 @@ async function main() {
     async () => (await getAutomationFramework()).engine.startScheduled(),
     startAutomationClock,
     startCommandBus,
+    startAnnounceBus,
   ]) {
     natsCleanups.push(await start());
   }

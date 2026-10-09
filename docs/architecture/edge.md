@@ -20,6 +20,10 @@ Gateway state machine: `PROVISIONED → ONLINE ↔ OFFLINE → DISABLED` (schema
 
 The API publishes gateway-bound commands through the **command bus** (`apps/api/src/command-bus.ts`) backed by JetStream, so commands survive gateway disconnects and deliver on reconnect.
 
+## Announcements to gateways
+
+The `announce` automation action speaks text on an on-prem gateway's speaker. `packages/services/src/device/gateway/announce.ts` checks the gateways belong to the automation's site, and the **announce bus** (`apps/api/src/nats/announce-bus.ts`) publishes the message on `announce.<gatewayId>` (`packages/runtime/src/announce-subjects.ts`). Unlike commands this is core NATS with no stream: an announcement sent while the gateway is offline is dropped rather than spoken late, and the run is marked failed for gateways last seen OFFLINE or DISABLED. Voice, chimes, repeat and priority (normal / high / emergency) handling live on the gateway (rw-gateway `src/announcer`).
+
 ## From signal to cycle
 
 The path a "machine finished a part" signal takes:
