@@ -1,6 +1,7 @@
 import type { ActionContext, ActionHandler } from "@rw/automations";
 import { ANNOUNCE_CHIMES, ANNOUNCE_VOICES, type AnnouncementMessage } from "@rw/runtime/announce-subjects";
 import { announcements } from "@rw/services/device/gateway/index";
+import * as paging from "@rw/services/paging/index";
 import { unwrapService } from "./shared.js";
 
 const ids = (value: unknown) => (Array.isArray(value) ? value.map(String).filter(Boolean) : []);
@@ -111,13 +112,23 @@ export const handler: ActionHandler = {
         if (gatewayIds.length === 0) {
           throw new Error(`automation "${ctx.automation.label}": announce needs at least one gateway`);
         }
-        unwrapService(
-          await announcements.announce({
-            gatewayIds,
-            siteId: ctx.event.partition,
-            message: buildAnnouncement(inputs, ctx),
-          }),
-        );
+        const message = buildAnnouncement(inputs, ctx);
+        const siteId = ctx.event.partition;
+        // Global (site-less) automations predate site partitioning; the page
+        // log is per site, so they announce without one.
+        if (!siteId) {
+          unwrapService(await announcements.announce({ gatewayIds, message }));
+          return;
+        }
+        // Logged with the plant's manual pages (Recent pages), sent by this automation.
+        const { data: log } = await paging.sendAutomationPage({
+          siteId,
+          gatewayIds,
+          message,
+          automation: { id: ctx.automation.id, label: ctx.automation.label },
+        });
+        // A page that missed a speaker fails the run, so the run history shows who missed it.
+        if (log.status !== "SENT") throw new Error(log.error ?? `announce ${log.status.toLowerCase()}`);
       },
     },
   },

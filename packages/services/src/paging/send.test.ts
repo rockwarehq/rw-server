@@ -11,7 +11,7 @@ const db = vi.hoisted(() => ({
 vi.mock("@rw/db", async (importOriginal) => ({ ...(await importOriginal<object>()), default: db }));
 
 const { setAnnouncementSink } = await import("../device/gateway/announce.js");
-const { sendPage, sendSavedPage, toAnnouncement } = await import("./send.js");
+const { sendAutomationPage, sendPage, sendSavedPage, toAnnouncement } = await import("./send.js");
 
 const SITE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const published: Array<{ gatewayId: string; message: Record<string, unknown> }> = [];
@@ -128,5 +128,60 @@ describe("sending an overhead page", () => {
 
     db.overheadPage.findUnique.mockResolvedValue({ id: "page-1", archivedAt: new Date() });
     expect(await sendSavedPage({ id: "page-1" })).toMatchObject({ code: "OVERHEAD_PAGE_NOT_FOUND" });
+  });
+
+  it("logs a manual page as sent by the person", async () => {
+    db.gateway.findMany.mockResolvedValue([{ id: "gw1", name: "Line 1", status: "ONLINE" }]);
+    const { data } = await sendPage({
+      siteId: SITE,
+      text: "Hi",
+      gatewayIds: ["gw1"],
+      sentByUserId: "user-1",
+      sentByName: "Pat Lee",
+    });
+    expect(data).toMatchObject({ source: "MANUAL", sourceType: "user", sourceRef: "user-1", sentByName: "Pat Lee" });
+  });
+
+  it("logs an automation's page as sent by the automation, keeping the message's own id", async () => {
+    db.gateway.findMany.mockResolvedValue([{ id: "gw1", name: "Line 1", status: "ONLINE" }]);
+    const { data } = await sendAutomationPage({
+      siteId: SITE,
+      gatewayIds: ["gw1"],
+      message: {
+        id: "evt-1:auto-1:0",
+        text: "Supervisor needed at STN-07.",
+        priority: "high",
+        chimeBefore: true,
+        chimeAfter: false,
+        repeat: 2,
+      },
+      automation: { id: "auto-1", label: "Overhead page: Supervisor Needed" },
+    });
+    expect(published[0]).toEqual({
+      gatewayId: "gw1",
+      message: {
+        id: "evt-1:auto-1:0",
+        text: "Supervisor needed at STN-07.",
+        priority: "high",
+        chimeBefore: true,
+        chimeAfter: false,
+        repeat: 2,
+      },
+    });
+    expect(data).toMatchObject({
+      status: "SENT",
+      text: "Supervisor needed at STN-07.",
+      priority: "HIGH",
+      chimeBefore: null,
+      chimeAfter: "off",
+      repeat: 2,
+      source: "SYSTEM",
+      sourceType: "automation",
+      sourceRef: "auto-1",
+      sentByName: "Overhead page: Supervisor Needed",
+    });
+    expect(data.sentByUserId ?? null).toBeNull();
+    expect(data.pageId ?? null).toBeNull();
+    expect(data.id).not.toBe("evt-1:auto-1:0");
   });
 });

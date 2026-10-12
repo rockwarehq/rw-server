@@ -1,6 +1,7 @@
 import prisma from "@rw/db";
 import type { AnnouncementMessage } from "@rw/runtime/announce-subjects";
 import { announcements } from "@rw/services/device/gateway/index";
+import * as paging from "@rw/services/paging/index";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { makeUser } from "./helpers/access.js";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
@@ -12,7 +13,17 @@ const VIEWER_EMAIL = "paging-viewer@test.local";
 const PASSWORD = "paging-test-password-1";
 
 type PageJson = { id: string; name: string; priority: string; repeat: number; chimeBefore: string | null };
-type LogJson = { id: string; status: string; error: string | null; pageName: string | null; sentByUserId: string | null };
+type LogJson = {
+  id: string;
+  status: string;
+  error: string | null;
+  pageName: string | null;
+  sentByUserId: string | null;
+  sentByName: string | null;
+  source: string;
+  sourceType: string | null;
+  sourceRef: string | null;
+};
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)("overhead paging", () => {
   let server: TestServer;
@@ -138,5 +149,33 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("overhead paging", () => {
     const options = await rpcCall(server, "overheadPage/options", {}, viewerToken);
     expect(options.json).toMatchObject({ chimes: ["alert", "attention", "end"] });
     expect((options.json as { voices: string[] }).voices).toContain("am_onyx");
+  });
+
+  it("logs who sent each page: a person on the paging page, or an automation", async () => {
+    const manual = (
+      await rpcCall(server, "overheadPage/send", { siteId, text: "Manual page", gatewayIds: [onlineId] }, managerToken)
+    ).json as LogJson;
+    expect(manual).toMatchObject({ source: "MANUAL", sourceType: "user" });
+    expect(manual.sourceRef).toBe(manual.sentByUserId);
+
+    const automationId = "11111111-2222-4333-8444-555555555555";
+    await paging.sendAutomationPage({
+      siteId,
+      gatewayIds: [onlineId],
+      message: { id: "evt-1:auto:0", text: "Supervisor needed at STN-07.", priority: "high" },
+      automation: { id: automationId, label: "paging-test automation" },
+    });
+    const logs = (await rpcCall(server, "overheadPage/logList", { siteId, limit: 1 }, viewerToken)).json as {
+      data: LogJson[];
+    };
+    expect(logs.data[0]).toMatchObject({
+      text: "Supervisor needed at STN-07.",
+      status: "SENT",
+      source: "SYSTEM",
+      sourceType: "automation",
+      sourceRef: automationId,
+      sentByName: "paging-test automation",
+      sentByUserId: null,
+    });
   });
 });

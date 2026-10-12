@@ -3,9 +3,11 @@ import { deriveAnnounceSubject } from "@rw/runtime/announce-subjects";
 import { describe, expect, it, vi } from "vitest";
 
 // The "announce" automation action: editor inputs -> the gateway's message. The
-// gateway service is mocked (no DB/NATS); its targeting is tested in services.
+// services are mocked (no DB/NATS); delivery and logging are tested in services.
 const announce = vi.hoisted(() => vi.fn());
+const sendAutomationPage = vi.hoisted(() => vi.fn());
 vi.mock("@rw/services/device/gateway/index", () => ({ announcements: { announce } }));
+vi.mock("@rw/services/paging/index", () => ({ sendAutomationPage }));
 
 const { buildAnnouncement, handler } = await import("../src/automations/actions/announce.js");
 
@@ -61,22 +63,34 @@ describe("announce automation action", () => {
     expect(message).toEqual({ id: "evt-9:auto-1:2", text: "Hi" });
   });
 
-  it("sends to the picked gateways on the event's site", async () => {
-    announce.mockResolvedValue({ data: { gatewayIds: ["gw1"] } });
+  it("sends to the picked gateways on the event's site, logged as sent by this automation", async () => {
+    sendAutomationPage.mockResolvedValue({ data: { status: "SENT", error: null } });
     await handler.versions["1"].run({ gatewayIds: ["gw1"], text: "Hi" }, ctx);
-    expect(announce).toHaveBeenLastCalledWith({
-      gatewayIds: ["gw1"],
+    expect(sendAutomationPage).toHaveBeenLastCalledWith({
       siteId: "site-1",
+      gatewayIds: ["gw1"],
       message: { id: "evt-9:auto-1:2", text: "Hi" },
+      automation: { id: "auto-1", label: "Down alert" },
     });
   });
 
-  it("fails the run when the service reports an error", async () => {
-    announce.mockResolvedValue({ code: "GATEWAY_UNAVAILABLE", error: "Not announced on: Line 2 (offline)" });
+  it("fails the run when a speaker missed it", async () => {
+    sendAutomationPage.mockResolvedValue({ data: { status: "PARTIAL", error: "Not announced on: Line 2 (offline)" } });
     await expect(handler.versions["1"].run({ gatewayIds: ["gw2"], text: "Hi" }, ctx)).rejects.toThrow(
-      "GATEWAY_UNAVAILABLE: Not announced on: Line 2 (offline)",
+      "Not announced on: Line 2 (offline)",
     );
     await expect(handler.versions["1"].run({ gatewayIds: [], text: "Hi" }, ctx)).rejects.toThrow("at least one gateway");
+  });
+
+  it("announces without logging for a site-less (legacy global) automation", async () => {
+    announce.mockResolvedValue({ code: "GATEWAY_UNAVAILABLE", error: "Not announced on: Line 2 (offline)" });
+    const globalCtx = { ...ctx, event: { ...ctx.event, partition: undefined } } as unknown as ActionContext;
+    sendAutomationPage.mockClear();
+    await expect(handler.versions["1"].run({ gatewayIds: ["gw2"], text: "Hi" }, globalCtx)).rejects.toThrow(
+      "GATEWAY_UNAVAILABLE: Not announced on: Line 2 (offline)",
+    );
+    expect(announce).toHaveBeenLastCalledWith({ gatewayIds: ["gw2"], message: { id: "evt-9:auto-1:2", text: "Hi" } });
+    expect(sendAutomationPage).not.toHaveBeenCalled();
   });
 
   it("publishes on the subject the gateway subscribes to", () => {
