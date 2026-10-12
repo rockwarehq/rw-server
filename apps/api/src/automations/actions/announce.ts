@@ -1,18 +1,7 @@
 import type { ActionContext, ActionHandler } from "@rw/automations";
-import type { AnnouncementMessage } from "@rw/runtime/announce-subjects";
+import { ANNOUNCE_CHIMES, ANNOUNCE_VOICES, type AnnouncementMessage } from "@rw/runtime/announce-subjects";
 import { announcements } from "@rw/services/device/gateway/index";
 import { unwrapService } from "./shared.js";
-
-// Kokoro's voices (rw-gateway packages/rw-tts-kokoro). "default" is the gateway's
-// configured default; a gateway that later switches engine falls back to its
-// default for an id it doesn't know, so these never stop an announcement.
-const VOICES = [
-  "default",
-  ...["af_alloy", "af_aoede", "af_bella", "af_heart", "af_jessica", "af_kore", "af_nicole", "af_nova"],
-  ...["af_river", "af_sarah", "af_sky", "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam"],
-  ...["am_michael", "am_onyx", "am_puck", "am_santa", "bf_alice", "bf_emma", "bf_isabella", "bf_lily"],
-  ...["bm_daniel", "bm_fable", "bm_george", "bm_lewis"],
-];
 
 const ids = (value: unknown) => (Array.isArray(value) ? value.map(String).filter(Boolean) : []);
 
@@ -28,9 +17,15 @@ function number(value: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-function onOff(value: unknown): boolean | undefined {
+// "off" = no chime, a name = that chime, blank = the gateway's setting for the
+// slot. "on" (version 1's original choice, still in saved automations) = the
+// gateway's chime for the slot.
+function chime(value: unknown): boolean | string | undefined {
   const s = text(value)?.toLowerCase();
-  return s === "on" ? true : s === "off" ? false : undefined;
+  if (!s) return undefined;
+  if (s === "on") return true;
+  if (s === "off") return false;
+  return s;
 }
 
 /** The message sent to each gateway. Exported for tests. */
@@ -47,8 +42,8 @@ export function buildAnnouncement(
     text: String(inputs.text ?? "").trim(),
     voice: text(inputs.voice),
     speed: number(inputs.speed),
-    chimeBefore: onOff(inputs.chimeBefore),
-    chimeAfter: onOff(inputs.chimeAfter),
+    chimeBefore: chime(inputs.chimeBefore),
+    chimeAfter: chime(inputs.chimeAfter),
     repeat: number(inputs.repeat),
     priority: priority === "normal" || priority === "high" || priority === "emergency" ? priority : undefined,
     expiresAt: expiresInSeconds && expiresInSeconds > 0 ? now + expiresInSeconds * 1000 : undefined,
@@ -86,20 +81,20 @@ export const handler: ActionHandler = {
           },
           chimeBefore: {
             type: "string",
-            enum: ["on", "off"],
+            enum: ["off", ...ANNOUNCE_CHIMES],
             title: "Chime before",
-            description: "Blank = the gateway's setting (on).",
+            description: "Blank = the gateway's setting (alert).",
           },
           chimeAfter: {
             type: "string",
-            enum: ["on", "off"],
+            enum: ["off", ...ANNOUNCE_CHIMES],
             title: "Chime after",
-            description: "Blank = the gateway's setting (off).",
+            description: "Blank = the gateway's setting (none).",
           },
           repeat: { type: "number", title: "Times to speak", description: "1–10. Default 1." },
           voice: {
             type: "string",
-            enum: VOICES,
+            enum: [...ANNOUNCE_VOICES],
             title: "Voice",
             description: "Blank or default = the gateway's voice.",
           },

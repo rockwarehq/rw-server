@@ -45,6 +45,17 @@ describe("announce automation action", () => {
     });
   });
 
+  it("passes a picked chime by name; 'on' from older automations means the gateway's chime", () => {
+    expect(buildAnnouncement({ text: "Hi", chimeBefore: "attention", chimeAfter: "End" }, ctx)).toMatchObject({
+      chimeBefore: "attention",
+      chimeAfter: "end",
+    });
+    expect(buildAnnouncement({ text: "Hi", chimeBefore: "on", chimeAfter: "off" }, ctx)).toMatchObject({
+      chimeBefore: true,
+      chimeAfter: false,
+    });
+  });
+
   it("leaves blank inputs out so the gateway uses its defaults", () => {
     const message = buildAnnouncement({ text: "Hi", voice: "", speed: "", chimeBefore: "", priority: "" }, ctx);
     expect(message).toEqual({ id: "evt-9:auto-1:2", text: "Hi" });
