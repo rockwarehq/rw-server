@@ -133,6 +133,7 @@ export const RESOLVERS = {
   notificationGroup: (id: string) =>
     prisma.notificationGroup.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   notification: (id: string) => prisma.notification.findUnique({ where: { id }, select: { siteId: true } }).then(one),
+  overheadPage: (id: string) => prisma.overheadPage.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   integration: (id: string) => prisma.integration.findUnique({ where: { id }, select: { siteId: true } }).then(one),
   integrationTrigger: (id: string) =>
     prisma.integrationTrigger.findUnique({ where: { id }, select: { siteId: true } }).then(one),
@@ -218,6 +219,7 @@ export const NOT_FOUND_MESSAGES: Record<RowKind, string> = {
   stationProfile: "Profile not found",
   notificationGroup: "Notification group not found",
   notification: "Notification not found",
+  overheadPage: "Overhead page not found",
   disposition: "Disposition not found",
   dispositionReason: "Disposition reason not found",
   dispositionLog: "Disposition log not found",

@@ -24,6 +24,8 @@ The API publishes gateway-bound commands through the **command bus** (`apps/api/
 
 The `announce` automation action speaks text on an on-prem gateway's speaker. `packages/services/src/device/gateway/announce.ts` checks the gateways belong to the automation's site, and the **announce bus** (`apps/api/src/nats/announce-bus.ts`) publishes the message on `announce.<gatewayId>` (`packages/runtime/src/announce-subjects.ts`). Unlike commands this is core NATS with no stream: an announcement sent while the gateway is offline is dropped rather than spoken late, and the run is marked failed for gateways last seen OFFLINE or DISABLED. Voice, chimes, repeat and priority (normal / high / emergency) handling live on the gateway (rw-gateway `src/announcer`).
 
+People can also page by hand (rw-imm Settings → Overhead paging): `overheadPage.*` (`apps/api/src/rpc/paging.ts`, `packages/services/src/paging/`) sends a typed or saved page (`OverheadPage`) through the same service and logs every send (`OverheadPageLog`: SENT / PARTIAL / FAILED, who sent it).
+
 ## From signal to cycle
 
 The path a "machine finished a part" signal takes:

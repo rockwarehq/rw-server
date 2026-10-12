@@ -28,6 +28,7 @@
     "./metrics/*": "./dist/metrics/*.js",
     "./notification/*": "./dist/notification/*.js",
     "./order/*": "./dist/order/*.js",
+    "./paging/*": "./dist/paging/*.js",
     "./processor/*": "./dist/processor/*.js",
     "./queues/*": "./dist/queues/*.js",
     "./reporting/*": "./dist/reporting/*.js",

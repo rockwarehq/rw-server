@@ -16,6 +16,22 @@ export function deriveAnnounceSubject(gatewayId: string): string {
   return `announce.${token}`;
 }
 
+// Kokoro's voices (rw-gateway packages/rw-tts-kokoro). "default" is the gateway's
+// configured default; a gateway that later switches engine falls back to its
+// default for an id it doesn't know, so these never stop an announcement.
+export const ANNOUNCE_VOICES = [
+  "default",
+  ...["af_alloy", "af_aoede", "af_bella", "af_heart", "af_jessica", "af_kore", "af_nicole", "af_nova"],
+  ...["af_river", "af_sarah", "af_sky", "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam"],
+  ...["am_michael", "am_onyx", "am_puck", "am_santa", "bf_alice", "bf_emma", "bf_isabella", "bf_lily"],
+  ...["bm_daniel", "bm_fable", "bm_george", "bm_lewis"],
+] as const;
+
+// Chimes bundled with every gateway (rw-gateway assets/chimes). A gateway can add
+// its own, but rw-server doesn't know about those. An unknown name falls back to
+// the gateway's chime for that slot.
+export const ANNOUNCE_CHIMES = ["alert", "attention", "end"] as const;
+
 export interface AnnouncementMessage {
   /** The gateway speaks a given id once, so a redelivered event can't repeat it. */
   id?: string;

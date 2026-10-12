@@ -19,6 +19,7 @@ import * as callRpc from "./call.js";
 import * as productionModeRpc from "./production-mode.js";
 import * as stationProfileRpc from "./station-profile.js";
 import * as notificationRpc from "./notification.js";
+import * as pagingRpc from "./paging.js";
 import * as shift from "./shift.js";
 import * as disposition from "./disposition.js";
 import * as pointValue from "./point-value.js";
@@ -431,6 +432,18 @@ export const router = {
     list: notificationRpc.list,
     get: notificationRpc.get,
   },
+  overheadPage: {
+    create: pagingRpc.create,
+    list: pagingRpc.list,
+    get: pagingRpc.get,
+    update: pagingRpc.update,
+    archive: pagingRpc.archive,
+    send: pagingRpc.send,
+    sendSaved: pagingRpc.sendSaved,
+    logList: pagingRpc.logList,
+    options: pagingRpc.options,
+  },
+
   shift: {
     current: shift.current,
   },

@@ -1,0 +1,44 @@
+/// How an overhead page queues on the gateway speaker (rw-gateway src/announcer).
+enum OverheadPagePriority {
+  /// Waits its turn.
+  NORMAL
+  /// Plays ahead of waiting NORMAL pages; doesn't interrupt.
+  HIGH
+  /// Stops whatever is playing (unless it is also an emergency) and plays next.
+  EMERGENCY
+}
+
+/// A saved overhead page: what to say, on which gateways' speakers, and how.
+/// Sent by hand from Settings → Overhead paging; every send is an OverheadPageLog.
+model OverheadPage {
+  id   String @id @default(uuid()) @db.Uuid
+  name String
+  text String
+
+  /// Gateways whose speakers play it. Plain ids, not FKs: a gateway removed from
+  /// the site makes the send fail with GATEWAY_NOT_FOUND rather than vanish silently.
+  gatewayIds String[] @db.Uuid
+
+  priority    OverheadPagePriority @default(NORMAL)
+  /// "off", a chime name ("alert", "attention", "end", or a gateway's own), or null for the gateway's setting.
+  chimeBefore String?
+  chimeAfter  String?
+  /// Times to speak the text, 1–10.
+  repeat      Int                  @default(1)
+  /// Gateway voice name or engine voice id; null = the gateway's default.
+  voice       String?
+  /// 0.5–2; null = the gateway's speed.
+  speed       Float?
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  logs OverheadPageLog[]
+
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  @@unique([siteId, name])
+  @@index([siteId])
+}

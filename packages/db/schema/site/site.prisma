@@ -74,6 +74,8 @@ model Site {
   automations             Automation[]
   notificationGroups      NotificationGroup[]
   notifications           Notification[]
+  overheadPages           OverheadPage[]
+  overheadPageLogs        OverheadPageLog[]
   stationModeLogs         StationModeLog[]
   inventoryItems          InventoryItem[]
   stationStateLogs        StationStateLog[]
