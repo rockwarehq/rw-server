@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import prisma from "@rw/db";
-import type { OverheadPageLog, OverheadPageLogStatus } from "@rw/db";
+import prisma, { type Prisma } from "@rw/db";
+import type { OverheadPageLog, OverheadPageLogStatus, OverheadPagePriority } from "@rw/db";
 import type { AnnouncementMessage } from "@rw/runtime/announce-subjects";
 import { deliver, describeUnheard } from "../device/gateway/announce.js";
 import type { PageSettings } from "./pages.js";
 
-// Sending an overhead page by hand. Every attempt is logged (OverheadPageLog),
+// Sending overhead pages — by hand from the paging page, or from an
+// automation's announce action. Every attempt is logged (OverheadPageLog),
 // including ones that reached no gateway, so the log answers "who paged what".
 
 type ServiceError = { error: string; code: string };
@@ -41,19 +42,25 @@ export function toAnnouncement(id: string, page: PageSettings): AnnouncementMess
   return Object.fromEntries(Object.entries(message).filter(([, v]) => v !== undefined)) as AnnouncementMessage;
 }
 
+type LogFields = Omit<
+  Prisma.OverheadPageLogUncheckedCreateInput,
+  "id" | "siteId" | "text" | "gatewayIds" | "status" | "error" | "createdAt"
+>;
+
 /**
- * Publish the page to its gateways and log the outcome: SENT (every gateway),
+ * Publish a message to its gateways and log the outcome: SENT (every gateway),
  * PARTIAL (some were offline/disabled) or FAILED (none). Delivery problems are
  * recorded on the log rather than returned as errors.
  */
-export async function sendPage(input: SendPageInput): Promise<{ data: OverheadPageLog }> {
-  const id = randomUUID();
+async function deliverAndLog(input: {
+  logId: string;
+  siteId: string;
+  gatewayIds: string[];
+  message: AnnouncementMessage;
+  fields: LogFields;
+}): Promise<{ data: OverheadPageLog }> {
   const gatewayIds = [...new Set(input.gatewayIds)];
-  const result = await deliver({
-    gatewayIds,
-    siteId: input.siteId,
-    message: toAnnouncement(id, input),
-  });
+  const result = await deliver({ gatewayIds, siteId: input.siteId, message: input.message });
 
   let status: OverheadPageLogStatus;
   let error: string | null = null;
@@ -69,25 +76,80 @@ export async function sendPage(input: SendPageInput): Promise<{ data: OverheadPa
 
   const log = await prisma.overheadPageLog.create({
     data: {
-      id,
+      ...input.fields,
+      id: input.logId,
       siteId: input.siteId,
+      text: input.message.text.trim(),
+      gatewayIds,
+      status,
+      error,
+    },
+  });
+  return { data: log };
+}
+
+/** A page from the paging page: typed by hand, or a saved page. */
+export async function sendPage(input: SendPageInput): Promise<{ data: OverheadPageLog }> {
+  const id = randomUUID();
+  return deliverAndLog({
+    logId: id,
+    siteId: input.siteId,
+    gatewayIds: input.gatewayIds,
+    message: toAnnouncement(id, input),
+    fields: {
       pageId: input.pageId ?? null,
       pageName: input.pageName ?? null,
-      text: input.text.trim(),
-      gatewayIds,
       priority: input.priority ?? "NORMAL",
       chimeBefore: input.chimeBefore ?? null,
       chimeAfter: input.chimeAfter ?? null,
       repeat: input.repeat ?? 1,
       voice: input.voice ?? null,
       speed: input.speed ?? null,
-      status,
-      error,
+      source: "MANUAL",
+      sourceType: "user",
+      sourceRef: input.sentByUserId ?? null,
       sentByUserId: input.sentByUserId ?? null,
       sentByName: input.sentByName ?? null,
     },
   });
-  return { data: log };
+}
+
+/** A chime value on the message as the log stores it: "off", a name, or null (the gateway's own). */
+function chimeColumn(value: boolean | string | undefined): string | null {
+  if (value === false) return "off";
+  return typeof value === "string" && value ? value : null;
+}
+
+/**
+ * An automation's announce action. The message keeps its own id (stable per
+ * event, so the gateway speaks a redelivered event once); the log names the
+ * automation as the sender.
+ */
+export async function sendAutomationPage(input: {
+  siteId: string;
+  gatewayIds: string[];
+  message: AnnouncementMessage;
+  automation: { id: string; label: string };
+}): Promise<{ data: OverheadPageLog }> {
+  const { message } = input;
+  return deliverAndLog({
+    logId: randomUUID(),
+    siteId: input.siteId,
+    gatewayIds: input.gatewayIds,
+    message,
+    fields: {
+      priority: message.priority ? (message.priority.toUpperCase() as OverheadPagePriority) : "NORMAL",
+      chimeBefore: chimeColumn(message.chimeBefore),
+      chimeAfter: chimeColumn(message.chimeAfter),
+      repeat: message.repeat ?? 1,
+      voice: message.voice ?? null,
+      speed: message.speed ?? null,
+      source: "SYSTEM",
+      sourceType: "automation",
+      sourceRef: input.automation.id,
+      sentByName: input.automation.label,
+    },
+  });
 }
 
 /** Send a saved page exactly as saved. */

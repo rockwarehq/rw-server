@@ -7,8 +7,9 @@ enum OverheadPageLogStatus {
   FAILED
 }
 
-/// One manual overhead page as sent: a snapshot of the message and settings,
-/// who sent it, and which gateways it reached.
+/// One overhead page as sent — by a person on the paging page, or by an
+/// automation's announce action: a snapshot of the message and settings, who
+/// or what sent it, and which gateways it reached.
 model OverheadPageLog {
   id String @id @default(uuid()) @db.Uuid
 
@@ -32,8 +33,14 @@ model OverheadPageLog {
   status OverheadPageLogStatus
   error  String?
 
+  /// MANUAL: a person on the paging page. SYSTEM: an automation's announce action.
+  source     ActionSource @default(MANUAL)
+  sourceType String? // "user" | "automation"
+  sourceRef  String? // the user's or automation's id
+
   sentByUserId String? @db.Uuid
-  sentByName   String? // snapshot
+  /// Snapshot: the person's name, or the automation's label.
+  sentByName   String?
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
