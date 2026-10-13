@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(() => ({ gateway: { findMany: vi.fn() } }));
 vi.mock("@rw/db", async (importOriginal) => ({ ...(await importOriginal<object>()), default: db }));
 
-const { announce, setAnnouncementSink } = await import("./announce.js");
+const { announce, setAnnouncementSink, siteSpeakerIds } = await import("./announce.js");
 
 const SITE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const sent: Array<{ gatewayId: string; text: string }> = [];
@@ -66,5 +66,11 @@ describe("gateway announcements", () => {
     expect(await announce({ gatewayIds: ["gw1"], message: { text: "hi" } })).toMatchObject({
       code: "ANNOUNCE_UNAVAILABLE",
     });
+  });
+
+  it("lists a site's speakers: every gateway that isn't disabled", async () => {
+    db.gateway.findMany.mockResolvedValue([{ id: "gw1" }, { id: "gw2" }]);
+    expect(await siteSpeakerIds(SITE)).toEqual(["gw1", "gw2"]);
+    expect(db.gateway.findMany.mock.lastCall?.[0].where).toEqual({ siteId: SITE, status: { not: "DISABLED" } });
   });
 });

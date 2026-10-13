@@ -184,4 +184,27 @@ describe("sending an overhead page", () => {
     expect(data.pageId ?? null).toBeNull();
     expect(data.id).not.toBe("evt-1:auto-1:0");
   });
+
+  it("with no speakers picked, plays on every speaker at the plant and logs which", async () => {
+    db.gateway.findMany
+      .mockResolvedValueOnce([{ id: "gw1" }, { id: "gw2" }]) // the plant's speakers
+      .mockResolvedValueOnce([
+        { id: "gw1", name: "Line 1", status: "ONLINE" },
+        { id: "gw2", name: "Line 2", status: "ONLINE" },
+      ]);
+    const { data } = await sendPage({ siteId: SITE, text: "Lunch", gatewayIds: [] });
+    expect(data).toMatchObject({ status: "SENT", gatewayIds: ["gw1", "gw2"] });
+    expect(published.map((p) => p.gatewayId)).toEqual(["gw1", "gw2"]);
+  });
+
+  it("logs FAILED when the plant has no speakers at all", async () => {
+    db.gateway.findMany.mockResolvedValue([]);
+    const { data } = await sendPage({ siteId: SITE, text: "Lunch" });
+    expect(data).toMatchObject({
+      status: "FAILED",
+      error: "This plant has no speakers (gateways) yet",
+      gatewayIds: [],
+    });
+    expect(published).toEqual([]);
+  });
 });

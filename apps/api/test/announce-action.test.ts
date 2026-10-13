@@ -4,9 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 // The "announce" automation action: editor inputs -> the gateway's message. The
 // services are mocked (no DB/NATS); delivery and logging are tested in services.
-const announce = vi.hoisted(() => vi.fn());
 const sendAutomationPage = vi.hoisted(() => vi.fn());
-vi.mock("@rw/services/device/gateway/index", () => ({ announcements: { announce } }));
 vi.mock("@rw/services/paging/index", () => ({ sendAutomationPage }));
 
 const { buildAnnouncement, handler } = await import("../src/automations/actions/announce.js");
@@ -63,34 +61,41 @@ describe("announce automation action", () => {
     expect(message).toEqual({ id: "evt-9:auto-1:2", text: "Hi" });
   });
 
-  it("sends to the picked gateways on the event's site, logged as sent by this automation", async () => {
+  it("plays on every speaker at the plant when no speakers are picked, logged as sent by this automation", async () => {
     sendAutomationPage.mockResolvedValue({ data: { status: "SENT", error: null } });
-    await handler.versions["1"].run({ gatewayIds: ["gw1"], text: "Hi" }, ctx);
+    await handler.versions["1"].run({ text: "Hi" }, ctx);
     expect(sendAutomationPage).toHaveBeenLastCalledWith({
       siteId: "site-1",
-      gatewayIds: ["gw1"],
+      gatewayIds: [],
       message: { id: "evt-9:auto-1:2", text: "Hi" },
       automation: { id: "auto-1", label: "Down alert" },
     });
   });
 
-  it("fails the run when a speaker missed it", async () => {
-    sendAutomationPage.mockResolvedValue({ data: { status: "PARTIAL", error: "Not announced on: Line 2 (offline)" } });
-    await expect(handler.versions["1"].run({ gatewayIds: ["gw2"], text: "Hi" }, ctx)).rejects.toThrow(
-      "Not announced on: Line 2 (offline)",
-    );
-    await expect(handler.versions["1"].run({ gatewayIds: [], text: "Hi" }, ctx)).rejects.toThrow("at least one gateway");
+  it("plays only on the picked speakers when some are picked", async () => {
+    sendAutomationPage.mockResolvedValue({ data: { status: "SENT", error: null } });
+    await handler.versions["1"].run({ gatewayIds: ["gw1", ""], text: "Hi" }, ctx);
+    expect(sendAutomationPage).toHaveBeenLastCalledWith(expect.objectContaining({ gatewayIds: ["gw1"] }));
   });
 
-  it("announces without logging for a site-less (legacy global) automation", async () => {
-    announce.mockResolvedValue({ code: "GATEWAY_UNAVAILABLE", error: "Not announced on: Line 2 (offline)" });
+  it("fails the run when a speaker missed it, or the plant has none", async () => {
+    sendAutomationPage.mockResolvedValue({ data: { status: "PARTIAL", error: "Not announced on: Line 2 (offline)" } });
+    await expect(handler.versions["1"].run({ text: "Hi" }, ctx)).rejects.toThrow("Not announced on: Line 2 (offline)");
+    sendAutomationPage.mockResolvedValue({ data: { status: "FAILED", error: "This plant has no speakers (gateways) yet" } });
+    await expect(handler.versions["1"].run({ text: "Hi" }, ctx)).rejects.toThrow("This plant has no speakers");
+  });
+
+  it("needs a plant", async () => {
     const globalCtx = { ...ctx, event: { ...ctx.event, partition: undefined } } as unknown as ActionContext;
-    sendAutomationPage.mockClear();
-    await expect(handler.versions["1"].run({ gatewayIds: ["gw2"], text: "Hi" }, globalCtx)).rejects.toThrow(
-      "GATEWAY_UNAVAILABLE: Not announced on: Line 2 (offline)",
-    );
-    expect(announce).toHaveBeenLastCalledWith({ gatewayIds: ["gw2"], message: { id: "evt-9:auto-1:2", text: "Hi" } });
-    expect(sendAutomationPage).not.toHaveBeenCalled();
+    await expect(handler.versions["1"].run({ text: "Hi" }, globalCtx)).rejects.toThrow("announce needs a plant");
+  });
+
+  it("only needs the message; Speakers is optional", () => {
+    expect(handler.versions["1"].inputSchema.required).toEqual(["text"]);
+    expect(handler.versions["1"].inputSchema.properties.gatewayIds).toMatchObject({
+      title: "Speakers",
+      ref: { source: "gateways", multi: true },
+    });
   });
 
   it("publishes on the subject the gateway subscribes to", () => {
