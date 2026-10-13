@@ -17,7 +17,8 @@ const nameSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "Letters, numbers, 
 
 const settingsShape = {
   text: z.string().trim().min(1).max(1000),
-  gatewayIds: z.array(z.uuid()).min(1, "Pick at least one gateway").max(100),
+  /** Empty or omitted = every speaker at the plant, resolved when sent. */
+  gatewayIds: z.array(z.uuid()).max(100).optional(),
   priority: z.enum(["NORMAL", "HIGH", "EMERGENCY"]).optional(),
   /** "off", a chime name, or null for the gateway's setting. */
   chimeBefore: nameSchema.nullable().optional(),

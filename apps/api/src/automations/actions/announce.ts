@@ -1,10 +1,6 @@
 import type { ActionContext, ActionHandler } from "@rw/automations";
 import { ANNOUNCE_CHIMES, ANNOUNCE_VOICES, type AnnouncementMessage } from "@rw/runtime/announce-subjects";
-import { announcements } from "@rw/services/device/gateway/index";
 import * as paging from "@rw/services/paging/index";
-import { unwrapService } from "./shared.js";
-
-const ids = (value: unknown) => (Array.isArray(value) ? value.map(String).filter(Boolean) : []);
 
 // Inputs arrive as typed by the editor, or as strings after {{event.*}}
 // interpolation; blanks mean "the gateway's default" and are left out.
@@ -59,13 +55,13 @@ export const handler: ActionHandler = {
   versions: {
     "1": {
       inputSchema: {
-        required: ["gatewayIds", "text"],
+        required: ["text"],
         properties: {
           gatewayIds: {
             type: "array",
             items: { type: "string" },
-            title: "Gateways",
-            description: "On-prem gateways whose speaker plays the announcement.",
+            title: "Speakers",
+            description: "Blank = every speaker at the plant.",
             ref: { source: "gateways", multi: true },
           },
           text: {
@@ -108,18 +104,13 @@ export const handler: ActionHandler = {
         },
       },
       async run(inputs, ctx) {
-        const gatewayIds = ids(inputs.gatewayIds);
-        if (gatewayIds.length === 0) {
-          throw new Error(`automation "${ctx.automation.label}": announce needs at least one gateway`);
-        }
-        const message = buildAnnouncement(inputs, ctx);
         const siteId = ctx.event.partition;
-        // Global (site-less) automations predate site partitioning; the page
-        // log is per site, so they announce without one.
-        if (!siteId) {
-          unwrapService(await announcements.announce({ gatewayIds, message }));
-          return;
-        }
+        // Speakers are per plant; global (site-less) automations predate site partitioning.
+        if (!siteId) throw new Error(`automation "${ctx.automation.label}": announce needs a plant`);
+        const message = buildAnnouncement(inputs, ctx);
+        // Picked speakers, or none = every speaker at the plant, resolved when sent
+        // (a speaker added later is included).
+        const gatewayIds = Array.isArray(inputs.gatewayIds) ? inputs.gatewayIds.map(String).filter(Boolean) : [];
         // Logged with the plant's manual pages (Recent pages), sent by this automation.
         const { data: log } = await paging.sendAutomationPage({
           siteId,

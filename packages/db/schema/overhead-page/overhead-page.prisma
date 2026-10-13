@@ -15,8 +15,9 @@ model OverheadPage {
   name String
   text String
 
-  /// Gateways whose speakers play it. Plain ids, not FKs: a gateway removed from
-  /// the site makes the send fail with GATEWAY_NOT_FOUND rather than vanish silently.
+  /// Gateways whose speakers play it; empty = every speaker at the plant, resolved
+  /// when sent. Plain ids, not FKs: a gateway removed from the site makes the send
+  /// fail with GATEWAY_NOT_FOUND rather than vanish silently.
   gatewayIds String[] @db.Uuid
 
   priority    OverheadPagePriority @default(NORMAL)

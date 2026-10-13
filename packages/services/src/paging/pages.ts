@@ -19,7 +19,8 @@ function isUniqueViolation(err: unknown): boolean {
 /** What to say and how: shared by saved pages and one-off sends. */
 export interface PageSettings {
   text: string;
-  gatewayIds: string[];
+  /** Empty or omitted = every speaker at the plant, resolved when sent. */
+  gatewayIds?: string[];
   priority?: OverheadPagePriority;
   /** "off", a chime name, or null/undefined for the gateway's setting. */
   chimeBefore?: string | null;
@@ -36,10 +37,10 @@ export interface CreatePageInput extends PageSettings {
 
 export type UpdatePageInput = Partial<PageSettings> & { name?: string };
 
-/** Every gateway must be on the site. */
-export async function validateGateways(siteId: string, gatewayIds: string[]): Promise<ServiceError | null> {
+/** Every picked gateway must be on the site. None picked is fine: every speaker. */
+export async function validateGateways(siteId: string, gatewayIds: string[] = []): Promise<ServiceError | null> {
   const ids = [...new Set(gatewayIds)];
-  if (ids.length === 0) return { error: "Pick at least one gateway", code: "ANNOUNCE_NO_GATEWAYS" };
+  if (ids.length === 0) return null;
   const found = await prisma.gateway.findMany({ where: { id: { in: ids }, siteId }, select: { id: true } });
   const known = new Set(found.map((g) => g.id));
   const missing = ids.filter((id) => !known.has(id));
@@ -61,7 +62,7 @@ export async function createPage(input: CreatePageInput): Promise<ServiceError |
         siteId: input.siteId,
         name: input.name,
         text: input.text,
-        gatewayIds: [...new Set(input.gatewayIds)],
+        gatewayIds: [...new Set(input.gatewayIds ?? [])],
         priority: input.priority,
         chimeBefore: input.chimeBefore ?? null,
         chimeAfter: input.chimeAfter ?? null,

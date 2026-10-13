@@ -23,6 +23,16 @@ export interface AnnounceInput {
   message: AnnouncementMessage;
 }
 
+/** Every gateway at the site that can play a page (not DISABLED), name-ordered. */
+export async function siteSpeakerIds(siteId: string): Promise<string[]> {
+  const gateways = await prisma.gateway.findMany({
+    where: { siteId, status: { not: "DISABLED" } },
+    select: { id: true },
+    orderBy: { name: "asc" },
+  });
+  return gateways.map((g) => g.id);
+}
+
 export interface UnheardGateway {
   id: string;
   name: string;

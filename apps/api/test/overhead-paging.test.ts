@@ -178,4 +178,24 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("overhead paging", () => {
       sentByUserId: null,
     });
   });
+
+  it("a page with no speakers picked goes to every speaker at the plant", async () => {
+    const page = (
+      await rpcCall(
+        server,
+        "overheadPage/create",
+        { siteId, name: "paging-test-everyone", text: "Lunch is ready." },
+        adminToken,
+      )
+    ).json as PageJson & { gatewayIds: string[] };
+    expect(page.gatewayIds).toEqual([]);
+
+    published.length = 0;
+    const log = (await rpcCall(server, "overheadPage/sendSaved", { id: page.id }, managerToken)).json as LogJson & {
+      gatewayIds: string[];
+    };
+    expect(log.gatewayIds).toEqual(expect.arrayContaining([onlineId, offlineId]));
+    expect(published.map((p) => p.gatewayId)).toEqual(expect.arrayContaining([onlineId, offlineId]));
+    expect(log.status).toBe("PARTIAL"); // the offline test gateway didn't hear it
+  });
 });

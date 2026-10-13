@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import prisma, { type Prisma } from "@rw/db";
 import type { OverheadPageLog, OverheadPageLogStatus, OverheadPagePriority } from "@rw/db";
 import type { AnnouncementMessage } from "@rw/runtime/announce-subjects";
-import { deliver, describeUnheard } from "../device/gateway/announce.js";
+import { deliver, describeUnheard, siteSpeakerIds } from "../device/gateway/announce.js";
 import type { PageSettings } from "./pages.js";
 
 // Sending overhead pages — by hand from the paging page, or from an
@@ -55,12 +55,16 @@ type LogFields = Omit<
 async function deliverAndLog(input: {
   logId: string;
   siteId: string;
+  /** Empty = every speaker at the plant. The log records the gateways it actually went to. */
   gatewayIds: string[];
   message: AnnouncementMessage;
   fields: LogFields;
 }): Promise<{ data: OverheadPageLog }> {
-  const gatewayIds = [...new Set(input.gatewayIds)];
-  const result = await deliver({ gatewayIds, siteId: input.siteId, message: input.message });
+  let gatewayIds = [...new Set(input.gatewayIds)];
+  if (gatewayIds.length === 0) gatewayIds = await siteSpeakerIds(input.siteId);
+  const result = gatewayIds.length
+    ? await deliver({ gatewayIds, siteId: input.siteId, message: input.message })
+    : { error: "This plant has no speakers (gateways) yet", code: "ANNOUNCE_NO_GATEWAYS" };
 
   let status: OverheadPageLogStatus;
   let error: string | null = null;
@@ -94,7 +98,7 @@ export async function sendPage(input: SendPageInput): Promise<{ data: OverheadPa
   return deliverAndLog({
     logId: id,
     siteId: input.siteId,
-    gatewayIds: input.gatewayIds,
+    gatewayIds: input.gatewayIds ?? [],
     message: toAnnouncement(id, input),
     fields: {
       pageId: input.pageId ?? null,
