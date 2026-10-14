@@ -109,6 +109,31 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("pace detection", () => {
     await call("station/create", { siteId, workcenterId, name: `${P}-bad`, fastDetect: 1 }, 400);
   });
 
+  it("a new workcenter starts at slow 25% and down 120s, fast off; null leaves one off", async () => {
+    const made = await call<Record<string, unknown> & { id: string }>("workcenter/create", {
+      siteId,
+      name: `${P}-new`,
+    });
+    const off = await call<Record<string, unknown> & { id: string }>("workcenter/create", {
+      siteId,
+      name: `${P}-new-off`,
+      slowDetect: null,
+      downtimeDetect: null,
+      fastDetect: 0.2,
+    });
+    try {
+      expect(Number(made.slowDetect)).toBe(0.25);
+      expect(made.fastDetect).toBeNull();
+      expect(Number(made.downtimeDetect)).toBe(120);
+      expect(off.slowDetect).toBeNull();
+      expect(off.downtimeDetect).toBeNull();
+      expect(Number(off.fastDetect)).toBe(0.2);
+    } finally {
+      await call("workcenter/remove", { id: made.id });
+      await call("workcenter/remove", { id: off.id });
+    }
+  });
+
   it("a station with no detects of its own uses its workcenter's, for slow and for fast", async () => {
     const id = await station("inherits");
     //                              on pace  fast  fast  on pace  slow  fast
