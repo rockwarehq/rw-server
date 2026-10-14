@@ -8,7 +8,25 @@ export interface CreateWorkcenterInput {
   attrs?: Record<string, unknown>;
   siteId: string;
   parentId?: string;
+  /**
+   * Detection defaults for the workcenter's stations. Omitted takes
+   * {@link NEW_WORKCENTER_DETECTION}; null leaves that detection off.
+   */
+  slowDetect?: number | null;
+  fastDetect?: number | null;
+  downtimeDetect?: number | null;
 }
+
+/**
+ * What a new workcenter detects with unless told otherwise: slow at 25% over
+ * standard, down after 120s of silence past it, fast off. Stamped at creation
+ * only — a workcenter cleared later stays cleared; there is no fallback.
+ */
+export const NEW_WORKCENTER_DETECTION = {
+  slowDetect: 0.25,
+  fastDetect: null,
+  downtimeDetect: 120,
+} as const;
 
 export interface UpdateWorkcenterInput {
   name?: string;
@@ -33,6 +51,12 @@ export interface ListWorkcentersFilter {
  */
 export async function create(input: CreateWorkcenterInput) {
   const { name, description, attrs, siteId, parentId } = input;
+  const detection = {
+    slowDetect: input.slowDetect !== undefined ? input.slowDetect : NEW_WORKCENTER_DETECTION.slowDetect,
+    fastDetect: input.fastDetect !== undefined ? input.fastDetect : NEW_WORKCENTER_DETECTION.fastDetect,
+    downtimeDetect:
+      input.downtimeDetect !== undefined ? input.downtimeDetect : NEW_WORKCENTER_DETECTION.downtimeDetect,
+  };
 
   // Workcenters are a flat list per site: stations (and later station
   // groups) go under workcenters, never another workcenter. Existing nested
@@ -60,6 +84,7 @@ export async function create(input: CreateWorkcenterInput) {
       description,
       attrs: attrs ?? {},
       siteId,
+      ...detection,
       // The cell's access container is born with the cell.
       bucket: { create: { workspaceId: site.workspaceId, siteId, kind: "WORKCENTER", name } },
     },

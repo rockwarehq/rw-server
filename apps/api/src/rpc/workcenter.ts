@@ -12,6 +12,11 @@ const createInputSchema = z.object({
   description: z.string().optional(),
   attrs: z.record(z.string(), z.unknown()).optional(),
   siteId: z.uuid(),
+  // Omitted takes the new-workcenter defaults (slow 25%, down 120s, fast
+  // off); null leaves that one off.
+  slowDetect: z.number().positive().nullable().optional(),
+  fastDetect: z.number().positive().lt(1).nullable().optional(),
+  downtimeDetect: z.number().positive().nullable().optional(),
 });
 
 const updateInputSchema = z.object({

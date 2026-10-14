@@ -87,6 +87,19 @@ const COMMENT_SOURCE = shiftNoteSource(
 );
 const SIGNOFF_SOURCE = shiftNoteSource("ShiftSignoff", `n."id", n."postedById", n."postedAt"`);
 
+// ── Overhead pages: one row per page sent ───────────────────────────────────
+// A page belongs to the site, not a workcenter or a shift (shift instances are
+// per workcenter), so its business date is the site's local calendar date.
+// Names are the log's own snapshots: a deleted saved page or an automation
+// still reads as it did when the page went out.
+const OVERHEAD_PAGE_SOURCE = `
+  SELECT l."id", l."siteId", l."createdAt",
+    (l."createdAt" AT TIME ZONE s."timezone")::date AS "businessDate",
+    l."pageId", l."pageName", l."text", l."priority"::text AS "priority",
+    l."status"::text AS "status", l."error", l."source"::text AS "source",
+    l."sentByName", l."repeat", cardinality(l."gatewayIds") AS "gatewayCount"
+  FROM "OverheadPageLog" l JOIN "Site" s ON s."id" = l."siteId"`;
+
 // ── KPI facts: MetricBucket ∪ MetricBucketLog ────────────────────────────────
 // Active buckets plus archived history. The NOT EXISTS guards the
 // replay-unarchive window where a bucket id exists in both tables — the
@@ -697,6 +710,50 @@ export const FACTS: Record<string, FactDef> = {
       source: enumDim("Source", "source", ["MANUAL", "SYSTEM"]),
       openedBy: employeeDim("openedByEmployeeId", "Opened by"),
       closedBy: employeeDim("closedByEmployeeId", "Closed by"),
+    },
+  },
+
+  overheadPages: {
+    label: "Overhead pages",
+    description:
+      "One row per overhead page sent, by a person on the paging page or by an automation; " +
+      "dated by the site's local calendar day.",
+    source: OVERHEAD_PAGE_SOURCE,
+    dateColumn: "businessDate",
+    timeColumn: "createdAt",
+    // Site-wide: workcenter-restricted users don't see pages.
+    workcenterColumn: null,
+    rowKey: "id",
+    fields: {
+      id: idField,
+      createdAt: instant("Sent", "createdAt"),
+      text: { label: "Message", column: "text", type: "string" },
+      error: { label: "Error", column: "error", type: "string" },
+      repeat: { label: "Repeats", column: "repeat", type: "number" },
+      gatewayCount: { label: "Gateways", column: "gatewayCount", type: "number" },
+    },
+    measures: {
+      pages: { kind: "count", label: "Pages" },
+      failed: {
+        kind: "sum",
+        label: "Failed pages",
+        expr: `CASE WHEN f."status" = 'FAILED' THEN 1 ELSE 0 END`,
+        description: "Pages that reached no gateway.",
+      },
+      partial: {
+        kind: "sum",
+        label: "Partial pages",
+        expr: `CASE WHEN f."status" = 'PARTIAL' THEN 1 ELSE 0 END`,
+        description: "Pages that reached some gateways but not all.",
+      },
+    },
+    dimensions: {
+      businessDate: businessDateDim(),
+      page: { label: "Saved page", column: "pageName", type: "string" },
+      priority: enumDim("Priority", "priority", ["NORMAL", "HIGH", "EMERGENCY"]),
+      status: enumDim("Status", "status", ["SENT", "PARTIAL", "FAILED"]),
+      source: enumDim("Source", "source", ["MANUAL", "SYSTEM"]),
+      sentBy: { label: "Sent by", column: "sentByName", type: "string" },
     },
   },
 
