@@ -54,8 +54,7 @@ export async function create(input: CreateWorkcenterInput) {
   const detection = {
     slowDetect: input.slowDetect !== undefined ? input.slowDetect : NEW_WORKCENTER_DETECTION.slowDetect,
     fastDetect: input.fastDetect !== undefined ? input.fastDetect : NEW_WORKCENTER_DETECTION.fastDetect,
-    downtimeDetect:
-      input.downtimeDetect !== undefined ? input.downtimeDetect : NEW_WORKCENTER_DETECTION.downtimeDetect,
+    downtimeDetect: input.downtimeDetect !== undefined ? input.downtimeDetect : NEW_WORKCENTER_DETECTION.downtimeDetect,
   };
 
   // Workcenters are a flat list per site: stations (and later station
