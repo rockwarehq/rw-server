@@ -58,6 +58,23 @@ const EnvSchema = z.object({
   // Identity Validation token). Unset = /users/me supportSignature is null and
   // the widget can't verify who is writing.
   SUPPORT_IDENTITY_SECRET: z.string().optional(),
+  // Console agent. Unset = agent.status reports disabled and Console hides the
+  // chat; the rest of the app is unaffected.
+  // Agents (Console AI, agent runs, triggers, MCP) are in development: off
+  // unless a tenant opts in. Off hides every agent procedure and starts none
+  // of its background services.
+  AGENTS_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  // Ask the API why a request missed the prompt cache (beta cache diagnosis);
+  // recorded on each step.finished. For finding cache breakers, not for prod.
+  AGENT_CACHE_DIAGNOSTICS: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  AGENT_MODEL: z.string().default("claude-opus-5"),
   BUCKET_NAME: z.string().optional(),
   AWS_REGION: z.string().default("auto"),
   AWS_ENDPOINT_URL_S3: z.string().default("https://fly.storage.tigris.dev"),
@@ -141,6 +158,16 @@ export const emailConfig = {
 export const supportConfig = {
   identitySecret: config.SUPPORT_IDENTITY_SECRET ?? "",
   enabled: !!config.SUPPORT_IDENTITY_SECRET,
+};
+
+export const agentConfig = {
+  /** The feature flag: whether this deploy has agents at all. */
+  available: config.AGENTS_ENABLED,
+  apiKey: config.ANTHROPIC_API_KEY ?? "",
+  model: config.AGENT_MODEL,
+  /** Available and able to call the model. */
+  enabled: config.AGENTS_ENABLED && !!config.ANTHROPIC_API_KEY,
+  cacheDiagnostics: config.AGENT_CACHE_DIAGNOSTICS,
 };
 
 export const securityConfig = {

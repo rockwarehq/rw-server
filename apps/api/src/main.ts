@@ -23,7 +23,7 @@ createPrismaClient("api");
 import { initEventsBridge } from "@rw/runtime/events-bus";
 import { initMetricsBridge } from "@rw/services/rpc/metrics-bus";
 
-import { serverConfig } from "./config.js";
+import { agentConfig, serverConfig } from "./config.js";
 import { startStaleGatewayCheck, stopStaleGatewayCheck } from "@rw/services/queues/background-workers";
 import { initQueues, registerStateDetectionWorkers, stopQueues } from "@rw/services/queues/station-detection";
 import { initMetricBucketQueues, stopMetricBucketQueues } from "@rw/services/queues/metric-buckets";
@@ -44,7 +44,11 @@ import {
   startUiChangePublisher,
 } from "./nats/domain-event-publishers.js";
 import { getAutomationFramework } from "./automations/index.js";
+import { startAgentClock } from "./agent/clock.js";
+import { startAgentRunConsumer } from "./agent/queue.js";
+import { startAgentRuntime } from "./agent/startup.js";
 import { startAutomationClock } from "./automations/clock.js";
+import { startAgentTriggerConsumer } from "./nats/agent-trigger-consumer.js";
 import { startAutomationEventConsumer } from "./nats/automation-event-consumer.js";
 import { startAnnounceBus } from "./nats/announce-bus.js";
 import { startCommandBus } from "./nats/command-bus.js";
@@ -119,6 +123,10 @@ async function main() {
     startAutomationClock,
     startCommandBus,
     startAnnounceBus,
+    // Agents run only on deploys that opted in (AGENTS_ENABLED).
+    ...(agentConfig.available
+      ? [startAgentRuntime, startAgentRunConsumer, startAgentTriggerConsumer, startAgentClock]
+      : []),
   ]) {
     natsCleanups.push(await start());
   }

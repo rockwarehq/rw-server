@@ -5,6 +5,7 @@ export * as triggers from "./triggers.js";
 export * as nodeTypes from "./node-types.js";
 export * as introspect from "./introspect.js";
 export * as planner from "./plan.js";
+export * as changesets from "./changeset.js";
 export { setGraphDefinitionEventSink } from "./definition-events.js";
 export { extractExpressionDependencyIds, prefixedPropertyId } from "./validation.js";
 export type { ServiceResult, ListResult } from "./types.js";

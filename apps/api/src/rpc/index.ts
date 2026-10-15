@@ -37,11 +37,15 @@ import * as siteAndonRules from "./site-andon-rules.js";
 import * as workspace from "./workspace.js";
 import * as automations from "./automations.js";
 import * as entity from "./entity.js";
+import * as agent from "./agent.js";
 import * as graph from "./graph.js";
 import * as apiToken from "./api-token.js";
 import * as integration from "./integration.js";
 
-export const router = {
+// The app router outgrew what TypeScript will inline in one declaration
+// (TS7056), so the agent routes join through an explicit type and the
+// published client's declarations refer to them by name.
+export const coreRouter = {
   events: {
     ingest: events.ingest,
     stream: events.stream,
@@ -145,6 +149,14 @@ export const router = {
       conformance: graph.introspectConformance,
       diagnostics: graph.introspectDiagnostics,
       plan: graph.introspectPlan,
+    },
+    changeset: {
+      create: graph.changesetCreate,
+      get: graph.changesetGet,
+      list: graph.changesetList,
+      replan: graph.changesetReplan,
+      discard: graph.changesetDiscard,
+      apply: graph.changesetApply,
     },
   },
   metrics: {
@@ -639,6 +651,11 @@ export const router = {
     delete: automations.deleteAutomation,
     listRuns: automations.listRuns,
   },
+};
+
+export const router: typeof coreRouter & { agent: typeof agent.agentRouter } = {
+  ...coreRouter,
+  agent: agent.agentRouter,
 };
 
 export type AppRouter = typeof router;

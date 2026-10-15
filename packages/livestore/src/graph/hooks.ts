@@ -68,11 +68,13 @@ async function getGraphHookForSite(id: string, scope: GraphScope) {
   return { data: hook };
 }
 
-async function assertHookCondition(input: unknown, scope: GraphScope) {
+// knownPropertyIds: properties written in the same changeset transaction,
+// which don't exist in the database yet.
+async function assertHookCondition(input: unknown, scope: GraphScope, knownPropertyIds?: ReadonlySet<string>) {
   const condition = parseGraphHookCondition(input);
   if (!condition) return errorResult("INVALID_HOOK_CONDITION", "Graph hook condition is invalid");
 
-  const propertyIds = graphHookConditionPropertyIds(condition);
+  const propertyIds = [...new Set(graphHookConditionPropertyIds(condition))].filter((id) => !knownPropertyIds?.has(id));
   const properties = await prisma.graphProperty.findMany({
     where: {
       id: { in: propertyIds },
@@ -88,8 +90,12 @@ async function assertHookCondition(input: unknown, scope: GraphScope) {
   return { data: condition };
 }
 
-async function assertPropertyIdsInSite(propertyIds: readonly string[], scope: GraphScope) {
-  const ids = [...new Set(propertyIds)];
+async function assertPropertyIdsInSite(
+  propertyIds: readonly string[],
+  scope: GraphScope,
+  knownPropertyIds?: ReadonlySet<string>,
+) {
+  const ids = [...new Set(propertyIds)].filter((id) => !knownPropertyIds?.has(id));
   if (ids.length === 0) return { data: true as const };
   const properties = await prisma.graphProperty.findMany({
     where: {
@@ -132,7 +138,12 @@ function validatePayload(payload: unknown) {
   return { data: payload };
 }
 
-async function validateEventContext(input: unknown, eventSchema: LivestoreHookEventSchema, scope: GraphScope) {
+async function validateEventContext(
+  input: unknown,
+  eventSchema: LivestoreHookEventSchema,
+  scope: GraphScope,
+  knownPropertyIds?: ReadonlySet<string>,
+) {
   const context = parseGraphHookEventContext(input);
   if (!context) return errorResult("INVALID_HOOK_CONTEXT", "Graph hook eventContext is invalid");
 
@@ -175,7 +186,11 @@ async function validateEventContext(input: unknown, eventSchema: LivestoreHookEv
     }
   }
 
-  const propertyResult = await assertPropertyIdsInSite(graphHookEventContextPropertyIds(context), scope);
+  const propertyResult = await assertPropertyIdsInSite(
+    graphHookEventContextPropertyIds(context),
+    scope,
+    knownPropertyIds,
+  );
   if ("error" in propertyResult) return propertyResult;
 
   return { data: context };
@@ -185,7 +200,26 @@ function hookReferencedPropertyIds(condition: GraphHookCondition, context: Graph
   return [...graphHookConditionPropertyIds(condition), ...graphHookEventContextPropertyIds(context)];
 }
 
-export async function create(input: CreateGraphHookInput, scope: GraphScope): Promise<ServiceResult<unknown>> {
+export interface PreparedGraphHookCreate {
+  existingId: string | null;
+  data: {
+    siteId: string;
+    name: string;
+    enabled: boolean;
+    condition: Prisma.InputJsonValue;
+    eventNamespace: string;
+    eventName: string;
+    eventVersion: string;
+    eventPayload: Prisma.InputJsonValue;
+    eventContext: Prisma.InputJsonValue;
+  };
+}
+
+export async function prepareCreate(
+  input: CreateGraphHookInput,
+  scope: GraphScope,
+  options: { knownPropertyIds?: ReadonlySet<string> } = {},
+): Promise<ServiceResult<PreparedGraphHookCreate>> {
   const name = input.name.trim();
   if (!name) return errorResult("INVALID_NAME", "Graph hook name is required");
 
@@ -196,7 +230,7 @@ export async function create(input: CreateGraphHookInput, scope: GraphScope): Pr
     return errorResult("SITE_MISMATCH", "Graph hook siteId does not match the scoped site");
   }
 
-  const conditionResult = await assertHookCondition(input.condition, scope);
+  const conditionResult = await assertHookCondition(input.condition, scope, options.knownPropertyIds);
   if ("error" in conditionResult) return conditionResult;
 
   const eventResult = validateEvent(input.eventNamespace, input.eventName, input.eventVersion ?? "1");
@@ -205,41 +239,46 @@ export async function create(input: CreateGraphHookInput, scope: GraphScope): Pr
   const payloadResult = validatePayload(input.eventPayload);
   if ("error" in payloadResult) return payloadResult;
 
-  const contextResult = await validateEventContext(input.eventContext, eventResult.data.schema, scope);
+  const contextResult = await validateEventContext(
+    input.eventContext,
+    eventResult.data.schema,
+    scope,
+    options.knownPropertyIds,
+  );
   if ("error" in contextResult) return contextResult;
 
   const existing = await prisma.graphHook.findUnique({ where: { siteId_name: { siteId: scope.siteId, name } } });
   if (existing && !existing.isDeleted) return errorResult("GRAPH_HOOK_NAME_EXISTS", "Graph hook name already exists");
 
-  const hook = existing
-    ? await prisma.graphHook.update({
-        where: { id: existing.id },
-        data: {
-          name,
-          siteId: scope.siteId,
-          enabled: input.enabled ?? true,
-          condition: conditionResult.data as unknown as Prisma.InputJsonValue,
-          eventNamespace: eventResult.data.eventNamespace,
-          eventName: eventResult.data.eventName,
-          eventVersion: eventResult.data.eventVersion,
-          eventPayload: payloadResult.data as Prisma.InputJsonValue,
-          eventContext: contextResult.data as unknown as Prisma.InputJsonValue,
-          isDeleted: false,
-        },
-      })
-    : await prisma.graphHook.create({
-        data: {
-          siteId: scope.siteId,
-          name,
-          enabled: input.enabled ?? true,
-          condition: conditionResult.data as unknown as Prisma.InputJsonValue,
-          eventNamespace: eventResult.data.eventNamespace,
-          eventName: eventResult.data.eventName,
-          eventVersion: eventResult.data.eventVersion,
-          eventPayload: payloadResult.data as Prisma.InputJsonValue,
-          eventContext: contextResult.data as unknown as Prisma.InputJsonValue,
-        },
-      });
+  return {
+    data: {
+      existingId: existing?.id ?? null,
+      data: {
+        siteId: scope.siteId,
+        name,
+        enabled: input.enabled ?? true,
+        condition: conditionResult.data as unknown as Prisma.InputJsonValue,
+        eventNamespace: eventResult.data.eventNamespace,
+        eventName: eventResult.data.eventName,
+        eventVersion: eventResult.data.eventVersion,
+        eventPayload: payloadResult.data as Prisma.InputJsonValue,
+        eventContext: contextResult.data as unknown as Prisma.InputJsonValue,
+      },
+    },
+  };
+}
+
+export async function writeCreate(tx: Prisma.TransactionClient, prepared: PreparedGraphHookCreate) {
+  return prepared.existingId
+    ? tx.graphHook.update({ where: { id: prepared.existingId }, data: { ...prepared.data, isDeleted: false } })
+    : tx.graphHook.create({ data: prepared.data });
+}
+
+export async function create(input: CreateGraphHookInput, scope: GraphScope): Promise<ServiceResult<unknown>> {
+  const prepared = await prepareCreate(input, scope);
+  if ("error" in prepared) return prepared;
+
+  const hook = await writeCreate(prisma, prepared.data);
 
   publishGraphDefinitionEvent({
     entity: "hook",

@@ -2,12 +2,13 @@ import { ORPCError } from "@orpc/server";
 import { type CodeOverrides, unwrap as unwrapService } from "./errors.js";
 import { GRAPH_TYPE_INPUT_VALUE_TYPES, GRAPH_TYPE_VALUE_TYPES } from "@rw/livestore/catalog/graph-types";
 import { buildLivestoreCapabilityManifest } from "@rw/livestore/catalog/manifest";
+import { logEvent } from "@rw/services/audit/index";
 import { z } from "zod";
 import * as graph from "@rw/livestore/graph/index";
 import { readGraphValues } from "../nats/graph-values.js";
 
 import { workspaceSiteScope } from "./scope.js";
-import { userRequired, graphReadRequired } from "./middleware.js";
+import { agentsRequired, graphReadRequired, userRequired } from "./middleware.js";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const idInputSchema = z.object({ id: z.uuid() });
@@ -186,6 +187,8 @@ const GRAPH_OVERRIDES: CodeOverrides = {
   SITE_MISMATCH: "FORBIDDEN",
   ENTITY_SITE_MISMATCH: "FORBIDDEN",
   RESOLVER_TYPE_MISMATCH: "FORBIDDEN",
+  GRAPH_CHANGESET_STALE: "CONFLICT",
+  GRAPH_CHANGESET_CLOSED: "CONFLICT",
 };
 
 function unwrap<T>(result: { data: T } | { error: string; code: string } | null): T {
@@ -533,3 +536,88 @@ export const introspectDiagnostics = graphReadRequired
         : [],
     };
   });
+
+// ── Changesets ─────────────────────────────────────────────────────────────
+// A proposed batch of creations (same shape as plan) that a person reviews
+// and applies in one transaction. The Console agent proposes these; it never
+// writes the graph itself.
+
+const graphVersionSchema = z.object({
+  asOf: z.string().nullable(),
+  counts: z.object({
+    nodes: z.number(),
+    properties: z.number(),
+    edges: z.number(),
+    hooks: z.number(),
+    types: z.number(),
+  }),
+});
+
+const changesetCreateInputSchema = planInputSchema.extend({
+  title: z.string().min(1).max(200),
+  rationale: z.string().max(4000).nullable().optional(),
+});
+
+const changesetIdInputSchema = z.object({ siteId: z.uuid(), id: z.uuid() });
+
+const changesetListInputSchema = z.object({
+  siteId: z.uuid(),
+  status: z.enum(["DRAFT", "APPLIED", "DISCARDED"]).optional(),
+  sessionId: z.uuid().optional(),
+  limit: z.number().int().min(1).max(200).default(50),
+});
+
+const changesetApplyInputSchema = changesetIdInputSchema.extend({
+  // The plan version the reviewer saw; apply refuses (CONFLICT) if the graph
+  // has moved since.
+  expectedGraphVersion: graphVersionSchema.optional(),
+});
+
+export const changesetCreate = agentsRequired.input(changesetCreateInputSchema).handler(async ({ input, context }) => {
+  const { siteId, title, rationale, ...spec } = input;
+  const scope = await workspaceSiteScope(context, "ADMIN", { site: siteId });
+  return unwrap(
+    await graph.changesets.create(
+      { title, rationale, spec, author: "USER", createdById: context.current.user.id },
+      scope,
+    ),
+  );
+});
+
+export const changesetGet = agentsRequired.input(changesetIdInputSchema).handler(async ({ input, context }) => {
+  const scope = await workspaceSiteScope(context, "VIEW", { site: input.siteId });
+  return unwrap(await graph.changesets.get(input.id, scope));
+});
+
+export const changesetList = agentsRequired.input(changesetListInputSchema).handler(async ({ input, context }) => {
+  const { siteId, ...filter } = input;
+  const scope = await workspaceSiteScope(context, "VIEW", { site: siteId });
+  return unwrap(await graph.changesets.list(filter, scope));
+});
+
+export const changesetReplan = agentsRequired.input(changesetIdInputSchema).handler(async ({ input, context }) => {
+  const scope = await workspaceSiteScope(context, "ADMIN", { site: input.siteId });
+  return unwrap(await graph.changesets.replan(input.id, scope));
+});
+
+export const changesetDiscard = agentsRequired.input(changesetIdInputSchema).handler(async ({ input, context }) => {
+  const scope = await workspaceSiteScope(context, "ADMIN", { site: input.siteId });
+  return unwrap(await graph.changesets.discard(input.id, scope));
+});
+
+export const changesetApply = agentsRequired.input(changesetApplyInputSchema).handler(async ({ input, context }) => {
+  const scope = await workspaceSiteScope(context, "ADMIN", { site: input.siteId });
+  const applied = unwrap(
+    await graph.changesets.apply(input.id, scope, {
+      expectedGraphVersion: input.expectedGraphVersion,
+      appliedById: context.current.user.id,
+    }),
+  );
+  await logEvent({
+    action: "GRAPH_CHANGESET_APPLIED",
+    actorId: context.current.user.id,
+    workspaceId: scope.workspaceId,
+    metadata: { changesetId: input.id, siteId: scope.siteId },
+  });
+  return applied;
+});

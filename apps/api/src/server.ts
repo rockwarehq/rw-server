@@ -5,7 +5,7 @@ import helmet from "@fastify/helmet";
 import sensible from "@fastify/sensible";
 
 import closeWithGrace from "close-with-grace";
-import { corsConfig, env } from "./config.js";
+import { agentConfig, corsConfig, env } from "./config.js";
 import { rootLogger } from "./logger.js";
 import type { IServerOptions } from "./types.js";
 import type { SerializerSchemaOptions } from "./types/fastify.js";
@@ -20,6 +20,7 @@ import edge from "./edge.js";
 import { RPCHandler } from "@orpc/server/fastify";
 import { ORPCError, onError } from "@orpc/server";
 import { router } from "./rpc/index.js";
+import { registerMcpRoute } from "./agent/mcp.js";
 
 // Per-request unhandled rejections (most commonly AbortError from clients
 // disconnecting mid-stream on RPC subscriptions) shouldn't take the whole
@@ -80,6 +81,9 @@ export function createServer(options: IServerOptions) {
       }),
     ],
   });
+
+  // Console agent tools over MCP for Claude Code / Claude Desktop.
+  if (agentConfig.available) registerMcpRoute(server);
 
   server.all("/rpc/*", async (req, reply) => {
     try {

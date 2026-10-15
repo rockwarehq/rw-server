@@ -61,6 +61,19 @@ describe("config validation", () => {
     await expect(loadConfig()).rejects.toThrow(/PORT/);
   });
 
+  it("agents are off unless AGENTS_ENABLED=true, whatever keys are set", async () => {
+    for (const [key, value] of Object.entries(PROD_BASELINE)) vi.stubEnv(key, value);
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
+    vi.stubEnv("AGENTS_ENABLED", undefined);
+    expect((await loadConfig()).agentConfig).toMatchObject({ available: false, enabled: false });
+
+    vi.stubEnv("AGENTS_ENABLED", "true");
+    expect((await loadConfig()).agentConfig).toMatchObject({ available: true, enabled: true });
+
+    vi.stubEnv("ANTHROPIC_API_KEY", undefined);
+    expect((await loadConfig()).agentConfig).toMatchObject({ available: true, enabled: false });
+  });
+
   it("CORS_ALLOW_ANY=false uses an exact-match allowlist, additive to APP_BASE_URL", async () => {
     for (const [key, value] of Object.entries(PROD_BASELINE)) vi.stubEnv(key, value);
     vi.stubEnv("CORS_ALLOW_ANY", "false");

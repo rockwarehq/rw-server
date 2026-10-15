@@ -114,6 +114,7 @@ describe("automation bridge events", () => {
       "forceMode",
       "notify",
       "openCall",
+      "runAgent",
     ]);
   });
 });
