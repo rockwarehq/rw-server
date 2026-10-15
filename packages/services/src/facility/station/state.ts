@@ -9,7 +9,7 @@ import { publishUiChange } from "../../events/ui-changes.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import type { StationStatus } from "@rw/runtime/station-status-events";
 import { emitStationStatusChanged, findStatusSince } from "./status-events.js";
-import { STATION_LAST_CYCLE_SPEED_FIELDS } from "./speed.js";
+import { STATION_LAST_CYCLE_SPEED_FIELDS, STATION_STATUS_SPEED_FIELDS } from "./speed.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { findOpenModeLog } from "../production-mode/open-log.js";
 import { resolveShiftStamp, type ShiftStamp } from "../work-context.js";
@@ -767,7 +767,8 @@ export async function transitionToSlow(stationId: string, timestamp: Date) {
       (entry.status ?? entry.state) as "FAST" | "SLOW" | "UP" | "DOWN",
       entry.updatedAt,
     );
-    if (statusChanged) publishStationStatusEntityEvent(ctx, ["status", "statusStartAt"]);
+    if (statusChanged)
+      publishStationStatusEntityEvent(ctx, ["status", "statusStartAt", ...STATION_STATUS_SPEED_FIELDS]);
   }
   if (statusChanged) void emitStationStatusChanged(stationId, previous).catch(logStatusEventError(stationId));
   return entry;
@@ -885,7 +886,13 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
       result.entry.updatedAt,
     );
     publishStationStatusReasonMetricEvent(ctx, result.entry.statusReasonId, result.entry.updatedAt);
-    if (result.statusChanged) publishStationStatusEntityEvent(ctx, ["status", "statusReasonId", "statusStartAt"]);
+    if (result.statusChanged)
+      publishStationStatusEntityEvent(ctx, [
+        "status",
+        "statusReasonId",
+        "statusStartAt",
+        ...STATION_STATUS_SPEED_FIELDS,
+      ]);
   }
   if (result.statusChanged) {
     void emitStationStatusChanged(stationId, result.previous).catch(logStatusEventError(stationId));

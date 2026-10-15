@@ -4,6 +4,7 @@
 export * as crud from "./crud.js";
 export * as tokens from "./tokens.js";
 export * as commands from "./commands.js";
+export * as announcements from "./announce.js";
 export * as spec from "./spec.js";
 
 // Re-export commonly used functions at top level for convenience

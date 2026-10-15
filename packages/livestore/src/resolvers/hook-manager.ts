@@ -18,7 +18,7 @@ import {
   type GraphHookEventContext,
 } from "../catalog/hook-conditions.js";
 
-import { evaluateHookCondition } from "./hook-condition.js";
+import { evaluateHookCondition, throttleAllows } from "./hook-condition.js";
 import { isRecord, type LivestoreLogger, type ValueEnvelope } from "../types/index.js";
 
 const encoder = new TextEncoder();
@@ -60,7 +60,11 @@ export class HookManager {
   private readonly hooks = new Map<string, GraphHookRuntime>();
   private readonly byProperty = new Map<string, Set<string>>();
   private pending: PendingHookEvent[] = [];
+  // Newest firing per hook, for the condition's minIntervalMs. In memory only:
+  // a restart or hook edit starts the throttle fresh.
+  private readonly lastFiredTs = new Map<string, number>();
   private matchedTotal = 0;
+  private throttledTotal = 0;
   private publishedTotal = 0;
   private publishFailuresTotal = 0;
   private lastPublishedAt: number | null = null;
@@ -103,6 +107,7 @@ export class HookManager {
     const existing = this.hooks.get(hookId);
     if (!existing) return;
     this.hooks.delete(hookId);
+    this.lastFiredTs.delete(hookId);
     this.pending = this.pending.filter((event) => event.hook.id !== hookId);
     for (const propertyId of graphHookConditionPropertyIds(existing.condition)) {
       const hooks = this.byProperty.get(propertyId);
@@ -121,6 +126,13 @@ export class HookManager {
       const hook = this.hooks.get(hookId);
       if (!hook) continue;
       if (!evaluateHookCondition(hook.condition, args.previous, args.current)) continue;
+      const lastFired = this.lastFiredTs.get(hookId) ?? null;
+      const ts = args.current.timestamp;
+      if (!throttleAllows(hook.condition, lastFired, ts)) {
+        this.throttledTotal += 1;
+        continue;
+      }
+      this.lastFiredTs.set(hookId, lastFired === null ? ts : Math.max(lastFired, ts));
       this.pending.push({ hook, propertyId: args.propertyId, previous: args.previous, current: args.current });
       this.matchedTotal += 1;
       queued = true;
@@ -154,6 +166,7 @@ export class HookManager {
 
   hookStats(): {
     matchedTotal: number;
+    throttledTotal: number;
     publishedTotal: number;
     publishFailuresTotal: number;
     lastPublishedAt: number | null;
@@ -161,6 +174,7 @@ export class HookManager {
   } {
     return {
       matchedTotal: this.matchedTotal,
+      throttledTotal: this.throttledTotal,
       publishedTotal: this.publishedTotal,
       publishFailuresTotal: this.publishFailuresTotal,
       lastPublishedAt: this.lastPublishedAt,

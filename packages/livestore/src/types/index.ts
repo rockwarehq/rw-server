@@ -133,6 +133,7 @@ export interface TotalizerState {
   lastQuality: Quality; // quality of the last add's inputs
   lastTriggerValue: unknown; // last good trigger sample (null until seen)
   lastTriggerTs: number; // 0 = no trigger sample seen yet
+  lastTriggerFiredTs?: number; // newest trigger firing, for its minIntervalMs (absent = none / pre-throttle state)
   lastResetValue: unknown; // last good reset sample (null until seen)
   lastResetTs: number; // 0 = no reset sample seen yet
   lastEmitTs: number; // ts of the last add/reset emit (0 = none); boot re-emits stamp this

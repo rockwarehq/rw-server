@@ -1,0 +1,49 @@
+enum OverheadPageLogStatus {
+  /// Published to every gateway.
+  SENT
+  /// Published to some; others were offline or disabled (see error).
+  PARTIAL
+  /// Reached no gateway (all offline/disabled, a gateway not found, or NATS down).
+  FAILED
+}
+
+/// One overhead page as sent — by a person on the paging page, or by an
+/// automation's announce action: a snapshot of the message and settings, who
+/// or what sent it, and which gateways it reached.
+model OverheadPageLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  /// The saved page it was sent from; null for a one-off page.
+  pageId   String?       @db.Uuid
+  page     OverheadPage? @relation(fields: [pageId], references: [id], onDelete: SetNull)
+  pageName String? // snapshot
+
+  text        String
+  gatewayIds  String[]             @db.Uuid
+  priority    OverheadPagePriority
+  chimeBefore String?
+  chimeAfter  String?
+  repeat      Int
+  voice       String?
+  speed       Float?
+
+  status OverheadPageLogStatus
+  error  String?
+
+  /// MANUAL: a person on the paging page. SYSTEM: an automation's announce action.
+  source     ActionSource @default(MANUAL)
+  sourceType String? // "user" | "automation"
+  sourceRef  String? // the user's or automation's id
+
+  sentByUserId String? @db.Uuid
+  /// Snapshot: the person's name, or the automation's label.
+  sentByName   String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([siteId, createdAt(sort: Desc)])
+  @@index([pageId])
+}

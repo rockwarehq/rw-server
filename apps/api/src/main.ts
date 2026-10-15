@@ -50,6 +50,7 @@ import { startAgentRuntime } from "./agent/startup.js";
 import { startAutomationClock } from "./automations/clock.js";
 import { startAgentTriggerConsumer } from "./nats/agent-trigger-consumer.js";
 import { startAutomationEventConsumer } from "./nats/automation-event-consumer.js";
+import { startAnnounceBus } from "./nats/announce-bus.js";
 import { startCommandBus } from "./nats/command-bus.js";
 import { closeNatsConnection } from "./nats/util.js";
 import { rootLogger } from "./logger.js";
@@ -121,6 +122,7 @@ async function main() {
     async () => (await getAutomationFramework()).engine.startScheduled(),
     startAutomationClock,
     startCommandBus,
+    startAnnounceBus,
     // Agents run only on deploys that opted in (AGENTS_ENABLED).
     ...(agentConfig.available
       ? [startAgentRuntime, startAgentRunConsumer, startAgentTriggerConsumer, startAgentClock]

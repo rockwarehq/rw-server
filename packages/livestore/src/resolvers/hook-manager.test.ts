@@ -17,7 +17,9 @@ const logger: LivestoreLogger = {
   error: vi.fn(),
 };
 
-function makeHarness(overrides: { stationEnvelope?: ValueEnvelope | null } = {}) {
+const at = (value: unknown, timestamp: number): ValueEnvelope => ({ value, quality: "good", timestamp });
+
+function makeHarness(overrides: { stationEnvelope?: ValueEnvelope | null; minIntervalMs?: number } = {}) {
   const publish = vi.fn(async (_subject: string, _payload: Uint8Array, _opts?: unknown) => {});
   const prisma = {
     graphHook: {
@@ -30,6 +32,7 @@ function makeHarness(overrides: { stationEnvelope?: ValueEnvelope | null } = {})
           condition: {
             source: { type: "property", propertyId: "cycle-prop" },
             operator: "increases",
+            ...(overrides.minIntervalMs !== undefined ? { minIntervalMs: overrides.minIntervalMs } : {}),
           },
           eventNamespace: "imm",
           eventName: "cycle_completed",
@@ -106,5 +109,22 @@ describe("HookManager", () => {
     await manager.flushPending(getCurrent);
 
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("drops a second firing inside minIntervalMs and only restarts the clock on a firing", async () => {
+    const { manager, publish, getCurrent } = makeHarness({ minIntervalMs: 1000 });
+    await manager.start();
+
+    const fire = (prev: number, next: number, ts: number) =>
+      manager.onPropertyCommitted({ propertyId: "cycle-prop", previous: at(prev, ts - 1), current: at(next, ts) });
+
+    expect(fire(10, 11, 10_000)).toBe(true);
+    expect(fire(11, 12, 10_400)).toBe(false); // double-fire blip
+    expect(fire(12, 13, 10_900)).toBe(false); // still inside: measured from 10_000, not the dropped 10_400
+    expect(fire(13, 14, 11_000)).toBe(true);
+
+    await manager.flushPending(getCurrent);
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(manager.hookStats()).toMatchObject({ matchedTotal: 2, throttledTotal: 2, publishedTotal: 2 });
   });
 });

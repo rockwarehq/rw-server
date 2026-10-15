@@ -1,4 +1,5 @@
 import { type ActionHandler, type ActionRegistry, type ActionSchema, createActionRegistry } from "@rw/automations";
+import * as announce from "./announce.js";
 import * as clearMode from "./clear-mode.js";
 import * as closeCall from "./close-call.js";
 import * as deckMakeEditions from "./deck-make-editions.js";
@@ -11,6 +12,7 @@ import { agentConfig } from "../../config.js";
 
 const modules: readonly { handler: ActionHandler }[] = [
   notify,
+  announce,
   openCall,
   closeCall,
   forceMode,

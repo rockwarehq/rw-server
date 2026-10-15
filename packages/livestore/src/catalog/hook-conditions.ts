@@ -22,6 +22,8 @@ export interface GraphHookPropertyCondition {
   value?: unknown;
   threshold?: number;
   minDelta?: number;
+  /** Leading-edge throttle: a match within this many ms (source timestamps) of the last firing is dropped. */
+  minIntervalMs?: number;
 }
 
 export type GraphHookCondition = GraphHookPropertyCondition;
@@ -88,6 +90,12 @@ export function parseGraphHookCondition(value: unknown): GraphHookCondition | nu
   ) {
     return null;
   }
+  if (
+    value.minIntervalMs !== undefined &&
+    (typeof value.minIntervalMs !== "number" || !Number.isFinite(value.minIntervalMs) || value.minIntervalMs < 0)
+  ) {
+    return null;
+  }
 
   return {
     source: {
@@ -98,6 +106,7 @@ export function parseGraphHookCondition(value: unknown): GraphHookCondition | nu
     ...("value" in value ? { value: value.value } : {}),
     ...(typeof value.threshold === "number" ? { threshold: value.threshold } : {}),
     ...(typeof value.minDelta === "number" ? { minDelta: value.minDelta } : {}),
+    ...(typeof value.minIntervalMs === "number" ? { minIntervalMs: value.minIntervalMs } : {}),
   };
 }
 

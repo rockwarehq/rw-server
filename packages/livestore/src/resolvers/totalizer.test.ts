@@ -34,6 +34,19 @@ describe("totalizer folds", () => {
     expect(second.state).toMatchObject({ total: 200, count: 2, lastTriggerTs: 3_000 });
   });
 
+  it("drops a trigger firing inside minIntervalMs so a double-fire can't add twice", () => {
+    const throttled = trigger({ minIntervalMs: 1_000 });
+    let state = foldTotalizerSource(initTotalizerState(), sample(100, "good", 1_000));
+    state = foldTotalizerTrigger(state, sample(0, "good", 1_500), throttled).state; // baseline
+    state = foldTotalizerTrigger(state, sample(1, "good", 2_000), throttled).state;
+    const blip = foldTotalizerTrigger(state, sample(2, "good", 2_300), throttled);
+    expect(blip.added).toBe(false);
+    // The edge is still tracked; the clock still runs from the 2_000 firing.
+    expect(blip.state).toMatchObject({ total: 100, count: 1, lastTriggerValue: 2, lastTriggerFiredTs: 2_000 });
+    const next = foldTotalizerTrigger(blip.state, sample(3, "good", 3_000), throttled);
+    expect(next.state).toMatchObject({ total: 200, count: 2, lastTriggerFiredTs: 3_000 });
+  });
+
   it("skips (without adding) when the trigger fires before any usable source value", () => {
     const baseline = foldTotalizerTrigger(initTotalizerState(), sample(0, "good", 500), trigger());
     const result = foldTotalizerTrigger(baseline.state, sample(1, "good", 1_000), trigger());

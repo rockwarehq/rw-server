@@ -20,6 +20,7 @@ import {
   publishStationStatusReasonMetricEvent,
   type StationMetricContext,
 } from "../facility/station/state.js";
+import { STATION_STATUS_SPEED_FIELDS } from "../facility/station/speed.js";
 import { enqueueDetection, prepareDetection, type PreparedDetection } from "../facility/station/state-detection.js";
 import { resolveShiftStamp, type StampDims, toDateString } from "../facility/work-context.js";
 import { emitStationStatusChanged } from "../facility/station/status-events.js";
@@ -435,7 +436,12 @@ export async function complete(input: StartCycleInput) {
         console.error(`[cycle] publishStationStatusReasonMetric failed for station ${stationId}:`, err);
       }
       try {
-        publishStationStatusEntityEvent(stationCtx, ["status", "statusReasonId", "statusStartAt"]);
+        publishStationStatusEntityEvent(stationCtx, [
+          "status",
+          "statusReasonId",
+          "statusStartAt",
+          ...STATION_STATUS_SPEED_FIELDS,
+        ]);
       } catch (err) {
         console.error(`[cycle] publishStationStatusEntityEvent failed for station ${stationId}:`, err);
       }

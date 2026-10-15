@@ -137,6 +137,10 @@ const totalizerConditionSchema = (role: "trigger" | "reset") =>
     value: z.unknown().optional().meta({ description: "Comparison value for equals/notEquals." }),
     threshold: z.number().optional().meta({ description: "Threshold for gt/gte/lt/lte/crossesAbove/crossesBelow." }),
     minDelta: z.number().optional().meta({ description: "Minimum change for increases/decreases." }),
+    minIntervalMs: z
+      .number()
+      .optional()
+      .meta({ description: "Leading-edge throttle: drop a match within this many ms of the last firing." }),
   });
 
 export const totalizerTriggerSchema = totalizerConditionSchema("trigger").meta({

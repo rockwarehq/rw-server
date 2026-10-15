@@ -68,6 +68,7 @@ const pointGroupProperties = {
   name: { type: "string" },
   description: { type: "string", nullable: true },
   pollRateMs: { type: "number" },
+  publishIntervalMs: { type: "number", nullable: true },
   config: { type: "object", additionalProperties: true },
   datasourceId: { type: "string", format: "uuid" },
   createdAt: { type: "string", format: "date-time" },
@@ -164,6 +165,7 @@ const createGroupBodySchema = {
     name: { type: "string" },
     description: { type: "string" },
     pollRateMs: { type: "number" },
+    publishIntervalMs: { type: "number", nullable: true },
     config: { type: "object", additionalProperties: true },
   },
   required: ["name"],
@@ -303,6 +305,7 @@ function getStatusForCode(code: string): 400 | 404 | 500 {
     case "SITE_NOT_FOUND":
       return 404;
     case "VALIDATION_FAILED":
+    case "INVALID_PUBLISH_INTERVAL":
     case "GROUP_MISMATCH":
     case "INVALID_STATUS":
     case "CONNECTION_REQUIRED":

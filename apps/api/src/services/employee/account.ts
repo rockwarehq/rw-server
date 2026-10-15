@@ -99,8 +99,9 @@ export async function syncAccountTeamMember(tx: Tx, userId: string, options: Syn
       select: { id: true },
       take: 2,
     });
-    if (sameEmail.length === 1) {
-      employeeId = sameEmail[0]!.id;
+    const [match] = sameEmail;
+    if (sameEmail.length === 1 && match) {
+      employeeId = match.id;
       await tx.user.update({ where: { id: user.id }, data: { employeeId } });
     }
   }

@@ -2,10 +2,29 @@ import prisma from "@rw/db";
 import { validatePointGroupConfig } from "../../validation.js";
 import { bumpSpecVersion } from "@rw/services/device/gateway/index";
 
+const MIN_PUBLISH_INTERVAL_MS = 100;
+const MAX_PUBLISH_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+/** 0/null publish on change (stored as null); otherwise a whole number of ms in range. */
+function normalizePublishInterval(
+  value: number | null | undefined,
+): { value: number | null | undefined } | { error: string; code: string } {
+  if (value === undefined) return { value: undefined };
+  if (value === null || value === 0) return { value: null };
+  if (!Number.isInteger(value) || value < MIN_PUBLISH_INTERVAL_MS || value > MAX_PUBLISH_INTERVAL_MS) {
+    return {
+      error: `publishIntervalMs must be a whole number from ${MIN_PUBLISH_INTERVAL_MS} to ${MAX_PUBLISH_INTERVAL_MS}, or null to publish on change`,
+      code: "INVALID_PUBLISH_INTERVAL",
+    };
+  }
+  return { value };
+}
+
 export interface CreateGroupInput {
   name: string;
   description?: string;
   pollRateMs?: number;
+  publishIntervalMs?: number | null;
   config?: Record<string, unknown>;
 }
 
@@ -13,6 +32,7 @@ export interface UpdateGroupInput {
   name?: string;
   description?: string;
   pollRateMs?: number;
+  publishIntervalMs?: number | null;
   config?: Record<string, unknown>;
 }
 
@@ -21,6 +41,8 @@ export interface UpdateGroupInput {
  */
 export async function create(datasourceId: string, input: CreateGroupInput) {
   const { name, description, pollRateMs, config } = input;
+  const publishInterval = normalizePublishInterval(input.publishIntervalMs);
+  if ("error" in publishInterval) return { error: publishInterval.error, code: publishInterval.code };
 
   const datasource = await prisma.datasource.findUnique({ where: { id: datasourceId } });
   if (!datasource) {
@@ -44,6 +66,7 @@ export async function create(datasourceId: string, input: CreateGroupInput) {
       name,
       description,
       pollRateMs: pollRateMs || 1000,
+      publishIntervalMs: publishInterval.value ?? null,
       config: config || {},
       datasourceId,
     },
@@ -98,6 +121,8 @@ export async function getById(id: string) {
  */
 export async function update(id: string, input: UpdateGroupInput) {
   const { name, description, pollRateMs, config } = input;
+  const publishInterval = normalizePublishInterval(input.publishIntervalMs);
+  if ("error" in publishInterval) return { error: publishInterval.error, code: publishInterval.code };
 
   const existing = await prisma.pointGroup.findUnique({
     where: { id },
@@ -128,6 +153,7 @@ export async function update(id: string, input: UpdateGroupInput) {
   if (name !== undefined) updateData.name = name;
   if (description !== undefined) updateData.description = description;
   if (pollRateMs !== undefined) updateData.pollRateMs = pollRateMs;
+  if (publishInterval.value !== undefined) updateData.publishIntervalMs = publishInterval.value;
   if (config !== undefined) updateData.config = config;
 
   const group = await prisma.pointGroup.update({

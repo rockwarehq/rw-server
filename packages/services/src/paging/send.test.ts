@@ -1,0 +1,210 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// Manual overhead pages: the gateway message built from a page, the log status
+// from what the gateways heard, and saved-page sends. Prisma is mocked; delivery
+// goes through the real gateway announcements service with a capturing sink.
+const db = vi.hoisted(() => ({
+  gateway: { findMany: vi.fn() },
+  overheadPage: { findUnique: vi.fn() },
+  overheadPageLog: { create: vi.fn(async ({ data }: { data: unknown }) => data) },
+}));
+vi.mock("@rw/db", async (importOriginal) => ({ ...(await importOriginal<object>()), default: db }));
+
+const { setAnnouncementSink } = await import("../device/gateway/announce.js");
+const { sendAutomationPage, sendPage, sendSavedPage, toAnnouncement } = await import("./send.js");
+
+const SITE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const published: Array<{ gatewayId: string; message: Record<string, unknown> }> = [];
+
+beforeEach(() => {
+  published.length = 0;
+  db.gateway.findMany.mockReset();
+  db.overheadPage.findUnique.mockReset();
+  db.overheadPageLog.create.mockClear();
+  setAnnouncementSink((gatewayId, message) => void published.push({ gatewayId, message: { ...message } }));
+});
+
+describe("overhead page message", () => {
+  it("maps saved settings onto the gateway message", () => {
+    expect(
+      toAnnouncement("log-1", {
+        text: " Tornado warning. Go to the shelter. ",
+        gatewayIds: ["gw1"],
+        priority: "EMERGENCY",
+        chimeBefore: "attention",
+        chimeAfter: "off",
+        repeat: 10,
+        voice: "bm_george",
+        speed: 0.9,
+      }),
+    ).toEqual({
+      id: "log-1",
+      text: "Tornado warning. Go to the shelter.",
+      priority: "emergency",
+      chimeBefore: "attention",
+      chimeAfter: false,
+      repeat: 10,
+      voice: "bm_george",
+      speed: 0.9,
+    });
+  });
+
+  it("leaves unset settings to the gateway", () => {
+    expect(toAnnouncement("log-1", { text: "Hi", gatewayIds: ["gw1"], chimeBefore: null, voice: "" })).toEqual({
+      id: "log-1",
+      text: "Hi",
+    });
+  });
+});
+
+describe("sending an overhead page", () => {
+  it("logs SENT when every gateway heard it, with the log id as the message id", async () => {
+    db.gateway.findMany.mockResolvedValue([{ id: "gw1", name: "Line 1", status: "ONLINE" }]);
+    const { data } = await sendPage({
+      siteId: SITE,
+      text: "Tornado",
+      gatewayIds: ["gw1", "gw1"],
+      priority: "EMERGENCY",
+      repeat: 10,
+      sentByUserId: "user-1",
+      sentByName: "Pat Lee",
+    });
+    expect(data).toMatchObject({
+      status: "SENT",
+      error: null,
+      gatewayIds: ["gw1"],
+      priority: "EMERGENCY",
+      repeat: 10,
+      sentByName: "Pat Lee",
+    });
+    expect(published).toEqual([
+      { gatewayId: "gw1", message: { id: data.id, text: "Tornado", priority: "emergency", repeat: 10 } },
+    ]);
+  });
+
+  it("logs PARTIAL when some gateways were offline or disabled", async () => {
+    db.gateway.findMany.mockResolvedValue([
+      { id: "gw1", name: "Line 1", status: "ONLINE" },
+      { id: "gw2", name: "Line 2", status: "OFFLINE" },
+    ]);
+    const { data } = await sendPage({ siteId: SITE, text: "Hi", gatewayIds: ["gw1", "gw2"] });
+    expect(data).toMatchObject({ status: "PARTIAL", error: "Not announced on: Line 2 (offline)" });
+  });
+
+  it("logs FAILED when no gateway heard it, or delivery couldn't start", async () => {
+    db.gateway.findMany.mockResolvedValue([{ id: "gw1", name: "Line 1", status: "DISABLED" }]);
+    expect((await sendPage({ siteId: SITE, text: "Hi", gatewayIds: ["gw1"] })).data).toMatchObject({
+      status: "FAILED",
+      error: "Not announced on: Line 1 (disabled)",
+    });
+
+    setAnnouncementSink(null);
+    expect((await sendPage({ siteId: SITE, text: "Hi", gatewayIds: ["gw1"] })).data).toMatchObject({
+      status: "FAILED",
+      error: "Announcements need NATS, which is not connected",
+    });
+    expect(db.overheadPageLog.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends a saved page as saved, and refuses an archived one", async () => {
+    db.gateway.findMany.mockResolvedValue([{ id: "gw1", name: "Line 1", status: "ONLINE" }]);
+    db.overheadPage.findUnique.mockResolvedValue({
+      id: "page-1",
+      siteId: SITE,
+      name: "Tornado",
+      text: "Tornado warning",
+      gatewayIds: ["gw1"],
+      priority: "EMERGENCY",
+      chimeBefore: "attention",
+      chimeAfter: null,
+      repeat: 10,
+      voice: null,
+      speed: null,
+      archivedAt: null,
+    });
+    const result = await sendSavedPage({ id: "page-1", sentByName: "Pat Lee" });
+    expect(result).toMatchObject({ data: { pageId: "page-1", pageName: "Tornado", status: "SENT" } });
+    expect(published[0].message).toMatchObject({ chimeBefore: "attention", repeat: 10, priority: "emergency" });
+
+    db.overheadPage.findUnique.mockResolvedValue({ id: "page-1", archivedAt: new Date() });
+    expect(await sendSavedPage({ id: "page-1" })).toMatchObject({ code: "OVERHEAD_PAGE_NOT_FOUND" });
+  });
+
+  it("logs a manual page as sent by the person", async () => {
+    db.gateway.findMany.mockResolvedValue([{ id: "gw1", name: "Line 1", status: "ONLINE" }]);
+    const { data } = await sendPage({
+      siteId: SITE,
+      text: "Hi",
+      gatewayIds: ["gw1"],
+      sentByUserId: "user-1",
+      sentByName: "Pat Lee",
+    });
+    expect(data).toMatchObject({ source: "MANUAL", sourceType: "user", sourceRef: "user-1", sentByName: "Pat Lee" });
+  });
+
+  it("logs an automation's page as sent by the automation, keeping the message's own id", async () => {
+    db.gateway.findMany.mockResolvedValue([{ id: "gw1", name: "Line 1", status: "ONLINE" }]);
+    const { data } = await sendAutomationPage({
+      siteId: SITE,
+      gatewayIds: ["gw1"],
+      message: {
+        id: "evt-1:auto-1:0",
+        text: "Supervisor needed at STN-07.",
+        priority: "high",
+        chimeBefore: true,
+        chimeAfter: false,
+        repeat: 2,
+      },
+      automation: { id: "auto-1", label: "Overhead page: Supervisor Needed" },
+    });
+    expect(published[0]).toEqual({
+      gatewayId: "gw1",
+      message: {
+        id: "evt-1:auto-1:0",
+        text: "Supervisor needed at STN-07.",
+        priority: "high",
+        chimeBefore: true,
+        chimeAfter: false,
+        repeat: 2,
+      },
+    });
+    expect(data).toMatchObject({
+      status: "SENT",
+      text: "Supervisor needed at STN-07.",
+      priority: "HIGH",
+      chimeBefore: null,
+      chimeAfter: "off",
+      repeat: 2,
+      source: "SYSTEM",
+      sourceType: "automation",
+      sourceRef: "auto-1",
+      sentByName: "Overhead page: Supervisor Needed",
+    });
+    expect(data.sentByUserId ?? null).toBeNull();
+    expect(data.pageId ?? null).toBeNull();
+    expect(data.id).not.toBe("evt-1:auto-1:0");
+  });
+
+  it("with no speakers picked, plays on every speaker at the plant and logs which", async () => {
+    db.gateway.findMany
+      .mockResolvedValueOnce([{ id: "gw1" }, { id: "gw2" }]) // the plant's speakers
+      .mockResolvedValueOnce([
+        { id: "gw1", name: "Line 1", status: "ONLINE" },
+        { id: "gw2", name: "Line 2", status: "ONLINE" },
+      ]);
+    const { data } = await sendPage({ siteId: SITE, text: "Lunch", gatewayIds: [] });
+    expect(data).toMatchObject({ status: "SENT", gatewayIds: ["gw1", "gw2"] });
+    expect(published.map((p) => p.gatewayId)).toEqual(["gw1", "gw2"]);
+  });
+
+  it("logs FAILED when the plant has no speakers at all", async () => {
+    db.gateway.findMany.mockResolvedValue([]);
+    const { data } = await sendPage({ siteId: SITE, text: "Lunch" });
+    expect(data).toMatchObject({
+      status: "FAILED",
+      error: "This plant has no speakers (gateways) yet",
+      gatewayIds: [],
+    });
+    expect(published).toEqual([]);
+  });
+});

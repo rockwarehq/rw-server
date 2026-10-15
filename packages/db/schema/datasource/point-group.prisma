@@ -3,6 +3,9 @@ model PointGroup {
   name        String
   description String?
   pollRateMs  Int     @default(1000)
+  /// Null: publish each point when it changes. Set: publish every point's latest
+  /// value on a clock-aligned tick this many ms apart, then the group's tick point.
+  publishIntervalMs Int?
   config      Json    @default("{}")
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
