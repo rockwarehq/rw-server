@@ -1,0 +1,89 @@
+# Runs on every merge into main. The merged PR's title starts with the version
+# ("Release v1.2.3", optionally followed by a description; main-source-branch.yml
+# requires it), so this:
+#   1. tags the merge commit with the version and publishes a GitHub Release
+#      named after the full title, with notes generated from the PRs since the
+#      previous release
+#   2. publishes the Docker images (latest, commit sha, and the release tag)
+#   3. publishes the RPC and API clients, each only if its package.json
+#      version was bumped (otherwise skipped, not failed)
+#
+# Tags made here use GITHUB_TOKEN, which doesn't trigger other workflows, so
+# the publish workflows are called directly.
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Version from the merged PR title
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+            --jq '[.[] | select(.base.ref == "main" and .merged_at != null)][0].title // ""')
+          if [ -z "$title" ]; then
+            echo "::error::No merged PR found for ${GITHUB_SHA}. main only takes PRs titled \"Release vX.Y.Z\"; tag this commit by hand if it was pushed directly."
+            exit 1
+          fi
+          version=$(printf '%s' "$title" | sed -nE 's/^[[:space:]]*Release (v[0-9]+\.[0-9]+\.[0-9]+)([[:space:]:].*)?$/\1/p')
+          if [ -z "$version" ]; then
+            echo "::error::Merged PR title \"$title\" doesn't start with \"Release vX.Y.Z\"; tag this commit by hand."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # The full title (trimmed) names the GitHub Release.
+          echo "name=$(printf '%s' "$title" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          NAME: ${{ steps.version.outputs.name }}
+        run: |
+          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "$NAME" --generate-notes
+          echo "### Released $NAME" >> "$GITHUB_STEP_SUMMARY"
+
+  docker:
+    needs: tag
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker-publish.yml
+    with:
+      release_tag: ${{ needs.tag.outputs.version }}
+    secrets: inherit
+
+  rpc-client:
+    needs: tag
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/publish-rpc-client.yml
+    secrets: inherit
+
+  api-client:
+    needs: tag
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/publish-api-client.yml
+    secrets: inherit

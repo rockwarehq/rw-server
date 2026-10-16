@@ -1,11 +1,15 @@
 # main only takes released work: PRs from dev, or hotfix/* branches cut from
-# main. Required check on the main ruleset.
+# main, titled with the version to release ("Release v1.2.3"). release.yml
+# tags and publishes that version on merge. Both jobs are required checks on
+# the main ruleset.
 
 name: Main source branch
 
 on:
   pull_request:
     branches: [main]
+    # edited: re-check when the title changes.
+    types: [opened, edited, synchronize, reopened]
 
 permissions: {}
 
@@ -21,3 +25,32 @@ jobs:
             dev|hotfix/*) echo "PR from $HEAD_REF into main: allowed" ;;
             *) echo "::error::PRs into main must come from dev or a hotfix/* branch (this one is from $HEAD_REF). Target dev instead."; exit 1 ;;
           esac
+
+  release-title:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check PR title names a new version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          # "Release v1.2.3", optionally followed by a description
+          # ("Release v1.2.3 — migration squash"). Stray spaces are ignored.
+          version=$(printf '%s' "$TITLE" | sed -nE 's/^[[:space:]]*Release (v[0-9]+\.[0-9]+\.[0-9]+)([[:space:]:].*)?$/\1/p')
+          if [ -z "$version" ]; then
+            echo "::error::Start the PR title with \"Release vX.Y.Z\" (the version this merge releases; it becomes the tag). A description can follow: \"Release v1.2.3 — what's in it\"."
+            exit 1
+          fi
+          tags=$(gh api "repos/${GITHUB_REPOSITORY}/tags" --paginate --jq '.[].name' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
+          if printf '%s\n' "$tags" | grep -qx "$version"; then
+            echo "::error::$version is already tagged; pick the next version."
+            exit 1
+          fi
+          latest=$(printf '%s\n' "$tags" | sort -V | tail -1)
+          if [ -n "$latest" ] && [ "$(printf '%s\n%s\n' "$latest" "$version" | sort -V | tail -1)" != "$version" ]; then
+            echo "::error::$version is lower than the latest release $latest."
+            exit 1
+          fi
+          echo "Will release $version (latest is ${latest:-none})"

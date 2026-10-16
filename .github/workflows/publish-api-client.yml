@@ -1,10 +1,17 @@
 name: Publish API Client
 
+# release.yml calls this on every release merged into main; it publishes only
+# when package.json's version isn't in the registry yet (bump it to release).
 on:
   workflow_dispatch:
     inputs:
       dry_run:
         description: "Dry run (skip actual publish)"
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      dry_run:
         type: boolean
         default: false
 
@@ -56,7 +63,21 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
         working-directory: packages/api-client
 
+      - name: Skip if already published
+        id: published
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if npm view "@rockwarehq/api-client@${VERSION}" version >/dev/null 2>&1; then
+            echo "::notice::@rockwarehq/api-client@${VERSION} is already published; bump the version in packages/api-client/package.json to publish a new one."
+            echo "### Skipped: \`@rockwarehq/api-client@${VERSION}\` is already published" >> $GITHUB_STEP_SUMMARY
+            echo "skip=true" >> $GITHUB_OUTPUT
+          fi
+        working-directory: packages/api-client
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Publish to GitHub Packages
+        if: steps.published.outputs.skip != 'true'
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "Dry run enabled - running npm publish --dry-run"
@@ -69,6 +90,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Summary
+        if: steps.published.outputs.skip != 'true'
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "### Dry Run Complete" >> $GITHUB_STEP_SUMMARY
