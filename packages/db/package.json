@@ -11,7 +11,7 @@
   "scripts": {
     "build": "tsc -b",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate deploy",
+    "prisma:migrate": "node scripts/baseline-guard.mjs && prisma migrate deploy",
     "prisma:migrate:dev": "prisma migrate dev"
   },
   "dependencies": {

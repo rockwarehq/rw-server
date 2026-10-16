@@ -64,4 +64,5 @@ model ShiftAmendment {
   @@index([siteId, businessDate])
   @@index([workCenterId, businessDate])
   @@index([siteId, status])
+  @@index([undoOfId])
 }

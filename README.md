@@ -94,6 +94,27 @@ against `DATABASE_URL_MIGRATION` (a direct/non-pgbouncer endpoint set as a
 fly secret), and aborts the deploy if it fails. **No separate migration
 step in CI or locally** — just `flyctl deploy`.
 
+### v1 migration squash
+
+`20261016000000_v1_baseline` replaces the 151 migrations before it. Deployed
+databases need nothing: `pnpm db:migrate` records the baseline as applied
+when every old migration is there. If some are missing it stops before
+touching the database — deploy `2748b90` (the last release before the
+squash) to apply them, then deploy again. The old `_prisma_migrations` rows
+stay, so rolling back to `2748b90` is a no-op.
+
+**Local dev databases** from before the squash: after `pnpm db:migrate`,
+`prisma migrate dev` will offer to reset, because the old rows have no
+folder anymore. Clear them once (local only — deployed databases need them
+for rollback):
+
+```sql
+DELETE FROM _prisma_migrations WHERE migration_name <> '20261016000000_v1_baseline';
+```
+
+Branches with new migrations must rebase onto the squash and use a
+timestamp later than `20261016000000`.
+
 ### First deploy for a new tenant
 
 ```sh
