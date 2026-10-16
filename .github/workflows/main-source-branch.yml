@@ -36,9 +36,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TITLE: ${{ github.event.pull_request.title }}
         run: |
-          version=$(printf '%s' "$TITLE" | sed -nE 's/^Release (v[0-9]+\.[0-9]+\.[0-9]+)$/\1/p')
+          # "Release v1.2.3", optionally followed by a description
+          # ("Release v1.2.3 — migration squash"). Stray spaces are ignored.
+          version=$(printf '%s' "$TITLE" | sed -nE 's/^[[:space:]]*Release (v[0-9]+\.[0-9]+\.[0-9]+)([[:space:]:].*)?$/\1/p')
           if [ -z "$version" ]; then
-            echo "::error::Title the PR \"Release vX.Y.Z\" with the version this merge releases (it becomes the tag)."
+            echo "::error::Start the PR title with \"Release vX.Y.Z\" (the version this merge releases; it becomes the tag). A description can follow: \"Release v1.2.3 — what's in it\"."
             exit 1
           fi
           tags=$(gh api "repos/${GITHUB_REPOSITORY}/tags" --paginate --jq '.[].name' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
