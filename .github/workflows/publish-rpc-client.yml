@@ -1,10 +1,17 @@
 name: Publish RPC Client
 
+# release.yml calls this on every release merged into main; it publishes only
+# when package.json's version isn't in the registry yet (bump it to release).
 on:
   workflow_dispatch:
     inputs:
       dry_run:
         description: "Dry run (skip actual publish)"
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      dry_run:
         type: boolean
         default: false
 
@@ -15,8 +22,9 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    # Only main publishes packages (the production environment allows main only).
-    environment: production
+    # main goes through `production` (main only). Other branches may publish
+    # prereleases only; the version step below refuses release versions.
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'development' }}
 
     steps:
       - name: Checkout code
@@ -75,7 +83,21 @@ jobs:
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
         working-directory: packages/rpc-client
 
+      - name: Skip if already published
+        id: published
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if npm view "@rockwarehq/rpc-client@${VERSION}" version >/dev/null 2>&1; then
+            echo "::notice::@rockwarehq/rpc-client@${VERSION} is already published; bump the version in packages/rpc-client/package.json to publish a new one."
+            echo "### Skipped: \`@rockwarehq/rpc-client@${VERSION}\` is already published" >> $GITHUB_STEP_SUMMARY
+            echo "skip=true" >> $GITHUB_OUTPUT
+          fi
+        working-directory: packages/rpc-client
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Publish to GitHub Packages
+        if: steps.published.outputs.skip != 'true'
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "Dry run enabled - running npm publish --dry-run"
@@ -88,6 +110,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Summary
+        if: steps.published.outputs.skip != 'true'
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             echo "### Dry Run Complete" >> $GITHUB_STEP_SUMMARY
