@@ -1,0 +1,23 @@
+# main only takes released work: PRs from dev, or hotfix/* branches cut from
+# main. Required check on the main ruleset.
+
+name: Main source branch
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  source-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR source
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          case "$HEAD_REF" in
+            dev|hotfix/*) echo "PR from $HEAD_REF into main: allowed" ;;
+            *) echo "::error::PRs into main must come from dev or a hotfix/* branch (this one is from $HEAD_REF). Target dev instead."; exit 1 ;;
+          esac

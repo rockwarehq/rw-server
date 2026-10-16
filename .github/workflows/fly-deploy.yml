@@ -6,6 +6,9 @@
 # secret this workflow needs is FLY_API_TOKEN.
 #
 # Trigger: manual (workflow_dispatch). Pick the app and tenant in the UI.
+#
+# Customer tenants deploy through the `production` environment, which only
+# allows main. dev and sim go through `development` and can deploy any branch.
 
 name: Deploy to Fly.io
 
@@ -51,6 +54,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: ${{ (inputs.tenant == 'dev' || inputs.tenant == 'sim') && 'development' || 'production' }}
     timeout-minutes: 25
     steps:
       - name: Checkout
