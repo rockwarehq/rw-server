@@ -116,8 +116,10 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY_IMAGE }}
+          # `latest` is what local/on-prem installs pull, so only main gets it.
+          # A run from any other branch publishes the commit tag only.
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=raw,value=${{ env.VERSION }}
 
       - name: Log in to GitHub Container Registry
