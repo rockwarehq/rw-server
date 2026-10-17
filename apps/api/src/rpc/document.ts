@@ -16,6 +16,15 @@ const documentIdInputSchema = z.object({
   documentId: z.uuid(),
 });
 
+/**
+ * get/open/download: a display may name the station whose context it is
+ * reading from (an operator screen serving several stations). User callers'
+ * stationId is ignored.
+ */
+const readDocumentInputSchema = documentIdInputSchema.extend({
+  stationId: z.uuid().optional(),
+});
+
 const createFolderInputSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().max(2000).optional(),
@@ -124,10 +133,17 @@ function contextAccessTarget(targetType: DocumentTargetType, id: string) {
   }
 }
 
-const displayContextInputSchema = z
-  .object({
-    labelsAny: labelsSchema.optional(),
-    labelsAll: labelsSchema.optional(),
+const labelFilterInputSchema = z.object({
+  labelsAny: labelsSchema.optional(),
+  labelsAll: labelsSchema.optional(),
+});
+
+const displayContextInputSchema = labelFilterInputSchema.optional();
+
+const displayKnowledgeContextInputSchema = labelFilterInputSchema
+  .extend({
+    /** A station in the display's site (and workcenter, when bound); defaults to the display's own. */
+    stationId: z.uuid().optional(),
   })
   .optional();
 
@@ -146,9 +162,15 @@ function getDisplayDocumentContext(display: DisplayCurrent) {
   };
 }
 
-async function assertDisplayCanAccessDocument(display: DisplayCurrent, documentId: string) {
-  const result = await documents.listForDisplayContext(getDisplayDocumentContext(display));
-  if (!result.data.some((document) => document.id === documentId)) {
+/**
+ * A display reads a document only when it is in the knowledge context it can
+ * see: the chosen station's (validated against the display's site and
+ * workcenter), else its own station's, workcenter's or site's.
+ */
+async function assertDisplayCanAccessDocument(display: DisplayCurrent, documentId: string, stationId?: string) {
+  const result = await documents.resolveDisplayContext(getDisplayDocumentContext(display), stationId);
+  if ("error" in result) throw new ORPCError("NOT_FOUND", { message: "Document not found" });
+  if (!result.data.some((item) => item.document.id === documentId)) {
     throw new ORPCError("NOT_FOUND", { message: "Document not found" });
   }
 }
@@ -250,9 +272,9 @@ export const list = userRequired.input(listInputSchema).handler(async ({ input, 
   return documents.list(input);
 });
 
-export const get = userOrDisplayRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
+export const get = userOrDisplayRequired.input(readDocumentInputSchema).handler(async ({ input, context }) => {
   if (context.current.kind === "display") {
-    await assertDisplayCanAccessDocument(context.current, input.documentId);
+    await assertDisplayCanAccessDocument(context.current, input.documentId, input.stationId);
     const result = await documents.getById(input.documentId);
     if (!result) throw new ORPCError("NOT_FOUND", { message: "Document not found" });
     if (result.error !== undefined) throwServiceError(result);
@@ -267,9 +289,9 @@ export const get = userOrDisplayRequired.input(documentIdInputSchema).handler(as
   return result.data;
 });
 
-export const download = userOrDisplayRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
+export const download = userOrDisplayRequired.input(readDocumentInputSchema).handler(async ({ input, context }) => {
   if (context.current.kind === "display") {
-    await assertDisplayCanAccessDocument(context.current, input.documentId);
+    await assertDisplayCanAccessDocument(context.current, input.documentId, input.stationId);
   } else {
     await context.access.require("VIEW", { document: input.documentId });
   }
@@ -279,9 +301,9 @@ export const download = userOrDisplayRequired.input(documentIdInputSchema).handl
   return result.data;
 });
 
-export const open = userOrDisplayRequired.input(documentIdInputSchema).handler(async ({ input, context }) => {
+export const open = userOrDisplayRequired.input(readDocumentInputSchema).handler(async ({ input, context }) => {
   if (context.current.kind === "display") {
-    await assertDisplayCanAccessDocument(context.current, input.documentId);
+    await assertDisplayCanAccessDocument(context.current, input.documentId, input.stationId);
   } else {
     await context.access.require("VIEW", { document: input.documentId });
   }
@@ -348,4 +370,23 @@ export const listForDisplayContext = displayRequired
   .input(displayContextInputSchema)
   .handler(async ({ input, context }) => {
     return documents.listForDisplayContext(getDisplayDocumentContext(context.current), getLabelFilter(input));
+  });
+
+/**
+ * A terminal's knowledge context, in the same shape as `context`: each file
+ * with the records it came through (`via`), its folder and current version.
+ * Rooted at `stationId` (which must be live in the display's site and, when
+ * the display is bound to one, its workcenter — else NOT_FOUND), else the
+ * display's own station, workcenter or site.
+ */
+export const displayContext = displayRequired
+  .input(displayKnowledgeContextInputSchema)
+  .handler(async ({ input, context }) => {
+    const result = await documents.resolveDisplayContext(
+      getDisplayDocumentContext(context.current),
+      input?.stationId,
+      getLabelFilter(input),
+    );
+    if ("error" in result) throwServiceError(result);
+    return { data: result.data, targets: result.targets };
   });

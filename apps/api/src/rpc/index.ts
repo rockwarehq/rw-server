@@ -385,6 +385,7 @@ export const coreRouter = {
     listForTarget: document.listForTarget,
     context: document.context,
     listForDisplayContext: document.listForDisplayContext,
+    displayContext: document.displayContext,
   },
   statusCategory: {
     create: statusCategory.create,
