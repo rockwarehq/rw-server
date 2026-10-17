@@ -461,6 +461,54 @@ describe("document service", () => {
       });
       expect(display.data.map((document) => document.id)).toEqual(running.data.map((item) => item.document.id));
 
+      // A workcenter terminal choosing a station gets the full shape: via,
+      // folder, current version and the targets it walked.
+      const workcenterDisplay = { siteId, workcenterId: workcenter.id, stationId: null };
+      const chosen = await documents.resolveDisplayContext(workcenterDisplay, station.id);
+      if ("error" in chosen) throw new Error(chosen.error);
+      const shape = (items: typeof running.data) =>
+        items.map((item) => ({ id: item.document.id, via: item.via, currentFileId: item.currentFileId }));
+      expect(chosen.targets).toEqual(running.targets);
+      expect(shape(chosen.data)).toEqual(shape(running.data));
+      // No choice: the display's own scope (here its workcenter).
+      const unchosen = await documents.resolveDisplayContext(workcenterDisplay);
+      if ("error" in unchosen) throw new Error(unchosen.error);
+      expect(unchosen.targets.map((target) => target.targetType)).toEqual(["WORKCENTER", "SITE"]);
+      // What open/get/download check for a display reading from that station.
+      expect(chosen.data.some((item) => item.document.id === moldManual)).toBe(true);
+      expect(unchosen.data.some((item) => item.document.id === moldManual)).toBe(false);
+
+      // A station outside the display's site or workcenter is refused.
+      const elsewhereSite = await prisma.site.create({ data: { name: `Elsewhere ${suffix}`, workspaceId } });
+      try {
+        const foreign = await prisma.station.create({ data: { name: `Foreign ${suffix}`, siteId: elsewhereSite.id } });
+        expect(await documents.resolveDisplayContext(workcenterDisplay, foreign.id)).toMatchObject({
+          code: "STATION_NOT_FOUND",
+        });
+        expect(await documents.resolveDisplayContext({ siteId: elsewhereSite.id }, station.id)).toMatchObject({
+          code: "STATION_NOT_FOUND",
+        });
+      } finally {
+        await prisma.station.deleteMany({ where: { siteId: elsewhereSite.id } });
+        await prisma.site.delete({ where: { id: elsewhereSite.id } });
+      }
+      const otherWorkcenter = await prisma.workcenter.create({ data: { name: `WC2 ${suffix}`, siteId } });
+      const outside = await prisma.station.create({ data: { name: `Outside ${suffix}`, siteId } });
+      expect(
+        await documents.resolveDisplayContext({ siteId, workcenterId: otherWorkcenter.id }, station.id),
+      ).toMatchObject({ code: "STATION_NOT_FOUND" });
+      expect(await documents.resolveDisplayContext(workcenterDisplay, outside.id)).toMatchObject({
+        code: "STATION_NOT_FOUND",
+      });
+      // A site-level display may choose any live station in its site.
+      const siteLevel = await documents.resolveDisplayContext({ siteId }, outside.id);
+      if ("error" in siteLevel) throw new Error(siteLevel.error);
+      expect(siteLevel.targets.map((target) => target.targetType)).toEqual(["STATION", "SITE"]);
+      await prisma.station.update({ where: { id: outside.id }, data: { deletedAt: new Date() } });
+      expect(await documents.resolveDisplayContext({ siteId }, outside.id)).toMatchObject({
+        code: "STATION_NOT_FOUND",
+      });
+
       // Link rows on a document name their targets.
       const detail = await documents.getById(setupSheet);
       if (!detail || "error" in detail) throw new Error("missing document");

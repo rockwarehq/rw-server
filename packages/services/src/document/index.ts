@@ -770,26 +770,71 @@ export async function listForTarget(targetType: DocumentTargetType, targetId: st
   return { data: links.map((link) => toDocument(link.document)) };
 }
 
+type ContextRoot = { targetType: DocumentTargetType; targetId: string };
+
 /**
- * A terminal's documents: the knowledge context of its station (current job,
- * its parts, tools and materials, then workcenter and site), or of its
- * workcenter or site when it shows no station. See context.ts.
+ * Where a terminal's knowledge context starts. With `stationId` the terminal
+ * asks for a station it chose (an operator screen serving several presses):
+ * it must be live, in the display's site and, when the display is bound to a
+ * workcenter, in that workcenter — anything else is STATION_NOT_FOUND. With no
+ * choice it is the display's own station when that is still live in its site,
+ * else its workcenter, else its site.
  */
-export async function listForDisplayContext(context: DisplayDocumentContext, filter: LabelFilter = {}) {
+export async function displayContextRoot(
+  context: DisplayDocumentContext,
+  stationId?: string | null,
+): Promise<ContextRoot | { error: string; code: string }> {
+  if (stationId) {
+    const station = await prisma.station.findUnique({
+      where: { id: stationId },
+      select: { id: true, siteId: true, workcenterId: true, deletedAt: true },
+    });
+    if (
+      !station ||
+      station.deletedAt ||
+      station.siteId !== context.siteId ||
+      (context.workcenterId && station.workcenterId !== context.workcenterId)
+    ) {
+      return { error: "Station not found", code: "STATION_NOT_FOUND" };
+    }
+    return { targetType: "STATION", targetId: station.id };
+  }
+
   const station = context.stationId
     ? await prisma.station.findUnique({
         where: { id: context.stationId },
         select: { id: true, siteId: true, deletedAt: true },
       })
     : null;
-  const root: { targetType: DocumentTargetType; targetId: string } =
-    station && !station.deletedAt && station.siteId === context.siteId
-      ? { targetType: "STATION", targetId: station.id }
-      : context.workcenterId
-        ? { targetType: "WORKCENTER", targetId: context.workcenterId }
-        : { targetType: "SITE", targetId: context.siteId };
+  return station && !station.deletedAt && station.siteId === context.siteId
+    ? { targetType: "STATION", targetId: station.id }
+    : context.workcenterId
+      ? { targetType: "WORKCENTER", targetId: context.workcenterId }
+      : { targetType: "SITE", targetId: context.siteId };
+}
 
-  const result = await resolveContext(root, filter);
+/**
+ * A terminal's knowledge context, in the same shape as resolveContext (each
+ * file with its `via`, folder and current version), rooted per
+ * displayContextRoot.
+ */
+export async function resolveDisplayContext(
+  context: DisplayDocumentContext,
+  stationId?: string | null,
+  filter: LabelFilter = {},
+) {
+  const root = await displayContextRoot(context, stationId);
+  if ("error" in root) return root;
+  return resolveContext(root, filter);
+}
+
+/**
+ * A terminal's documents: the knowledge context of its station (current job,
+ * its parts, tools and materials, then workcenter and site), or of its
+ * workcenter or site when it shows no station. See context.ts.
+ */
+export async function listForDisplayContext(context: DisplayDocumentContext, filter: LabelFilter = {}) {
+  const result = await resolveDisplayContext(context, null, filter);
   if ("error" in result) return { data: [] };
   return { data: result.data.map((item) => item.document) };
 }

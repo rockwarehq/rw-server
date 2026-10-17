@@ -44,6 +44,9 @@ export const EXCLUDED_PROCEDURES: ReadonlySet<string> = new Set([
   // display-context-scoped listing: the display principal's own
   // site/workcenter/station bound the query (getDisplayDocumentContext).
   "document.listForDisplayContext",
+  // Same bound, same shape as document.context: a chosen stationId must be in
+  // the display's own site (and workcenter, when bound) — resolveDisplayContext.
+  "document.displayContext",
   "display.register",
   "display.get",
   "display.heartbeat",
