@@ -40,7 +40,10 @@ const cookiesFrom = (setCookie: string | string[] | undefined) =>
 
 describe("sign-in", () => {
   beforeEach(() => {
-    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => fakeApi(url, init)));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => fakeApi(url, init)),
+    );
   });
   afterEach(() => vi.unstubAllGlobals());
 
