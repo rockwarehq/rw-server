@@ -1,8 +1,7 @@
 app = 'sim-api'
 
-# All secrets below are set by rw-provisioner (`secrets apply sim`), except
-# AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, which belong to the pre-existing
-# 'rw-sim' Tigris bucket and were set by hand.
+# All secrets below are set by rw-provisioner (`secrets apply sim`), including
+# AWS_* + BUCKET_NAME from its Tigris bucket ('sim-storage').
 # No MQTT_* on this tenant: ingest comes in via the NATS edge gateway
 # (wss://sim-nats.rockware.io:443), not a per-tenant MQTT broker.
 [_meta]
