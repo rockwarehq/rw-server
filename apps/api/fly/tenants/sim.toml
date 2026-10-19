@@ -1,12 +1,10 @@
 app = 'sim-api'
 
-# Fly secrets (set via flyctl secrets set -a sim-api):
-# - DATABASE_URL (pooled endpoint — port 6432 if PSDB / pgbouncer)
-# - DATABASE_URL_MIGRATION (direct endpoint — port 5432) — used by [deploy] release_command
-# - REDIS_URL, JWT_SECRET, RESEND_API_KEY, PROCESSOR_SHARED_SECRET
-# - HUB_URL, HUB_API_KEY (optional — unset means SMS records SKIPPED; rw-hub holds the Twilio creds)
-# - MQTT_GATEWAY_REALY_URL, MQTT_GATEWAY_REALY_USER, MQTT_GATEWAY_REALY_PASSWORD
-# - AWS_* + BUCKET_NAME (if S3 uploads enabled)
+# All secrets below are set by rw-provisioner (`secrets apply sim`), except
+# AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, which belong to the pre-existing
+# 'rw-sim' Tigris bucket and were set by hand.
+# No MQTT_* on this tenant: ingest comes in via the NATS edge gateway
+# (wss://sim-nats.rockware.io:443), not a per-tenant MQTT broker.
 [_meta]
 required_secrets = [
   'DATABASE_URL',
@@ -15,19 +13,25 @@ required_secrets = [
   'JWT_SECRET',
   'RESEND_API_KEY',
   'PROCESSOR_SHARED_SECRET',
-  'MQTT_GATEWAY_REALY_URL',
-  'MQTT_GATEWAY_REALY_USER',
-  'MQTT_GATEWAY_REALY_PASSWORD',
   'INTEGRATION_ENCRYPTION_KEY',
+  'CORS_ALLOWED_ORIGINS',
+  'NATS_URL',
+  'NATS_GATEWAY_RELAY_SERVERS',
+  'NATS_GATEWAY_RELAY_USER',
+  'NATS_GATEWAY_RELAY_PASS',
+  'AWS_ACCESS_KEY_ID',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_REGION',
+  'AWS_ENDPOINT_URL_S3',
+  'BUCKET_NAME',
 ]
 domain = 'sim-api.rockware.io'
 
 [env]
 LOG_LEVEL = 'debug'
 APP_BASE_URL = 'https://sim.rockware.io'
-BUCKET_NAME = 'rw-sim'
 # DEV_CYCLE_SIMULATOR is local-dev only. On fly, cycles ALWAYS come from
-# workers/processor (MQTT ingest). Do not set DEV_CYCLE_SIMULATOR here.
+# the gateway/NATS pipeline. Do not set DEV_CYCLE_SIMULATOR here.
 
 [[http_service.checks]]
 interval = '10s'
