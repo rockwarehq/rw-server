@@ -18,6 +18,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("operator.identify", () => {
   let stationId: string;
   let operatorId: string;
   let supervisorId: string;
+  let siteId: string;
 
   const activeSessions = () =>
     prisma.stationLogonSession.findMany({ where: { displayId, logoffTime: null }, select: { employeeId: true } });
@@ -33,6 +34,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("operator.identify", () => {
     const site = await prisma.site.create({
       data: { name: `Site ${suffix}`, workspaceId: workspace.id, attrs: { operatorLogon: { multiLogon: false } } },
     });
+    siteId = site.id;
     const workcenter = await prisma.workcenter.create({ data: { name: `WC ${suffix}`, siteId: site.id } });
     stationId = (
       await prisma.station.create({ data: { name: `STN ${suffix}`, siteId: site.id, workcenterId: workcenter.id } })
@@ -78,6 +80,20 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("operator.identify", () => {
 
   const identify = (method: string, credentials: Record<string, string>) =>
     rpcCall(server, "operator/identify", { displayId, stationId, method, credentials }, token);
+
+  it("tells the terminal the plant's PIN length: 4 unless the site says, and only 4 to 8", async () => {
+    const pinLength = async () =>
+      ((await rpcCall(server, "operator/config", { displayId }, token)).json as { pinLength: number }).pinLength;
+    expect(await pinLength()).toBe(4);
+
+    const setLength = (length: unknown) =>
+      prisma.site.update({ where: { id: siteId }, data: { attrs: { operatorLogon: { multiLogon: false, pinLength: length } } } });
+    await setLength(6);
+    expect(await pinLength()).toBe(6);
+    await setLength(12);
+    expect(await pinLength()).toBe(4);
+    await setLength(4);
+  });
 
   it("names the employee and leaves the operator logged on", async () => {
     const res = await identify("PIN", { employeeId: supervisorId, pin: "2222" });
