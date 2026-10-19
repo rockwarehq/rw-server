@@ -1,0 +1,39 @@
+primary_region = 'iad'
+
+[build]
+
+# No release_command: the simulator only reads the DB, it never migrates it.
+
+[env]
+NODE_ENV = 'production'
+HOST = '::'
+PORT = '30200'
+# Station programs, saved by the UI. Lives on the volume below.
+SIM_CONFIG_PATH = '/data/sim.json'
+pnpm_config_verify_deps_before_run = 'false'
+
+# One machine, always on: stopping it stops every simulated station, and the
+# config volume belongs to a single machine. fly-deploy passes --ha=false.
+[http_service]
+internal_port = 30200
+force_https = true
+auto_stop_machines = 'off'
+auto_start_machines = true
+min_machines_running = 1
+
+[[http_service.checks]]
+interval = '15s'
+timeout = '2s'
+grace_period = '15s'
+method = 'GET'
+path = '/healthz'
+
+[mounts]
+source = 'sim_data'
+destination = '/data'
+initial_size = '1gb'
+
+[[vm]]
+memory = '256mb'
+cpu_kind = 'shared'
+cpus = 1

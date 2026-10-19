@@ -1,0 +1,60 @@
+# Deploy the station simulator (apps/sim) to fly — separate from the main
+# api / workers / livestore deploy so simulator changes never ride along with
+# (or hold up) a platform rollout.
+#
+# The simulator only reads the DB, so there is no release_command / migration.
+# fly-deploy validates the app's required secrets (DATABASE_URL, NATS_URL)
+# before deploying; the only secret this workflow needs is FLY_API_TOKEN.
+#
+# Trigger: manual (workflow_dispatch), any branch. Only tenants with an
+# apps/sim/fly/tenants/<tenant>.toml can be deployed.
+
+name: Deploy simulator to Fly.io
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: 'Tenant'
+        required: true
+        type: choice
+        options:
+          - sim
+        default: sim
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.tenant }}-simulator
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Simulator tenants are non-customer, so they deploy through `development`.
+    environment: development
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Fly CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy simulator
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: pnpm fly:deploy --app sim ${{ inputs.tenant }}
