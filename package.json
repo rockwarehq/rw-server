@@ -7,6 +7,7 @@
     "dev": "pnpm --parallel --filter @rw/api --filter @rw/livestore-app dev",
     "dev:api": "pnpm --filter @rw/api dev",
     "dev:livestore": "pnpm --filter @rw/livestore-app dev",
+    "dev:sim": "pnpm --filter @rw/sim-app dev",
     "build": "tsc -b && tsc -p apps/api",
     "clean": "tsc -b --clean",
     "lint": "biome check",

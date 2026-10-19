@@ -1,0 +1,28 @@
+{
+  "name": "@rw/sim-app",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node dist/main.js",
+    "dev": "tsx watch src/main.ts",
+    "test": "vitest run",
+    "dev:fly-sim": "DOTENV_CONFIG_PATH=.env.fly-sim tsx watch src/main.ts"
+  },
+  "dependencies": {
+    "@nats-io/transport-node": "^3.4.0",
+    "@rw/db": "workspace:*",
+    "@rw/runtime": "workspace:*",
+    "@rw/services": "workspace:*",
+    "dotenv": "^17.2.3",
+    "fastify": "^5.6.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.8",
+    "tsx": "^4.19.4",
+    "typescript": "~6.0.2",
+    "vitest": "^4.0.14"
+  }
+}

@@ -3,8 +3,8 @@
  * monorepo.
  *
  * Usage:
- *   pnpm fly:generate --app api|workers|livestore <tenant>     # write fly.generated.toml
- *   pnpm fly:deploy   --app api|workers|livestore <tenant>     # generate + validate + deploy (local build)
+ *   pnpm fly:generate --app api|workers|livestore|sim <tenant> # write fly.generated.toml
+ *   pnpm fly:deploy   --app api|workers|livestore|sim <tenant> # generate + validate + deploy (local build)
  *   pnpm fly:deploy   --app ... <tenant> --remote             # build on Fly's remote builder (use on arm64 hosts)
  *   pnpm fly:deploy   --app workers <tenant> --groups gateway-health  # roll only these worker process groups
  *
@@ -12,6 +12,7 @@
  *   apps/api/fly/base.toml      + apps/api/fly/tenants/<tenant>.toml
  *   apps/workers/fly/base.toml  + apps/workers/fly/tenants/<tenant>.toml
  *   apps/livestore/fly/base.toml + apps/livestore/fly/tenants/<tenant>.toml
+ *   apps/sim/fly/base.toml      + apps/sim/fly/tenants/<tenant>.toml   (station simulator)
  *
  * Examples:
  *   pnpm fly:generate --app api sim
@@ -32,7 +33,7 @@ interface TenantMeta {
 
 type TomlValue = string | number | boolean | Date | TomlValue[] | { [key: string]: TomlValue };
 type TomlObject = { [key: string]: TomlValue };
-type DeployApp = "api" | "workers" | "livestore";
+type DeployApp = "api" | "workers" | "livestore" | "sim";
 
 function deepMerge(base: TomlObject, override: TomlObject): TomlObject {
   const result = { ...base };
@@ -185,7 +186,9 @@ function deploy(outPath: string, dockerfile: string, target: DeployApp, remote: 
   // Workers are singletons (imm-events records cycles, rollups runs ticks) — never
   // an HA pair, or duplicate consumers double-record. --ha=false makes deploy create
   // one machine per process group instead of the default two. api/livestore keep HA.
-  const ha = target === "workers" ? "--ha=false" : "";
+  // The simulator is a singleton too: two would double every simulated cycle,
+  // and its config lives on a single-machine volume.
+  const ha = target === "workers" || target === "sim" ? "--ha=false" : "";
   // Scope the rollout to specific process groups (workers only). The image is
   // still built once; only the named groups' machines are updated/restarted, so
   // e.g. `--groups gateway-health` leaves the stateful rollups/imm-events
@@ -233,18 +236,20 @@ function main(): void {
   const remote = args.includes("--remote");
 
   const appArg = getFlagValue(args, "--app");
-  if (appArg !== "api" && appArg !== "workers" && appArg !== "livestore") {
-    console.error(`Error: --app must be 'api', 'workers', or 'livestore', got: ${appArg ?? "(missing)"}`);
+  if (appArg !== "api" && appArg !== "workers" && appArg !== "livestore" && appArg !== "sim") {
+    console.error(`Error: --app must be 'api', 'workers', 'livestore', or 'sim', got: ${appArg ?? "(missing)"}`);
     process.exit(1);
   }
   const app = appArg;
 
-  const flagValues = new Set<string>();
+  // Skip flag values by position, not by value: `--app sim sim` has a tenant
+  // named like the app.
+  const flagValueIdx = new Set<number>();
   for (const flag of ["--app", "--groups"]) {
-    const v = getFlagValue(args, flag);
-    if (v !== undefined) flagValues.add(v);
+    const i = args.indexOf(flag);
+    if (i !== -1) flagValueIdx.add(i + 1);
   }
-  const tenant = args.find((a) => !a.startsWith("--") && !flagValues.has(a));
+  const tenant = args.find((a, i) => !a.startsWith("--") && !flagValueIdx.has(i));
 
   // --groups <a,b> restricts the rollout to specific worker process groups.
   // Empty (e.g. from an unfilled CI input) means "all groups".
@@ -261,7 +266,7 @@ function main(): void {
     const { tenantsDir } = appPaths(app);
     const available = listTenants(tenantsDir);
     console.error(
-      `Usage: fly-deploy [--generate-only] [--remote] [--groups <a,b>] --app api|workers|livestore <tenant>`,
+      `Usage: fly-deploy [--generate-only] [--remote] [--groups <a,b>] --app api|workers|livestore|sim <tenant>`,
     );
     console.error(`Available tenants for app=${app}: ${available.join(", ") || "(none)"}`);
     process.exit(1);

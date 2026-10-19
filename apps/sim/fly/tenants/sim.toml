@@ -1,0 +1,16 @@
+app = 'sim-simulator'
+
+# Fly secrets (flyctl secrets set -a sim-simulator):
+# - DATABASE_URL  pooled endpoint (port 6432); read-only use
+# - NATS_URL      the tenant's NATS (tags publish through the sim gateway's leaf)
+# Sign-in goes through the tenant API (SIM_API_URL) — no user credentials here.
+[_meta]
+required_secrets = ['DATABASE_URL', 'NATS_URL']
+# Cloudflare A/AAAA/_acme-challenge records were created with rw-provisioner's
+# Fly + Cloudflare providers (same layout as tenant-dns).
+domain = 'sim-simulator.rockware.io'
+
+[env]
+LOG_LEVEL = 'info'
+SIM_API_URL = 'http://sim-api.internal:3000'
+NATS_CLIENT_NAME = 'sim-simulator'

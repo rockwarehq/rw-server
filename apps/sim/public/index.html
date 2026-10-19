@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Station Simulator</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #1b1f24; --muted: #667080; --line: #e3e6eb;
+    --accent: #2f6fde; --accent-ink: #ffffff; --hover: #f0f3f8;
+    --up: #1f9d55; --slow: #d98a00; --fast: #2f6fde; --down: #d64545; --none: #9aa3af; --warn-bg: #fff4e0; --warn-ink: #8a5300;
+    --radius: 8px; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #111418; --panel: #191d23; --ink: #e6e9ee; --muted: #8f99a8; --line: #2a3039;
+      --accent: #5b8ff0; --hover: #20252d; --warn-bg: #3a2c12; --warn-ink: #f2c06b; --none: #6b7482;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }
+  header { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line); padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  header h1 { font-size: 16px; margin: 0 12px 0 0; }
+  .counts { color: var(--muted); }
+  .spacer { flex: 1; }
+  input, select, button { font: inherit; color: inherit; }
+  input[type=text], input[type=number], input[type=search], select { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+  input[type=number] { width: 80px; }
+  button { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button:hover { background: var(--hover); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  button.danger { color: var(--down); }
+  main { padding: 16px; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--hover); }
+  tbody tr.selected { background: var(--hover); box-shadow: inset 3px 0 0 var(--accent); }
+  .sub { color: var(--muted); font-size: 12px; }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--none); flex: none; }
+  .UP .dot { background: var(--up); } .SLOW .dot { background: var(--slow); } .FAST .dot { background: var(--fast); } .DOWN .dot { background: var(--down); }
+  .warn { display: inline-block; background: var(--warn-bg); color: var(--warn-ink); border-radius: 4px; padding: 1px 6px; font-size: 12px; }
+  .off { color: var(--muted); }
+  .switch { position: relative; width: 34px; height: 20px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch span { position: absolute; inset: 0; background: var(--line); border-radius: 20px; transition: .15s; }
+  .switch span::before { content: ""; position: absolute; width: 14px; height: 14px; left: 3px; top: 3px; background: var(--panel); border-radius: 50%; transition: .15s; }
+  .switch input:checked + span { background: var(--accent); }
+  .switch input:checked + span::before { transform: translateX(14px); }
+  .hide-sm { }
+  @media (max-width: 760px) { .hide-sm { display: none; } }
+
+  aside { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100vw); background: var(--panel); border-left: 1px solid var(--line); z-index: 5; overflow-y: auto; padding: 16px; transform: translateX(100%); transition: transform .18s; box-shadow: -8px 0 24px rgb(0 0 0 / .08); }
+  aside.open { transform: none; }
+  aside h2 { margin: 0; font-size: 17px; }
+  aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 20px 0 8px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin-top: 10px; font-size: 13px; }
+  .facts dt { color: var(--muted); } .facts dd { margin: 0; }
+  .step { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px; margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .step .idx { font-weight: 600; width: 18px; color: var(--muted); }
+  .step.current { border-color: var(--accent); }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin-bottom: 10px; }
+  .seg button { border: 0; border-radius: 0; padding: 6px 16px; }
+  .seg button.on, .chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .chip { padding: 3px 9px; border-radius: 999px; font-size: 13px; }
+  .step .row { margin-bottom: 0; width: 100%; }
+  .step .fields { margin-top: 8px; padding-left: 26px; gap: 14px; align-items: flex-start; }
+  .stopped { color: var(--down); font-weight: 600; font-size: 13px; }
+  button:disabled { opacity: .4; cursor: default; }
+  [hidden] { display: none !important; }
+  .field { display: inline-flex; flex-direction: column; gap: 2px; }
+  .cap { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+  .stopped { line-height: 30px; }
+  .guide { border: 1px dashed var(--line); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px; }
+  .guide-example { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; }
+  .guide-example .box { border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; font-family: var(--mono); font-size: 13px; background: var(--bg); }
+  .guide-keys { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 0 0 6px; font-size: 13px; }
+  .guide-keys dt { font-weight: 600; } .guide-keys dd { margin: 0; color: var(--muted); }
+  .dirty { color: var(--warn-ink); background: var(--warn-bg); border-radius: 4px; padding: 1px 6px; font-size: 12px; font-weight: 600; }
+  #login { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
+  .login-card { width: min(360px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; display: grid; gap: 12px; }
+  .login-card h1 { margin: 0; font-size: 18px; }
+  .login-card .field input { width: 100%; }
+  .err { color: var(--down); font-size: 13px; min-height: 18px; }
+  .note { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="login" hidden>
+  <form id="login-form" class="login-card">
+    <h1>Station Simulator</h1>
+    <p class="note">Sign in with your Rockware account.</p>
+    <label class="field"><span class="cap">Email</span><input type="email" id="l-email" autocomplete="username" required /></label>
+    <label class="field"><span class="cap">Password</span><input type="password" id="l-password" autocomplete="current-password" required /></label>
+    <div class="err" id="l-err"></div>
+    <button class="primary" type="submit" id="l-submit">Sign in</button>
+  </form>
+</div>
+<div id="app" hidden>
+<header>
+  <h1>Station Simulator</h1>
+  <span class="counts" id="counts"></span>
+  <span class="spacer"></span>
+  <input type="search" id="filter" placeholder="Filter stations…" />
+  <button id="refresh" title="Re-read stations, jobs and standards from the database">Refresh</button>
+  <button id="bulk-auto" title="Enable every station in the filtered list, in auto">Run visible in auto</button>
+  <button id="bulk-off" class="danger" title="Stop simulating every station in the filtered list">Disable visible</button>
+  <span class="sub" id="who"></span>
+  <button id="sign-out">Sign out</button>
+</header>
+<main>
+  <table>
+    <thead><tr>
+      <th style="width:44px">Sim</th><th>Station</th><th class="hide-sm">Job</th><th class="hide-sm">Standard</th><th>Status</th><th>Doing</th><th class="hide-sm">Next cycle</th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</main>
+
+</div>
+<aside id="drawer" aria-hidden="true">
+  <div class="row"><h2 id="d-title"></h2><span class="dirty" hidden>Unsaved</span><span class="spacer"></span><button id="d-close">Close</button></div>
+  <div class="sub" id="d-sub"></div>
+  <dl class="facts" id="d-facts"></dl>
+
+  <h3>Mode</h3>
+  <div class="seg" role="tablist">
+    <button data-mode="auto">Auto</button>
+    <button data-mode="program">Program</button>
+  </div>
+
+  <div id="auto-pane">
+    <p class="note">Runs like a real machine: mostly normal, with stretches of great, slow, short stops and downtime picked at random.</p>
+    <div class="row"><span class="dirty" hidden>Unsaved changes</span><span class="spacer"></span><button class="primary" id="run-auto">Save &amp; run auto</button></div>
+  </div>
+
+  <div id="program-pane">
+    <p class="note">Steps run top to bottom, then start over, forever. Each step is one stretch of running (or stopped) time.</p>
+    <div class="guide">
+      <div class="guide-example" aria-hidden="true">
+        <span class="field"><span class="cap">Speed</span><span class="box">× 1.2</span></span>
+        <span class="field"><span class="cap">Variation</span><span class="box">± 3 %</span></span>
+        <span class="field"><span class="cap">Time</span><span class="box">for 10 min</span></span>
+      </div>
+      <dl class="guide-keys">
+        <dt>Speed</dt><dd>How fast to cycle compared to the job's standard. ×1 = standard, ×1.2 = 20% faster, ×0.8 = 20% slower.</dd>
+        <dt>Variation</dt><dd>How much each cycle can randomly differ, so it looks like a real machine. ±3% on a 20 s standard = cycles between 19.4 and 20.6 s. 0 = every cycle exactly the same.</dd>
+        <dt>Time</dt><dd>How long this step runs before moving to the next one. Blank = stay on this step.</dd>
+      </dl>
+      <p class="note">Example above: run 20% fast with a little variation for 10 minutes, then go to the next step. The buttons on each step (×1, +20%, −20%, Stop) fill in the speed for you.</p>
+    </div>
+    <div id="steps"></div>
+    <div class="row">
+      <button id="add-step">Add step</button>
+      <span class="spacer"></span>
+      <span class="dirty" hidden>Unsaved changes</span>
+      <button class="primary" id="run-program">Save &amp; run program</button>
+    </div>
+  </div>
+
+  <h3>Tag to update</h3>
+  <p class="note">Which tag the simulator publishes cycle signals to. The list is the tag properties on this station's livestore node.</p>
+  <div class="row">
+    <select id="t-select" style="flex:1;min-width:0"></select>
+  </div>
+  <div class="row" id="t-custom" hidden>
+    <input type="text" id="t-device" placeholder="deviceId" />
+    <input type="text" id="t-path" placeholder="tagPath" />
+  </div>
+  <div class="note" id="d-tag" style="margin-bottom:8px"></div>
+  <div class="row"><button id="save-tag">Save tag</button></div>
+  <div class="err" id="d-err"></div>
+</aside>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let stations = [];
+let serverOffset = 0;
+let selectedId = null;
+let draftSteps = null;
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+function fmtSeconds(s) {
+  if (s == null) return "—";
+  if (s < 90) return `${+s.toFixed(1)} s`;
+  if (s < 5400) return `${+(s / 60).toFixed(1)} min`;
+  return `${+(s / 3600).toFixed(1)} h`;
+}
+function fmtStandard(st) {
+  const std = st.standards;
+  if (!std) return `<span class="off">${st.jobId ? "no standard" : "no job"}</span>`;
+  if (std.mode === "QUANTITY_PER_INTERVAL") return `<span class="num">${std.standardQuantity ?? "?"}</span> / ${fmtSeconds(std.standardCycleSeconds)}`;
+  return `<span class="num">${fmtSeconds(std.standardCycleSeconds)}</span>`;
+}
+const MODE_LABEL = { DISCRETE: "by cycle", QUANTITY_PER_CYCLE: "by amount", QUANTITY_PER_INTERVAL: "by time" };
+function countdown(iso) {
+  if (!iso) return "—";
+  const ms = Date.parse(iso) - (Date.now() + serverOffset);
+  if (ms <= 0) return "now";
+  return fmtSeconds(ms / 1000);
+}
+function rateText(r) {
+  if (!r) return "";
+  if (r.rate <= 0) return " · stopped";
+  const pct = Math.round((r.rate - 1) * 100);
+  return ` · ×${r.rate.toFixed(2)}${pct ? ` (${pct > 0 ? "+" : ""}${pct}%)` : ""}`;
+}
+
+function otherPublisher(s) {
+  const src = !s.sim.tagOverride && s.cycleTagSource;
+  return src ? `${src.gatewayName ?? "a gateway"} (datasource “${src.datasourceName}”)` : "something else";
+}
+
+async function api(method, path, body) {
+  const res = await fetch(path, { method, headers: body ? { "content-type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+  const json = await res.json().catch(() => ({}));
+  if (res.status === 401 && path.startsWith("/api/")) { showLogin(); throw new Error("Sign in required"); }
+  if (!res.ok) throw new Error(json.error || res.statusText);
+  return json;
+}
+
+async function load() {
+  try {
+    const json = await api("GET", "/api/stations");
+    stations = json.data;
+    serverOffset = Date.parse(json.now) - Date.now();
+    render();
+    if (selectedId) renderFacts();
+  } catch (e) {
+    $("counts").textContent = `offline: ${e.message}`;
+  }
+}
+
+function visible() {
+  const q = $("filter").value.trim().toLowerCase();
+  if (!q) return stations;
+  return stations.filter((s) => [s.name, s.workcenterName, s.jobName, s.siteName, s.profileName].some((v) => v && v.toLowerCase().includes(q)));
+}
+
+function render() {
+  const enabled = stations.filter((s) => s.sim.enabled).length;
+  $("counts").textContent = `${enabled} of ${stations.length} simulated`;
+  $("rows").innerHTML = visible().map((s) => {
+    const r = s.runtime;
+    const doing = !s.sim.enabled ? `<span class="off">off</span>` : r ? `${esc(r.behavior)}${rateText(r)}${r.note ? ` <span class="sub">${esc(r.note)}</span>` : ""}` : `<span class="off">${s.tag ? "starting" : "no cycle tag"}</span>`;
+    const foreign = s.foreignAt ? ` <span class="warn" title="${esc(otherPublisher(s))} is also publishing on this tag — cycles will double up">also fed by ${esc(s.sim.tagOverride ? "another publisher" : (s.cycleTagSource?.gatewayName ?? "another publisher"))}</span>` : "";
+    return `<tr data-id="${s.id}" class="${s.id === selectedId ? "selected" : ""}">
+      <td><label class="switch" onclick="event.stopPropagation()"><input type="checkbox" data-toggle="${s.id}" ${s.sim.enabled ? "checked" : ""}/><span></span></label></td>
+      <td><div>${esc(s.name)}</div><div class="sub">${esc(s.workcenterName ?? s.siteName)}</div></td>
+      <td class="hide-sm">${esc(s.jobName ?? "—")}<div class="sub">${esc(s.profileName ?? MODE_LABEL[s.cycleMode] ?? "")}</div></td>
+      <td class="hide-sm">${fmtStandard(s)}</td>
+      <td><span class="pill ${s.status ?? ""}"><span class="dot"></span>${esc(s.status ?? "—")}</span></td>
+      <td>${doing}${foreign}</td>
+      <td class="hide-sm num">${s.sim.enabled && r ? countdown(r.nextCycleAt) : "—"}<div class="sub">${r ? `${r.cycles} cycles` : ""}</div></td>
+    </tr>`;
+  }).join("");
+}
+
+const current = () => stations.find((s) => s.id === selectedId);
+
+async function save(id, sim) {
+  $("d-err").textContent = "";
+  try {
+    await api("PUT", `/api/stations/${id}`, sim);
+    await load();
+  } catch (e) {
+    $("d-err").textContent = e.message;
+  }
+}
+
+
+// ── Drawer ──────────────────────────────────────────────────────────────
+let draftMode = "auto";
+const PRESETS = [
+  { label: "×1", step: { type: "rate", rate: 1 } },
+  { label: "+20%", step: { type: "rate", rate: 1.2 } },
+  { label: "−20%", step: { type: "rate", rate: 0.8 } },
+  { label: "Stop", step: { type: "stop" } },
+];
+
+function openDrawer(id) {
+  if (selectedId && selectedId !== id && !confirmDiscard()) return;
+  if (selectedId === id) return;
+  selectedId = id;
+  const s = current();
+  if (!s) return;
+  draftSteps = structuredClone(s.sim.steps);
+  draftMode = s.sim.mode;
+  $("d-title").textContent = s.name;
+  $("d-sub").textContent = [s.siteName, s.workcenterName].filter(Boolean).join(" · ");
+  renderTagSelect(s);
+  renderMode();
+  renderSteps();
+  renderFacts();
+  $("d-err").textContent = "";
+  $("drawer").classList.add("open");
+  $("drawer").setAttribute("aria-hidden", "false");
+  render();
+}
+function closeDrawer() {
+  if (selectedId && !confirmDiscard()) return;
+  selectedId = null;
+  $("drawer").classList.remove("open");
+  $("drawer").setAttribute("aria-hidden", "true");
+  render();
+}
+
+function renderMode() {
+  document.querySelectorAll("[data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === draftMode));
+  $("auto-pane").hidden = draftMode !== "auto";
+  $("program-pane").hidden = draftMode !== "program";
+}
+document.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => { draftMode = b.dataset.mode; renderMode(); renderDirty(); }));
+
+function renderFacts() {
+  const s = current();
+  if (!s) return;
+  const r = s.runtime;
+  const facts = [
+    ["Counts", `${MODE_LABEL[s.cycleMode] ?? s.cycleMode}${s.profileName ? ` · ${esc(s.profileName)}` : ""}`],
+    ["Job", esc(s.jobName ?? "none")],
+    ["Standard", fmtStandard(s)],
+    ["Status", `<span class="pill ${s.status ?? ""}"><span class="dot"></span>${esc(s.status ?? "—")}</span>`],
+    ["Sim", !s.sim.enabled ? "off" : r ? `${esc(r.behavior)}${rateText(r)}` : "starting"],
+  ];
+  if (r?.stepEndsAt) facts.push([r.autoState ? "Stretch ends" : "Step ends", countdown(r.stepEndsAt)]);
+  if (r) facts.push(["Next cycle", countdown(r.nextCycleAt)], ["Cycles", String(r.cycles)]);
+  if (s.foreignAt) {
+    facts.push(["Warning", `<span class="warn">${esc(otherPublisher(s))} is also publishing on this tag</span><div class="sub">${s.sim.enabled ? "Cycles are doubling up: this station gets the gateway's cycles plus the simulator's." : "If you turn the simulator on, this station will get both sets of cycles."} Unpublish that datasource (back to Draft) so the gateway stops sending it, or use a tag override below.</div>`]);
+  }
+  $("d-facts").innerHTML = facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  renderTagNote();
+  renderDirty();
+  const running = s.sim.enabled && s.sim.mode === "program" ? r?.stepIndex : null;
+  document.querySelectorAll("#steps .step").forEach((el, i) => el.classList.toggle("current", running === i));
+}
+
+const canon = (steps) => JSON.stringify(steps.map((st) => [st.type, st.type === "rate" ? st.rate : null, st.type === "rate" ? (st.jitter ?? 0.03) : null, st.durationSec ?? null]));
+function isDirty() {
+  const s = current();
+  return !!s && (draftMode !== s.sim.mode || canon(draftSteps) !== canon(s.sim.steps));
+}
+function renderDirty() {
+  const dirty = isDirty();
+  document.querySelectorAll(".dirty").forEach((el) => (el.hidden = !dirty));
+}
+function confirmDiscard() {
+  return !isDirty() || confirm("You have unsaved changes to this station. Discard them?");
+}
+
+const minutes = (sec) => (sec != null ? +(sec / 60).toFixed(2) : "");
+
+function renderSteps() {
+  $("steps").innerHTML = draftSteps.map((st, i) => {
+    const isRate = st.type === "rate";
+    const active = (p) => (p.step.type === st.type && (st.type === "stop" || p.step.rate === st.rate) ? " on" : "");
+    return `<div class="step" data-i="${i}">
+      <div class="row presets">
+        <span class="idx">${i + 1}</span>
+        ${PRESETS.map((p, k) => `<button class="chip${active(p)}" data-preset="${k}">${p.label}</button>`).join("")}
+        <span class="spacer"></span>
+        <button data-act="up" title="Move up" ${i === 0 ? "disabled" : ""}>↑</button><button data-act="del" class="danger" title="Remove">✕</button>
+      </div>
+      <div class="row fields">
+        ${isRate
+          ? `<label class="field" title="Speed vs the job's standard: ×1 = standard, ×1.2 = 20% faster"><span class="cap">Speed</span><span>× <input type="number" step="0.05" min="0.05" max="10" data-f="rate" value="${st.rate}" style="width:70px"/></span></label>
+             <label class="field" title="How much each cycle randomly differs; 0 = every cycle identical"><span class="cap">Variation</span><span>± <input type="number" step="1" min="0" max="50" data-f="jitter" value="${Math.round((st.jitter ?? 0.03) * 100)}" style="width:56px"/> %</span></label>`
+          : `<span class="field"><span class="cap">Speed</span><span class="stopped">Stopped — no cycles</span></span>`}
+        <label class="field" title="How long before the next step; blank = stay on this step"><span class="cap">Time</span><span>for <input type="number" step="any" min="0.1" data-f="for" value="${minutes(st.durationSec)}" placeholder="∞" style="width:64px"/> min</span></label>
+      </div>
+    </div>`;
+  }).join("") || `<div class="note">No steps — add one.</div>`;
+  renderFacts();
+}
+
+$("steps").addEventListener("change", (e) => {
+  const f = e.target.dataset.f;
+  const i = Number(e.target.closest(".step")?.dataset.i);
+  if (!f || Number.isNaN(i)) return;
+  const st = draftSteps[i];
+  const n = Number(e.target.value);
+  if (f === "rate") st.rate = n > 0 ? n : 1;
+  if (f === "jitter") st.jitter = Math.min(50, Math.max(0, n)) / 100;
+  if (f === "for") {
+    if (e.target.value === "" || !(n > 0)) delete st.durationSec;
+    else st.durationSec = Math.max(1, Math.round(n * 60));
+  }
+  renderSteps();
+});
+$("steps").addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  const i = Number(e.target.closest(".step")?.dataset.i);
+  if (!btn || Number.isNaN(i)) return;
+  if (btn.dataset.preset != null) {
+    const prev = draftSteps[i];
+    const preset = PRESETS[Number(btn.dataset.preset)].step;
+    // Presets set what the step does; its jitter and length carry over.
+    draftSteps[i] = preset.type === "rate"
+      ? { type: "rate", rate: preset.rate, jitter: prev.jitter ?? 0.03, ...(prev.durationSec ? { durationSec: prev.durationSec } : {}) }
+      : { type: "stop", ...(prev.durationSec ? { durationSec: prev.durationSec } : {}) };
+  }
+  if (btn.dataset.act === "del") draftSteps.splice(i, 1);
+  if (btn.dataset.act === "up" && i > 0) [draftSteps[i - 1], draftSteps[i]] = [draftSteps[i], draftSteps[i - 1]];
+  renderSteps();
+});
+$("add-step").onclick = () => { draftSteps.push({ type: "rate", rate: 1, jitter: 0.03, durationSec: 600 }); renderSteps(); };
+
+$("run-program").onclick = () => {
+  const s = current();
+  if (!s) return;
+  if (draftSteps.length === 0) { $("d-err").textContent = "Add at least one step."; return; }
+  save(s.id, { ...s.sim, enabled: true, mode: "program", steps: draftSteps });
+};
+$("run-auto").onclick = () => {
+  const s = current();
+  // Steps save too, so a program edited before switching to auto isn't lost.
+  if (s) save(s.id, { ...s.sim, enabled: true, mode: "auto", steps: draftSteps.length ? draftSteps : s.sim.steps });
+};
+
+// ── Tag picker ──────────────────────────────────────────────────────────
+const sameTag = (a, b) => !!a && !!b && a.deviceId === b.deviceId && a.tagPath === b.tagPath;
+
+/** Choices for this station: the hook's tag first, then the node's other tag properties, then custom. */
+function tagChoices(s) {
+  const choices = [];
+  const hookOpt = s.tagOptions.find((o) => sameTag(o, s.cycleTag));
+  if (s.cycleTag) choices.push({ value: "hook", label: `${hookOpt?.name ?? "Cycle hook's tag"} — watched by the cycle hook`, tag: s.cycleTag });
+  for (const o of s.tagOptions) {
+    if (sameTag(o, s.cycleTag)) continue;
+    choices.push({ value: `p:${o.propertyId}`, label: o.name, tag: { deviceId: o.deviceId, tagPath: o.tagPath } });
+  }
+  choices.push({ value: "custom", label: "Custom device / path…", tag: null });
+  return choices;
+}
+
+function renderTagSelect(s) {
+  const choices = tagChoices(s);
+  const override = s.sim.tagOverride;
+  // Saved override → its option; else the hook's tag; else the node's first tag (still needs a Save).
+  const selected = override
+    ? (choices.find((c) => c.tag && sameTag(c.tag, override))?.value ?? "custom")
+    : (choices[0]?.value ?? "custom");
+  $("t-select").innerHTML = choices.map((c) => `<option value="${esc(c.value)}" ${c.value === selected ? "selected" : ""}>${esc(c.label)}</option>`).join("");
+  $("t-device").value = selected === "custom" ? (override?.deviceId ?? "") : "";
+  $("t-path").value = selected === "custom" ? (override?.tagPath ?? "") : "";
+  renderTagNote();
+}
+
+function pickedTag() {
+  const s = current();
+  const choice = s && tagChoices(s).find((c) => c.value === $("t-select").value);
+  if (!choice) return null;
+  if (choice.value !== "custom") return choice.tag;
+  const deviceId = $("t-device").value.trim(), tagPath = $("t-path").value.trim();
+  return deviceId && tagPath ? { deviceId, tagPath } : null;
+}
+
+function renderTagNote() {
+  const s = current();
+  if (!s) return;
+  $("t-custom").hidden = $("t-select").value !== "custom";
+  const tag = pickedTag();
+  const parts = [];
+  if (tag) parts.push(`Publishes to <span class="num">${esc(tag.deviceId)} / ${esc(tag.tagPath)}</span>`);
+  if (!sameTag(tag, s.tag)) parts.push(`<span class="dirty">Not saved</span>`);
+  if (tag && s.cycleTag && !sameTag(tag, s.cycleTag)) {
+    parts.push(`<div class="sub">The cycle hook watches a different tag, so cycles only record once a hook watches this one.</div>`);
+  }
+  if (!s.cycleTag) parts.push(`<div class="sub">No cycle hook tag found for this station.</div>`);
+  $("d-tag").innerHTML = parts.join(" ");
+}
+
+$("t-select").onchange = renderTagNote;
+$("t-device").oninput = renderTagNote;
+$("t-path").oninput = renderTagNote;
+$("save-tag").onclick = () => {
+  const s = current();
+  if (!s) return;
+  const tag = pickedTag();
+  if (!tag) { $("d-err").textContent = "Pick a tag, or fill in both deviceId and tagPath."; return; }
+  // The hook's own tag is the default, so store no override for it.
+  save(s.id, { ...s.sim, tagOverride: sameTag(tag, s.cycleTag) ? null : tag });
+};
+
+// ── Table + header ──────────────────────────────────────────────────────
+$("rows").addEventListener("click", (e) => {
+  const tr = e.target.closest("tr[data-id]");
+  if (tr) openDrawer(tr.dataset.id);
+});
+$("rows").addEventListener("change", (e) => {
+  const id = e.target.dataset.toggle;
+  const s = stations.find((x) => x.id === id);
+  if (s) save(id, { ...s.sim, enabled: e.target.checked });
+});
+$("d-close").onclick = closeDrawer;
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+$("filter").oninput = render;
+
+async function bulk(enabled) {
+  const ids = visible().map((s) => s.id);
+  if (ids.length === 0) return;
+  if (!confirm(`${enabled ? "Run" : "Disable"} ${ids.length} station(s)${enabled ? " in auto" : ""}?`)) return;
+  // Bulk keeps each station's own program and mix; it only flips on/off (+ auto when enabling).
+  for (const s of visible()) await api("PUT", `/api/stations/${s.id}`, enabled ? { ...s.sim, enabled: true, mode: "auto" } : { ...s.sim, enabled: false });
+  await load();
+}
+$("bulk-auto").onclick = () => bulk(true);
+$("bulk-off").onclick = () => bulk(false);
+
+window.addEventListener("beforeunload", (e) => { if (isDirty()) e.preventDefault(); });
+
+async function refreshStations() {
+  $("refresh").disabled = true;
+  try {
+    await api("POST", "/api/refresh");
+  } catch (e) {
+    $("counts").textContent = `refresh failed: ${e.message}`;
+  }
+  $("refresh").disabled = false;
+  await load();
+}
+$("refresh").onclick = refreshStations;
+
+// Re-read the DB once per page load; after that only live status is polled.
+// ── Sign-in ─────────────────────────────────────────────────────────────
+let pollTimer = null;
+function showLogin() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (selectedId) { selectedId = null; $("drawer").classList.remove("open"); }
+  $("app").hidden = true;
+  $("login").hidden = false;
+  $("l-email").focus();
+}
+function showApp(user) {
+  $("login").hidden = true;
+  $("app").hidden = false;
+  $("who").textContent = user.name ? `${user.name} · ${user.email}` : user.email;
+  // Re-read the DB on every sign-in / page load; after that only live status is polled.
+  refreshStations();
+  if (!pollTimer) pollTimer = setInterval(load, 2000);
+}
+$("login-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("l-err").textContent = "";
+  $("l-submit").disabled = true;
+  try {
+    const { user } = await api("POST", "/auth/login", { email: $("l-email").value.trim(), password: $("l-password").value });
+    $("l-password").value = "";
+    showApp(user);
+  } catch (err) {
+    $("l-err").textContent = err.message;
+  }
+  $("l-submit").disabled = false;
+});
+$("sign-out").onclick = async () => {
+  if (!confirmDiscard()) return;
+  await api("POST", "/auth/logout").catch(() => {});
+  showLogin();
+};
+
+(async () => {
+  try {
+    const { user } = await api("GET", "/api/session");
+    if (user) showApp(user);
+  } catch {
+    // 401 already showed the sign-in form
+  }
+})();
+</script>
+</body>
+</html>
