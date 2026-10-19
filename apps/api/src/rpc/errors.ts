@@ -72,6 +72,8 @@ const EXACT: Record<string, OrpcErrorCode> = {
   IN_OTHER_GROUP: "CONFLICT",
   LABEL_CONFLICT: "CONFLICT",
   VERSION_CONFLICT: "CONFLICT",
+  // An operator terminal changes shift notes only while their shift runs.
+  SHIFT_ENDED: "CONFLICT",
   // A material cannot stop being tracked while it has stock (ADR-0016).
   STOCK_ON_HAND: "CONFLICT",
   GRAPH_CYCLE: "CONFLICT",
