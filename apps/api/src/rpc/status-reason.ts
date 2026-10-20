@@ -11,6 +11,7 @@ const createInputSchema = z.object({
   siteId: z.uuid(),
   name: z.string().min(1),
   isPlannedDown: z.boolean().optional(),
+  quick: z.boolean().optional(),
   categoryId: z.uuid().nullable().optional(),
   labelIds: z.array(z.uuid()).max(50).optional(),
 });
@@ -19,6 +20,7 @@ const updateInputSchema = z.object({
   id: z.uuid(),
   name: z.string().min(1).optional(),
   isPlannedDown: z.boolean().optional(),
+  quick: z.boolean().optional(),
   categoryId: z.uuid().nullable().optional(),
   // Replaces the code's whole label list with this one.
   labelIds: z.array(z.uuid()).max(50).optional(),

@@ -5,6 +5,8 @@ import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 export interface CreateStatusReasonInput {
   name: string;
   isPlannedDown?: boolean;
+  /** Offered as a one-tap button when coding downtime. */
+  quick?: boolean;
   categoryId?: string | null;
   siteId: string;
   /** Labels to put on this code. They must come from the same site's list. */
@@ -14,6 +16,7 @@ export interface CreateStatusReasonInput {
 export interface UpdateStatusReasonInput {
   name?: string;
   isPlannedDown?: boolean;
+  quick?: boolean;
   categoryId?: string | null;
   /** Replaces the code's whole label list with this one (same-site labels only). */
   labelIds?: string[];
@@ -33,7 +36,7 @@ export interface ListStatusReasonsFilter {
  * Create a new status reason
  */
 export async function create(input: CreateStatusReasonInput) {
-  const { name, isPlannedDown, categoryId, siteId, labelIds } = input;
+  const { name, isPlannedDown, quick, categoryId, siteId, labelIds } = input;
 
   const site = await prisma.site.findUnique({
     where: { id: siteId },
@@ -81,6 +84,7 @@ export async function create(input: CreateStatusReasonInput) {
     data: {
       name,
       isPlannedDown: isPlannedDown ?? false,
+      quick: quick ?? false,
       categoryId: categoryId ?? null,
       siteId,
       ...(labelIds?.length ? { labels: { connect: labelIds.map((id) => ({ id })) } } : {}),
@@ -177,7 +181,7 @@ export async function getById(id: string) {
  * Update status reason
  */
 export async function update(id: string, input: UpdateStatusReasonInput) {
-  const { name, isPlannedDown, categoryId, labelIds } = input;
+  const { name, isPlannedDown, quick, categoryId, labelIds } = input;
 
   const current = await prisma.statusReason.findUnique({
     where: { id },
@@ -226,6 +230,7 @@ export async function update(id: string, input: UpdateStatusReasonInput) {
   const updateData: Record<string, unknown> = {};
   if (name !== undefined) updateData.name = name;
   if (isPlannedDown !== undefined) updateData.isPlannedDown = isPlannedDown;
+  if (quick !== undefined) updateData.quick = quick;
   if (categoryId !== undefined) updateData.categoryId = categoryId;
   if (labelIds !== undefined) updateData.labels = { set: labelIds.map((lid) => ({ id: lid })) };
 
