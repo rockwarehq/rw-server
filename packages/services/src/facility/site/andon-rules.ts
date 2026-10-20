@@ -13,6 +13,7 @@ export interface AndonRuleRecord {
   expression: string;
   referencedVariables: string[];
   colorHex: string;
+  pulse: boolean;
   sortOrder: number;
   enabled: boolean;
   createdAt: Date;
@@ -29,6 +30,7 @@ export interface CreateAndonRuleInput {
   expression: string;
   referencedVariables: string[];
   colorHex: string;
+  pulse?: boolean;
   enabled?: boolean;
 }
 
@@ -38,6 +40,7 @@ export interface UpdateAndonRuleInput {
   expression?: string;
   referencedVariables?: string[];
   colorHex?: string;
+  pulse?: boolean;
   enabled?: boolean;
 }
 
@@ -85,6 +88,7 @@ function mapAndonRule(rule: {
   expression: string;
   referencedVariables: string[];
   colorHex: string;
+  pulse: boolean;
   sortOrder: number;
   enabled: boolean;
   createdAt: Date;
@@ -97,6 +101,7 @@ function mapAndonRule(rule: {
     expression: rule.expression,
     referencedVariables: normalizeReferencedVariables(rule.referencedVariables),
     colorHex: rule.colorHex,
+    pulse: rule.pulse,
     sortOrder: rule.sortOrder,
     enabled: rule.enabled,
     createdAt: rule.createdAt,
@@ -221,6 +226,7 @@ export async function create(input: CreateAndonRuleInput) {
       expression,
       referencedVariables,
       colorHex: input.colorHex,
+      pulse: input.pulse ?? false,
       enabled: input.enabled ?? true,
       sortOrder: (maxSortOrder._max.sortOrder ?? -1) + 1,
     },
@@ -243,6 +249,7 @@ export async function update(input: UpdateAndonRuleInput) {
     expression?: string;
     referencedVariables?: string[];
     colorHex?: string;
+    pulse?: boolean;
     enabled?: boolean;
   } = {};
 
@@ -271,6 +278,10 @@ export async function update(input: UpdateAndonRuleInput) {
     }
 
     updateData.colorHex = input.colorHex;
+  }
+
+  if (input.pulse !== undefined) {
+    updateData.pulse = input.pulse;
   }
 
   if (input.enabled !== undefined) {

@@ -9,6 +9,7 @@ const andonRuleInputSchema = z.object({
   expression: z.string(),
   referencedVariables: z.array(z.string()),
   colorHex: z.string(),
+  pulse: z.boolean().optional(),
   enabled: z.boolean().optional(),
 });
 
@@ -22,6 +23,7 @@ const updateInputSchema = z.object({
   expression: z.string().optional(),
   referencedVariables: z.array(z.string()).optional(),
   colorHex: z.string().optional(),
+  pulse: z.boolean().optional(),
   enabled: z.boolean().optional(),
 });
 

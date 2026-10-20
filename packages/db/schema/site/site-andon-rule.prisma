@@ -4,6 +4,8 @@ model SiteAndonRule {
   expression          String
   referencedVariables String[] @default([])
   colorHex            String
+  /// Matching stations pulse on the boards, not just take the color.
+  pulse               Boolean  @default(false)
   sortOrder           Int
   enabled             Boolean  @default(true)
 
