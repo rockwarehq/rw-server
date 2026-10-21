@@ -177,6 +177,14 @@ export async function createInvite(
       select: { bucket: { select: { siteId: true } } },
     });
 
+    // Removed people are DISABLED with their access wiped. A DISABLED user who
+    // still holds access (or account admin) was disabled, not removed: the
+    // adoption below would hand the inviter a password for that standing.
+    // Bringing them back is an account admin's Enable, or Remove then invite.
+    if (existingUser.status === "DISABLED" && (held.length > 0 || existingUser.isAccountAdmin)) {
+      return { success: false, error: "This person is disabled. An account admin can enable or remove them." };
+    }
+
     if (existingUser.status === "PENDING" && (held.length > 0 || existingUser.isAccountAdmin)) {
       mode = "resent";
       // Resend refreshes invite delivery only. Access changes are explicit
