@@ -202,7 +202,7 @@ export const scrapLogList = userOrDisplayRequired.input(scrapLogListInputSchema)
 });
 
 // ============================================================================
-// Shift Comments (workcenter-overall + per-station, append-only thread)
+// Shift Comments (workcenter-overall + per-station thread)
 // Everything in a shift recap is workcenter data: checks name the workcenter.
 // ============================================================================
 
@@ -258,28 +258,44 @@ const commentUpdateInputSchema = z.object({
   text: z.string().min(1).max(5000),
 });
 
-export const commentUpdate = userRequired.input(commentUpdateInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { shiftComment: input.id });
+// A user changes their own comments; an operator terminal, the terminal
+// comments at its own station (see ShiftCommentActor).
+export const commentUpdate = userOrDisplayRequired
+  .input(commentUpdateInputSchema)
+  .handler(async ({ input, context }) => {
+    await context.access.require("MANAGE", { shiftComment: input.id });
 
-  const result = await shiftCommentService.update(input.id, {
-    text: input.text,
-    actorId: context.current.user.id,
+    const result = await shiftCommentService.update(input.id, {
+      text: input.text,
+      actor: commentActor(context.current),
+    });
+    if (result.error !== undefined) throwServiceError(result);
+    return result.data;
   });
-  if (result.error !== undefined) throwServiceError(result);
-  return result.data;
-});
 
 const commentDeleteInputSchema = z.object({
   id: z.uuid(),
 });
 
-export const commentDelete = userRequired.input(commentDeleteInputSchema).handler(async ({ input, context }) => {
-  await context.access.require("MANAGE", { shiftComment: input.id });
+export const commentDelete = userOrDisplayRequired
+  .input(commentDeleteInputSchema)
+  .handler(async ({ input, context }) => {
+    await context.access.require("MANAGE", { shiftComment: input.id });
 
-  const result = await shiftCommentService.remove(input.id, { actorId: context.current.user.id });
-  if (result.error !== undefined) throwServiceError(result);
-  return { success: true };
-});
+    const result = await shiftCommentService.remove(input.id, { actor: commentActor(context.current) });
+    if (result.error !== undefined) throwServiceError(result);
+    return { success: true };
+  });
+
+function commentActor(
+  current:
+    | { kind: "user"; user: { id: string } }
+    | { kind: "display"; display: { stationId: string | null; workcenterId: string | null } },
+): shiftCommentService.ShiftCommentActor {
+  return current.kind === "user"
+    ? { kind: "user", id: current.user.id }
+    : { kind: "display", stationId: current.display.stationId, workcenterId: current.display.workcenterId };
+}
 
 // ============================================================================
 // Shift Recap Sign-off (supervisor "post" per shift instance + workcenter)
