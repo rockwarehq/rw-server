@@ -26,6 +26,7 @@ on:
           - bushhog
           - trimlok-elk
           - trimlok-bp
+          - alliance
         default: dev
       app:
         description: 'App to deploy'
