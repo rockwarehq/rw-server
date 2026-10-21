@@ -56,6 +56,11 @@ interface OperatorLogonConfig {
   sessionTimeout: number | null;
   multiLogon: boolean;
   employeeDisplayFormat: "name" | "employeeNumber" | "badge" | "initials";
+  /**
+   * How many digits every PIN at the plant has, 4 to 8. Known, the terminal
+   * logs on at the last digit, as a phone's passcode does — no Continue.
+   */
+  pinLength: number;
 }
 
 const DEFAULT_CONFIG: OperatorLogonConfig = {
@@ -67,7 +72,15 @@ const DEFAULT_CONFIG: OperatorLogonConfig = {
   sessionTimeout: null,
   multiLogon: true,
   employeeDisplayFormat: "name",
+  pinLength: 4,
 };
+
+/** A stored PIN length, or 4 when it is anything but a whole 4 to 8. */
+export function pinLengthOf(value: unknown): number {
+  return Number.isInteger(value) && (value as number) >= 4 && (value as number) <= 8
+    ? (value as number)
+    : DEFAULT_CONFIG.pinLength;
+}
 
 /**
  * Resolve display and get effective operator logon config (site merged with display overrides).
@@ -105,6 +118,8 @@ async function resolveDisplayContext(displayId: string) {
     ...siteConfig,
     ...displayConfig,
   };
+  // attrs are JSON written by hand: keep the length to what a pad can take.
+  config.pinLength = pinLengthOf(config.pinLength);
 
   return {
     display,
@@ -141,6 +156,7 @@ export const config = displayRequired.input(displayIdSchema).handler(async ({ in
     hasStation: !!ctx.stationId,
     multiLogon: ctx.config.multiLogon,
     employeeDisplayFormat: ctx.config.employeeDisplayFormat,
+    pinLength: ctx.config.pinLength,
   };
 });
 
