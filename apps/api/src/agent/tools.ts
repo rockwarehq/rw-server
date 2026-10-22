@@ -116,7 +116,7 @@ function setupProposalOutput(id: string, plan: SetupPlan) {
     issues: [...plan.issues, ...problems.flatMap((row) => row.issues)].slice(0, 100),
     next: plan.applicable
       ? `Give the person this link to review and apply it: ${new URL(`/settings/imports/${id}`, appConfig.baseUrl)}`
-      : "Fix the issues in the spec and propose again (discarding nothing is needed; the person will discard stale drafts), or ask the person to fix records in IMM and call setup_replan.",
+      : "Nothing can be applied until the issues are fixed. Fix them in the spec and propose again, or ask the person to fix the records in IMM and then call setup_replan with this id.",
   };
 }
 
