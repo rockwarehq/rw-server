@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 // imports fresh copies of what it checks.
 async function freshWithAgentsOff() {
   vi.stubEnv("AGENTS_ENABLED", "false");
+  vi.stubEnv("MCP_ENABLED", "false");
   vi.resetModules();
 }
 

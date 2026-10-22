@@ -311,6 +311,76 @@ export const AGENT_TOOLS: AgentTool[] = [
       return { output: child.text, metadata: { childSessionId: child.childSessionId } };
     },
   }),
+  // IMM master data, as a connected agent needs it to map a customer's data
+  // onto what the plant already has. Thin wrappers over the list procedures,
+  // trimmed to names and keys.
+  defineTool({
+    name: "imm_products_search",
+    description:
+      "Find products (parts) in this plant by text (sku or name). Returns id, sku, name, externalSku and archived state.",
+    input: z.object({
+      q: z.string().optional().describe("Matches sku or name"),
+      includeArchived: z.boolean().default(false),
+      limit: z.number().int().min(1).max(200).default(50),
+      offset: z.number().int().min(0).default(0),
+    }),
+    permission: { key: "imm.read" },
+    execute: (input, ctx) => read(ctx.client.product.list({ siteId: ctx.siteId, ...input })),
+  }),
+  defineTool({
+    name: "imm_materials_search",
+    description:
+      "Find materials (resins, colorants, packaging...) in this plant by text. Returns id, name, material number, short code and units.",
+    input: z.object({
+      q: z.string().optional().describe("Matches name, material number or short code"),
+      limit: z.number().int().min(1).max(200).default(50),
+      offset: z.number().int().min(0).default(0),
+    }),
+    permission: { key: "imm.read" },
+    execute: (input, ctx) => read(ctx.client.material.list({ siteId: ctx.siteId, ...input })),
+  }),
+  defineTool({
+    name: "imm_tools_search",
+    description: "Find tools (molds) in this plant by name.",
+    input: z.object({
+      name: z.string().optional(),
+      limit: z.number().int().min(1).max(200).default(50),
+      offset: z.number().int().min(0).default(0),
+    }),
+    permission: { key: "imm.read" },
+    execute: (input, ctx) => read(ctx.client.tool.list({ siteId: ctx.siteId, ...input })),
+  }),
+  defineTool({
+    name: "imm_jobs_search",
+    description: "Find jobs in this plant by text, with the products each makes.",
+    input: z.object({
+      q: z.string().optional(),
+      limit: z.number().int().min(1).max(200).default(50),
+      offset: z.number().int().min(0).default(0),
+    }),
+    permission: { key: "imm.read" },
+    execute: (input, ctx) =>
+      read(ctx.client.job.list({ siteId: ctx.siteId, view: "full", includeProducts: true, ...input })),
+  }),
+  defineTool({
+    name: "imm_stations_tree",
+    description:
+      "The plant's workcenters and the stations (machines) in each, as the person can see them. Use it to place jobs and to match station names.",
+    input: z.object({}),
+    permission: { key: "imm.read" },
+    execute: async (_input, ctx) => {
+      const [workcenters, stations] = await Promise.all([
+        ctx.client.workcenter.list({ siteId: ctx.siteId, limit: 0 }),
+        ctx.client.station.list({ siteId: ctx.siteId, sortBy: "sortOrder", limit: 0 }),
+      ]);
+      return {
+        output: {
+          workcenters: workcenters.data.map((wc) => ({ id: wc.id, name: wc.name, parentId: wc.parentId })),
+          stations: stations.data.map((st) => ({ id: st.id, name: st.name, workcenterId: st.workcenterId })),
+        },
+      };
+    },
+  }),
   defineTool({
     name: "tool_output_read",
     description: "Read more of a tool result that was truncated, by its tool call id.",

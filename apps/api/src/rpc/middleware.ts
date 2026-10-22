@@ -2,6 +2,7 @@ import { os, ORPCError } from "@orpc/server";
 import { timingSafeEqual } from "node:crypto";
 import { AccessDenied } from "@rw/auth/iam/access";
 import type { Current } from "@rw/auth/context";
+import { scopeForProcedure } from "../agent/scopes.js";
 import { agentConfig, processorConfig } from "../config.js";
 import type { CallerContext, RPCContext } from "./context.js";
 
@@ -26,9 +27,22 @@ const mapAccessDenied = os.$context<RPCContext>().middleware(async ({ next }) =>
   }
 });
 
+// A person acting through a connected agent (OAuth over MCP) reaches only the
+// procedures listed for the scopes they granted it. Everyone else passes.
+const agentScopeGate = os.$context<RPCContext>().middleware(async ({ context, path, next }) => {
+  const via = context.current?.kind === "user" ? context.current.via : undefined;
+  if (via) {
+    const needed = scopeForProcedure(path);
+    if (!needed || !via.scopes.includes(needed)) {
+      throw new ORPCError("FORBIDDEN", { message: `This agent connection can't call ${path.join(".")}` });
+    }
+  }
+  return next();
+});
+
 // Base procedure builder: every procedure starts here, so AccessDenied is
-// mapped once for all of them.
-export const publicProcedure = os.$context<RPCContext>().use(mapAccessDenied);
+// mapped and agent connections are gated once for all of them.
+export const publicProcedure = os.$context<RPCContext>().use(mapAccessDenied).use(agentScopeGate);
 
 /**
  * Admit only these kinds of caller. APP (customer API token) callers are

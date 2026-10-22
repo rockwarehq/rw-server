@@ -32,6 +32,7 @@ export interface ResolvedAgent {
 const DEFAULT_RULES: PermissionRule[] = [
   { permission: "*", pattern: "*", action: "ask" },
   { permission: "graph.read", pattern: "*", action: "allow" },
+  { permission: "imm.read", pattern: "*", action: "allow" },
   { permission: "devices.read", pattern: "*", action: "allow" },
   { permission: "catalog.read", pattern: "*", action: "allow" },
   { permission: "integrations.read", pattern: "*", action: "allow" },

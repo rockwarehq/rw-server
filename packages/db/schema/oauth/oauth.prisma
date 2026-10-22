@@ -1,0 +1,84 @@
+// OAuth 2.1 for agents connecting over MCP (Claude Code, Cursor, ...). The
+// person approves a client on IMM's consent page; that creates a grant (one
+// person, one client, one site, a set of scopes). Codes and tokens hang off
+// the grant, so revoking it stops the agent on its next call.
+//
+// Tokens are opaque ("rw_mcp_..." access, "rw_mcr_..." refresh), SHA-256
+// hashed at rest like ApiToken, and only ever accepted on /mcp.
+
+// A client registered itself (RFC 7591 dynamic client registration). Public
+// clients only: no secret, PKCE on every authorization.
+model OAuthClient {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String
+  redirectUris String[]
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  grants OAuthGrant[]
+}
+
+model OAuthGrant {
+  id         String    @id @default(uuid()) @db.Uuid
+  // "read" | "setup:propose" — a ceiling on what the person can already do.
+  scopes     String[]
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  lastUsedAt DateTime? @db.Timestamptz(3)
+  revokedAt  DateTime? @db.Timestamptz(3)
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  clientId String      @db.Uuid
+  client   OAuthClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  workspaceId String    @db.Uuid
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  codes  OAuthCode[]
+  tokens OAuthToken[]
+
+  @@index([userId])
+  @@index([siteId])
+}
+
+// Single-use authorization code, bound to the PKCE challenge and redirect URI
+// it was issued for.
+model OAuthCode {
+  id            String    @id @default(uuid()) @db.Uuid
+  codeHash      String    @unique
+  codeChallenge String
+  redirectUri   String
+  expiresAt     DateTime  @db.Timestamptz(3)
+  usedAt        DateTime? @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+
+  grantId String     @db.Uuid
+  grant   OAuthGrant @relation(fields: [grantId], references: [id], onDelete: Cascade)
+
+  @@index([grantId])
+}
+
+enum OAuthTokenKind {
+  ACCESS
+  REFRESH
+}
+
+model OAuthToken {
+  id        String         @id @default(uuid()) @db.Uuid
+  kind      OAuthTokenKind
+  tokenHash String         @unique
+  expiresAt DateTime       @db.Timestamptz(3)
+  revokedAt DateTime?      @db.Timestamptz(3)
+  // Refresh rotation, as RefreshToken: set with revokedAt when a successor
+  // replaced it, so a re-presentation inside the grace window is benign.
+  rotatedAt DateTime?      @db.Timestamptz(3)
+  createdAt DateTime       @default(now()) @db.Timestamptz(3)
+
+  grantId String     @db.Uuid
+  grant   OAuthGrant @relation(fields: [grantId], references: [id], onDelete: Cascade)
+
+  @@index([grantId])
+}

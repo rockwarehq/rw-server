@@ -40,6 +40,11 @@ enum AuditAction {
 
   // Graph changesets
   GRAPH_CHANGESET_APPLIED
+
+  // Agents connected over OAuth (MCP)
+  OAUTH_GRANT_CREATED
+  OAUTH_GRANT_REVOKED
+  AGENT_CONNECTIONS_POLICY_CHANGED
 }
 
 model AuditLog {

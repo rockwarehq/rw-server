@@ -40,6 +40,7 @@ import * as entity from "./entity.js";
 import * as agent from "./agent.js";
 import * as graph from "./graph.js";
 import * as apiToken from "./api-token.js";
+import * as agentConnection from "./agent-connection.js";
 import * as integration from "./integration.js";
 
 // The app router outgrew what TypeScript will inline in one declaration
@@ -621,6 +622,15 @@ export const coreRouter = {
     removeLineItem: order.removeLineItem,
     reorder: order.reorder,
     nextNumber: order.nextNumber,
+  },
+  agentConnection: {
+    describeRequest: agentConnection.describeRequest,
+    approve: agentConnection.approve,
+    deny: agentConnection.deny,
+    list: agentConnection.list,
+    revoke: agentConnection.revoke,
+    policy: agentConnection.policy,
+    setPolicy: agentConnection.setPolicy,
   },
   apiToken: {
     create: apiToken.create,

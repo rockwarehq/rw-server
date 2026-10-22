@@ -8,6 +8,10 @@ model Site {
   /// row's business date is chosen.
   weekStart   WeekStart @default(MONDAY)
   attrs       Json      @default("{}")
+  /// Whether people may connect their own agents (Claude Code, Cursor, ...)
+  /// to this plant over MCP. Off by default: connecting sends plant data to
+  /// a third-party model provider, so the plant opts in.
+  agentConnections Boolean @default(false)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -63,6 +67,7 @@ model Site {
   objectSchemas           ObjectSchema[]
   objectInstances         ObjectInstance[]
   apiTokens               ApiToken[]
+  oauthGrants             OAuthGrant[]
   savedViews              SavedView[]
   reportDecks             ReportDeck[]
   integrations            Integration[]

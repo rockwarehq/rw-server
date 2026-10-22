@@ -67,6 +67,16 @@ const EnvSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((v) => v === "true"),
+  // People's own agents (Claude Code, Cursor, ...) over MCP + OAuth: IMM
+  // reads and setup proposals. Independent of AGENTS_ENABLED (our own agent
+  // runtime); each plant still opts in (Site.agentConnections).
+  MCP_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  // The API's public origin for OAuth metadata. Unset = as the caller
+  // reached us (forwarded headers).
+  MCP_PUBLIC_URL: z.url().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
   // Ask the API why a request missed the prompt cache (beta cache diagnosis);
   // recorded on each step.finished. For finding cache breakers, not for prod.
@@ -168,6 +178,19 @@ export const agentConfig = {
   /** Available and able to call the model. */
   enabled: config.AGENTS_ENABLED && !!config.ANTHROPIC_API_KEY,
   cacheDiagnostics: config.AGENT_CACHE_DIAGNOSTICS,
+};
+
+export const appConfig = {
+  /** Where IMM is served: the OAuth consent page lives there. */
+  baseUrl: config.APP_BASE_URL,
+};
+
+export const mcpConfig = {
+  /** /mcp and OAuth are mounted: for connected agents, or our own runtime. */
+  enabled: config.MCP_ENABLED || config.AGENTS_ENABLED,
+  /** Connected agents (OAuth) are admitted. */
+  connections: config.MCP_ENABLED,
+  publicUrl: config.MCP_PUBLIC_URL ?? null,
 };
 
 export const securityConfig = {

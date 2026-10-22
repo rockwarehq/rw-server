@@ -73,6 +73,7 @@ model User {
   productStockAdjustments ProductStockAdjustment[]
   stockMovements          StockMovement[]
   apiTokensCreated        ApiToken[]
+  oauthGrants             OAuthGrant[]
   savedViewsCreated       SavedView[]
   documentFilesCreated    DocumentFile[]           @relation("DocumentFileCreatedBy")
 
