@@ -74,6 +74,8 @@ model User {
   stockMovements          StockMovement[]
   apiTokensCreated        ApiToken[]
   oauthGrants             OAuthGrant[]
+  setupChangesetsCreated  SetupChangeset[]         @relation("SetupChangesetCreatedBy")
+  setupChangesetsApplied  SetupChangeset[]         @relation("SetupChangesetAppliedBy")
   savedViewsCreated       SavedView[]
   documentFilesCreated    DocumentFile[]           @relation("DocumentFileCreatedBy")
 

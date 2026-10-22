@@ -4,6 +4,10 @@ import * as graph from "@rw/livestore/graph/index";
 import { logEvent } from "@rw/services/audit/index";
 import { z } from "zod";
 
+import { appConfig } from "../config.js";
+import type { SetupPlan } from "../setup/plan.js";
+import { setupSchemaDocument, setupSpecSchema } from "../setup/spec.js";
+
 import type { router as appRouter } from "../rpc/index.js";
 import type { ResolvedAgent } from "./agents.js";
 import type { DurableEvent } from "./events.js";
@@ -101,6 +105,20 @@ const planHook = z.object({
   eventPayload: jsonObject.optional(),
   eventContext: jsonObject.optional(),
 });
+
+/** A proposal as the agent needs it: counts, what's wrong, and where to send the person. */
+function setupProposalOutput(id: string, plan: SetupPlan) {
+  const problems = plan.rows.filter((row) => row.issues.length > 0);
+  return {
+    id,
+    summary: plan.summary,
+    applicable: plan.applicable,
+    issues: [...plan.issues, ...problems.flatMap((row) => row.issues)].slice(0, 100),
+    next: plan.applicable
+      ? `Give the person this link to review and apply it: ${new URL(`/settings/imports/${id}`, appConfig.baseUrl)}`
+      : "Fix the issues in the spec and propose again (discarding nothing is needed; the person will discard stale drafts), or ask the person to fix records in IMM and call setup_replan.",
+  };
+}
 
 export const AGENT_TOOLS: AgentTool[] = [
   defineTool({
@@ -380,6 +398,54 @@ export const AGENT_TOOLS: AgentTool[] = [
         },
       };
     },
+  }),
+  // Bulk setup: the agent maps a customer's data onto the spec and proposes
+  // it; a person reviews and applies it in IMM.
+  defineTool({
+    name: "setup_schema",
+    description:
+      "The setup spec: JSON Schema and rules for proposing materials and products (by external key) into this plant. Read it before mapping a spreadsheet.",
+    input: z.object({}),
+    permission: { key: "imm.read" },
+    execute: async () => ({ output: setupSchemaDocument() }),
+  }),
+  defineTool({
+    name: "setup_propose",
+    description:
+      "Propose a setup changeset. It is planned against the plant and saved as a draft; nothing changes until a person applies it in IMM. Returns the plan (create/update/unchanged/conflict per row, with issues) and the review link to give the person.",
+    input: z.object({
+      title: z
+        .string()
+        .trim()
+        .min(1)
+        .max(200)
+        .describe("What this import is, e.g. 'Acme resins and parts, batch 1 of 3'"),
+      spec: setupSpecSchema,
+    }),
+    permission: { key: "setup.propose" },
+    execute: async (input, ctx) => {
+      const created = await ctx.client.setup.changeset.create({ siteId: ctx.siteId, ...input });
+      return { output: setupProposalOutput(created.id, created.plan) };
+    },
+  }),
+  defineTool({
+    name: "setup_replan",
+    description:
+      "Plan a draft setup changeset again against the plant as it is now (after the person fixed something in IMM, or a changeset it depends on was applied).",
+    input: z.object({ id: z.uuid() }),
+    permission: { key: "setup.propose" },
+    execute: async (input, ctx) => {
+      const replanned = await ctx.client.setup.changeset.replan(input);
+      return { output: setupProposalOutput(replanned.id, replanned.plan) };
+    },
+  }),
+  defineTool({
+    name: "setup_changesets_list",
+    description:
+      "Setup changesets proposed for this plant, newest first, with their status (DRAFT, APPLIED, DISCARDED) and counts.",
+    input: z.object({ status: z.enum(["DRAFT", "APPLIED", "DISCARDED"]).optional() }),
+    permission: { key: "imm.read" },
+    execute: (input, ctx) => read(ctx.client.setup.changeset.list({ siteId: ctx.siteId, ...input })),
   }),
   defineTool({
     name: "tool_output_read",

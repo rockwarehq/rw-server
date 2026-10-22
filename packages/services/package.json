@@ -8,6 +8,7 @@
     "./automation/*": "./dist/automation/*.js",
     "./label/*": "./dist/label/*.js",
     "./config": "./dist/config.js",
+    "./write": "./dist/write.js",
     "./cycle/*": "./dist/cycle/*.js",
     "./dashboard/*": "./dist/dashboard/*.js",
     "./device/*": "./dist/device/*.js",

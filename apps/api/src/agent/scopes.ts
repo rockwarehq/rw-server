@@ -23,6 +23,13 @@ export const AGENT_CALLABLE: Readonly<Record<string, OAuthScope>> = {
   "job.get": "read",
   "job.listTools": "read",
   "job.listItems": "read",
+  // Setup changesets: an agent proposes and revises its person's drafts.
+  // Applying is never here: a person applies in IMM.
+  "setup.changeset.list": "read",
+  "setup.changeset.get": "read",
+  "setup.changeset.create": "setup:propose",
+  "setup.changeset.replan": "setup:propose",
+  "setup.changeset.discard": "setup:propose",
 };
 
 /** The scope a connected agent needs for this procedure, or null when closed to agents. */

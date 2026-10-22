@@ -3,6 +3,7 @@ import type { Prisma, WeightUnit } from "@rw/db";
 
 import * as storage from "@rw/runtime/storage";
 import { publishEntityEvent } from "../entity/events.js";
+import { emitEntityEvent, inTransaction, reader, type WriteOptions } from "../write.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { createForStockable } from "../stock/item.js";
 
@@ -95,11 +96,12 @@ export interface AddPictureInput {
 /**
  * Create a new product with initial version (version 1)
  */
-export async function create(input: CreateProductInput) {
+export async function create(input: CreateProductInput, options?: WriteOptions) {
+  const db = reader(options);
   const { siteId, labelIds, sku, name, description, externalSku, weight, weightUnits, itemCost, attrs } = input;
 
   // Verify site exists
-  const site = await prisma.site.findUnique({
+  const site = await db.site.findUnique({
     where: { id: siteId },
     select: { id: true, workspaceId: true },
   });
@@ -109,14 +111,14 @@ export async function create(input: CreateProductInput) {
   }
 
   if (labelIds && labelIds.length > 0) {
-    const found = await prisma.label.count({ where: { id: { in: labelIds }, siteId } });
+    const found = await db.label.count({ where: { id: { in: labelIds }, siteId } });
     if (found !== labelIds.length) {
       return { error: "One or more labels not found for this site", code: "LABEL_NOT_FOUND" };
     }
   }
 
   // Create product and initial version in transaction
-  const product = await prisma.$transaction(async (tx) => {
+  const product = await inTransaction(options, async (tx) => {
     // 1. Create Product entity
     const p = await tx.product.create({
       data: {
@@ -157,7 +159,7 @@ export async function create(input: CreateProductInput) {
     });
   });
 
-  publishEntityEvent({
+  emitEntityEvent(options, {
     action: "created",
     entityKey: SYSTEM_ENTITY_KEYS.Product,
     entityId: product.id,
@@ -309,11 +311,12 @@ export async function getById(id: string) {
 /**
  * Update product (creates new version version)
  */
-export async function update(id: string, input: UpdateProductInput) {
+export async function update(id: string, input: UpdateProductInput, options?: WriteOptions) {
+  const db = reader(options);
   const { sku, name, description, externalSku, weight, weightUnits, itemCost, attrs, labelIds } = input;
 
   // Get current product with version
-  const current = await prisma.product.findUnique({
+  const current = await db.product.findUnique({
     where: { id },
     include: { currentVersion: true, site: { select: { workspaceId: true } } },
   });
@@ -331,7 +334,7 @@ export async function update(id: string, input: UpdateProductInput) {
   }
 
   if (labelIds && labelIds.length > 0) {
-    const found = await prisma.label.count({
+    const found = await db.label.count({
       where: { id: { in: labelIds }, siteId: current.siteId },
     });
     if (found !== labelIds.length) {
@@ -342,7 +345,7 @@ export async function update(id: string, input: UpdateProductInput) {
   const currentVersion = current.currentVersion;
 
   // Get next version number
-  const latestVersion = await prisma.productVersion.findFirst({
+  const latestVersion = await db.productVersion.findFirst({
     where: { productId: id },
     orderBy: { version: "desc" },
     select: { version: true },
@@ -351,7 +354,7 @@ export async function update(id: string, input: UpdateProductInput) {
   const nextVersion = (latestVersion?.version ?? 0) + 1;
 
   // Create new version with merged data
-  const product = await prisma.$transaction(async (tx) => {
+  const product = await inTransaction(options, async (tx) => {
     const version = await tx.productVersion.create({
       data: {
         productId: id,
@@ -382,7 +385,7 @@ export async function update(id: string, input: UpdateProductInput) {
     });
   });
 
-  publishEntityEvent({
+  emitEntityEvent(options, {
     action: "updated",
     entityKey: SYSTEM_ENTITY_KEYS.Product,
     entityId: product.id,
@@ -716,11 +719,12 @@ export async function duplicate(input: DuplicateProductInput) {
 /**
  * Add a material to a product
  */
-export async function addMaterial(input: AddMaterialInput) {
+export async function addMaterial(input: AddMaterialInput, options?: WriteOptions) {
+  const db = reader(options);
   const { productId, materialId, weight, weightUnits, itemCost } = input;
 
   // Verify product exists and is not deleted
-  const product = await prisma.product.findUnique({
+  const product = await db.product.findUnique({
     where: { id: productId },
     select: {
       id: true,
@@ -740,7 +744,7 @@ export async function addMaterial(input: AddMaterialInput) {
   }
 
   // Verify material exists and is not deleted
-  const material = await prisma.material.findUnique({
+  const material = await db.material.findUnique({
     where: { id: materialId },
     select: { id: true, siteId: true, deletedAt: true, currentVersionId: true },
   });
@@ -759,7 +763,7 @@ export async function addMaterial(input: AddMaterialInput) {
   }
 
   // Check if already linked
-  const existing = await prisma.productMaterial.findUnique({
+  const existing = await db.productMaterial.findUnique({
     where: { productId_materialId: { productId, materialId } },
   });
 
@@ -774,7 +778,7 @@ export async function addMaterial(input: AddMaterialInput) {
   }
 
   // Create link and initial version in transaction
-  const productMaterial = await prisma.$transaction(async (tx) => {
+  const productMaterial = await inTransaction(options, async (tx) => {
     const pm = await tx.productMaterial.create({
       data: {
         productId,
@@ -808,7 +812,7 @@ export async function addMaterial(input: AddMaterialInput) {
     });
   });
 
-  publishEntityEvent({
+  emitEntityEvent(options, {
     action: "updated",
     entityKey: SYSTEM_ENTITY_KEYS.Product,
     entityId: product.id,
@@ -816,7 +820,7 @@ export async function addMaterial(input: AddMaterialInput) {
     workspaceId: product.site.workspaceId,
     changedFields: ["materials"],
   });
-  publishEntityEvent({
+  emitEntityEvent(options, {
     action: "updated",
     entityKey: SYSTEM_ENTITY_KEYS.Material,
     entityId: material.id,
@@ -831,11 +835,12 @@ export async function addMaterial(input: AddMaterialInput) {
 /**
  * Update a product-material link
  */
-export async function updateMaterial(input: UpdateMaterialInput) {
+export async function updateMaterial(input: UpdateMaterialInput, options?: WriteOptions) {
+  const db = reader(options);
   const { productId, materialId, weight, weightUnits, itemCost } = input;
 
   // Find existing link with current version and parent entities for version snapshots
-  const existing = await prisma.productMaterial.findUnique({
+  const existing = await db.productMaterial.findUnique({
     where: { productId_materialId: { productId, materialId } },
     include: {
       currentVersion: true,
@@ -855,7 +860,7 @@ export async function updateMaterial(input: UpdateMaterialInput) {
   }
 
   // Get next version number
-  const latestVersion = await prisma.productMaterialVersion.findFirst({
+  const latestVersion = await db.productMaterialVersion.findFirst({
     where: { productMaterialId: existing.id },
     orderBy: { version: "desc" },
     select: { version: true },
@@ -864,7 +869,7 @@ export async function updateMaterial(input: UpdateMaterialInput) {
   const nextVersion = (latestVersion?.version ?? 0) + 1;
 
   // Create new version version
-  const productMaterial = await prisma.$transaction(async (tx) => {
+  const productMaterial = await inTransaction(options, async (tx) => {
     const currentVersion = existing.currentVersion;
     const newWeight = weight !== undefined ? weight : (currentVersion?.weight ?? null);
     const newWeightUnits = weightUnits !== undefined ? weightUnits : (currentVersion?.weightUnits ?? null);
@@ -898,7 +903,7 @@ export async function updateMaterial(input: UpdateMaterialInput) {
     });
   });
 
-  publishEntityEvent({
+  emitEntityEvent(options, {
     action: "updated",
     entityKey: SYSTEM_ENTITY_KEYS.Product,
     entityId: existing.product.id,
@@ -906,7 +911,7 @@ export async function updateMaterial(input: UpdateMaterialInput) {
     workspaceId: existing.product.site.workspaceId,
     changedFields: ["materials"],
   });
-  publishEntityEvent({
+  emitEntityEvent(options, {
     action: "updated",
     entityKey: SYSTEM_ENTITY_KEYS.Material,
     entityId: existing.material.id,

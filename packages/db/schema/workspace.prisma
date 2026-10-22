@@ -27,7 +27,7 @@ model Workspace {
   objectSchemas ObjectSchema[]
 
   // Customer/app API tokens issued for this workspace
-  apiTokens ApiToken[]
+  apiTokens   ApiToken[]
   oauthGrants OAuthGrant[]
 
   // SMS consent, keyed by phone number rather than by person

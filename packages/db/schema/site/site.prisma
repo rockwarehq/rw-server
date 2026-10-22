@@ -1,17 +1,17 @@
 model Site {
-  id          String    @id @default(uuid()) @db.Uuid
-  name        String
-  description String?
-  timezone    String    @default("UTC")
+  id               String    @id @default(uuid()) @db.Uuid
+  name             String
+  description      String?
+  timezone         String    @default("UTC")
   /// First day of the site's week. Only decides which week a business date
   /// falls in (weekly reports, week views, new weekly schedules) — never how a
   /// row's business date is chosen.
-  weekStart   WeekStart @default(MONDAY)
-  attrs       Json      @default("{}")
+  weekStart        WeekStart @default(MONDAY)
+  attrs            Json      @default("{}")
   /// Whether people may connect their own agents (Claude Code, Cursor, ...)
   /// to this plant over MCP. Off by default: connecting sends plant data to
   /// a third-party model provider, so the plant opts in.
-  agentConnections Boolean @default(false)
+  agentConnections Boolean   @default(false)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -68,6 +68,8 @@ model Site {
   objectInstances         ObjectInstance[]
   apiTokens               ApiToken[]
   oauthGrants             OAuthGrant[]
+  externalRefs            ExternalRef[]
+  setupChangesets         SetupChangeset[]
   savedViews              SavedView[]
   reportDecks             ReportDeck[]
   integrations            Integration[]

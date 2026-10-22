@@ -1,0 +1,71 @@
+enum SetupEntity {
+  MATERIAL
+  PRODUCT
+  TOOL
+  JOB
+  WORKCENTER
+  STATION
+}
+
+enum SetupChangesetStatus {
+  DRAFT
+  APPLIED
+  DISCARDED
+}
+
+/// A record's key in another system ("customer-erp" / "RES-PP-01"). Bulk
+/// setup resolves keys through these first, so re-running an import finds
+/// what it created last time instead of duplicating it.
+model ExternalRef {
+  id          String      @id @default(uuid()) @db.Uuid
+  entityType  SetupEntity
+  source      String
+  key         String
+  entityId    String      @db.Uuid
+  /// The setup changeset that last wrote this record through this key.
+  changesetId String?     @db.Uuid
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, entityType, source, key])
+  @@index([siteId, entityType, entityId])
+}
+
+/// A proposed batch of master-data upserts (materials, products, ...) keyed
+/// by external keys, planned against the plant and applied in one transaction
+/// once a person approves it in IMM. Agents only ever propose these.
+model SetupChangeset {
+  id         String               @id @default(uuid()) @db.Uuid
+  title      String
+  source     String
+  status     SetupChangesetStatus @default(DRAFT)
+  /// Proposed through a connected agent (OAuth) rather than by hand.
+  author     GraphChangesetAuthor @default(USER)
+  /// The spec exactly as proposed.
+  spec       Json
+  /// The latest plan of spec against the plant.
+  planResult Json
+  /// Counts by entity and action, for lists.
+  summary    Json
+  grantId    String?              @db.Uuid
+  clientName String?
+
+  createdById String?   @db.Uuid
+  createdBy   User?     @relation("SetupChangesetCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  appliedById String?   @db.Uuid
+  appliedBy   User?     @relation("SetupChangesetAppliedBy", fields: [appliedById], references: [id], onDelete: SetNull)
+  appliedAt   DateTime? @db.Timestamptz(3)
+  discardedAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@index([siteId, status, createdAt])
+}

@@ -223,12 +223,31 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("agent connections over OAuth (T
     expect(names).toContain("imm_products_search");
     expect(names.some((name) => name.startsWith("graph_"))).toBe(false);
     expect(names).not.toContain("propose_changeset");
+    expect(names).not.toContain("setup_propose");
 
     const call = await mcp(server, tokens.access_token, "tools/call", { name: "imm_products_search", arguments: {} });
     expect(call.body.result.isError).toBeFalsy();
 
     const rpc = await rpcCall(server, "product/list", { siteId }, tokens.access_token);
     expect(rpc.statusCode).toBe(401);
+  });
+
+  it("lets a propose grant propose setup over MCP and hands back the review link", async () => {
+    const tokens = await connect(memberToken, ["read", "setup:propose"]);
+    const list = await mcp(server, tokens.access_token, "tools/list");
+    const names = (list.body.result.tools as Array<{ name: string }>).map((tool) => tool.name);
+    expect(names).toEqual(expect.arrayContaining(["setup_schema", "setup_propose", "setup_replan"]));
+
+    const call = await mcp(server, tokens.access_token, "tools/call", {
+      name: "setup_propose",
+      arguments: { title: "oauth test", spec: { source: "oauth-test", materials: [{ key: "OAUTH-MAT-1" }] } },
+    });
+    expect(call.body.result.isError).toBeFalsy();
+    const output = JSON.parse(call.body.result.content[0].text) as { id: string; next: string };
+    expect(output.next).toContain(`/settings/imports/${output.id}`);
+    const row = await prisma.setupChangeset.findUniqueOrThrow({ where: { id: output.id } });
+    expect(row.author).toBe("AGENT");
+    await prisma.setupChangeset.delete({ where: { id: output.id } });
   });
 
   it("burns the connection when a code is replayed", async () => {
