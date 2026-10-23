@@ -155,7 +155,14 @@ async function revertVersion(tx: Tx, entry: Entry): Promise<boolean> {
   if (entry.entity === "product") {
     await tx.product.update({ where: { id: entry.entityId }, data: { currentVersionId: before } });
     const used = await tx.productVersion.count({
-      where: { id: after, OR: [{ productMaterialVersions: { some: {} } }, { inventoryItems: { some: {} } }] },
+      where: {
+        id: after,
+        OR: [
+          { productMaterialVersions: { some: {} } },
+          { inventoryItems: { some: {} } },
+          { itemDispositionLogs: { some: {} } },
+        ],
+      },
     });
     if (!used) await tx.productVersion.delete({ where: { id: after } });
   } else if (entry.entity === "material") {

@@ -459,6 +459,25 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
     expect(after?.currentVersion?.name).toBe("Part RV 0");
   });
 
+  it("keeps the import's version when removing completely if a disposition was logged against it", async () => {
+    await proposeAndApply(ownSpec("DL"));
+    const before = await productByKey(`DL-P0-${RUN}`);
+    const renamed = ownSpec("DL");
+    renamed.products[0]!.name = "Renamed before scrap was logged";
+    const { id } = await proposeAndApply(renamed);
+    const imported = await productByKey(`DL-P0-${RUN}`);
+    const station = await prisma.station.create({ data: { siteId, name: `DL station ${RUN}` } });
+    await prisma.itemDispositionLog.create({
+      data: { siteId, stationId: station.id, productId: imported!.id, productVersionId: imported!.currentVersionId! },
+    });
+
+    await rpcCall(server, "setup/changeset/rollback", { id, mode: "remove" }, adminToken);
+    expect((await settled(id)).status).toBe("ROLLED_BACK");
+    const after = await productByKey(`DL-P0-${RUN}`);
+    expect(after?.currentVersionId).toBe(before?.currentVersionId);
+    expect(await prisma.productVersion.count({ where: { id: imported!.currentVersionId! } })).toBe(1);
+  });
+
   it("puts a material's stock back on its earlier unit when an import that changed it is removed completely", async () => {
     await proposeAndApply(ownSpec("SU"));
     const material = await prisma.material.findFirstOrThrow({
