@@ -52,6 +52,9 @@ const PUBLIC_REST_ROUTES = new Set(
     "GET /oauth/authorize",
     "POST /oauth/token",
     "POST /oauth/revoke",
+    // A setup import's file, sent by an agent with curl. Authority is the
+    // one-time upload token from setup.upload.create, which needs MANAGE.
+    "PUT /setup/uploads/:id",
   ].map((s) => s.toUpperCase()),
 );
 

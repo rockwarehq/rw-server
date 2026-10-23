@@ -76,6 +76,7 @@ model User {
   oauthGrants             OAuthGrant[]
   setupChangesetsCreated  SetupChangeset[]         @relation("SetupChangesetCreatedBy")
   setupChangesetsApplied  SetupChangeset[]         @relation("SetupChangesetAppliedBy")
+  setupUploads            SetupUpload[]            @relation("SetupUploadCreatedBy")
   savedViewsCreated       SavedView[]
   documentFilesCreated    DocumentFile[]           @relation("DocumentFileCreatedBy")
 

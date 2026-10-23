@@ -8,7 +8,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import { loadUserCurrent } from "../auth/plugin.js";
 import { agentConfig, mcpConfig } from "../config.js";
-import { protectedResourceMetadataUrl } from "../oauth/routes.js";
+import { apiOrigin, protectedResourceMetadataUrl } from "../oauth/routes.js";
 import { OAUTH_ACCESS_PREFIX, resolveAccessToken } from "../oauth/store.js";
 import { builtInAgent, type ResolvedAgent } from "./agents.js";
 import type { Ruleset } from "./permission.js";
@@ -110,6 +110,7 @@ function mcpServerFor(request: FastifyRequest, current: Current, siteId: string)
         requireSiteAdmin: async () => {
           await current.access.require("ADMIN", { site: siteId });
         },
+        apiOrigin: apiOrigin(request),
         runSubagent: null,
       });
       return { content: [{ type: "text", text: serializeOutput(result.output, "mcp").model }] };

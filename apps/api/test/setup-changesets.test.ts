@@ -4,7 +4,7 @@ import prisma from "@rw/db";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadUserCurrent } from "../src/auth/plugin.js";
 import { router } from "../src/rpc/index.js";
-import type { SetupPlan } from "../src/setup/plan.js";
+import type { SetupPlan, SetupRow } from "../src/setup/plan.js";
 import { makeUser } from "./helpers/access.js";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
 import { rpcCall } from "./helpers/rpc-call.js";
@@ -60,6 +60,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
     return rpcCall(server, "setup/changeset/create", { siteId, title: "test import", spec: body }, token);
   }
 
+  /** A changeset's planned rows, as the review page pages them. */
+  async function rowsOf(id: string, filter: Record<string, unknown> = {}) {
+    const page = await rpcCall(server, "setup/changeset/rows", { id, limit: 500, ...filter }, memberToken);
+    expect(page.statusCode).toBe(200);
+    return (page.json as { total: number; rows: SetupRow[] }).rows;
+  }
+
   beforeAll(async () => {
     server = buildServer();
     await server.ready();
@@ -87,7 +94,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
     const { id, plan } = proposed.json as { id: string; plan: SetupPlan };
     expect(plan.applicable).toBe(true);
     expect(plan.summary).toMatchObject({ material: { create: 2 }, product: { create: 2 } });
-    const cap = plan.rows.find((row) => row.key === `P1-${RUN}`);
+    const cap = (await rowsOf(id)).find((row) => row.key === `P1-${RUN}`);
     expect(cap?.links?.map((link) => link.action)).toEqual(["create", "create"]);
 
     const applied = await rpcCall(server, "setup/changeset/apply", { id }, memberToken);
@@ -116,8 +123,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
 
   it("plans a changed field as an update with its diff", async () => {
     const proposed = await propose(spec({ productName: `Cap 38mm v2 ${RUN}` }));
-    const plan = (proposed.json as { plan: SetupPlan }).plan;
-    const cap = plan.rows.find((row) => row.key === `P1-${RUN}`);
+    const cap = (await rowsOf((proposed.json as { id: string }).id, { action: "update" })).find(
+      (row) => row.key === `P1-${RUN}`,
+    );
     expect(cap).toMatchObject({ action: "update", matchedBy: "ref" });
     expect(cap?.changes).toEqual([{ field: "name", from: `Cap 38mm ${RUN}`, to: `Cap 38mm v2 ${RUN}` }]);
   });
@@ -125,9 +133,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
   it("finds a record made by hand through its natural key", async () => {
     const sku = `HAND-${RUN}`;
     await rpcCall(server, "product/create", { siteId, sku, name: "Made by hand" }, memberToken);
-    const proposed = await propose({ source: SOURCE, products: [{ key: sku, name: "Made by hand" }] });
-    const row = (proposed.json as { plan: SetupPlan }).plan.rows[0];
-    expect(row).toMatchObject({ action: "unchanged", matchedBy: "natural" });
+    const proposed = await propose({ source: SOURCE, products: [{ key: sku, name: "Made by hand, renamed" }] });
+    const [row] = await rowsOf((proposed.json as { id: string }).id);
+    expect(row).toMatchObject({ action: "update", matchedBy: "natural" });
   });
 
   it("reports duplicates and unknown materials instead of guessing", async () => {
@@ -139,9 +147,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
       ],
       products: [{ key: `P3-${RUN}`, materials: [{ material: `NOPE-${RUN}` }] }],
     });
-    const plan = (proposed.json as { plan: SetupPlan }).plan;
+    const { plan, problems } = proposed.json as { plan: SetupPlan; problems: SetupRow[] };
     expect(plan.applicable).toBe(false);
-    const codes = plan.rows.flatMap((row) => row.issues.map((issue) => issue.code));
+    const codes = problems.flatMap((row) => row.issues.map((issue) => issue.code));
     expect(codes).toContain("DUPLICATE_KEY");
     expect(codes).toContain("UNKNOWN_MATERIAL");
 
@@ -161,8 +169,134 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
     const after = await rpcCall(server, "setup/changeset/get", { id }, memberToken);
     const body = after.json as { status: string; plan: SetupPlan };
     expect(body.status).toBe("DRAFT");
-    const cap = body.plan.rows.find((row) => row.key === `P1-${RUN}`);
+    const cap = (await rowsOf(id)).find((row) => row.key === `P1-${RUN}`);
     expect(cap?.changes[0]).toMatchObject({ from: `Renamed in IMM ${RUN}`, to: `Cap stale ${RUN}` });
+  });
+
+  async function upload(filename: string, csv: string, token = memberToken) {
+    const created = await rpcCall(server, "setup/upload/create", { siteId, filename }, token);
+    expect(created.statusCode).toBe(200);
+    const { id, token: uploadToken, path } = created.json as { id: string; token: string; path: string };
+    const sent = await server.inject({
+      method: "PUT",
+      url: path,
+      headers: { "x-upload-token": uploadToken, "content-type": "text/csv" },
+      payload: csv,
+    });
+    expect(sent.statusCode).toBe(200);
+    return { id, uploadToken, path };
+  }
+
+  it("takes an upload once, with its token only", async () => {
+    const created = await rpcCall(server, "setup/upload/create", { siteId, filename: "x.csv" }, memberToken);
+    const { token, path } = created.json as { token: string; path: string };
+    const put = (headers: Record<string, string>) =>
+      server.inject({ method: "PUT", url: path, headers: { "content-type": "text/csv", ...headers }, payload: "a,b\n1,2\n" });
+    expect((await put({})).statusCode).toBe(401);
+    expect((await put({ "x-upload-token": "rw_upl_wrong" })).statusCode).toBe(401);
+    expect((await put({ "x-upload-token": token })).statusCode).toBe(200);
+    expect((await put({ "x-upload-token": token })).statusCode).toBe(409);
+    expect((await rpcCall(server, "setup/upload/create", { siteId, filename: "x.csv" }, viewerToken)).statusCode).toBe(403);
+  });
+
+  it("builds an import from uploaded files and a column mapping, pointing problems at file lines", async () => {
+    const materials = await upload(
+      "materials.csv",
+      [`Item No;Description;UoM;Std Cost`, `FM1-${RUN};"Resin; natural";kgs;"1.234,50"`, `FM2-${RUN};Colorant;Kilo;6,10`].join("\r\n"),
+    );
+    const products = await upload(
+      "products.csv",
+      [
+        "Part No,Part Name,Shot Weight (g),Resin,Resin (g)",
+        `FP1-${RUN},Cap,4.2,FM1-${RUN},4.1`,
+        `FP2-${RUN},Lid,heavy,FM1-${RUN},`,
+        `FP3-${RUN},Spout,3.1,,`,
+      ].join("\n"),
+    );
+    const bom = await upload("bom.csv", ["Parent,Component,Qty", `FP1-${RUN},FM2-${RUN},0.1`, `NOPE-${RUN},FM2-${RUN},1`].join("\n"));
+
+    const proposed = await rpcCall(
+      server,
+      "setup/changeset/create",
+      {
+        siteId,
+        title: "from files",
+        source: `${SOURCE}-files`,
+        files: {
+          numbers: { decimal: "," },
+          materials: {
+            upload: materials.id,
+            columns: { key: "Item No", name: "Description", weightUnits: "UoM", unitCost: "Std Cost" },
+          },
+          products: {
+            upload: products.id,
+            columns: { key: "Part No", name: "Part Name", weight: "Shot Weight (g)", weightUnits: { value: "G" } },
+            materials: [{ material: "Resin", weight: "Resin (g)", weightUnits: { value: "G" } }],
+          },
+          bom: {
+            upload: bom.id,
+            columns: { product: "Parent", material: "Component", weight: "Qty", weightUnits: { value: "G" } },
+          },
+        },
+      },
+      memberToken,
+    );
+    expect(proposed.statusCode).toBe(200);
+    const { id, plan } = proposed.json as { id: string; plan: SetupPlan };
+    expect(plan.summary).toMatchObject({ material: { create: 2 }, product: { create: 3 } });
+    // "heavy" isn't a number (decimal "," reads 4.2 as 42, which is still a number), and NOPE isn't in the import.
+    expect(plan.applicable).toBe(false);
+    expect(plan.issues.map((issue) => [issue.code, issue.path])).toEqual([
+      ["BAD_VALUE", "products.csv line 3, weight"],
+      ["UNKNOWN_PRODUCT", "bom.csv line 3, product"],
+    ]);
+
+    const rows = await rowsOf(id);
+    const resin = rows.find((row) => row.key === `FM1-${RUN}`);
+    expect(resin?.origin).toEqual({ file: "materials.csv", line: 2 });
+    expect(resin?.changes).toEqual(
+      expect.arrayContaining([
+        { field: "name", from: null, to: "Resin; natural" },
+        { field: "weightUnits", from: null, to: "KG" },
+        { field: "unitCost", from: null, to: 1234.5 },
+      ]),
+    );
+    const cap = rows.find((row) => row.key === `FP1-${RUN}`);
+    expect(cap?.origin).toEqual({ file: "products.csv", line: 2 });
+    expect(cap?.links?.map((link) => link.materialKey)).toEqual([`FM1-${RUN}`, `FM2-${RUN}`]);
+    expect(rows.find((row) => row.key === `FP3-${RUN}`)?.links).toEqual([]);
+
+    // The file's problems stay until the files are fixed and proposed again.
+    const replanned = await rpcCall(server, "setup/changeset/replan", { id }, memberToken);
+    expect((replanned.json as { plan: SetupPlan }).plan.applicable).toBe(false);
+    expect((await rpcCall(server, "setup/changeset/apply", { id }, memberToken)).statusCode).toBe(400);
+
+    const page = await rpcCall(server, "setup/changeset/rows", { id, entity: "product", q: "spout" }, memberToken);
+    expect((page.json as { total: number }).total).toBe(1);
+  });
+
+  it("names the columns a file has when the mapping gets one wrong", async () => {
+    const file = await upload("parts.csv", "Part No,Name\nX1,Thing\n");
+    const proposed = await rpcCall(
+      server,
+      "setup/changeset/create",
+      {
+        siteId,
+        title: "bad mapping",
+        source: SOURCE,
+        files: { products: { upload: file.id, columns: { key: "Part Number" } } },
+      },
+      memberToken,
+    );
+    expect(proposed.statusCode).toBe(400);
+    expect(JSON.stringify(proposed.json)).toContain('Its columns are: \\"Part No\\", \\"Name\\"');
+  });
+
+  it("sends anything over the inline limit to uploads", async () => {
+    const products = Array.from({ length: 2001 }, (_, i) => ({ key: `BIG-${RUN}-${i}` }));
+    const proposed = await propose({ source: SOURCE, products });
+    expect(proposed.statusCode).toBe(400);
+    expect(JSON.stringify(proposed.json)).toContain("Upload the files instead");
   });
 
   it("lets a connected agent propose and revise, never apply", async () => {

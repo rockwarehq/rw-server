@@ -5,8 +5,11 @@ import { logEvent } from "@rw/services/audit/index";
 import { z } from "zod";
 
 import { appConfig } from "../config.js";
-import type { SetupPlan } from "../setup/plan.js";
+import { filesSchemaDocument, setupFilesSchema } from "../setup/mapping.js";
+import type { SetupRow } from "../setup/plan.js";
 import { setupSchemaDocument, setupSpecSchema } from "../setup/spec.js";
+import type { SetupPlanTotals } from "../setup/store.js";
+import { MAX_APPLY_ROWS } from "../setup/apply.js";
 
 import type { router as appRouter } from "../rpc/index.js";
 import type { ResolvedAgent } from "./agents.js";
@@ -42,6 +45,8 @@ export interface ToolContext {
   /** Set when this call runs because a person approved it. */
   approval: { repliedById: string } | null;
   requireSiteAdmin: () => Promise<void>;
+  /** The API's public origin, for links an agent calls itself (MCP only). */
+  apiOrigin?: string;
   /** Runs a child agent to completion (only inside the runner). */
   runSubagent: ((agentKey: string, prompt: string) => Promise<{ childSessionId: string; text: string }>) | null;
 }
@@ -107,18 +112,33 @@ const planHook = z.object({
 });
 
 /** A proposal as the agent needs it: counts, what's wrong, and where to send the person. */
-function setupProposalOutput(id: string | null, plan: SetupPlan) {
-  const problems = plan.rows.filter((row) => row.issues.length > 0);
+function setupProposalOutput(proposal: {
+  id: string | null;
+  plan: SetupPlanTotals;
+  problems: SetupRow[];
+  writes: number;
+}) {
+  const { id, plan, problems, writes } = proposal;
+  const issues = [...plan.issues, ...problems.flatMap((row) => row.issues)];
+  const byCode: Record<string, number> = {};
+  for (const issue of issues) byCode[issue.code] = (byCode[issue.code] ?? 0) + 1;
+  const conflicts = plan.summary.material.conflict + plan.summary.product.conflict;
   return {
     id,
     summary: plan.summary,
     applicable: plan.applicable,
-    issues: [...plan.issues, ...problems.flatMap((row) => row.issues)].slice(0, 100),
+    issueCounts: byCode,
+    issues: issues.slice(0, 100),
+    ...(issues.length > 100 || conflicts > problems.length
+      ? { more: "Only the first problems are listed. Page through them with setup_rows (action: conflict)." }
+      : {}),
     next: !id
       ? "Already up to date: every row matches the plant, so nothing was saved and there's nothing for the person to review."
-      : plan.applicable
-        ? `Give the person this link to review and apply it: ${new URL(`/settings/imports/${id}`, appConfig.baseUrl)}`
-        : "Nothing can be applied until the issues are fixed. Fix them in the spec and propose again, or ask the person to fix the records in IMM and then call setup_replan with this id.",
+      : !plan.applicable
+        ? "Nothing can be applied until the issues are fixed. Fix them in the files or spec and propose again, or ask the person to fix the records in IMM and then call setup_replan with this id."
+        : writes > MAX_APPLY_ROWS
+          ? `This writes ${writes} records and one apply takes up to ${MAX_APPLY_ROWS} for now. Discard it and propose it again in parts of at most ${MAX_APPLY_ROWS} new or changed rows (materials first).`
+          : `Give the person this link to review and apply it: ${new URL(`/settings/imports/${id}`, appConfig.baseUrl)}`,
   };
 }
 
@@ -406,15 +426,15 @@ export const AGENT_TOOLS: AgentTool[] = [
   defineTool({
     name: "setup_schema",
     description:
-      "The setup spec: JSON Schema and rules for proposing materials and products (by external key) into this plant. Read it before mapping a spreadsheet.",
+      "The setup spec and the file mapping: JSON Schemas and rules for proposing materials and products (by external key) into this plant, inline or from uploaded CSV files. Read it before mapping a spreadsheet.",
     input: z.object({}),
     permission: { key: "imm.read" },
-    execute: async () => ({ output: setupSchemaDocument() }),
+    execute: async () => ({ output: { ...setupSchemaDocument(), files: filesSchemaDocument() } }),
   }),
   defineTool({
     name: "setup_propose",
     description:
-      "Propose a setup changeset. It is planned against the plant and saved as a draft; nothing changes until a person applies it in IMM. When every row already matches the plant, nothing is saved and id is null. Returns the plan (create/update/unchanged/conflict per row, with issues) and the review link to give the person.",
+      "Propose a setup changeset. Send either spec (the rows, up to 2,000) or source + files (uploads from setup_upload and how their columns map to fields). It is planned against the plant and saved as a draft; nothing changes until a person applies it in IMM. When every row already matches the plant, nothing is saved and id is null. Returns counts, the problems (with file lines for uploads) and the next step.",
     input: z.object({
       title: z
         .string()
@@ -422,13 +442,50 @@ export const AGENT_TOOLS: AgentTool[] = [
         .min(1)
         .max(200)
         .describe("What this import is, e.g. 'Acme resins and parts, batch 1 of 3'"),
-      spec: setupSpecSchema,
+      spec: setupSpecSchema.optional(),
+      source: z.string().trim().min(1).max(100).optional().describe("With files: stable name of the source system"),
+      files: setupFilesSchema.optional(),
     }),
     permission: { key: "setup.propose" },
     execute: async (input, ctx) => {
       const created = await ctx.client.setup.changeset.create({ siteId: ctx.siteId, ...input });
-      return { output: setupProposalOutput(created.id, created.plan) };
+      return { output: setupProposalOutput(created) };
     },
+  }),
+  defineTool({
+    name: "setup_upload",
+    description:
+      "Start sending a CSV file for a setup import, so its rows go to Rockware directly instead of through you. Returns a one-time command: run it on the person's machine (curl), then use uploadId in setup_propose's files. Export spreadsheets to CSV first. One file per upload; the token works once, for 30 minutes.",
+    input: z.object({ filename: z.string().trim().min(1).max(255).describe("The file's name, e.g. products.csv") }),
+    permission: { key: "setup.propose" },
+    execute: async (input, ctx) => {
+      const upload = await ctx.client.setup.upload.create({ siteId: ctx.siteId, filename: input.filename });
+      const url = new URL(upload.path, ctx.apiOrigin ?? appConfig.baseUrl).toString();
+      return {
+        output: {
+          uploadId: upload.id,
+          url,
+          expiresAt: upload.expiresAt,
+          command: `curl -sS --fail-with-body -X PUT -H 'x-upload-token: ${upload.token}' -H 'content-type: text/csv' --data-binary @'<path to ${input.filename}>' '${url}'`,
+          next: 'Run the command with the file\'s path. It answers {"ok":true,"size":...}. Then propose with files.<materials|products|bom>.upload set to uploadId.',
+        },
+      };
+    },
+  }),
+  defineTool({
+    name: "setup_rows",
+    description:
+      "Page through a proposed changeset's planned rows: filter by action (create, update, unchanged, conflict), entity (material, product) or text in key or name. Conflicts carry their issues.",
+    input: z.object({
+      id: z.uuid(),
+      action: z.enum(["create", "update", "unchanged", "conflict"]).optional(),
+      entity: z.enum(["material", "product"]).optional(),
+      q: z.string().trim().max(200).optional(),
+      offset: z.number().int().min(0).default(0),
+      limit: z.number().int().min(1).max(200).default(50),
+    }),
+    permission: { key: "imm.read" },
+    execute: (input, ctx) => read(ctx.client.setup.changeset.rows(input)),
   }),
   defineTool({
     name: "setup_replan",
@@ -438,7 +495,7 @@ export const AGENT_TOOLS: AgentTool[] = [
     permission: { key: "setup.propose" },
     execute: async (input, ctx) => {
       const replanned = await ctx.client.setup.changeset.replan(input);
-      return { output: setupProposalOutput(replanned.id, replanned.plan) };
+      return { output: setupProposalOutput(replanned) };
     },
   }),
   defineTool({

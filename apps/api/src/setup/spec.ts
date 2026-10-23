@@ -6,7 +6,10 @@ import { z } from "zod";
 // system the keys come from ("customer-erp"); a key resolves through the
 // plant's external refs first, then by the record's natural key.
 
-export const MAX_SETUP_ROWS = 2000;
+/** Rows in one changeset. Past a couple of thousand, propose from uploaded files. */
+export const MAX_SETUP_ROWS = 50_000;
+/** Rows an inline spec may carry; anything bigger goes up as files, not through the model. */
+export const MAX_INLINE_ROWS = 2000;
 
 const weightUnits = z.enum(["KG", "LB", "G", "OZ"]);
 const key = z.string().trim().min(1).max(200);
@@ -89,7 +92,7 @@ export function setupSchemaDocument() {
       "Keys resolve through this source's external refs first, then by natural key (material number, SKU).",
       "A product's materials may reference materials in the same spec or ones the plant already has.",
       "Propose references exactly as the source has them. An unknown material comes back as an UNKNOWN_MATERIAL issue for the person to settle; never swap in a similar key.",
-      `Propose at most ${MAX_SETUP_ROWS} rows per changeset; split bigger imports and propose materials before the products that use them.`,
+      `An inline spec takes up to ${MAX_INLINE_ROWS} rows. For more, send the files with setup_upload and propose them with a column mapping (up to ${MAX_SETUP_ROWS} rows).`,
       "Proposing never changes the plant. A person reviews and applies the changeset in IMM.",
     ],
   };

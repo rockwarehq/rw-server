@@ -53,6 +53,10 @@ model SetupChangeset {
   summary    Json
   grantId    String?              @db.Uuid
   clientName String?
+  /// For imports built from uploaded files: the column mapping as proposed.
+  mapping    Json?
+  /// For imports built from uploaded files: the file and line behind each spec row.
+  origin     Json?
 
   createdById String?   @db.Uuid
   createdBy   User?     @relation("SetupChangesetCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
@@ -67,5 +71,64 @@ model SetupChangeset {
   siteId String @db.Uuid
   site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
+  rows SetupChangesetRow[]
+
   @@index([siteId, status, createdAt])
+}
+
+/// One planned row of a setup changeset: what applying would do to one
+/// material or product. Kept as rows rather than one JSON plan, so a
+/// 20,000-row import can be paged and filtered for review.
+model SetupChangesetRow {
+  id        String  @id @default(uuid()) @db.Uuid
+  /// Order in the plan: materials first, then products, each in spec order.
+  position  Int
+  /// material | product
+  entity    String
+  /// Index in the spec's materials or products.
+  index     Int
+  key       String
+  label     String
+  /// create | update | unchanged | conflict
+  action    String
+  entityId  String? @db.Uuid
+  /// ref | natural
+  matchedBy String?
+  changes   Json
+  links     Json?
+  issues    Json
+  /// Where the row came from in an uploaded file: { file, line }.
+  origin    Json?
+
+  changesetId String         @db.Uuid
+  changeset   SetupChangeset @relation(fields: [changesetId], references: [id], onDelete: Cascade)
+
+  @@unique([changesetId, position])
+  @@index([changesetId, action, position])
+}
+
+/// A file an agent (or a person) sends for a setup import. The agent gets a
+/// one-time token to send it with, so the file goes straight to the server
+/// instead of through the model. Read once into a changeset's spec.
+model SetupUpload {
+  id          String    @id @default(uuid()) @db.Uuid
+  filename    String
+  /// sha256 of the one-time token the file must be sent with.
+  tokenHash   String    @unique
+  /// The token stops working after this, or once the file arrived.
+  expiresAt   DateTime  @db.Timestamptz(3)
+  receivedAt  DateTime? @db.Timestamptz(3)
+  size        Int?
+  data        Bytes?
+  grantId     String?   @db.Uuid
+
+  createdById String? @db.Uuid
+  createdBy   User?   @relation("SetupUploadCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@index([siteId, createdAt])
 }

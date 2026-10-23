@@ -19,11 +19,20 @@ export interface SetupIssue {
     | "AMBIGUOUS_MATCH"
     | "DELETED_MATCH"
     | "TOO_LARGE"
-    | "DUPLICATE_NATURAL_KEY";
-  /** Where in the spec, e.g. products[12].materials[0].material */
+    | "DUPLICATE_NATURAL_KEY"
+    | "BAD_VALUE"
+    | "UNKNOWN_PRODUCT";
+  /** Where in the spec, e.g. products[12].materials[0].material, or a file line for uploaded imports. */
   path: string;
   message: string;
   hint?: string;
+  /** The file line the issue is about, for imports built from uploaded files. */
+  at?: SetupOriginRef;
+}
+
+export interface SetupOriginRef {
+  file: string;
+  line: number;
 }
 
 export interface SetupChange {
@@ -55,6 +64,8 @@ export interface SetupRow {
   changes: SetupChange[];
   links?: SetupLinkPlan[];
   issues: SetupIssue[];
+  /** The file line this row came from, for imports built from uploaded files. */
+  origin?: SetupOriginRef;
 }
 
 export interface SetupPlan {

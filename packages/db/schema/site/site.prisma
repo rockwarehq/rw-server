@@ -70,6 +70,7 @@ model Site {
   oauthGrants             OAuthGrant[]
   externalRefs            ExternalRef[]
   setupChangesets         SetupChangeset[]
+  setupUploads            SetupUpload[]
   savedViews              SavedView[]
   reportDecks             ReportDeck[]
   integrations            Integration[]

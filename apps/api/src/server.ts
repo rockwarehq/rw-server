@@ -22,6 +22,7 @@ import { ORPCError, onError } from "@orpc/server";
 import { router } from "./rpc/index.js";
 import { registerMcpRoute } from "./agent/mcp.js";
 import { registerOAuthRoutes } from "./oauth/routes.js";
+import { registerSetupUploadRoutes } from "./setup/routes.js";
 
 // Per-request unhandled rejections (most commonly AbortError from clients
 // disconnecting mid-stream on RPC subscriptions) shouldn't take the whole
@@ -86,6 +87,7 @@ export function createServer(options: IServerOptions) {
   // Console agent tools over MCP for Claude Code / Claude Desktop.
   if (mcpConfig.enabled) registerMcpRoute(server);
   if (mcpConfig.connections) registerOAuthRoutes(server);
+  if (mcpConfig.enabled) registerSetupUploadRoutes(server);
 
   server.all("/rpc/*", async (req, reply) => {
     try {

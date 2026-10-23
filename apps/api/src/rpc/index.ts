@@ -632,6 +632,10 @@ export const coreRouter = {
       replan: setup.replan,
       discard: setup.discard,
       apply: setup.apply,
+      rows: setup.rows,
+    },
+    upload: {
+      create: setup.createUploadProcedure,
     },
   },
   agentConnection: {

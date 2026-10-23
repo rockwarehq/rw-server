@@ -22,6 +22,18 @@ export class SetupApplyError extends Error {
   }
 }
 
+/**
+ * Records one apply writes, at most, for now: it is one transaction, at
+ * ~16 ms a product (BOM links and refs included), so 2,000 is ~35 s.
+ * Chunked background apply lifts this.
+ */
+export const MAX_APPLY_ROWS = 2000;
+
+/** Records an apply would create or update. */
+export function writeCount(plan: Pick<SetupPlan, "summary">): number {
+  return Object.values(plan.summary).reduce((sum, counts) => sum + counts.create + counts.update, 0);
+}
+
 export interface SetupApplyResult {
   written: { materials: Record<string, string>; products: Record<string, string> };
   plan: SetupPlan;
