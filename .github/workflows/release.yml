@@ -1,4 +1,5 @@
-# Runs on every merge into main. The merged PR's title starts with the version
+# Runs on every merge into main. Both clients are built first (verify); if
+# either fails, nothing is tagged or published. The merged PR's title starts with the version
 # ("Release v1.2.3", optionally followed by a description; main-source-branch.yml
 # requires it), so this:
 #   1. tags the merge commit with the version and publishes a GitHub Release
@@ -24,7 +25,40 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Build both clients before anything is tagged, so a client that can't build
+  # stops the release instead of failing after it's published.
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm db:generate
+
+      - run: pnpm build
+
+      - name: Build RPC client
+        run: pnpm build
+        working-directory: packages/rpc-client
+
+      - run: pnpm openapi:generate
+
+      - name: Generate and build API client
+        run: pnpm generate && pnpm build
+        working-directory: packages/api-client
+
   tag:
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: write
