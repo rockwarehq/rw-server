@@ -6,6 +6,7 @@ This page is the map. Each subsystem has its own deep-dive:
 
 - [API Server](./api.md) — Fastify + oRPC, request lifecycle, RPC conventions
 - [Auth & IAM](./auth.md) — tokens, principals, RBAC
+- [Audit trail](./audit.md) — who did what, when, where from; how to write entries
 - [Edge & Data Pipeline](./edge.md) — gateways, NATS, how a machine cycle becomes a database row
 - [Background Work](./workers.md) — the workers binary, job inventory, scaling rules
 - [Livestore](./livestore.md) — the reactive graph engine behind live dashboards
