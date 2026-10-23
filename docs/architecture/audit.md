@@ -67,6 +67,6 @@ Four `AuditAction` values are kept but never written (Postgres can't drop enum v
 
 ## Next
 
-1. Explicit actions for security-relevant settings: workspace access and roles, user profiles, plant settings, integrations, automations, employee roles, devices, documents.
+1. Explicit actions for security-relevant settings: workspace access and roles, user profiles, integrations, automations, employee roles, devices, documents.
 2. Reading: `audit.search` and a record's history, an IMM Activity page and History on each record, CSV export.
 3. Append-only enforced in the database, and a written retention policy.
