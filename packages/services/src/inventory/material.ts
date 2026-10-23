@@ -4,6 +4,7 @@ import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { lockMaterialBalance, pendingMaterialUsage, setMaterialStockUnit } from "../stock/balance.js";
 import { createForStockable } from "../stock/item.js";
+import { emitEntityEvent, inTransaction, reader, type WriteOptions } from "../write.js";
 
 // ============================================================================
 // Types
@@ -56,7 +57,8 @@ export interface ListMaterialsFilter {
 /**
  * Create a new material with initial version (version 1)
  */
-export async function create(input: CreateMaterialInput) {
+export async function create(input: CreateMaterialInput, options?: WriteOptions) {
+  const db = reader(options);
   const {
     siteId,
     labelIds,
@@ -71,7 +73,7 @@ export async function create(input: CreateMaterialInput) {
   } = input;
 
   // Verify site exists
-  const site = await prisma.site.findUnique({
+  const site = await db.site.findUnique({
     where: { id: siteId },
     select: { id: true, workspaceId: true },
   });
@@ -81,14 +83,14 @@ export async function create(input: CreateMaterialInput) {
   }
 
   if (labelIds && labelIds.length > 0) {
-    const found = await prisma.label.count({ where: { id: { in: labelIds }, siteId } });
+    const found = await db.label.count({ where: { id: { in: labelIds }, siteId } });
     if (found !== labelIds.length) {
       return { error: "One or more labels not found for this site", code: "LABEL_NOT_FOUND" };
     }
   }
 
   // Create material and initial version in transaction
-  const material = await prisma.$transaction(async (tx) => {
+  const material = await inTransaction(options, async (tx) => {
     // 1. Create Material entity
     const mat = await tx.material.create({
       data: {
@@ -135,7 +137,7 @@ export async function create(input: CreateMaterialInput) {
     });
   });
 
-  publishEntityEvent({
+  emitEntityEvent(options, {
     action: "created",
     entityKey: SYSTEM_ENTITY_KEYS.Material,
     entityId: material.id,
@@ -249,12 +251,13 @@ export async function getById(id: string) {
 /**
  * Update material (creates new version version)
  */
-export async function update(id: string, input: UpdateMaterialInput) {
+export async function update(id: string, input: UpdateMaterialInput, options?: WriteOptions) {
+  const db = reader(options);
   const { materialNumber, name, shortCode, description, externalNumber, weightUnits, unitCost, attrs, labelIds } =
     input;
 
   // Get current material with version
-  const current = await prisma.material.findUnique({
+  const current = await db.material.findUnique({
     where: { id },
     include: { currentVersion: true, site: { select: { workspaceId: true } } },
   });
@@ -272,7 +275,7 @@ export async function update(id: string, input: UpdateMaterialInput) {
   }
 
   if (labelIds && labelIds.length > 0) {
-    const found = await prisma.label.count({
+    const found = await db.label.count({
       where: { id: { in: labelIds }, siteId: current.siteId },
     });
     if (found !== labelIds.length) {
@@ -283,7 +286,7 @@ export async function update(id: string, input: UpdateMaterialInput) {
   const currentVersion = current.currentVersion;
 
   // Get next version number
-  const latestVersion = await prisma.materialVersion.findFirst({
+  const latestVersion = await db.materialVersion.findFirst({
     where: { materialId: id },
     orderBy: { version: "desc" },
     select: { version: true },
@@ -294,7 +297,7 @@ export async function update(id: string, input: UpdateMaterialInput) {
   const nextUnit = weightUnits !== undefined ? weightUnits : currentVersion.weightUnits;
 
   // Create new version with merged data
-  const result = await prisma.$transaction(async (tx) => {
+  const result = await inTransaction(options, async (tx) => {
     // Stock unit rules (ADR-0016): switching between weights converts the
     // totals; dropping the unit stops tracking, which is only allowed when
     // nothing is on hand or in use this shift, so no stock disappears.
@@ -346,7 +349,7 @@ export async function update(id: string, input: UpdateMaterialInput) {
   if ("error" in result) return result;
   const material = result.data;
 
-  publishEntityEvent({
+  emitEntityEvent(options, {
     action: "updated",
     entityKey: SYSTEM_ENTITY_KEYS.Material,
     entityId: material.id,
@@ -363,8 +366,8 @@ export async function update(id: string, input: UpdateMaterialInput) {
 /**
  * Soft delete material (sets deletedAt)
  */
-export async function remove(id: string) {
-  const material = await prisma.material.findUnique({
+export async function remove(id: string, options?: WriteOptions) {
+  const material = await reader(options).material.findUnique({
     where: { id },
     include: {
       site: { select: { workspaceId: true } },
@@ -387,12 +390,12 @@ export async function remove(id: string) {
     };
   }
 
-  await prisma.material.update({
+  await reader(options).material.update({
     where: { id },
     data: { deletedAt: new Date() },
   });
 
-  publishEntityEvent({
+  emitEntityEvent(options, {
     action: "deleted",
     entityKey: SYSTEM_ENTITY_KEYS.Material,
     entityId: material.id,

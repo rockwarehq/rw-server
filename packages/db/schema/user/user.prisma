@@ -73,6 +73,11 @@ model User {
   productStockAdjustments ProductStockAdjustment[]
   stockMovements          StockMovement[]
   apiTokensCreated        ApiToken[]
+  oauthGrants             OAuthGrant[]
+  setupChangesetsCreated  SetupChangeset[]         @relation("SetupChangesetCreatedBy")
+  setupChangesetsApplied  SetupChangeset[]         @relation("SetupChangesetAppliedBy")
+  setupUploads            SetupUpload[]            @relation("SetupUploadCreatedBy")
+  setupChangesetsRolledBack SetupChangeset[]       @relation("SetupChangesetRolledBackBy")
   savedViewsCreated       SavedView[]
   documentFilesCreated    DocumentFile[]           @relation("DocumentFileCreatedBy")
 

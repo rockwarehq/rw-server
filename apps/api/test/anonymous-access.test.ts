@@ -41,6 +41,20 @@ const PUBLIC_REST_ROUTES = new Set(
     // agent tools over MCP: authenticates in-handler (user session or
     // graph:read API token) and answers 401 without one
     "POST /mcp",
+    // OAuth for people's own agents (MCP authorization spec): discovery
+    // metadata, dynamic client registration and the code/token/revoke
+    // endpoints run before any session exists. Authority comes from the
+    // person approving on IMM's consent page (agentConnection.approve).
+    "GET /.well-known/oauth-protected-resource",
+    "GET /.well-known/oauth-protected-resource/mcp",
+    "GET /.well-known/oauth-authorization-server",
+    "POST /oauth/register",
+    "GET /oauth/authorize",
+    "POST /oauth/token",
+    "POST /oauth/revoke",
+    // A setup import's file, sent by an agent with curl. Authority is the
+    // one-time upload token from setup.upload.create, which needs MANAGE.
+    "PUT /setup/uploads/:id",
   ].map((s) => s.toUpperCase()),
 );
 

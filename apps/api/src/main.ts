@@ -48,6 +48,7 @@ import { startAgentClock } from "./agent/clock.js";
 import { startAgentRunConsumer } from "./agent/queue.js";
 import { startAgentRuntime } from "./agent/startup.js";
 import { startAutomationClock } from "./automations/clock.js";
+import { startSetupRunner } from "./setup/runner.js";
 import { startAgentTriggerConsumer } from "./nats/agent-trigger-consumer.js";
 import { startAutomationEventConsumer } from "./nats/automation-event-consumer.js";
 import { startAnnounceBus } from "./nats/announce-bus.js";
@@ -122,6 +123,8 @@ async function main() {
     startAutomationEventConsumer,
     async () => (await getAutomationFramework()).engine.startScheduled(),
     startAutomationClock,
+    // Setup imports' chunked applies and rollbacks, resumed after a restart.
+    startSetupRunner,
     startCommandBus,
     startAnnounceBus,
     startHealthStream,

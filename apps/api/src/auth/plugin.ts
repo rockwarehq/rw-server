@@ -13,6 +13,7 @@ import {
   UserAccess,
 } from "@rw/auth/iam/access";
 import { replyAccessDenied } from "../api/authz.js";
+import { OAUTH_ACCESS_PREFIX } from "../oauth/store.js";
 import type { AccessTokenPayload } from "@rw/auth/verify";
 import type { Current } from "@rw/auth/context";
 import prisma from "@rw/db";
@@ -48,6 +49,9 @@ export async function authenticate(authHeader: string, log?: RequestLogger): Pro
   // Opaque customer/app API tokens are routed by prefix before JWT decoding.
   // The prefix carries no authority — a forged one just fails the hash lookup.
   if (token.startsWith(API_TOKEN_PREFIX)) return authenticateApp(token, log);
+  // Agent (OAuth) access tokens are only good on /mcp, which resolves them
+  // itself; everywhere else they are anonymous.
+  if (token.startsWith(OAUTH_ACCESS_PREFIX)) return null;
 
   let decoded: DecodedAccessToken;
   try {
