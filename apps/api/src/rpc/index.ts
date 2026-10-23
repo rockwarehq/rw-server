@@ -172,6 +172,7 @@ export const coreRouter = {
     create: device.gatewayCreate,
     list: device.gatewayList,
     get: device.gatewayGet,
+    health: device.gatewayHealth,
     update: device.gatewayUpdate,
     delete: device.gatewayDelete,
   },

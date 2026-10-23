@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { ORPCError } from "@orpc/server";
+import { ORPCError, eventIterator } from "@orpc/server";
 import { userRequired } from "./middleware.js";
 import { gateway, datasource } from "../services/device/index.js";
+import { type GatewayHealthEvent, watchGatewayHealth } from "../nats/health-stream.js";
 import { throwServiceError } from "./errors.js";
 
 // ============================================================================
@@ -116,6 +117,23 @@ export const gatewayGet = userRequired.input(gatewayIdInputSchema).handler(async
   }
   return result.data;
 });
+
+/**
+ * Live health for one gateway and its drivers: the latest snapshot of each on
+ * connect, then every new one. Read from NATS (RW_HEALTH), not the database.
+ */
+export const gatewayHealth = userRequired
+  .input(gatewayIdInputSchema)
+  .output(eventIterator(z.custom<GatewayHealthEvent>(() => true)))
+  .handler(async function* ({ input, context, signal }) {
+    await context.access.require("VIEW", { gateway: input.id });
+
+    const events = await watchGatewayHealth(input.id, signal);
+    if (!events) {
+      throw new ORPCError("SERVICE_UNAVAILABLE", { message: "Gateway health is unavailable" });
+    }
+    yield* events;
+  });
 
 /**
  * Update gateway
