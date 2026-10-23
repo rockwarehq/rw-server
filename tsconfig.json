@@ -12,6 +12,7 @@
     { "path": "./packages/livestore" },
     { "path": "./packages/metrics" },
     { "path": "./apps/workers" },
-    { "path": "./apps/livestore" }
+    { "path": "./apps/livestore" },
+    { "path": "./apps/sim" }
   ]
 }

@@ -528,3 +528,28 @@ describe("scheduled flag", () => {
     ]);
   });
 });
+
+// ── Timezone change ──────────────────────────────────────────────
+
+import { sameWallClockInstant } from "./materialize.js";
+
+describe("sameWallClockInstant", () => {
+  it("keeps the local clock time in the new zone", () => {
+    // 18:00 New York (EDT) -> 18:00 Chicago (CDT).
+    expect(new Date(sameWallClockInstant(ms("2026-10-20T22:00:00Z"), "America/New_York", "America/Chicago"))).toEqual(
+      new Date("2026-10-20T23:00:00Z"),
+    );
+  });
+
+  it("uses each zone's offset on that date, across DST", () => {
+    // 18:00 New York (EST, after fall-back) -> 18:00 Phoenix (MST, no DST): two hours later.
+    expect(new Date(sameWallClockInstant(ms("2026-11-20T23:00:00Z"), "America/New_York", "America/Phoenix"))).toEqual(
+      new Date("2026-11-21T01:00:00Z"),
+    );
+  });
+
+  it("is the identity within one zone", () => {
+    const at = ms("2026-03-08T12:00:00Z");
+    expect(sameWallClockInstant(at, "America/New_York", "America/New_York")).toBe(at);
+  });
+});

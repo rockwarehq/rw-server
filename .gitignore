@@ -56,3 +56,6 @@ lib-cov
 profile-*
 *clinic*
 *flamegraph*
+
+# Station simulator config (runtime state)
+apps/sim/data/

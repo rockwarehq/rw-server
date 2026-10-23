@@ -57,6 +57,24 @@ pnpm fly:generate --app api sim         # write apps/api/fly.generated.toml
 pnpm fly:deploy   --app workers dixie   # validate secrets, deploy workers
 ```
 
+## Configuration
+
+Every environment variable each app reads is listed, with what it does and its
+default, in that app's `.env.example`. Copy it to `.env` next to it for local
+development; on fly, plain settings go in the tenant toml's `[env]` and secrets
+in `flyctl secrets` (the toml's `[_meta].required_secrets` lists the ones a
+deploy checks for).
+
+| File | For |
+| --- | --- |
+| `apps/api/.env.example` | The API: database, auth, email, storage, CORS, agents and connected agents (MCP), seed |
+| `apps/workers/.env.example` | Workers: queues, rollups, event pipelines and their tuning |
+| `apps/livestore/.env.example` | Livestore: NATS, stream sizing, test harnesses |
+| `apps/sim/.env.example` | The simulator |
+| `packages/db/.env.example` | The Prisma CLI (`db:migrate`, `db:seed`) from the workspace root |
+
+When you add a variable, add it to the app's `.env.example` in the same change.
+
 ## Deployment
 
 Each tenant has **two fly apps** — one for `api`, one for `workers`. App

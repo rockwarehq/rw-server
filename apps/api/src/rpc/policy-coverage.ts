@@ -19,6 +19,9 @@ export const EXCLUDED_PROCEDURES: ReadonlySet<string> = new Set([
   // deploy (a boolean and a model name); it names no target to authorize.
   // Every other agent procedure checks the site inline.
   "agent.status",
+  // ── agentConnection.deny turns a signed authorization request into the
+  // agent's "access_denied" redirect. It grants and reads nothing.
+  "agentConnection.deny",
   "bucket.setAccess",
   "bucket.removeAccess",
   // ── operator.* — display-identity-bound shop-floor flows. The principal is
@@ -44,6 +47,9 @@ export const EXCLUDED_PROCEDURES: ReadonlySet<string> = new Set([
   // display-context-scoped listing: the display principal's own
   // site/workcenter/station bound the query (getDisplayDocumentContext).
   "document.listForDisplayContext",
+  // Same bound, same shape as document.context: a chosen stationId must be in
+  // the display's own site (and workcenter, when bound) — resolveDisplayContext.
+  "document.displayContext",
   "display.register",
   "display.get",
   "display.heartbeat",
@@ -69,6 +75,20 @@ export const EXCLUDED_PROCEDURES: ReadonlySet<string> = new Set([
 /** Deliberately tokenless REST routes (mirrors test/anonymous-access.test.ts). */
 export const PUBLIC_REST_ROUTES: ReadonlySet<string> = new Set(
   [
+    // OAuth for people's own agents (MCP authorization spec): discovery
+    // metadata, dynamic client registration and the code/token/revoke
+    // endpoints run before any session exists. Authority comes from the
+    // person approving on IMM's consent page (agentConnection.approve).
+    "GET /.well-known/oauth-protected-resource",
+    "GET /.well-known/oauth-protected-resource/mcp",
+    "GET /.well-known/oauth-authorization-server",
+    "POST /oauth/register",
+    "GET /oauth/authorize",
+    "POST /oauth/token",
+    "POST /oauth/revoke",
+    // A setup import's file, sent by an agent with curl. Authority is the
+    // one-time upload token from setup.upload.create, which needs MANAGE.
+    "PUT /setup/uploads/:id",
     "GET /health",
     "GET /healthz",
     "GET /ready",
@@ -96,8 +116,8 @@ export const PUBLIC_REST_ROUTES: ReadonlySet<string> = new Set(
  */
 export const SELF_SERVICE_REST_ROUTES: ReadonlySet<string> = new Set(
   [
-    // Console agent tools over MCP. Users and graph:read API tokens both
-    // reach it, so it can't take the user-only access-token guard; the
+    // Agent tools over MCP. Users, graph:read API tokens and connected
+    // agents (OAuth, resolved in the handler) all reach it, so it can't take the user-only access-token guard; the
     // handler checks VIEW on the token's site, and every tool then calls a
     // policy-checked procedure as the caller.
     "POST /mcp",

@@ -26,6 +26,7 @@ const INVITEE_EMAILS = [
   "ws2-pending@test.local",
   "ws3-owner@test.local",
   "active-member@test.local",
+  "disabled-admin@test.local",
 ];
 
 let ipTail = 1;
@@ -279,6 +280,42 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("invite lifecycle (Tier 2)", () 
     expect(row.status).toBe("PENDING");
     expect(row.mustChangePassword).toBe(true);
     expect(await prisma.bucketAccess.count({ where: { userId: row.id } })).toBe(1);
+  });
+
+  it("disabled people who still hold access cannot be re-invited, only enabled or removed", async () => {
+    const email = INVITEE_EMAILS[12];
+    const { userId } = await makeUser(email, "DisabledAdmin123!", {
+      accountAdmin: true,
+      plants: [{ siteId, level: "ADMIN" }],
+    });
+    await prisma.user.update({ where: { id: userId }, data: { status: "DISABLED" } });
+    const before = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+
+    // Neither a plant admin nor an account admin gets a password through invite.
+    for (const token of [inviterToken, adminToken]) {
+      const res = await invite(token, { email, bucketAccesses: viewAccess() });
+      expect(res.statusCode).toBe(400);
+      expect((res.json() as { error: string }).error).toBe(
+        "This person is disabled. An account admin can enable or remove them.",
+      );
+    }
+    const untouched = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    expect(untouched).toMatchObject({ status: "DISABLED", isAccountAdmin: true, passwordHash: before.passwordHash });
+
+    // Removing wipes their standing; then a fresh invite brings them back clean.
+    const removed = await server.inject({
+      method: "DELETE",
+      url: `/workspaces/${workspaceId}/members/${userId}`,
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(removed.statusCode).toBe(200);
+    const back = await invite(inviterToken, { email, bucketAccesses: viewAccess() });
+    expect(back.statusCode).toBe(201);
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    expect(row).toMatchObject({ status: "PENDING", isAccountAdmin: false });
+    expect(await prisma.bucketAccess.findMany({ where: { userId }, select: { level: true } })).toEqual([
+      { level: "VIEW" },
+    ]);
   });
 
   it("permission matrix: no plant ADMIN means no invite/revoke; account-admin invites need an account admin", async () => {

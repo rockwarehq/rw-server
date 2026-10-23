@@ -4,9 +4,11 @@
 # Build:   docker build --target api       -t <tenant>-api       .
 #          docker build --target workers   -t <tenant>-workers   .
 #          docker build --target livestore -t <tenant>-livestore .
+#          docker build --target sim       -t <tenant>-simulator .
 # Deploy:  flyctl deploy --build-target api       -c apps/api/fly.generated.toml
 #          flyctl deploy --build-target workers   -c apps/workers/fly.generated.toml
 #          flyctl deploy --build-target livestore -c apps/livestore/fly.generated.toml
+#          flyctl deploy --build-target sim       -c apps/sim/fly.generated.toml
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared base
@@ -33,6 +35,7 @@ COPY packages/historian/package.json packages/historian/
 COPY apps/api/package.json apps/api/
 COPY apps/workers/package.json apps/workers/
 COPY apps/livestore/package.json apps/livestore/
+COPY apps/sim/package.json apps/sim/
 
 COPY packages/db/schema packages/db/schema/
 COPY packages/db/prisma.config.ts packages/db/
@@ -105,6 +108,23 @@ COPY packages/integrations/package.json packages/integrations/
 COPY packages/livestore/package.json packages/livestore/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --prod --filter '@rw/livestore-app...'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3d. Production deps for the station simulator (pruned to @rw/sim-app's set)
+# ─────────────────────────────────────────────────────────────────────────────
+FROM base AS prod-deps-sim
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
+COPY apps/sim/package.json apps/sim/
+COPY packages/db/package.json packages/db/
+COPY packages/runtime/package.json packages/runtime/
+COPY packages/services/package.json packages/services/
+COPY packages/auth/package.json packages/auth/
+COPY packages/automations/package.json packages/automations/
+COPY packages/notifications/package.json packages/notifications/
+COPY packages/integrations/package.json packages/integrations/
+RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --prod --filter '@rw/sim-app...'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -256,4 +276,43 @@ COPY --from=build /repo/pnpm-workspace.yaml /repo/package.json ./
 
 WORKDIR /repo/apps/livestore
 EXPOSE 30100
+CMD ["node", "dist/main.js"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4d. station simulator runtime image (reads the DB; no migrations)
+# ─────────────────────────────────────────────────────────────────────────────
+FROM base AS sim
+ENV NODE_ENV=production
+
+COPY --from=prod-deps-sim /repo/node_modules ./node_modules
+COPY --from=prod-deps-sim /repo/apps/sim/node_modules apps/sim/node_modules
+COPY --from=prod-deps-sim /repo/packages/db/node_modules packages/db/node_modules
+COPY --from=prod-deps-sim /repo/packages/runtime/node_modules packages/runtime/node_modules
+COPY --from=prod-deps-sim /repo/packages/services/node_modules packages/services/node_modules
+COPY --from=prod-deps-sim /repo/packages/auth/node_modules packages/auth/node_modules
+COPY --from=prod-deps-sim /repo/packages/automations/node_modules packages/automations/node_modules
+COPY --from=prod-deps-sim /repo/packages/integrations/node_modules packages/integrations/node_modules
+
+COPY --from=build /repo/packages/db/dist packages/db/dist
+COPY --from=build /repo/packages/db/src/generated packages/db/src/generated
+COPY --from=build /repo/packages/db/package.json packages/db/
+COPY --from=build /repo/packages/runtime/dist packages/runtime/dist
+COPY --from=build /repo/packages/runtime/package.json packages/runtime/
+COPY --from=build /repo/packages/services/dist packages/services/dist
+COPY --from=build /repo/packages/services/package.json packages/services/
+COPY --from=build /repo/packages/auth/dist packages/auth/dist
+COPY --from=build /repo/packages/auth/package.json packages/auth/
+COPY --from=build /repo/packages/automations/dist packages/automations/dist
+COPY --from=build /repo/packages/automations/package.json packages/automations/
+COPY --from=build /repo/packages/notifications/dist packages/notifications/dist
+COPY --from=build /repo/packages/notifications/package.json packages/notifications/
+COPY --from=build /repo/packages/integrations/dist packages/integrations/dist
+COPY --from=build /repo/packages/integrations/package.json packages/integrations/
+COPY --from=build /repo/apps/sim/dist apps/sim/dist
+COPY --from=build /repo/apps/sim/public apps/sim/public
+COPY --from=build /repo/apps/sim/package.json apps/sim/
+
+WORKDIR /repo/apps/sim
+EXPOSE 30200
 CMD ["node", "dist/main.js"]

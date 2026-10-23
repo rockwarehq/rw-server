@@ -8,13 +8,18 @@ import { throwServiceError, unwrap } from "./errors.js";
 // Input Schemas
 // ============================================================================
 
+// 4 to 8 digits. A PIN is the person's across the workspace, where the
+// length a plant asks for is the plant's (operatorLogon.pinLength): IMM holds
+// a PIN to its plant's length.
+const pinSchema = z.string().regex(/^\d{4,8}$/, "A PIN is 4 to 8 digits");
+
 const createInputSchema = z.object({
   siteId: z.uuid(),
   employeeNumber: z.string().min(1).nullable().optional(),
   firstName: z.string().min(1),
   lastName: z.string().min(1),
   roleId: z.uuid().optional(),
-  pin: z.string().min(4).max(8).optional(),
+  pin: pinSchema.optional(),
   badgeNumber: z.string().min(1).nullable().optional(),
   email: z.email().nullable().optional(),
   phone: z.string().min(3).max(32).nullable().optional(),
@@ -36,7 +41,7 @@ const updateInputSchema = z.object({
   lastName: z.string().min(1).optional(),
   status: z.enum(["ACTIVE", "INACTIVE"]).optional(),
   roleId: z.uuid().optional(),
-  pin: z.string().min(4).max(8).optional(),
+  pin: pinSchema.optional(),
   badgeNumber: z.string().min(1).nullable().optional(),
   email: z.email().nullable().optional(),
   phone: z.string().min(3).max(32).nullable().optional(),

@@ -17,14 +17,60 @@ export interface CreateShiftCommentInput {
   createdByEmployeeId?: string;
 }
 
+/**
+ * Who is changing a comment. A signed-in user changes their own. An operator
+ * terminal (a display, which is no one) changes the terminal comments at its
+ * own station — or, with no station, its workcenter: the screen that wrote it
+ * stands in for the author, as no user is on record. A terminal changes them
+ * only while their shift runs; a user's own comments stay theirs to change.
+ */
+export type ShiftCommentActor =
+  | { kind: "user"; id: string }
+  | { kind: "display"; stationId: string | null; workcenterId: string | null };
+
 export interface UpdateShiftCommentInput {
   text: string;
-  actorId: string;
+  actor: ShiftCommentActor;
 }
 
 export interface RemoveShiftCommentInput {
-  actorId: string;
+  actor: ShiftCommentActor;
 }
+
+interface CommentOwnership {
+  createdById: string | null;
+  stationId: string | null;
+  workcenterId: string;
+  shiftInstance: { endTime: Date };
+}
+
+function isAuthor(comment: CommentOwnership, actor: ShiftCommentActor): boolean {
+  if (actor.kind === "user") return comment.createdById === actor.id;
+  // Only a terminal comment (no user), and only where this display stands.
+  if (comment.createdById !== null) return false;
+  if (actor.stationId) return comment.stationId === actor.stationId;
+  return actor.workcenterId !== null && comment.workcenterId === actor.workcenterId;
+}
+
+/** Why `actor` may not change `comment`, or null when they may. */
+function refusal(comment: CommentOwnership, actor: ShiftCommentActor, verb: "edit" | "delete") {
+  if (!isAuthor(comment, actor)) {
+    return { error: `Only the author can ${verb} this comment`, code: "FORBIDDEN" } as const;
+  }
+  if (actor.kind === "display" && comment.shiftInstance.endTime <= new Date()) {
+    return { error: "This shift has ended; its notes can't be changed here", code: "SHIFT_ENDED" } as const;
+  }
+  return null;
+}
+
+const ownershipSelect = {
+  id: true,
+  createdById: true,
+  stationId: true,
+  workcenterId: true,
+  deletedAt: true,
+  shiftInstance: { select: { endTime: true } },
+} as const;
 
 export interface ListShiftCommentsFilter {
   shiftInstanceId: string;
@@ -154,16 +200,15 @@ export async function update(id: string, input: UpdateShiftCommentInput) {
 
   const current = await prisma.shiftComment.findUnique({
     where: { id },
-    select: { id: true, createdById: true, deletedAt: true },
+    select: ownershipSelect,
   });
 
   if (!current || current.deletedAt) {
     return { error: "Shift comment not found", code: "SHIFT_COMMENT_NOT_FOUND" };
   }
 
-  if (current.createdById !== input.actorId) {
-    return { error: "Only the author can edit this comment", code: "FORBIDDEN" };
-  }
+  const refused = refusal(current, input.actor, "edit");
+  if (refused) return refused;
 
   const comment = await prisma.shiftComment.update({
     where: { id },
@@ -177,16 +222,15 @@ export async function update(id: string, input: UpdateShiftCommentInput) {
 export async function remove(id: string, input: RemoveShiftCommentInput) {
   const current = await prisma.shiftComment.findUnique({
     where: { id },
-    select: { id: true, createdById: true, deletedAt: true },
+    select: ownershipSelect,
   });
 
   if (!current || current.deletedAt) {
     return { error: "Shift comment not found", code: "SHIFT_COMMENT_NOT_FOUND" };
   }
 
-  if (current.createdById !== input.actorId) {
-    return { error: "Only the author can delete this comment", code: "FORBIDDEN" };
-  }
+  const refused = refusal(current, input.actor, "delete");
+  if (refused) return refused;
 
   await prisma.shiftComment.update({
     where: { id },

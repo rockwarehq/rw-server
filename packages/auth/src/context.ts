@@ -19,6 +19,20 @@ export interface UserCurrent {
   /** The token's active site (bound at login / switch-site). */
   siteId: string | null;
   access: UserAccess;
+  /**
+   * Set when the person acts through an agent they connected over OAuth
+   * (MCP). Its scopes are a ceiling on what the person may do, never more:
+   * the RPC layer admits such a caller only to procedures listed for them.
+   */
+  via?: AgentVia;
+}
+
+export interface AgentVia {
+  kind: "oauth";
+  grantId: string;
+  clientId: string;
+  clientName: string;
+  scopes: string[];
 }
 
 export interface DisplayCurrent {

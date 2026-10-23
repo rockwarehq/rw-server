@@ -40,11 +40,35 @@ import * as entity from "./entity.js";
 import * as agent from "./agent.js";
 import * as graph from "./graph.js";
 import * as apiToken from "./api-token.js";
+import * as agentConnection from "./agent-connection.js";
+import * as setup from "./setup.js";
 import * as integration from "./integration.js";
 
 // The app router outgrew what TypeScript will inline in one declaration
-// (TS7056), so the agent routes join through an explicit type and the
-// published client's declarations refer to them by name.
+// (TS7056), so domains join through explicit types and the published client's
+// declarations refer to them by name. Keys are spread flat, so client paths
+// (rpc.gateway.get, ...) are unchanged. When the build hits TS7056 again, move
+// another domain out of coreRouter the same way.
+export const deviceRouter = {
+  gateway: {
+    create: device.gatewayCreate,
+    list: device.gatewayList,
+    get: device.gatewayGet,
+    health: device.gatewayHealth,
+    update: device.gatewayUpdate,
+    delete: device.gatewayDelete,
+  },
+  datasource: {
+    list: device.datasourceList,
+    get: device.datasourceGet,
+    create: device.datasourceCreate,
+    update: device.datasourceUpdate,
+    delete: device.datasourceDelete,
+    publish: device.datasourcePublish,
+    unpublish: device.datasourceUnpublish,
+  },
+};
+
 export const coreRouter = {
   events: {
     ingest: events.ingest,
@@ -167,22 +191,6 @@ export const coreRouter = {
   },
   metricCatalog: {
     list: metricCatalog.list,
-  },
-  gateway: {
-    create: device.gatewayCreate,
-    list: device.gatewayList,
-    get: device.gatewayGet,
-    update: device.gatewayUpdate,
-    delete: device.gatewayDelete,
-  },
-  datasource: {
-    list: device.datasourceList,
-    get: device.datasourceGet,
-    create: device.datasourceCreate,
-    update: device.datasourceUpdate,
-    delete: device.datasourceDelete,
-    publish: device.datasourcePublish,
-    unpublish: device.datasourceUnpublish,
   },
   site: {
     create: site.create,
@@ -385,6 +393,7 @@ export const coreRouter = {
     listForTarget: document.listForTarget,
     context: document.context,
     listForDisplayContext: document.listForDisplayContext,
+    displayContext: document.displayContext,
   },
   statusCategory: {
     create: statusCategory.create,
@@ -621,6 +630,33 @@ export const coreRouter = {
     reorder: order.reorder,
     nextNumber: order.nextNumber,
   },
+  setup: {
+    changeset: {
+      create: setup.create,
+      list: setup.list,
+      get: setup.get,
+      replan: setup.replan,
+      revise: setup.revise,
+      discard: setup.discard,
+      apply: setup.apply,
+      rows: setup.rows,
+      rollback: setup.rollback,
+      clear: setup.clear,
+    },
+    upload: {
+      create: setup.createUploadProcedure,
+      attach: setup.attachUploadProcedure,
+    },
+  },
+  agentConnection: {
+    describeRequest: agentConnection.describeRequest,
+    approve: agentConnection.approve,
+    deny: agentConnection.deny,
+    list: agentConnection.list,
+    revoke: agentConnection.revoke,
+    policy: agentConnection.policy,
+    setPolicy: agentConnection.setPolicy,
+  },
   apiToken: {
     create: apiToken.create,
     list: apiToken.list,
@@ -653,8 +689,9 @@ export const coreRouter = {
   },
 };
 
-export const router: typeof coreRouter & { agent: typeof agent.agentRouter } = {
+export const router: typeof coreRouter & typeof deviceRouter & { agent: typeof agent.agentRouter } = {
   ...coreRouter,
+  ...deviceRouter,
   agent: agent.agentRouter,
 };
 

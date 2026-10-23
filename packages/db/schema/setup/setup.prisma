@@ -1,0 +1,192 @@
+enum SetupEntity {
+  MATERIAL
+  PRODUCT
+  TOOL
+  JOB
+  WORKCENTER
+  STATION
+}
+
+enum SetupChangesetStatus {
+  DRAFT
+  /// Being written in chunks by the setup runner (setup/runner.ts).
+  APPLYING
+  APPLIED
+  DISCARDED
+  /// Its writes being reversed in chunks, from its journal.
+  ROLLING_BACK
+  ROLLED_BACK
+  /// A rollback that stopped partway: some entries couldn't be undone, or it
+  /// kept failing. What it did stays done; rolling back again carries on.
+  ROLLBACK_STOPPED
+}
+
+/// A record's key in another system ("customer-erp" / "RES-PP-01"). Bulk
+/// setup resolves keys through these first, so re-running an import finds
+/// what it created last time instead of duplicating it.
+model ExternalRef {
+  id          String      @id @default(uuid()) @db.Uuid
+  entityType  SetupEntity
+  source      String
+  key         String
+  entityId    String      @db.Uuid
+  /// The setup changeset that last wrote this record through this key.
+  changesetId String?     @db.Uuid
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, entityType, source, key])
+  @@index([siteId, entityType, entityId])
+}
+
+/// A proposed batch of master-data upserts (materials, products, ...) keyed
+/// by external keys, planned against the plant and applied in one transaction
+/// once a person approves it in IMM. Agents only ever propose these.
+model SetupChangeset {
+  id         String               @id @default(uuid()) @db.Uuid
+  title      String
+  source     String
+  status     SetupChangesetStatus @default(DRAFT)
+  /// Proposed through a connected agent (OAuth) rather than by hand.
+  author     GraphChangesetAuthor @default(USER)
+  /// The spec exactly as proposed. Null once the import's data is cleared.
+  spec       Json?
+  /// The latest plan of spec against the plant.
+  planResult Json
+  /// Counts by entity and action, for lists.
+  summary    Json
+  grantId    String?              @db.Uuid
+  clientName String?
+  /// For imports built from uploaded files: the column mapping as proposed.
+  mapping    Json?
+  /// For imports built from uploaded files: the file and line behind each spec row.
+  origin     Json?
+
+  createdById String?   @db.Uuid
+  createdBy   User?     @relation("SetupChangesetCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  appliedById String?   @db.Uuid
+  appliedBy   User?     @relation("SetupChangesetAppliedBy", fields: [appliedById], references: [id], onDelete: SetNull)
+  appliedAt   DateTime? @db.Timestamptz(3)
+  discardedAt DateTime? @db.Timestamptz(3)
+
+  rolledBackById String?   @db.Uuid
+  rolledBackBy   User?     @relation("SetupChangesetRolledBackBy", fields: [rolledBackById], references: [id], onDelete: SetNull)
+  rolledBackAt   DateTime? @db.Timestamptz(3)
+  /// Spec, plan rows, files and journal dropped; the record and its audit stay. No rollback after this.
+  clearedAt      DateTime? @db.Timestamptz(3)
+
+  /// Where an apply or rollback is: { phase, done, total, written, stopped? }.
+  progress   Json?
+  /// The runner holding this changeset; another may take it over once this passes.
+  leaseUntil DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  rows   SetupChangesetRow[]
+  writes SetupChangesetWrite[]
+
+  @@index([siteId, status, createdAt])
+}
+
+/// One planned row of a setup changeset: what applying would do to one
+/// material or product. Kept as rows rather than one JSON plan, so a
+/// 20,000-row import can be paged and filtered for review.
+model SetupChangesetRow {
+  id        String  @id @default(uuid()) @db.Uuid
+  /// Order in the plan: materials first, then products, each in spec order.
+  position  Int
+  /// material | product
+  entity    String
+  /// Index in the spec's materials or products.
+  index     Int
+  key       String
+  label     String
+  /// create | update | unchanged | conflict
+  action    String
+  entityId  String? @db.Uuid
+  /// ref | natural
+  matchedBy String?
+  changes   Json
+  links     Json?
+  issues    Json
+  /// Where the row came from in an uploaded file: { file, line }.
+  origin    Json?
+
+  changesetId String         @db.Uuid
+  changeset   SetupChangeset @relation(fields: [changesetId], references: [id], onDelete: Cascade)
+
+  @@unique([changesetId, position])
+  @@index([changesetId, action, position])
+}
+
+/// A file an agent (or a person) sends for a setup import. The agent gets a
+/// one-time token to send it with, so the file goes straight to the server
+/// instead of through the model. Read once into a changeset's spec.
+model SetupUpload {
+  id          String    @id @default(uuid()) @db.Uuid
+  filename    String
+  /// sha256 of the one-time token the file must be sent with.
+  tokenHash   String    @unique
+  /// The token stops working after this, or once the file arrived.
+  expiresAt   DateTime  @db.Timestamptz(3)
+  receivedAt  DateTime? @db.Timestamptz(3)
+  size        Int?
+  data        Bytes?
+  grantId     String?   @db.Uuid
+
+  createdById String? @db.Uuid
+  createdBy   User?   @relation("SetupUploadCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  siteId String @db.Uuid
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@index([siteId, createdAt])
+}
+
+/// One record an apply wrote, with what it was before, so the import can be
+/// rolled back: created records are deleted, changed ones restored, as long
+/// as nothing changed them since (currentVersionId still afterVersionId).
+model SetupChangesetWrite {
+  id          String  @id @default(uuid()) @db.Uuid
+  /// Write order within the changeset.
+  seq         Int
+  /// Rollback order: links (0), products (1), materials (2), external refs (3).
+  rank        Int
+  /// material | product | link | ref
+  entity      String
+  /// create | update
+  action      String
+  /// The material or product; for a link, its product; for a ref, the ref.
+  entityId    String  @db.Uuid
+  /// A link's material.
+  materialId  String? @db.Uuid
+  key         String
+  label       String
+  /// Field values before an update ({ fields }), or a ref before ({ entityId, changesetId }).
+  before      Json?
+  /// The version current before an update, for removing the import completely.
+  beforeVersionId String? @db.Uuid
+  /// The version the write left current; a different one now means it changed since.
+  afterVersionId  String? @db.Uuid
+  /// What rollback did: deleted | removed | restored | gone | skipped | failed
+  outcome     String?
+  reason      String?
+
+  changesetId String         @db.Uuid
+  changeset   SetupChangeset @relation(fields: [changesetId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([changesetId, seq])
+  @@index([changesetId, outcome, rank, seq])
+}

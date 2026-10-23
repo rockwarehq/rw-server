@@ -10,12 +10,14 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "./generated/client.js";
 
-export type DbRole = "api" | "rollups" | "livestore" | "imm-events" | "integration-events" | "hub-events";
+export type DbRole = "api" | "rollups" | "livestore" | "sim" | "imm-events" | "integration-events" | "hub-events";
 
 const DEFAULT_POOL: Record<DbRole, number> = {
   api: 5,
   rollups: 10,
   livestore: 5,
+  // Discovery polls only — a few reads every 15s.
+  sim: 2,
   // Sized for IMM_EVENTS_CONCURRENCY (10) parallel completes + headroom.
   "imm-events": 15,
   // Sequential dispatch: trigger match + run bookkeeping per event.
