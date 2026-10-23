@@ -107,16 +107,18 @@ const planHook = z.object({
 });
 
 /** A proposal as the agent needs it: counts, what's wrong, and where to send the person. */
-function setupProposalOutput(id: string, plan: SetupPlan) {
+function setupProposalOutput(id: string | null, plan: SetupPlan) {
   const problems = plan.rows.filter((row) => row.issues.length > 0);
   return {
     id,
     summary: plan.summary,
     applicable: plan.applicable,
     issues: [...plan.issues, ...problems.flatMap((row) => row.issues)].slice(0, 100),
-    next: plan.applicable
-      ? `Give the person this link to review and apply it: ${new URL(`/settings/imports/${id}`, appConfig.baseUrl)}`
-      : "Nothing can be applied until the issues are fixed. Fix them in the spec and propose again, or ask the person to fix the records in IMM and then call setup_replan with this id.",
+    next: !id
+      ? "Already up to date: every row matches the plant, so nothing was saved and there's nothing for the person to review."
+      : plan.applicable
+        ? `Give the person this link to review and apply it: ${new URL(`/settings/imports/${id}`, appConfig.baseUrl)}`
+        : "Nothing can be applied until the issues are fixed. Fix them in the spec and propose again, or ask the person to fix the records in IMM and then call setup_replan with this id.",
   };
 }
 
@@ -412,7 +414,7 @@ export const AGENT_TOOLS: AgentTool[] = [
   defineTool({
     name: "setup_propose",
     description:
-      "Propose a setup changeset. It is planned against the plant and saved as a draft; nothing changes until a person applies it in IMM. Returns the plan (create/update/unchanged/conflict per row, with issues) and the review link to give the person.",
+      "Propose a setup changeset. It is planned against the plant and saved as a draft; nothing changes until a person applies it in IMM. When every row already matches the plant, nothing is saved and id is null. Returns the plan (create/update/unchanged/conflict per row, with issues) and the review link to give the person.",
     input: z.object({
       title: z
         .string()

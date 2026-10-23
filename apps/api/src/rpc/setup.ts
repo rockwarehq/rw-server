@@ -51,11 +51,17 @@ function personName(p: { firstName: string | null; lastName: string | null; emai
   return [p.firstName, p.lastName].filter(Boolean).join(" ") || p.email;
 }
 
+function upToDate(plan: SetupPlan) {
+  return plan.applicable && plan.rows.every((row) => row.action === "unchanged");
+}
+
 export const create = userRequired
   .input(z.object({ siteId: z.uuid(), title: z.string().trim().min(1).max(200), spec: setupSpecSchema }))
   .handler(async ({ input, context }) => {
     await context.access.require("MANAGE", { site: input.siteId });
     const planned = await planSetup(prisma, input.siteId, input.spec);
+    // Nothing to apply and nothing wrong: there's nothing for a person to review.
+    if (upToDate(planned)) return { id: null, plan: planned };
     const via = context.current.via;
     const row = await prisma.setupChangeset.create({
       data: {
@@ -213,7 +219,8 @@ export const apply = userRequired.input(z.object({ id: z.uuid() })).handler(asyn
         changesetId: row.id,
         siteId: row.siteId,
         summary: result.plan.summary,
-        ...(row.grantId ? { via: "mcp", grantId: row.grantId, clientName: row.clientName } : {}),
+        // Applied by a person in IMM; the agent only proposed it.
+        ...(row.grantId ? { proposedVia: "mcp", grantId: row.grantId, clientName: row.clientName } : {}),
       },
     });
     return { ok: true, written: result.written };

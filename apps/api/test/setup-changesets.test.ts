@@ -104,10 +104,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
       await prisma.auditLog.count({ where: { action: "SETUP_CHANGESET_APPLIED", metadata: { path: ["changesetId"], equals: id } } }),
     ).toBe(1);
 
+    // Already up to date: planned, but not saved for anyone to review.
+    const saved = await prisma.setupChangeset.count({ where: { source: SOURCE } });
     const again = await propose(spec());
-    const rerun = (again.json as { plan: SetupPlan }).plan;
-    expect(rerun.summary.material).toMatchObject({ create: 0, update: 0, unchanged: 2 });
-    expect(rerun.summary.product).toMatchObject({ create: 0, update: 0, unchanged: 2 });
+    const rerun = again.json as { id: string | null; plan: SetupPlan };
+    expect(rerun.id).toBeNull();
+    expect(rerun.plan.summary.material).toMatchObject({ create: 0, update: 0, unchanged: 2 });
+    expect(rerun.plan.summary.product).toMatchObject({ create: 0, update: 0, unchanged: 2 });
+    expect(await prisma.setupChangeset.count({ where: { source: SOURCE } })).toBe(saved);
   });
 
   it("plans a changed field as an update with its diff", async () => {
@@ -180,7 +184,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
 
     const agent = client(["read", "setup:propose"]);
-    const created = await agent.setup.changeset.create({ siteId, title: "from an agent", spec: spec() as never });
+    const proposal = await agent.setup.changeset.create({
+      siteId,
+      title: "from an agent",
+      spec: spec({ productName: `Cap from an agent ${RUN}` }) as never,
+    });
+    if (!proposal.id) throw new Error("expected a saved proposal");
+    const created = { id: proposal.id };
     const row = await prisma.setupChangeset.findUniqueOrThrow({ where: { id: created.id } });
     expect(row).toMatchObject({ author: "AGENT", clientName: "Claude Code" });
 
