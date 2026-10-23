@@ -459,6 +459,31 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
     expect(after?.currentVersion?.name).toBe("Part RV 0");
   });
 
+  it("puts a material's stock back on its earlier unit when an import that changed it is removed completely", async () => {
+    await proposeAndApply(ownSpec("SU"));
+    const material = await prisma.material.findFirstOrThrow({
+      where: { siteId, currentVersion: { materialNumber: `SU-M1-${RUN}` } },
+    });
+    const stockUnit = async () =>
+      (
+        await prisma.stockItem.findUniqueOrThrow({
+          where: { stockableType_stockableId: { stockableType: "MATERIAL", stockableId: material.id } },
+        })
+      ).baseUnit;
+    expect(await stockUnit()).toBe("KG");
+
+    const relabelled = ownSpec("SU");
+    relabelled.materials[0]!.weightUnits = "LB";
+    const { id } = await proposeAndApply(relabelled);
+    expect(await stockUnit()).toBe("LB");
+
+    await rpcCall(server, "setup/changeset/rollback", { id, mode: "remove" }, adminToken);
+    await settled(id);
+    const after = await prisma.material.findUniqueOrThrow({ where: { id: material.id }, include: { currentVersion: true } });
+    expect(after.currentVersion?.weightUnits).toBe("KG");
+    expect(await stockUnit()).toBe("KG");
+  });
+
   it("clears an applied import's data but keeps its record, and then can't roll it back", async () => {
     const { id, status } = await proposeAndApply(ownSpec("CL"));
     // One chunk was the whole import: done before the request answered.

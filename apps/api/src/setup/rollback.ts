@@ -1,6 +1,7 @@
 import type { Prisma } from "@rw/db";
 import { SYSTEM_ENTITY_KEYS } from "@rw/services/entity/registry";
 import { material as materialService, product as productService } from "@rw/services/inventory/index";
+import { setMaterialStockUnit } from "@rw/services/stock/balance";
 import { emitEntityEvent, type EntityEventInput } from "@rw/services/write";
 
 // Reverses what an import wrote, from its journal (SetupChangesetWrite), a
@@ -158,7 +159,13 @@ async function revertVersion(tx: Tx, entry: Entry): Promise<boolean> {
     });
     if (!used) await tx.productVersion.delete({ where: { id: after } });
   } else if (entry.entity === "material") {
-    await tx.material.update({ where: { id: entry.entityId }, data: { currentVersionId: before } });
+    const restored = await tx.material.update({
+      where: { id: entry.entityId },
+      data: { currentVersionId: before },
+      select: { currentVersion: { select: { weightUnits: true } } },
+    });
+    // Stock follows the unit back, as it does when IMM changes it (ADR-0016).
+    await setMaterialStockUnit(tx, entry.entityId, restored.currentVersion?.weightUnits ?? "");
     const used = await tx.materialVersion.count({ where: { id: after, productMaterialVersions: { some: {} } } });
     if (!used) await tx.materialVersion.delete({ where: { id: after } });
   } else if (entry.entity === "link" && entry.materialId) {
