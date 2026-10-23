@@ -9,7 +9,6 @@ import { filesSchemaDocument, setupFilesSchema } from "../setup/mapping.js";
 import type { SetupRow } from "../setup/plan.js";
 import { setupSchemaDocument, setupSpecSchema } from "../setup/spec.js";
 import type { SetupPlanTotals } from "../setup/store.js";
-import { MAX_APPLY_ROWS } from "../setup/apply.js";
 
 import type { router as appRouter } from "../rpc/index.js";
 import type { ResolvedAgent } from "./agents.js";
@@ -118,7 +117,7 @@ function setupProposalOutput(proposal: {
   problems: SetupRow[];
   writes: number;
 }) {
-  const { id, plan, problems, writes } = proposal;
+  const { id, plan, problems } = proposal;
   const issues = [...plan.issues, ...problems.flatMap((row) => row.issues)];
   const byCode: Record<string, number> = {};
   for (const issue of issues) byCode[issue.code] = (byCode[issue.code] ?? 0) + 1;
@@ -136,9 +135,7 @@ function setupProposalOutput(proposal: {
       ? "Already up to date: every row matches the plant, so nothing was saved and there's nothing for the person to review."
       : !plan.applicable
         ? "Nothing can be applied until the issues are fixed. Fix them in the files or spec and propose again, or ask the person to fix the records in IMM and then call setup_replan with this id."
-        : writes > MAX_APPLY_ROWS
-          ? `This writes ${writes} records and one apply takes up to ${MAX_APPLY_ROWS} for now. Discard it and propose it again in parts of at most ${MAX_APPLY_ROWS} new or changed rows (materials first).`
-          : `Give the person this link to review and apply it: ${new URL(`/settings/imports/${id}`, appConfig.baseUrl)}`,
+        : `Give the person this link to review and apply it: ${new URL(`/settings/imports/${id}`, appConfig.baseUrl)}`,
   };
 }
 

@@ -633,6 +633,8 @@ export const coreRouter = {
       discard: setup.discard,
       apply: setup.apply,
       rows: setup.rows,
+      rollback: setup.rollback,
+      clear: setup.clear,
     },
     upload: {
       create: setup.createUploadProcedure,

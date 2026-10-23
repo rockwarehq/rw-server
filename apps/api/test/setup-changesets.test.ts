@@ -15,6 +15,7 @@ import { rpcCall } from "./helpers/rpc-call.js";
 
 const MEMBER = { email: "setup-member@test.local", password: "setup-member-password-1" };
 const VIEWER = { email: "setup-viewer@test.local", password: "setup-viewer-password-1" };
+const ADMIN = { email: "setup-admin@test.local", password: "setup-admin-password-1" };
 const RUN = `t${Date.now().toString(36)}`;
 const SOURCE = `test-erp-${RUN}`;
 
@@ -44,6 +45,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
   let siteId: string;
   let memberToken: string;
   let viewerToken: string;
+  let adminToken: string;
 
   async function siteToken(email: string, password: string) {
     const login = await loginAs(server, email, password);
@@ -60,6 +62,48 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
     return rpcCall(server, "setup/changeset/create", { siteId, title: "test import", spec: body }, token);
   }
 
+  /** A small import of its own: two materials, two products with BOM links. */
+  const ownSpec = (tag: string, count = 2) => ({
+    source: SOURCE,
+    materials: [
+      { key: `${tag}-M1-${RUN}`, name: `Resin ${tag}`, weightUnits: "KG" },
+      { key: `${tag}-M2-${RUN}`, name: `Colour ${tag}`, weightUnits: "KG" },
+    ],
+    products: Array.from({ length: count }, (_, i) => ({
+      key: `${tag}-P${i}-${RUN}`,
+      name: `Part ${tag} ${i}`,
+      weight: 3,
+      weightUnits: "G",
+      materials: [
+        { material: `${tag}-M1-${RUN}`, weight: 2.9, weightUnits: "G" },
+        { material: `${tag}-M2-${RUN}`, weight: 0.1, weightUnits: "G" },
+      ],
+    })),
+  });
+
+  async function proposeAndApply(body: unknown) {
+    const proposed = await propose(body);
+    expect(proposed.statusCode).toBe(200);
+    const { id } = proposed.json as { id: string };
+    const applied = await rpcCall(server, "setup/changeset/apply", { id }, memberToken);
+    expect(applied.statusCode).toBe(200);
+    return { id, status: (applied.json as { status: string }).status };
+  }
+
+  /** Wait for a background apply or rollback to settle; returns the changeset. */
+  async function settled(id: string) {
+    for (let i = 0; i < 200; i++) {
+      const got = await rpcCall(server, "setup/changeset/get", { id }, memberToken);
+      const body = got.json as { status: string } & Record<string, unknown>;
+      if (body.status !== "APPLYING" && body.status !== "ROLLING_BACK") return body;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    throw new Error("still running");
+  }
+
+  const productByKey = (key: string) =>
+    prisma.product.findFirst({ where: { siteId, currentVersion: { sku: key } }, include: { currentVersion: true } });
+
   /** A changeset's planned rows, as the review page pages them. */
   async function rowsOf(id: string, filter: Record<string, unknown> = {}) {
     const page = await rpcCall(server, "setup/changeset/rows", { id, limit: 500, ...filter }, memberToken);
@@ -73,14 +117,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
     siteId = (await prisma.site.findFirstOrThrow({ where: { name: "Rockware" }, select: { id: true } })).id;
     await makeUser(MEMBER.email, MEMBER.password, { plants: [{ siteId, level: "MANAGE" }] });
     await makeUser(VIEWER.email, VIEWER.password, { plants: [{ siteId, level: "VIEW" }] });
+    await makeUser(ADMIN.email, ADMIN.password, { plants: [{ siteId, level: "ADMIN" }] });
     memberToken = await siteToken(MEMBER.email, MEMBER.password);
     viewerToken = await siteToken(VIEWER.email, VIEWER.password);
+    adminToken = await siteToken(ADMIN.email, ADMIN.password);
   }, 30_000);
 
   afterAll(async () => {
     await prisma.externalRef.deleteMany({ where: { source: SOURCE } });
     await prisma.setupChangeset.deleteMany({ where: { source: SOURCE } });
-    await prisma.user.deleteMany({ where: { email: { in: [MEMBER.email, VIEWER.email] } } });
+    await prisma.user.deleteMany({ where: { email: { in: [MEMBER.email, VIEWER.email, ADMIN.email] } } });
     await server.close();
   });
 
@@ -299,6 +345,107 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
     expect(JSON.stringify(proposed.json)).toContain("Upload the files instead");
   });
 
+  it("applies a big import a chunk at a time in the background", async () => {
+    const body = ownSpec("BIG", 620);
+    const { id, status } = await proposeAndApply(body);
+    expect(status).toBe("APPLYING");
+    const done = await settled(id);
+    expect(done.status).toBe("APPLIED");
+    expect(done.progress).toMatchObject({ phase: "apply", total: 622, done: 622, written: 622 });
+    expect(await prisma.product.count({ where: { siteId, currentVersion: { sku: { startsWith: "BIG-P", endsWith: RUN } } } })).toBe(620);
+    expect(await prisma.setupChangesetWrite.count({ where: { changesetId: id, entity: "link" } })).toBe(1240);
+    expect(
+      await prisma.auditLog.count({ where: { action: "SETUP_CHANGESET_APPLIED", metadata: { path: ["changesetId"], equals: id } } }),
+    ).toBe(1);
+  }, 120_000);
+
+  it("rolls an import back: deletes what it made, restores what it changed, skips what changed since", async () => {
+    const first = await proposeAndApply(ownSpec("RB"));
+    // A second import renames one part and adds a third.
+    const second = ownSpec("RB", 3);
+    second.products[0]!.name = "Part RB 0, renamed";
+    const { id } = await proposeAndApply(second);
+    // Someone edits the new part by hand afterwards.
+    const added = await productByKey(`RB-P2-${RUN}`);
+    await rpcCall(server, "product/update", { id: added!.id, name: "Edited by hand" }, memberToken);
+
+    const rolled = await rpcCall(server, "setup/changeset/rollback", { id }, memberToken);
+    expect(rolled.statusCode).toBe(200);
+    const done = (await settled(id)) as { status: string; journal: { skipped: Array<{ key: string; reason: string }> } };
+    expect(done.status).toBe("ROLLED_BACK");
+    expect((await productByKey(`RB-P0-${RUN}`))?.currentVersion?.name).toBe("Part RB 0");
+    // Changed since: left alone, with the reason; so are its links' material refs' targets.
+    const kept = await productByKey(`RB-P2-${RUN}`);
+    expect(kept?.deletedAt).toBeNull();
+    expect(done.journal.skipped).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: `RB-P2-${RUN}`, reason: expect.stringContaining("Changed since") }),
+      ]),
+    );
+    // ...and keeps its materials list with it.
+    expect(await prisma.productMaterial.count({ where: { productId: kept!.id } })).toBe(2);
+    // The first import is untouched and can still be rolled back on its own.
+    expect((await productByKey(`RB-P1-${RUN}`))?.deletedAt).toBeNull();
+    expect(
+      await prisma.auditLog.count({ where: { action: "SETUP_CHANGESET_ROLLED_BACK", metadata: { path: ["changesetId"], equals: id } } }),
+    ).toBe(1);
+
+    const again = await rpcCall(server, "setup/changeset/rollback", { id: first.id }, memberToken);
+    expect(again.statusCode).toBe(200);
+    expect((await settled(first.id)).status).toBe("ROLLED_BACK");
+    const gone = await prisma.product.findFirst({ where: { siteId, currentVersion: { sku: `RB-P1-${RUN}` } } });
+    expect(gone?.deletedAt).not.toBeNull();
+    expect(await prisma.externalRef.count({ where: { source: SOURCE, key: `RB-P1-${RUN}` } })).toBe(0);
+  });
+
+  it("removes an import completely, for plant admins only, and clears its data", async () => {
+    const { id } = await proposeAndApply(ownSpec("RM"));
+    const made = await productByKey(`RM-P0-${RUN}`);
+    expect((await rpcCall(server, "setup/changeset/rollback", { id, mode: "remove" }, memberToken)).statusCode).toBe(403);
+
+    const removed = await rpcCall(server, "setup/changeset/rollback", { id, mode: "remove" }, adminToken);
+    expect(removed.statusCode).toBe(200);
+    const done = (await settled(id)) as { status: string; clearedAt: string | null; journal: { outcomes: Record<string, number> } };
+    expect(done.status).toBe("ROLLED_BACK");
+    expect(done.clearedAt).not.toBeNull();
+    expect(await prisma.product.findUnique({ where: { id: made!.id } })).toBeNull();
+    expect(await prisma.productVersion.count({ where: { productId: made!.id } })).toBe(0);
+    expect(await prisma.stockItem.count({ where: { stockableId: made!.id } })).toBe(0);
+    expect(await prisma.material.count({ where: { siteId, currentVersion: { materialNumber: `RM-M1-${RUN}` } } })).toBe(0);
+    expect(await prisma.setupChangesetWrite.count({ where: { changesetId: id } })).toBe(0);
+    expect(
+      await prisma.auditLog.count({ where: { action: "SETUP_CHANGESET_CLEARED", metadata: { path: ["changesetId"], equals: id } } }),
+    ).toBe(1);
+  });
+
+  it("puts a changed record back on its earlier version when an import is removed completely", async () => {
+    await proposeAndApply(ownSpec("RV"));
+    const before = await productByKey(`RV-P0-${RUN}`);
+    const renamed = ownSpec("RV");
+    renamed.products[0]!.name = "Renamed by import";
+    const { id } = await proposeAndApply(renamed);
+    await rpcCall(server, "setup/changeset/rollback", { id, mode: "remove" }, adminToken);
+    await settled(id);
+    const after = await productByKey(`RV-P0-${RUN}`);
+    expect(after?.currentVersionId).toBe(before?.currentVersionId);
+    expect(after?.currentVersion?.name).toBe("Part RV 0");
+  });
+
+  it("clears an applied import's data but keeps its record, and then can't roll it back", async () => {
+    const { id, status } = await proposeAndApply(ownSpec("CL"));
+    // One chunk was the whole import: done before the request answered.
+    expect(status).toBe("APPLIED");
+    const cleared = await rpcCall(server, "setup/changeset/clear", { id }, memberToken);
+    expect(cleared.statusCode).toBe(200);
+    const row = await prisma.setupChangeset.findUniqueOrThrow({ where: { id } });
+    expect(row).toMatchObject({ status: "APPLIED", spec: null });
+    expect(row.clearedAt).not.toBeNull();
+    expect(await prisma.setupChangesetRow.count({ where: { changesetId: id } })).toBe(0);
+    expect(await prisma.setupChangesetWrite.count({ where: { changesetId: id } })).toBe(0);
+    expect((await productByKey(`CL-P0-${RUN}`))?.deletedAt).toBeNull();
+    expect((await rpcCall(server, "setup/changeset/rollback", { id }, memberToken)).statusCode).toBe(400);
+  });
+
   it("lets a connected agent propose and revise, never apply", async () => {
     const person = await prisma.user.findUniqueOrThrow({ where: { email: MEMBER.email }, select: { id: true } });
     const site = await prisma.site.findUniqueOrThrow({ where: { id: siteId }, select: { workspaceId: true } });
@@ -330,6 +477,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
 
     await expect(agent.setup.changeset.replan({ id: created.id })).resolves.toBeDefined();
     await expect(agent.setup.changeset.apply({ id: created.id })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(agent.setup.changeset.rollback({ id: created.id, mode: "rollback" })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await expect(agent.setup.changeset.clear({ id: created.id })).rejects.toMatchObject({ code: "FORBIDDEN" });
     const detail = await agent.setup.changeset.get({ id: created.id });
     expect(detail.canApply).toBe(false);
   });

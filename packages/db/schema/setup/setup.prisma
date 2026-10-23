@@ -9,8 +9,13 @@ enum SetupEntity {
 
 enum SetupChangesetStatus {
   DRAFT
+  /// Being written in chunks by the setup runner (setup/runner.ts).
+  APPLYING
   APPLIED
   DISCARDED
+  /// Its writes being reversed in chunks, from its journal.
+  ROLLING_BACK
+  ROLLED_BACK
 }
 
 /// A record's key in another system ("customer-erp" / "RES-PP-01"). Bulk
@@ -45,8 +50,8 @@ model SetupChangeset {
   status     SetupChangesetStatus @default(DRAFT)
   /// Proposed through a connected agent (OAuth) rather than by hand.
   author     GraphChangesetAuthor @default(USER)
-  /// The spec exactly as proposed.
-  spec       Json
+  /// The spec exactly as proposed. Null once the import's data is cleared.
+  spec       Json?
   /// The latest plan of spec against the plant.
   planResult Json
   /// Counts by entity and action, for lists.
@@ -65,13 +70,25 @@ model SetupChangeset {
   appliedAt   DateTime? @db.Timestamptz(3)
   discardedAt DateTime? @db.Timestamptz(3)
 
+  rolledBackById String?   @db.Uuid
+  rolledBackBy   User?     @relation("SetupChangesetRolledBackBy", fields: [rolledBackById], references: [id], onDelete: SetNull)
+  rolledBackAt   DateTime? @db.Timestamptz(3)
+  /// Spec, plan rows, files and journal dropped; the record and its audit stay. No rollback after this.
+  clearedAt      DateTime? @db.Timestamptz(3)
+
+  /// Where an apply or rollback is: { phase, done, total, written, stopped? }.
+  progress   Json?
+  /// The runner holding this changeset; another may take it over once this passes.
+  leaseUntil DateTime? @db.Timestamptz(3)
+
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   siteId String @db.Uuid
   site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
-  rows SetupChangesetRow[]
+  rows   SetupChangesetRow[]
+  writes SetupChangesetWrite[]
 
   @@index([siteId, status, createdAt])
 }
@@ -131,4 +148,42 @@ model SetupUpload {
   site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
   @@index([siteId, createdAt])
+}
+
+/// One record an apply wrote, with what it was before, so the import can be
+/// rolled back: created records are deleted, changed ones restored, as long
+/// as nothing changed them since (currentVersionId still afterVersionId).
+model SetupChangesetWrite {
+  id          String  @id @default(uuid()) @db.Uuid
+  /// Write order within the changeset.
+  seq         Int
+  /// Rollback order: links (0), products (1), materials (2), external refs (3).
+  rank        Int
+  /// material | product | link | ref
+  entity      String
+  /// create | update
+  action      String
+  /// The material or product; for a link, its product; for a ref, the ref.
+  entityId    String  @db.Uuid
+  /// A link's material.
+  materialId  String? @db.Uuid
+  key         String
+  label       String
+  /// Field values before an update ({ fields }), or a ref before ({ entityId, changesetId }).
+  before      Json?
+  /// The version current before an update, for removing the import completely.
+  beforeVersionId String? @db.Uuid
+  /// The version the write left current; a different one now means it changed since.
+  afterVersionId  String? @db.Uuid
+  /// What rollback did: deleted | removed | restored | gone | skipped
+  outcome     String?
+  reason      String?
+
+  changesetId String         @db.Uuid
+  changeset   SetupChangeset @relation(fields: [changesetId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([changesetId, seq])
+  @@index([changesetId, outcome, rank, seq])
 }

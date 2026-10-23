@@ -119,6 +119,16 @@ export async function loadPlan(db: Db, changeset: { id: string; planResult: unkn
   return { ...planTotals(changeset), rows: rows.map(toRow) };
 }
 
+/** A slice of the stored plan, in apply order, with each row's position. */
+export async function rowsFrom(db: Db, changesetId: string, position: number, take: number) {
+  const rows = await db.setupChangesetRow.findMany({
+    where: { changesetId, position: { gte: position } },
+    orderBy: { position: "asc" },
+    take,
+  });
+  return rows.map((row) => ({ position: row.position, row: toRow(row) }));
+}
+
 export interface RowsQuery {
   action?: SetupAction;
   entity?: SetupEntityKind;

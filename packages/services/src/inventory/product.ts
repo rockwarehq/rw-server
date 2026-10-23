@@ -402,8 +402,8 @@ export async function update(id: string, input: UpdateProductInput, options?: Wr
 /**
  * Soft delete product (sets deletedAt)
  */
-export async function remove(id: string) {
-  const product = await prisma.product.findUnique({
+export async function remove(id: string, options?: WriteOptions) {
+  const product = await reader(options).product.findUnique({
     where: { id },
     include: {
       site: { select: { workspaceId: true } },
@@ -426,12 +426,12 @@ export async function remove(id: string) {
     };
   }
 
-  await prisma.product.update({
+  await reader(options).product.update({
     where: { id },
     data: { deletedAt: new Date() },
   });
 
-  publishEntityEvent({
+  emitEntityEvent(options, {
     action: "deleted",
     entityKey: SYSTEM_ENTITY_KEYS.Product,
     entityId: product.id,
@@ -942,8 +942,10 @@ export async function removeMaterial(
   productId: string,
   materialId: string,
   replaceActiveWithProductMaterialId?: string,
+  options?: WriteOptions,
 ) {
-  const existing = await prisma.productMaterial.findUnique({
+  const db = reader(options);
+  const existing = await db.productMaterial.findUnique({
     where: { productId_materialId: { productId, materialId } },
     select: {
       id: true,
@@ -962,7 +964,7 @@ export async function removeMaterial(
   const altGroupId = existing.altGroupId;
   const isActive = !!existing.activeOfAltGroup;
   const peerCount = altGroupId
-    ? await prisma.productMaterial.count({ where: { altGroupId, id: { not: existing.id } } })
+    ? await db.productMaterial.count({ where: { altGroupId, id: { not: existing.id } } })
     : 0;
 
   // Validate replacement (when provided) or require one for ambiguous removals.
@@ -970,7 +972,7 @@ export async function removeMaterial(
     if (replaceActiveWithProductMaterialId === existing.id) {
       return { error: "Replacement cannot be the material being removed", code: "REPLACEMENT_IS_SELF" };
     }
-    const replacement = await prisma.productMaterial.findUnique({
+    const replacement = await db.productMaterial.findUnique({
       where: { id: replaceActiveWithProductMaterialId },
       select: { id: true, altGroupId: true },
     });
@@ -987,7 +989,7 @@ export async function removeMaterial(
     };
   }
 
-  await prisma.$transaction(async (tx) => {
+  await inTransaction(options, async (tx) => {
     if (altGroupId && isActive && peerCount > 0) {
       // Promote replacement to active before deleting this PM — keeps the
       // "exactly one active per non-empty group" invariant unbroken.
@@ -1006,7 +1008,7 @@ export async function removeMaterial(
     }
   });
 
-  publishEntityEvent({
+  emitEntityEvent(options, {
     action: "updated",
     entityKey: SYSTEM_ENTITY_KEYS.Product,
     entityId: existing.productId,
@@ -1014,7 +1016,7 @@ export async function removeMaterial(
     workspaceId: existing.product.site.workspaceId,
     changedFields: ["materials"],
   });
-  publishEntityEvent({
+  emitEntityEvent(options, {
     action: "updated",
     entityKey: SYSTEM_ENTITY_KEYS.Material,
     entityId: existing.materialId,

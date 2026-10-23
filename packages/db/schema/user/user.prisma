@@ -77,6 +77,7 @@ model User {
   setupChangesetsCreated  SetupChangeset[]         @relation("SetupChangesetCreatedBy")
   setupChangesetsApplied  SetupChangeset[]         @relation("SetupChangesetAppliedBy")
   setupUploads            SetupUpload[]            @relation("SetupUploadCreatedBy")
+  setupChangesetsRolledBack SetupChangeset[]       @relation("SetupChangesetRolledBackBy")
   savedViewsCreated       SavedView[]
   documentFilesCreated    DocumentFile[]           @relation("DocumentFileCreatedBy")
 

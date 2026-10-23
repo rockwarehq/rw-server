@@ -366,8 +366,8 @@ export async function update(id: string, input: UpdateMaterialInput, options?: W
 /**
  * Soft delete material (sets deletedAt)
  */
-export async function remove(id: string) {
-  const material = await prisma.material.findUnique({
+export async function remove(id: string, options?: WriteOptions) {
+  const material = await reader(options).material.findUnique({
     where: { id },
     include: {
       site: { select: { workspaceId: true } },
@@ -390,12 +390,12 @@ export async function remove(id: string) {
     };
   }
 
-  await prisma.material.update({
+  await reader(options).material.update({
     where: { id },
     data: { deletedAt: new Date() },
   });
 
-  publishEntityEvent({
+  emitEntityEvent(options, {
     action: "deleted",
     entityKey: SYSTEM_ENTITY_KEYS.Material,
     entityId: material.id,

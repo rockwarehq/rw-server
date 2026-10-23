@@ -3,19 +3,14 @@ import prisma, { type Prisma } from "@rw/db";
 import { logEvent } from "@rw/services/audit/index";
 import { z } from "zod";
 
-import { applySetup, MAX_APPLY_ROWS, SetupApplyError, writeCount } from "../setup/apply.js";
+import { writeCount } from "../setup/apply.js";
+import { clearImportData } from "../setup/clear.js";
 import { SetupMappingError, setupFilesSchema, specFromFiles } from "../setup/mapping.js";
 import { planSetup, type SetupPlan } from "../setup/plan.js";
 import { MAX_INLINE_ROWS, type SetupSpec, setupSpecSchema, specRowCount } from "../setup/spec.js";
-import {
-  loadPlan,
-  pageRows,
-  planTotals,
-  problemRows,
-  type StoredOrigin,
-  savePlan,
-  withFileIssues,
-} from "../setup/store.js";
+import { pageRows, planTotals, problemRows, type StoredOrigin, savePlan, withFileIssues } from "../setup/store.js";
+import { pendingWhere } from "../setup/rollback.js";
+import { claimApply, claimRollback, firstStep, runInBackground, type SetupProgress } from "../setup/runner.js";
 import { createUpload, readUploads } from "../setup/uploads.js";
 import { userRequired } from "./middleware.js";
 import type { CallerContext } from "./context.js";
@@ -64,6 +59,44 @@ const person = { select: { id: true, firstName: true, lastName: true, email: tru
 function personName(p: { firstName: string | null; lastName: string | null; email: string } | null) {
   if (!p) return null;
   return [p.firstName, p.lastName].filter(Boolean).join(" ") || p.email;
+}
+
+/** What an import wrote, and what rolling it back did, for its page. */
+async function journalSummary(changesetId: string) {
+  const records = { in: ["material", "product"] };
+  const [byAction, byOutcome, linksRemoved, toRollBack, toRemove, skipped] = await Promise.all([
+    prisma.setupChangesetWrite.groupBy({
+      by: ["action"],
+      where: { changesetId, entity: { in: ["material", "product"] } },
+      _count: { _all: true },
+    }),
+    prisma.setupChangesetWrite.groupBy({
+      by: ["outcome"],
+      where: { changesetId, entity: records, outcome: { not: null } },
+      _count: { _all: true },
+    }),
+    prisma.setupChangesetWrite.count({ where: { changesetId, entity: "link", outcome: "removed" } }),
+    prisma.setupChangesetWrite.count({ where: { ...pendingWhere(changesetId, "rollback"), entity: { not: "ref" } } }),
+    prisma.setupChangesetWrite.count({ where: { ...pendingWhere(changesetId, "remove"), entity: { not: "ref" } } }),
+    prisma.setupChangesetWrite.findMany({
+      where: { changesetId, outcome: "skipped", entity: records },
+      orderBy: { seq: "asc" },
+      take: 50,
+      select: { entity: true, key: true, label: true, reason: true },
+    }),
+  ]);
+  const count = (list: Array<{ _count: { _all: number } } & Record<string, unknown>>, field: string, value: string) =>
+    list.find((row) => row[field] === value)?._count._all ?? 0;
+  return {
+    created: count(byAction, "action", "create"),
+    changed: count(byAction, "action", "update"),
+    toRollBack,
+    toRemove,
+    /** Materials and products only; BOM lines are counted on their own. */
+    outcomes: Object.fromEntries(byOutcome.map((row) => [row.outcome ?? "pending", row._count._all])),
+    linksRemoved,
+    skipped,
+  };
 }
 
 function upToDate(plan: SetupPlan) {
@@ -195,8 +228,13 @@ export const get = userRequired.input(z.object({ id: z.uuid() })).handler(async 
   await context.access.require("VIEW", { site: row.siteId });
   const people = await prisma.setupChangeset.findUnique({
     where: { id: row.id },
-    select: { createdBy: person, appliedBy: person },
+    select: { createdBy: person, appliedBy: person, rolledBackBy: person },
   });
+  const journal = await journalSummary(row.id);
+  const manage = !context.current.via && context.access.can("MANAGE", { site: row.siteId });
+  const admin = !context.current.via && context.access.can("ADMIN", { site: row.siteId });
+  const running = row.status === "APPLYING" || row.status === "ROLLING_BACK";
+  const settled = !running && !row.clearedAt;
   return {
     id: row.id,
     siteId: row.siteId,
@@ -214,11 +252,18 @@ export const get = userRequired.input(z.object({ id: z.uuid() })).handler(async 
       staff: people.createdBy.systemRole !== null,
     },
     appliedBy: people?.appliedBy && { id: people.appliedBy.id, name: personName(people.appliedBy) },
+    rolledBackAt: row.rolledBackAt,
+    rolledBackBy: people?.rolledBackBy && { id: people.rolledBackBy.id, name: personName(people.rolledBackBy) },
+    clearedAt: row.clearedAt,
     plan: planTotals(row),
     files: storedOrigin(row)?.files ?? [],
     writes: writeCount(planTotals(row)),
-    maxApplyRows: MAX_APPLY_ROWS,
-    canApply: row.status === "DRAFT" && !context.current.via && context.access.can("MANAGE", { site: row.siteId }),
+    progress: (row.progress as SetupProgress | null) ?? null,
+    journal,
+    canApply: row.status === "DRAFT" && !row.clearedAt && manage,
+    canRollBack: settled && row.status !== "ROLLED_BACK" && journal.toRollBack > 0 && manage,
+    canRemove: settled && journal.toRemove > 0 && admin,
+    canClear: settled && ["APPLIED", "DISCARDED", "ROLLED_BACK"].includes(row.status) && manage,
   };
 });
 
@@ -286,66 +331,66 @@ export const discard = userRequired.input(z.object({ id: z.uuid() })).handler(as
 
 // Never callable by a connected agent (not in AGENT_CALLABLE): a person
 // applies, interactively, with MANAGE at the plant (what every v1 row needs:
-// materials and products are plant records).
+// materials and products are plant records). The first chunk runs before
+// this answers, so a small import is done, and a stale one refused, right
+// away; a big one carries on in the background with its progress on the page.
 export const apply = userRequired.input(z.object({ id: z.uuid() })).handler(async ({ input, context }) => {
   const row = await load(input.id);
   await context.access.require("MANAGE", { site: row.siteId });
   requireDraft(row);
-  const totals = planTotals(row);
-  if (!totals.applicable) {
+  if (row.clearedAt) throw new ORPCError("BAD_REQUEST", { message: "This import's data was cleared." });
+  if (!planTotals(row).applicable) {
     throw new ORPCError("BAD_REQUEST", { message: "Resolve the changeset's problems before applying it." });
   }
-  if (writeCount(totals) > MAX_APPLY_ROWS) {
-    throw new ORPCError("BAD_REQUEST", {
-      message: `This import writes ${writeCount(totals)} records; one apply takes up to ${MAX_APPLY_ROWS} for now. Split it into smaller imports.`,
-    });
-  }
-
+  const total = await prisma.setupChangesetRow.count({ where: { changesetId: row.id } });
   // Claim the draft first so two people applying at once can't both write.
-  const claimed = await prisma.setupChangeset.updateMany({
-    where: { id: row.id, status: "DRAFT" },
-    data: { status: "APPLIED", appliedById: context.current.user.id, appliedAt: new Date() },
-  });
-  if (claimed.count === 0) throw new ORPCError("CONFLICT", { message: "This changeset was just applied or discarded" });
-
-  try {
-    const result = await applySetup({
-      siteId: row.siteId,
-      changesetId: row.id,
-      spec: row.spec as unknown as SetupSpec,
-      reviewedPlan: await loadPlan(prisma, row),
-    });
-    await logEvent({
-      action: "SETUP_CHANGESET_APPLIED",
-      actorId: context.current.user.id,
-      userId: row.createdById ?? undefined,
-      workspaceId: context.current.workspaceId,
-      metadata: {
-        changesetId: row.id,
-        siteId: row.siteId,
-        summary: result.plan.summary,
-        // Applied by a person in IMM; the agent only proposed it.
-        ...(row.grantId ? { proposedVia: "mcp", grantId: row.grantId, clientName: row.clientName } : {}),
-      },
-    });
-    return { ok: true, written: result.written };
-  } catch (err) {
-    // Back to a draft, with the fresh plan when the plant moved.
-    await prisma.$transaction(
-      async (tx) => {
-        await tx.setupChangeset.update({
-          where: { id: row.id },
-          data: { status: "DRAFT", appliedById: null, appliedAt: null },
-        });
-        if (err instanceof SetupApplyError && err.plan) {
-          await savePlan(tx, row.id, withFileIssues(err.plan, storedOrigin(row)));
-        }
-      },
-      { timeout: 60_000 },
-    );
-    if (err instanceof SetupApplyError) {
-      throw new ORPCError(err.code === "STALE" ? "CONFLICT" : "BAD_REQUEST", { message: err.message });
-    }
-    throw err;
+  if (!(await claimApply(row.id, context.current.user.id, total))) {
+    throw new ORPCError("CONFLICT", { message: "This changeset was just applied or discarded" });
   }
+  const first = await firstStep(row.id);
+  if (first.kind === "stopped") {
+    throw new ORPCError(first.error.code === "STALE" ? "CONFLICT" : "BAD_REQUEST", { message: first.error.message });
+  }
+  if (first.kind === "more") runInBackground(row.id);
+  return { ok: true, status: first.kind === "done" ? ("APPLIED" as const) : ("APPLYING" as const) };
+});
+
+const rollbackInput = z.object({
+  id: z.uuid(),
+  mode: z
+    .enum(["rollback", "remove"])
+    .default("rollback")
+    .describe("rollback: delete what it created, restore what it changed. remove: delete outright (plant ADMIN)"),
+});
+
+// Undo an import from its journal (setup/rollback.ts). Never agent-callable.
+export const rollback = userRequired.input(rollbackInput).handler(async ({ input, context }) => {
+  const row = await load(input.id);
+  await context.access.require(input.mode === "remove" ? "ADMIN" : "MANAGE", { site: row.siteId });
+  if (row.clearedAt) {
+    throw new ORPCError("BAD_REQUEST", { message: "This import's data was cleared, so it can't be rolled back." });
+  }
+  const from =
+    input.mode === "remove" ? ["APPLIED", "DRAFT", "DISCARDED", "ROLLED_BACK"] : ["APPLIED", "DRAFT", "DISCARDED"];
+  if (!from.includes(row.status)) {
+    throw new ORPCError("CONFLICT", { message: `This import is ${row.status.toLowerCase().replace("_", " ")}.` });
+  }
+  if (!(await claimRollback(row.id, context.current.user.id, input.mode, from))) {
+    throw new ORPCError("CONFLICT", { message: "Something else just started on this import." });
+  }
+  const first = await firstStep(row.id);
+  if (first.kind === "more") runInBackground(row.id);
+  return { ok: true, status: first.kind === "done" ? ("ROLLED_BACK" as const) : ("ROLLING_BACK" as const) };
+});
+
+// Drop an import's spec, rows, files and journal; keep its record and audit.
+export const clear = userRequired.input(z.object({ id: z.uuid() })).handler(async ({ input, context }) => {
+  const row = await load(input.id);
+  await context.access.require("MANAGE", { site: row.siteId });
+  if (row.clearedAt) return { ok: true };
+  if (!["APPLIED", "DISCARDED", "ROLLED_BACK"].includes(row.status)) {
+    throw new ORPCError("CONFLICT", { message: "Only an applied, discarded or rolled back import can be cleared." });
+  }
+  await clearImportData(row.id, context.current.user.id, context.current.workspaceId);
+  return { ok: true };
 });
