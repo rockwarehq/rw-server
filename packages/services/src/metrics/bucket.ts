@@ -22,7 +22,8 @@ import { MetricsContext } from "./context.js";
 import { TtlCache } from "./ttl-cache.js";
 
 // ── Process-level timezone cache ─────────────────────────────────
-// Timezones effectively never change at runtime, so a long TTL is safe.
+// Timezones rarely change at runtime, so a long TTL is safe; the site update
+// that changes one forgets it here (other processes catch up at expiry).
 const processTzCache = new TtlCache<string>({ ttlMs: 300_000, maxSize: 100 });
 
 // ── Site timezone lookup ─────────────────────────────────────────
@@ -53,6 +54,11 @@ export async function getSiteTimezone(siteId: string, ctx?: MetricsContext): Pro
   processTzCache.set(siteId, result);
   ctx?.setTimezoneCached(siteId, result);
   return result;
+}
+
+/** Drop a site's cached timezone so the next lookup reads the database. */
+export function forgetSiteTimezone(siteId: string): void {
+  processTzCache.delete(siteId);
 }
 
 // ── Business date helpers ────────────────────────────────────────

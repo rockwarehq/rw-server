@@ -158,6 +158,16 @@ buckets asynchronously" half for jobs.
    regenerated so they never count. Pattern-level overlap remains unvalidated (it was
    before) and resolves by the existing workcenter-over-site, latest-assignment order.
 
+9. **A site timezone change is a schedule edit.** Upcoming shifts keep their local clock
+   times in the new zone: an 18:00 New York shift becomes 18:00 Chicago. The site update
+   moves every override that has not started to the same local clock time (overrides
+   hold exact instants), forgets the cached zone, and rebuilds every live schedule at the
+   site from now, the way a pattern edit does. Rows that have ended, and rows in use
+   (anything stamped, or carrying a shift note or sign-off), stay where they are, and the
+   new zone takes over after them. Amendments describe shifts that ran and are not
+   touched. Other processes keep the old zone for up to their 5-minute cache TTL; the
+   shift rows are already rebuilt, so only their clock-aligned buckets lag.
+
 ## Consequences
 
 - Every fact from now on carries a shift stamp, so shift-grain reports are complete and
@@ -219,6 +229,9 @@ TypeScript duration path shares and in the two SQL derivations the live cascade 
 (station hours and per-job hours), so JOB buckets are exempt too. In-place edits of
 published definitions and patterns (`rematerializePattern`), unpublish-as-end
 (`shiftAssignment.unpublish`, `isPublished` on patterns) are on the same branch.
+Item 9 on `feat/site-timezone-reschedules`: `rematerializeSite`, override re-anchoring in
+`site.update`, and shift notes and sign-offs counted as in use (`SHIFT_ANNOTATION_TABLES`).
+Amendments still ignore notes and sign-offs when replacing a shift, as before.
 
 ## The amendment reads rows, not the pattern
 
