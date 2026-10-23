@@ -77,7 +77,20 @@ Operators aren't users: their logon events name the employee as the record (`ent
 
 Four `AuditAction` values are kept but never written (Postgres can't drop enum values cheaply): `INVITE_VERIFIED` and `INVITE_FAILED` (invites complete through the password reset, `INVITE_COMPLETED`), and `OPERATOR_SUPERVISOR_CHALLENGE` / `_FAILED` (supervisor approval isn't built).
 
+## Keeping it
+
+**Append-only.** The database refuses `UPDATE`, `DELETE` and `TRUNCATE` on `AuditLog` (trigger `audit_log_append_only`, migration `20261023150000_audit_append_only`), whatever the application or anyone with write access tries. The one sanctioned rewrite is a maintenance script's own transaction that sets `SET LOCAL rockware.audit_bypass = 'on'` first — today only `apps/api/scripts/collapse-workspaces.ts`, a dev tool that refuses to run in production. Nothing in the application sets it. A correction is a new entry, never an edit.
+
+**Retention.** Entries are kept for as long as the workspace exists; nothing purges them. They are small (a few hundred bytes; a plant making a few thousand changes a day writes well under a gigabyte a year), and an audit trail that forgets defeats its purpose. If a customer needs a limit (a contract, a regulation), it becomes a per-workspace setting with a purge job that runs in a sanctioned maintenance transaction, records that it ran, and keeps the record of the purge itself. Until then there is no limit, and none should be added ad hoc.
+
+**What an entry can outlive.** Entries have no foreign keys, so they stay when what they point at goes:
+- A deleted person's entries keep their `actorId`; the name is gone, so history shows "Someone".
+- A record deleted for good (a station today, an import's "undo and delete for good") keeps its entries; `metadata.label` still names it.
+- "Undo and delete for good" can remove a version an import made, so an entry's `versionId` / `previousVersionId` can point at a version that no longer exists. Its `changes` still say what changed.
+
+**Open decision: station delete.** ADR-0007 says station delete should be a soft delete, so its manufacturing history stays; the code still hard-deletes (`facility/station/crud.ts`), taking its versions with it. The audit trail records the delete and the station's name, but the station's own version history is gone. Making station delete soft is a separate change with its own consequences (lists, uniqueness of names, devices), to decide on its own.
+
 ## Next
 
 1. History on stations, workcenters and team members in IMM (reading is otherwise done: `audit.*`, Settings → Activity, History on products, materials, jobs, tools).
-2. Append-only enforced in the database, and a written retention policy.
+2. Station delete as a soft delete (ADR-0007), decided on its own.

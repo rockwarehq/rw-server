@@ -94,4 +94,22 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("audit trail (Tier 2)", () => {
     // Unique, not Fastify's per-process counter (req-1, req-2, ...).
     expect(row.requestId).toMatch(/^[0-9a-f-]{36}$/);
   });
+  it("refuses to change or remove what it recorded, except in a sanctioned maintenance transaction", async () => {
+    const entityId = randomUUID();
+    await logEvent({ action: "API_TOKEN_CREATED", entityType: "test", entityId });
+    const row = await prisma.auditLog.findFirstOrThrow({ where: { entityType: "test", entityId } });
+
+    await expect(prisma.auditLog.update({ where: { id: row.id }, data: { actorId: null } })).rejects.toThrow(
+      /append-only/,
+    );
+    await expect(prisma.auditLog.delete({ where: { id: row.id } })).rejects.toThrow(/append-only/);
+    await expect(prisma.$executeRawUnsafe(`TRUNCATE "AuditLog"`)).rejects.toThrow(/append-only/);
+
+    // A maintenance script's own transaction may (collapse-workspaces), and only that one.
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SET LOCAL rockware.audit_bypass = 'on'`);
+      await tx.auditLog.update({ where: { id: row.id }, data: { metadata: { rewritten: true } } });
+    });
+    await expect(prisma.auditLog.delete({ where: { id: row.id } })).rejects.toThrow(/append-only/);
+  });
 });
