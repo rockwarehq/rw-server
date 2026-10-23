@@ -11,7 +11,7 @@ The edge story: a **gateway** (an rw-gateway device on the factory floor) reads 
 
 1. **Claim** — a technician enters the device's serial number + claim code; `POST /edge/claim` (`apps/api/src/edge.ts`) binds the physical device to a site and issues a gateway token (validated with timing-safe compares on subsequent calls).
 2. **Connect** — the gateway calls `/edge/connect` to fetch its NATS leaf-node credentials and config, then holds a persistent NATS connection.
-3. **Operate** — drivers on the gateway (modbus, opc-ua, …; definitions registered by the API's driver registry) sample configured **datasource points** and publish to NATS subjects. Health snapshots go to `health.gateway.<id>` (~every 5s; subject helpers in `packages/runtime/src/gateway-subjects.ts`).
+3. **Operate** — drivers on the gateway (modbus, opc-ua, …; definitions registered by the API's driver registry) sample configured **datasource points** and publish to NATS subjects. Health snapshots go to `health.gateway.<id>` (~every 5s) and `health.device.<id>.<datasourceId>` (~every 10s); subject helpers in `packages/runtime/src/gateway-subjects.ts`. The in-memory `RW_HEALTH` stream keeps the latest snapshot per subject, and the API's `gateway.health` RPC streams it to clients (`apps/api/src/nats/health-stream.ts`).
 4. **Monitored** — `stale-gateway-check` (api, 30s) flips gateways OFFLINE when heartbeats stop; the `gateway-health` worker mirrors health snapshots into Prometheus gauges for Grafana.
 
 Gateway state machine: `PROVISIONED → ONLINE ↔ OFFLINE → DISABLED` (schema: `packages/db/schema/gateway/gateway.prisma`).

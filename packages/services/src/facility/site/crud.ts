@@ -1,7 +1,10 @@
 import prisma from "@rw/db";
+import type { Prisma } from "@rw/db";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { seedDefaults as seedDefaultRoles } from "../../employee/role.js";
+import { forgetSiteTimezone } from "../../metrics/bucket.js";
+import { rematerializeSite, sameWallClockInstant } from "../shift/materialize.js";
 
 export interface CreateSiteInput {
   name: string;
@@ -166,17 +169,20 @@ export async function update(id: string, input: UpdateSiteInput) {
   // Get current site
   const current = await prisma.site.findUnique({
     where: { id },
-    select: { id: true, attrs: true },
+    select: { id: true, attrs: true, timezone: true },
   });
 
   if (!current) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
 
+  // Forms send the whole payload: only a different zone moves the schedule.
+  const movesTimezone = timezone !== undefined && timezone !== current.timezone;
+
   const updateData: Record<string, unknown> = {};
   if (name !== undefined) updateData.name = name;
   if (description !== undefined) updateData.description = description;
-  if (timezone !== undefined) updateData.timezone = timezone;
+  if (movesTimezone) updateData.timezone = timezone;
   if (weekStart !== undefined) updateData.weekStart = weekStart;
   if (attrs !== undefined) {
     // Shallow-merge instead of replace: attrs is shared by unrelated features
@@ -189,19 +195,30 @@ export async function update(id: string, input: UpdateSiteInput) {
     updateData.attrs = merged;
   }
 
-  const site = await prisma.site.update({
-    where: { id },
-    data: {
-      ...updateData,
-      // The plant bucket carries the site's name.
-      ...(name !== undefined ? { buckets: { updateMany: { where: { kind: "PLANT" }, data: { name } } } } : {}),
-    },
-    include: {
-      _count: {
-        select: { workcenters: true, gateways: true, datasources: true },
+  const site = await prisma.$transaction(async (tx) => {
+    if (movesTimezone) await keepOverrideClockTimes(tx, id, current.timezone, timezone);
+    return tx.site.update({
+      where: { id },
+      data: {
+        ...updateData,
+        // The plant bucket carries the site's name.
+        ...(name !== undefined ? { buckets: { updateMany: { where: { kind: "PLANT" }, data: { name } } } } : {}),
       },
-    },
+      include: {
+        _count: {
+          select: { workcenters: true, gateways: true, datasources: true },
+        },
+      },
+    });
   });
+
+  // A timezone change is a schedule edit (ADR-0015): upcoming shifts keep
+  // their local clock times in the new zone. The cached zone goes first, or
+  // the rebuild would read the old one back.
+  if (movesTimezone) {
+    forgetSiteTimezone(id);
+    await rematerializeSite(id);
+  }
 
   publishEntityEvent({
     action: "updated",
@@ -458,4 +475,30 @@ export async function getDeviceTree(siteId: string) {
   });
 
   return { data: gateways };
+}
+
+/**
+ * Overrides hold exact instants. Those not started yet move to the same local
+ * clock time in the new zone, as definitions do; started ones are history.
+ */
+async function keepOverrideClockTimes(
+  tx: Prisma.TransactionClient,
+  siteId: string,
+  fromTimezone: string,
+  toTimezone: string,
+) {
+  const upcoming = await tx.shiftOverride.findMany({
+    where: { siteId, startTime: { gt: new Date() } },
+    select: { id: true, startTime: true, endTime: true },
+  });
+  for (const o of upcoming) {
+    if (!o.startTime || !o.endTime) continue;
+    await tx.shiftOverride.update({
+      where: { id: o.id },
+      data: {
+        startTime: new Date(sameWallClockInstant(o.startTime.getTime(), fromTimezone, toTimezone)),
+        endTime: new Date(sameWallClockInstant(o.endTime.getTime(), fromTimezone, toTimezone)),
+      },
+    });
+  }
 }

@@ -45,8 +45,30 @@ import * as setup from "./setup.js";
 import * as integration from "./integration.js";
 
 // The app router outgrew what TypeScript will inline in one declaration
-// (TS7056), so the agent routes join through an explicit type and the
-// published client's declarations refer to them by name.
+// (TS7056), so domains join through explicit types and the published client's
+// declarations refer to them by name. Keys are spread flat, so client paths
+// (rpc.gateway.get, ...) are unchanged. When the build hits TS7056 again, move
+// another domain out of coreRouter the same way.
+export const deviceRouter = {
+  gateway: {
+    create: device.gatewayCreate,
+    list: device.gatewayList,
+    get: device.gatewayGet,
+    health: device.gatewayHealth,
+    update: device.gatewayUpdate,
+    delete: device.gatewayDelete,
+  },
+  datasource: {
+    list: device.datasourceList,
+    get: device.datasourceGet,
+    create: device.datasourceCreate,
+    update: device.datasourceUpdate,
+    delete: device.datasourceDelete,
+    publish: device.datasourcePublish,
+    unpublish: device.datasourceUnpublish,
+  },
+};
+
 export const coreRouter = {
   events: {
     ingest: events.ingest,
@@ -169,22 +191,6 @@ export const coreRouter = {
   },
   metricCatalog: {
     list: metricCatalog.list,
-  },
-  gateway: {
-    create: device.gatewayCreate,
-    list: device.gatewayList,
-    get: device.gatewayGet,
-    update: device.gatewayUpdate,
-    delete: device.gatewayDelete,
-  },
-  datasource: {
-    list: device.datasourceList,
-    get: device.datasourceGet,
-    create: device.datasourceCreate,
-    update: device.datasourceUpdate,
-    delete: device.datasourceDelete,
-    publish: device.datasourcePublish,
-    unpublish: device.datasourceUnpublish,
   },
   site: {
     create: site.create,
@@ -683,8 +689,9 @@ export const coreRouter = {
   },
 };
 
-export const router: typeof coreRouter & { agent: typeof agent.agentRouter } = {
+export const router: typeof coreRouter & typeof deviceRouter & { agent: typeof agent.agentRouter } = {
   ...coreRouter,
+  ...deviceRouter,
   agent: agent.agentRouter,
 };
 

@@ -58,6 +58,11 @@ export class TtlCache<T> {
     });
   }
 
+  /** Remove one entry. */
+  delete(key: string): void {
+    this.map.delete(key);
+  }
+
   /** Remove all entries. */
   clear(): void {
     this.map.clear();

@@ -73,6 +73,13 @@ const SHIFT_AGGREGATE_TABLES = ["MaterialShiftUsage"] as const;
 /** Buckets name their shift in a plain column (no FK); an amendment rebuilds them outright. */
 const METRIC_BUCKET_TABLES = ["MetricBucket", "MetricBucketLog"] as const;
 
+/**
+ * What people wrote about a shift: notes and sign-offs. They are not placed in
+ * time (a re-stamp leaves them alone) and cascade-delete with their shift, so a
+ * reference from one keeps the shift instance alive through a rebuild.
+ */
+export const SHIFT_ANNOTATION_TABLES = ["ShiftComment", "ShiftSignoff"] as const;
+
 /** Tables a re-stamp re-resolves, so a reference from one does not pin an obsolete row. */
 export const RESTAMPED_TABLES: readonly string[] = [...new Set(STAMPED_FACTS.map((f) => f.table))];
 
@@ -85,6 +92,7 @@ export const SHIFT_REFERENCING_TABLES: readonly string[] = [
   ...METRIC_BUCKET_TABLES,
   ...RESTAMPED_TABLES,
   ...SHIFT_AGGREGATE_TABLES,
+  ...SHIFT_ANNOTATION_TABLES,
 ];
 
 export const isMetricBucketTable = (table: string) => table.startsWith("MetricBucket");

@@ -53,6 +53,7 @@ import { startAgentTriggerConsumer } from "./nats/agent-trigger-consumer.js";
 import { startAutomationEventConsumer } from "./nats/automation-event-consumer.js";
 import { startAnnounceBus } from "./nats/announce-bus.js";
 import { startCommandBus } from "./nats/command-bus.js";
+import { startHealthStream } from "./nats/health-stream.js";
 import { closeNatsConnection } from "./nats/util.js";
 import { rootLogger } from "./logger.js";
 import { Redis } from "ioredis";
@@ -126,6 +127,7 @@ async function main() {
     startSetupRunner,
     startCommandBus,
     startAnnounceBus,
+    startHealthStream,
     // Agents run only on deploys that opted in (AGENTS_ENABLED).
     ...(agentConfig.available
       ? [startAgentRuntime, startAgentRunConsumer, startAgentTriggerConsumer, startAgentClock]
