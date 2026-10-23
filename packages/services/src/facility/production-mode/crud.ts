@@ -1,4 +1,5 @@
 import prisma, { Prisma } from "@rw/db";
+import { auditRecord } from "../../audit/index.js";
 import { validateSiteRoleIds } from "../../employee/actor-role.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
@@ -13,6 +14,19 @@ const modeInclude = {
 
 type ProductionModeRecord = Prisma.ProductionModeGetPayload<{ include: typeof modeInclude }>;
 type ServiceError = { error: string; code: string };
+
+const AUDIT_FIELDS = ["name", "description", "scrapAll", "dispositionReason", "statusReason", "roles"] as const;
+
+function auditValues(mode: ProductionModeRecord) {
+  return {
+    name: mode.name,
+    description: mode.description,
+    scrapAll: mode.scrapAll,
+    dispositionReason: mode.dispositionReason?.name ?? null,
+    statusReason: mode.statusReason?.name ?? null,
+    roles: mode.roles.map((role) => role.name),
+  };
+}
 
 const DUPLICATE_NAME: ServiceError = {
   error: "A production mode with this name already exists for this site",
@@ -111,18 +125,31 @@ export async function create(input: CreateProductionModeInput): Promise<ServiceE
   if (reasonError) return reasonError;
 
   try {
-    const mode = await prisma.productionMode.create({
-      data: {
-        siteId,
-        name,
-        description: description ?? null,
-        scrapAll,
-        itemDispositionId: scrap.itemDispositionId,
-        dispositionReasonId: scrap.dispositionReasonId,
-        statusReasonId: input.statusReasonId ?? null,
-        roles: { connect: roleIds.map((id) => ({ id })) },
-      },
-      include: modeInclude,
+    const mode = await prisma.$transaction(async (tx) => {
+      const created = await tx.productionMode.create({
+        data: {
+          siteId,
+          name,
+          description: description ?? null,
+          scrapAll,
+          itemDispositionId: scrap.itemDispositionId,
+          dispositionReasonId: scrap.dispositionReasonId,
+          statusReasonId: input.statusReasonId ?? null,
+          roles: { connect: roleIds.map((id) => ({ id })) },
+        },
+        include: modeInclude,
+      });
+      await auditRecord(tx, {
+        change: "created",
+        entityType: "production-mode",
+        entityId: created.id,
+        siteId: created.siteId,
+        workspaceId: site.workspaceId,
+        label: created.name,
+        after: auditValues(created),
+        fields: AUDIT_FIELDS,
+      });
+      return created;
     });
 
     publishEntityEvent({
@@ -176,15 +203,7 @@ export async function update(
 ): Promise<ServiceError | { data: ProductionModeRecord }> {
   const current = await prisma.productionMode.findUnique({
     where: { id },
-    select: {
-      id: true,
-      siteId: true,
-      archivedAt: true,
-      scrapAll: true,
-      itemDispositionId: true,
-      dispositionReasonId: true,
-      site: { select: { workspaceId: true } },
-    },
+    include: { ...modeInclude, site: { select: { workspaceId: true } } },
   });
   if (!current || current.archivedAt) {
     return { error: "Production mode not found", code: "MODE_NOT_FOUND" };
@@ -215,7 +234,21 @@ export async function update(
   if (input.roleIds !== undefined) updateData.roles = { set: input.roleIds.map((id) => ({ id })) };
 
   try {
-    const mode = await prisma.productionMode.update({ where: { id }, data: updateData, include: modeInclude });
+    const mode = await prisma.$transaction(async (tx) => {
+      const updated = await tx.productionMode.update({ where: { id }, data: updateData, include: modeInclude });
+      await auditRecord(tx, {
+        change: "updated",
+        entityType: "production-mode",
+        entityId: updated.id,
+        siteId: updated.siteId,
+        workspaceId: current.site.workspaceId,
+        label: updated.name,
+        before: auditValues(current),
+        after: auditValues(updated),
+        fields: AUDIT_FIELDS,
+      });
+      return updated;
+    });
 
     publishEntityEvent({
       action: "updated",
@@ -237,13 +270,24 @@ export async function update(
 export async function archive(id: string): Promise<ServiceError | { data: { success: boolean } }> {
   const mode = await prisma.productionMode.findUnique({
     where: { id },
-    select: { id: true, siteId: true, archivedAt: true, site: { select: { workspaceId: true } } },
+    select: { id: true, siteId: true, name: true, archivedAt: true, site: { select: { workspaceId: true } } },
   });
   if (!mode || mode.archivedAt) {
     return { error: "Production mode not found", code: "MODE_NOT_FOUND" };
   }
 
-  await prisma.productionMode.update({ where: { id }, data: { archivedAt: new Date() } });
+  await prisma.$transaction(async (tx) => {
+    await tx.productionMode.update({ where: { id }, data: { archivedAt: new Date() } });
+    await auditRecord(tx, {
+      change: "deleted",
+      entityType: "production-mode",
+      entityId: mode.id,
+      siteId: mode.siteId,
+      workspaceId: mode.site.workspaceId,
+      label: mode.name,
+      fields: [],
+    });
+  });
 
   publishEntityEvent({
     action: "deleted",

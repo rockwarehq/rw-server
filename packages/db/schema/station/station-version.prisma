@@ -49,11 +49,11 @@ model StationVersion {
   /// The profile this station follows (ADR-0017). When set, cycleMode,
   /// quantityUnit, standardQuantity and (count by time) standardCycle are
   /// copies of the profile, made by the service; null = set by hand.
-  profileId        String?         @db.Uuid
-  profile          StationProfile? @relation(fields: [profileId], references: [id], onDelete: NoAction)
+  profileId        String?                  @db.Uuid
+  profile          StationProfile?          @relation(fields: [profileId], references: [id], onDelete: NoAction)
   /// true = the speed fields are the profile's usual speed and follow it when
   /// the profile changes; false = the station's own speed.
-  speedFromProfile Boolean         @default(false)
+  speedFromProfile Boolean                  @default(false)
   /// The profile variation this station follows (§8): its amount per signal
   /// or report interval. Null exactly when profileId is null.
   variationId      String?                  @db.Uuid
@@ -68,6 +68,8 @@ model StationVersion {
   itemDispositionLogs ItemDispositionLog[]
   calls               Call[]
   modeLogs            StationModeLog[]
+
+  createdById String? @db.Uuid // Who made this version (from the audit context)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 

@@ -1,6 +1,17 @@
 import prisma from "@rw/db";
+import { auditRecord } from "../../audit/index.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
+
+const AUDIT_FIELDS = [
+  "name",
+  "description",
+  "attrs",
+  "parentId",
+  "slowDetect",
+  "fastDetect",
+  "downtimeDetect",
+] as const;
 
 export interface CreateWorkcenterInput {
   name: string;
@@ -77,27 +88,40 @@ export async function create(input: CreateWorkcenterInput) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
 
-  const workcenter = await prisma.workcenter.create({
-    data: {
-      name,
-      description,
-      attrs: attrs ?? {},
-      siteId,
-      ...detection,
-      // The cell's access container is born with the cell.
-      bucket: { create: { workspaceId: site.workspaceId, siteId, kind: "WORKCENTER", name } },
-    },
-    include: {
-      site: {
-        select: { id: true, name: true, workspaceId: true },
+  const workcenter = await prisma.$transaction(async (tx) => {
+    const created = await tx.workcenter.create({
+      data: {
+        name,
+        description,
+        attrs: attrs ?? {},
+        siteId,
+        ...detection,
+        // The cell's access container is born with the cell.
+        bucket: { create: { workspaceId: site.workspaceId, siteId, kind: "WORKCENTER", name } },
       },
-      parent: {
-        select: { id: true, name: true },
+      include: {
+        site: {
+          select: { id: true, name: true, workspaceId: true },
+        },
+        parent: {
+          select: { id: true, name: true },
+        },
+        _count: {
+          select: { children: true, stations: true },
+        },
       },
-      _count: {
-        select: { children: true, stations: true },
-      },
-    },
+    });
+    await auditRecord(tx, {
+      change: "created",
+      entityType: "workcenter",
+      entityId: created.id,
+      siteId: created.siteId,
+      workspaceId: created.site.workspaceId,
+      label: created.name,
+      after: created,
+      fields: AUDIT_FIELDS,
+    });
+    return created;
   });
 
   publishEntityEvent({
@@ -212,10 +236,7 @@ export async function getById(id: string) {
 export async function update(id: string, input: UpdateWorkcenterInput) {
   const { name, description, attrs, slowDetect, fastDetect, downtimeDetect } = input;
 
-  const current = await prisma.workcenter.findUnique({
-    where: { id },
-    select: { id: true },
-  });
+  const current = await prisma.workcenter.findUnique({ where: { id } });
 
   if (!current) {
     return { error: "Workcenter not found", code: "WORKCENTER_NOT_FOUND" };
@@ -231,23 +252,37 @@ export async function update(id: string, input: UpdateWorkcenterInput) {
   if (fastDetect !== undefined) updateData.fastDetect = fastDetect;
   if (downtimeDetect !== undefined) updateData.downtimeDetect = downtimeDetect;
 
-  const workcenter = await prisma.workcenter.update({
-    where: { id },
-    data: updateData,
-    include: {
-      site: {
-        select: { id: true, name: true, workspaceId: true },
+  const workcenter = await prisma.$transaction(async (tx) => {
+    const updated = await tx.workcenter.update({
+      where: { id },
+      data: updateData,
+      include: {
+        site: {
+          select: { id: true, name: true, workspaceId: true },
+        },
+        parent: {
+          select: { id: true, name: true },
+        },
+        _count: {
+          select: { children: true, stations: true },
+        },
       },
-      parent: {
-        select: { id: true, name: true },
-      },
-      _count: {
-        select: { children: true, stations: true },
-      },
-    },
+    });
+    // The workcenter's bucket carries its name.
+    if (name !== undefined) await tx.bucket.updateMany({ where: { workcenterId: id }, data: { name } });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "workcenter",
+      entityId: updated.id,
+      siteId: updated.siteId,
+      workspaceId: updated.site.workspaceId,
+      label: updated.name,
+      before: current,
+      after: updated,
+      fields: AUDIT_FIELDS,
+    });
+    return updated;
   });
-  // The workcenter's bucket carries its name.
-  if (name !== undefined) await prisma.bucket.updateMany({ where: { workcenterId: id }, data: { name } });
 
   publishEntityEvent({
     action: "updated",
@@ -276,27 +311,42 @@ export async function move(id: string, newParentId: string | null) {
 
   const current = await prisma.workcenter.findUnique({
     where: { id },
-    select: { id: true },
+    select: { id: true, parentId: true, parent: { select: { name: true } } },
   });
 
   if (!current) {
     return { error: "Workcenter not found", code: "WORKCENTER_NOT_FOUND" };
   }
 
-  const workcenter = await prisma.workcenter.update({
-    where: { id },
-    data: { parentId: null },
-    include: {
-      site: {
-        select: { id: true, name: true, workspaceId: true },
+  const workcenter = await prisma.$transaction(async (tx) => {
+    const updated = await tx.workcenter.update({
+      where: { id },
+      data: { parentId: null },
+      include: {
+        site: {
+          select: { id: true, name: true, workspaceId: true },
+        },
+        parent: {
+          select: { id: true, name: true },
+        },
+        _count: {
+          select: { children: true, stations: true },
+        },
       },
-      parent: {
-        select: { id: true, name: true },
-      },
-      _count: {
-        select: { children: true, stations: true },
-      },
-    },
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "workcenter",
+      entityId: updated.id,
+      siteId: updated.siteId,
+      workspaceId: updated.site.workspaceId,
+      label: updated.name,
+      before: current,
+      after: updated,
+      fields: ["parentId"],
+      ...(current.parent ? { metadata: { fromParent: current.parent.name, toParent: null } } : {}),
+    });
+    return updated;
   });
 
   publishEntityEvent({
@@ -343,7 +393,18 @@ export async function remove(id: string) {
     };
   }
 
-  await prisma.workcenter.delete({ where: { id } });
+  await prisma.$transaction(async (tx) => {
+    await tx.workcenter.delete({ where: { id } });
+    await auditRecord(tx, {
+      change: "deleted",
+      entityType: "workcenter",
+      entityId: workcenter.id,
+      siteId: workcenter.siteId,
+      workspaceId: workcenter.site.workspaceId,
+      label: workcenter.name,
+      fields: [],
+    });
+  });
 
   publishEntityEvent({
     action: "deleted",

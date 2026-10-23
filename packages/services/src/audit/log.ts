@@ -16,6 +16,9 @@ export interface LogEventParams {
   entityId?: string;
   /** What changed: { field: { from, to } }. Never secrets. */
   changes?: Record<string, { from: unknown; to: unknown }>;
+  /** A versioned record's new version, and the one it replaced. */
+  versionId?: string;
+  previousVersionId?: string;
   via?: AuditVia;
   ipAddress?: string;
   userAgent?: string;
@@ -47,6 +50,8 @@ export async function logEvent(params: LogEventParams): Promise<void> {
     entityType: params.entityType,
     entityId: params.entityId,
     changes: (params.changes as Prisma.InputJsonValue | undefined) ?? undefined,
+    versionId: params.versionId,
+    previousVersionId: params.previousVersionId,
     via: params.via ?? actor?.via,
     requestId: context?.requestId,
     ipAddress: params.ipAddress ?? context?.ipAddress,

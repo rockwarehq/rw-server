@@ -2,6 +2,7 @@ import prisma from "@rw/db";
 import type { Prisma, WeightUnit } from "@rw/db";
 
 import * as storage from "@rw/runtime/storage";
+import { auditActorId, auditRecord, changedValues } from "../audit/index.js";
 import { publishEntityEvent } from "../entity/events.js";
 import { emitEntityEvent, inTransaction, reader, type WriteOptions } from "../write.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
@@ -10,6 +11,28 @@ import { createForStockable } from "../stock/item.js";
 // ============================================================================
 // Types - Product CRUD
 // ============================================================================
+
+// What a product's audit trail compares. Materials-list (BOM) changes are
+// recorded on the product as metadata.
+const AUDIT_FIELDS = [
+  "sku",
+  "name",
+  "description",
+  "externalSku",
+  "weight",
+  "weightUnits",
+  "itemCost",
+  "attrs",
+  "archivedAt",
+] as const;
+
+const MATERIAL_LINE_FIELDS = ["weight", "weightUnits", "itemCost"] as const;
+
+type NamedVersion = { name: string | null; sku: string } | null | undefined;
+type NamedMaterialVersion = { name: string | null; materialNumber: string } | null | undefined;
+
+const productLabel = (v: NamedVersion) => v?.name ?? v?.sku ?? null;
+const materialLabel = (v: NamedMaterialVersion) => v?.name ?? v?.materialNumber ?? null;
 
 export interface CreateProductInput {
   siteId: string;
@@ -140,7 +163,20 @@ export async function create(input: CreateProductInput, options?: WriteOptions) 
         weightUnits: weightUnits ?? null,
         itemCost: itemCost ?? null,
         attrs: attrs ?? {},
+        createdById: auditActorId(),
       },
+    });
+
+    await auditRecord(tx, {
+      change: "created",
+      entityType: "product",
+      entityId: p.id,
+      siteId,
+      workspaceId: site.workspaceId,
+      label: version.name ?? version.sku,
+      after: version,
+      fields: AUDIT_FIELDS,
+      versionId: version.id,
     });
 
     // 3. Its stock record, made in the same save (ADR-0016)
@@ -318,7 +354,11 @@ export async function update(id: string, input: UpdateProductInput, options?: Wr
   // Get current product with version
   const current = await db.product.findUnique({
     where: { id },
-    include: { currentVersion: true, site: { select: { workspaceId: true } } },
+    include: {
+      currentVersion: true,
+      site: { select: { workspaceId: true } },
+      labels: { select: { id: true, name: true } },
+    },
   });
 
   if (!current) {
@@ -367,10 +407,11 @@ export async function update(id: string, input: UpdateProductInput, options?: Wr
         weightUnits: weightUnits !== undefined ? weightUnits : currentVersion.weightUnits,
         itemCost: itemCost !== undefined ? itemCost : currentVersion.itemCost,
         attrs: attrs !== undefined ? attrs : (currentVersion.attrs as Record<string, unknown>),
+        createdById: auditActorId(),
       },
     });
 
-    return tx.product.update({
+    const updated = await tx.product.update({
       where: { id },
       data: {
         currentVersionId: version.id,
@@ -383,6 +424,26 @@ export async function update(id: string, input: UpdateProductInput, options?: Wr
         _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
       },
     });
+
+    const labelsFrom = current.labels.map((l) => l.name).sort();
+    const labelsTo = updated.labels.map((l) => l.name).sort();
+    const labelsChanged = labelIds !== undefined && JSON.stringify(labelsFrom) !== JSON.stringify(labelsTo);
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "product",
+      entityId: id,
+      siteId: current.siteId,
+      workspaceId: current.site.workspaceId,
+      label: version.name ?? version.sku,
+      before: currentVersion,
+      after: version,
+      fields: AUDIT_FIELDS,
+      versionId: version.id,
+      previousVersionId: currentVersion.id,
+      ...(labelsChanged ? { metadata: { labels: { from: labelsFrom, to: labelsTo } } } : {}),
+    });
+
+    return updated;
   });
 
   emitEntityEvent(options, {
@@ -407,6 +468,7 @@ export async function remove(id: string, options?: WriteOptions) {
     where: { id },
     include: {
       site: { select: { workspaceId: true } },
+      currentVersion: { select: { name: true, sku: true } },
       _count: { select: { jobProducts: true } },
     },
   });
@@ -426,9 +488,20 @@ export async function remove(id: string, options?: WriteOptions) {
     };
   }
 
-  await reader(options).product.update({
-    where: { id },
-    data: { deletedAt: new Date() },
+  await inTransaction(options, async (tx) => {
+    await tx.product.update({
+      where: { id },
+      data: { deletedAt: new Date() },
+    });
+    await auditRecord(tx, {
+      change: "deleted",
+      entityType: "product",
+      entityId: id,
+      siteId: product.siteId,
+      workspaceId: product.site.workspaceId,
+      label: product.currentVersion?.name ?? product.currentVersion?.sku,
+      fields: [],
+    });
   });
 
   emitEntityEvent(options, {
@@ -504,14 +577,28 @@ export async function archive(id: string) {
     return { error: "Product is already archived", code: "ALREADY_ARCHIVED" };
   }
 
-  const updated = await prisma.product.update({
-    where: { id },
-    data: { archivedAt: new Date() },
-    include: {
-      currentVersion: true,
-      site: { select: { id: true, name: true } },
-      _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
-    },
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await tx.product.update({
+      where: { id },
+      data: { archivedAt: new Date() },
+      include: {
+        currentVersion: true,
+        site: { select: { id: true, name: true } },
+        _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
+      },
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "product",
+      entityId: id,
+      siteId: row.siteId,
+      workspaceId: product.site.workspaceId,
+      label: row.currentVersion?.name ?? row.currentVersion?.sku,
+      before: product,
+      after: row,
+      fields: ["archivedAt"],
+    });
+    return row;
   });
 
   publishEntityEvent({
@@ -547,14 +634,28 @@ export async function unarchive(id: string) {
     return { error: "Product is not archived", code: "NOT_ARCHIVED" };
   }
 
-  const updated = await prisma.product.update({
-    where: { id },
-    data: { archivedAt: null },
-    include: {
-      currentVersion: true,
-      site: { select: { id: true, name: true } },
-      _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
-    },
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await tx.product.update({
+      where: { id },
+      data: { archivedAt: null },
+      include: {
+        currentVersion: true,
+        site: { select: { id: true, name: true } },
+        _count: { select: { materials: true, jobProducts: true, versions: true, pictures: true } },
+      },
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "product",
+      entityId: id,
+      siteId: row.siteId,
+      workspaceId: product.site.workspaceId,
+      label: row.currentVersion?.name ?? row.currentVersion?.sku,
+      before: product,
+      after: row,
+      fields: ["archivedAt"],
+    });
+    return row;
   });
 
   publishEntityEvent({
@@ -635,7 +736,21 @@ export async function duplicate(input: DuplicateProductInput) {
         weightUnits: sourceVersion.weightUnits,
         itemCost: sourceVersion.itemCost,
         attrs: sourceVersion.attrs as Record<string, unknown>,
+        createdById: auditActorId(),
       },
+    });
+
+    await auditRecord(tx, {
+      change: "created",
+      entityType: "product",
+      entityId: p.id,
+      siteId: source.siteId,
+      workspaceId: source.site.workspaceId,
+      label: version.name ?? version.sku,
+      after: version,
+      fields: AUDIT_FIELDS,
+      versionId: version.id,
+      metadata: { duplicatedFrom: { id: source.id, label: sourceVersion.name ?? sourceVersion.sku } },
     });
 
     // 3. Link version as current, and make its stock record (ADR-0016).
@@ -665,6 +780,7 @@ export async function duplicate(input: DuplicateProductInput) {
           itemCost: m.currentVersion?.itemCost ?? null,
           materialVersionId: m.materialVersionId,
           productVersionId: version.id,
+          createdById: auditActorId(),
         },
       });
 
@@ -731,6 +847,7 @@ export async function addMaterial(input: AddMaterialInput, options?: WriteOption
       siteId: true,
       deletedAt: true,
       currentVersionId: true,
+      currentVersion: { select: { name: true, sku: true } },
       site: { select: { workspaceId: true } },
     },
   });
@@ -795,10 +912,11 @@ export async function addMaterial(input: AddMaterialInput, options?: WriteOption
         itemCost: itemCost ?? null,
         materialVersionId,
         productVersionId,
+        createdById: auditActorId(),
       },
     });
 
-    return tx.productMaterial.update({
+    const linked = await tx.productMaterial.update({
       where: { id: pm.id },
       data: { currentVersionId: version.id },
       include: {
@@ -810,6 +928,23 @@ export async function addMaterial(input: AddMaterialInput, options?: WriteOption
         },
       },
     });
+
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "product",
+      entityId: productId,
+      siteId: product.siteId,
+      workspaceId: product.site.workspaceId,
+      label: productLabel(product.currentVersion),
+      fields: [],
+      metadata: {
+        materialsList: "added",
+        material: materialLabel(linked.material.currentVersion),
+        ...changedValues(null, version, MATERIAL_LINE_FIELDS),
+      },
+    });
+
+    return linked;
   });
 
   emitEntityEvent(options, {
@@ -844,7 +979,15 @@ export async function updateMaterial(input: UpdateMaterialInput, options?: Write
     where: { productId_materialId: { productId, materialId } },
     include: {
       currentVersion: true,
-      product: { select: { id: true, siteId: true, currentVersionId: true, site: { select: { workspaceId: true } } } },
+      product: {
+        select: {
+          id: true,
+          siteId: true,
+          currentVersionId: true,
+          currentVersion: { select: { name: true, sku: true } },
+          site: { select: { workspaceId: true } },
+        },
+      },
       material: { select: { id: true, currentVersionId: true } },
     },
   });
@@ -884,10 +1027,11 @@ export async function updateMaterial(input: UpdateMaterialInput, options?: Write
         itemCost: newItemCost,
         materialVersionId,
         productVersionId,
+        createdById: auditActorId(),
       },
     });
 
-    return tx.productMaterial.update({
+    const linked = await tx.productMaterial.update({
       where: { id: existing.id },
       data: {
         currentVersionId: version.id,
@@ -901,6 +1045,22 @@ export async function updateMaterial(input: UpdateMaterialInput, options?: Write
         },
       },
     });
+
+    const changes = changedValues(currentVersion, version, MATERIAL_LINE_FIELDS);
+    if (Object.keys(changes).length > 0) {
+      await auditRecord(tx, {
+        change: "updated",
+        entityType: "product",
+        entityId: productId,
+        siteId: existing.product.siteId,
+        workspaceId: existing.product.site.workspaceId,
+        label: productLabel(existing.product.currentVersion),
+        fields: [],
+        metadata: { materialsList: "changed", material: materialLabel(linked.material.currentVersion), ...changes },
+      });
+    }
+
+    return linked;
   });
 
   emitEntityEvent(options, {
@@ -953,7 +1113,14 @@ export async function removeMaterial(
       materialId: true,
       altGroupId: true,
       activeOfAltGroup: { select: { id: true } },
-      product: { select: { siteId: true, site: { select: { workspaceId: true } } } },
+      product: {
+        select: {
+          siteId: true,
+          currentVersion: { select: { name: true, sku: true } },
+          site: { select: { workspaceId: true } },
+        },
+      },
+      material: { select: { currentVersion: { select: { name: true, materialNumber: true } } } },
     },
   });
 
@@ -1006,6 +1173,16 @@ export async function removeMaterial(
       // Last member deleted — clean up the now-empty group row.
       await tx.productMaterialAltGroup.delete({ where: { id: altGroupId } });
     }
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "product",
+      entityId: productId,
+      siteId: existing.product.siteId,
+      workspaceId: existing.product.site.workspaceId,
+      label: productLabel(existing.product.currentVersion),
+      fields: [],
+      metadata: { materialsList: "removed", material: materialLabel(existing.material.currentVersion) },
+    });
   });
 
   emitEntityEvent(options, {
@@ -1147,7 +1324,16 @@ export async function addMaterialToAltGroup(altGroupId: string, materialId: stri
     select: {
       id: true,
       productId: true,
-      product: { select: { id: true, siteId: true, currentVersionId: true, deletedAt: true } },
+      label: true,
+      product: {
+        select: {
+          id: true,
+          siteId: true,
+          currentVersionId: true,
+          deletedAt: true,
+          currentVersion: { select: { name: true, sku: true } },
+        },
+      },
     },
   });
 
@@ -1157,7 +1343,13 @@ export async function addMaterialToAltGroup(altGroupId: string, materialId: stri
 
   const material = await prisma.material.findUnique({
     where: { id: materialId },
-    select: { id: true, siteId: true, deletedAt: true, currentVersionId: true },
+    select: {
+      id: true,
+      siteId: true,
+      deletedAt: true,
+      currentVersionId: true,
+      currentVersion: { select: { name: true, materialNumber: true } },
+    },
   });
 
   if (!material) {
@@ -1206,11 +1398,25 @@ export async function addMaterialToAltGroup(altGroupId: string, materialId: stri
             version: 1,
             materialVersionId: material.currentVersionId,
             productVersionId: group.product.currentVersionId,
+            createdById: auditActorId(),
           },
         });
         await tx.productMaterial.update({
           where: { id: pm.id },
           data: { currentVersionId: version.id },
+        });
+        await auditRecord(tx, {
+          change: "updated",
+          entityType: "product",
+          entityId: group.productId,
+          siteId: group.product.siteId,
+          label: productLabel(group.product.currentVersion),
+          fields: [],
+          metadata: {
+            materialsList: "added",
+            material: materialLabel(material.currentVersion),
+            alternateGroup: group.label,
+          },
         });
       }
 
@@ -1244,7 +1450,13 @@ export async function addMaterialToAltGroup(altGroupId: string, materialId: stri
 export async function setAltGroupActive(altGroupId: string, productMaterialId: string) {
   const group = await prisma.productMaterialAltGroup.findUnique({
     where: { id: altGroupId },
-    select: { id: true },
+    select: {
+      id: true,
+      label: true,
+      productId: true,
+      activeProductMaterialId: true,
+      product: { select: { siteId: true, currentVersion: { select: { name: true, sku: true } } } },
+    },
   });
 
   if (!group) {
@@ -1253,17 +1465,39 @@ export async function setAltGroupActive(altGroupId: string, productMaterialId: s
 
   const pm = await prisma.productMaterial.findUnique({
     where: { id: productMaterialId },
-    select: { id: true, altGroupId: true },
+    select: {
+      id: true,
+      altGroupId: true,
+      material: { select: { currentVersion: { select: { name: true, materialNumber: true } } } },
+    },
   });
 
   if (!pm || pm.altGroupId !== altGroupId) {
     return { error: "Product material is not a member of this group", code: "NOT_IN_GROUP" };
   }
 
-  const updated = await prisma.productMaterialAltGroup.update({
-    where: { id: altGroupId },
-    data: { activeProductMaterialId: productMaterialId },
-    include: altGroupInclude,
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await tx.productMaterialAltGroup.update({
+      where: { id: altGroupId },
+      data: { activeProductMaterialId: productMaterialId },
+      include: altGroupInclude,
+    });
+    if (group.activeProductMaterialId !== productMaterialId) {
+      await auditRecord(tx, {
+        change: "updated",
+        entityType: "product",
+        entityId: group.productId,
+        siteId: group.product.siteId,
+        label: productLabel(group.product.currentVersion),
+        fields: [],
+        metadata: {
+          materialsList: "activeAlternate",
+          material: materialLabel(pm.material.currentVersion),
+          alternateGroup: group.label,
+        },
+      });
+    }
+    return row;
   });
 
   return { data: updated };

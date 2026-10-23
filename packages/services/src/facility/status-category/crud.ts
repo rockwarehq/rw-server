@@ -1,4 +1,5 @@
 import prisma from "@rw/db";
+import { auditRecord } from "../../audit/index.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 
@@ -43,11 +44,24 @@ export async function create(input: CreateStatusCategoryInput) {
     return { error: "A status category with this name already exists for this site", code: "DUPLICATE_NAME" };
   }
 
-  const category = await prisma.statusCategory.create({
-    data: { name, siteId },
-    include: {
-      _count: { select: { statusReasons: true } },
-    },
+  const category = await prisma.$transaction(async (tx) => {
+    const created = await tx.statusCategory.create({
+      data: { name, siteId },
+      include: {
+        _count: { select: { statusReasons: true } },
+      },
+    });
+    await auditRecord(tx, {
+      change: "created",
+      entityType: "status-category",
+      entityId: created.id,
+      siteId: created.siteId,
+      workspaceId: site.workspaceId,
+      label: created.name,
+      after: created,
+      fields: ["name"],
+    });
+    return created;
   });
 
   publishEntityEvent({
@@ -129,7 +143,7 @@ export async function update(id: string, input: UpdateStatusCategoryInput) {
 
   const current = await prisma.statusCategory.findUnique({
     where: { id },
-    select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } },
+    select: { id: true, siteId: true, name: true, deletedAt: true, site: { select: { workspaceId: true } } },
   });
 
   if (!current || current.deletedAt) {
@@ -150,12 +164,26 @@ export async function update(id: string, input: UpdateStatusCategoryInput) {
   const updateData: Record<string, unknown> = {};
   if (name !== undefined) updateData.name = name;
 
-  const category = await prisma.statusCategory.update({
-    where: { id },
-    data: updateData,
-    include: {
-      _count: { select: { statusReasons: true } },
-    },
+  const category = await prisma.$transaction(async (tx) => {
+    const updated = await tx.statusCategory.update({
+      where: { id },
+      data: updateData,
+      include: {
+        _count: { select: { statusReasons: true } },
+      },
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "status-category",
+      entityId: updated.id,
+      siteId: updated.siteId,
+      workspaceId: current.site.workspaceId,
+      label: updated.name,
+      before: current,
+      after: updated,
+      fields: ["name"],
+    });
+    return updated;
   });
 
   publishEntityEvent({
@@ -193,9 +221,20 @@ export async function remove(id: string) {
     };
   }
 
-  await prisma.statusCategory.update({
-    where: { id },
-    data: { deletedAt: new Date() },
+  await prisma.$transaction(async (tx) => {
+    await tx.statusCategory.update({
+      where: { id },
+      data: { deletedAt: new Date() },
+    });
+    await auditRecord(tx, {
+      change: "deleted",
+      entityType: "status-category",
+      entityId: category.id,
+      siteId: category.siteId,
+      workspaceId: category.site.workspaceId,
+      label: category.name,
+      fields: [],
+    });
   });
 
   publishEntityEvent({

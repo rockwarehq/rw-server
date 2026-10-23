@@ -54,6 +54,12 @@ enum AuditAction {
   SETUP_CHANGESET_DISCARDED
   SETUP_CHANGESET_ROLLED_BACK
   SETUP_CHANGESET_CLEARED
+
+  // Records: master data's own history (packages/services/src/audit/record.ts).
+  // entityType/entityId name the record; changes holds { field: { from, to } }.
+  RECORD_CREATED
+  RECORD_UPDATED
+  RECORD_DELETED
 }
 
 // The audit trail: who did what, when, where from, and to which record.
@@ -69,6 +75,10 @@ model AuditLog {
   entityType  String? // The record it happened to, e.g. "product"
   entityId    String?
   changes     Json? // { field: { from, to } }, never secrets
+  // For versioned records (recording + immutable versions): the version this
+  // change made, and the one it replaced. The versions hold the full values.
+  versionId         String? @db.Uuid
+  previousVersionId String? @db.Uuid
   via         String? // ui | staff | display | api-token | system | agent:<client name>
   requestId   String? // Ties together the entries one request wrote
   ipAddress   String?
