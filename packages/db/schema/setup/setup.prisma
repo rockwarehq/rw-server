@@ -16,6 +16,9 @@ enum SetupChangesetStatus {
   /// Its writes being reversed in chunks, from its journal.
   ROLLING_BACK
   ROLLED_BACK
+  /// A rollback that stopped partway: some entries couldn't be undone, or it
+  /// kept failing. What it did stays done; rolling back again carries on.
+  ROLLBACK_STOPPED
 }
 
 /// A record's key in another system ("customer-erp" / "RES-PP-01"). Bulk
@@ -175,7 +178,7 @@ model SetupChangesetWrite {
   beforeVersionId String? @db.Uuid
   /// The version the write left current; a different one now means it changed since.
   afterVersionId  String? @db.Uuid
-  /// What rollback did: deleted | removed | restored | gone | skipped
+  /// What rollback did: deleted | removed | restored | gone | skipped | failed
   outcome     String?
   reason      String?
 

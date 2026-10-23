@@ -73,7 +73,7 @@ function personName(p: { firstName: string | null; lastName: string | null; emai
 /** What an import wrote, and what rolling it back did, for its page. */
 async function journalSummary(changesetId: string) {
   const records = { in: ["material", "product"] };
-  const [byAction, byOutcome, linksRemoved, toRollBack, toRemove, skipped] = await Promise.all([
+  const [byAction, byOutcome, linksRemoved, toRollBack, toRemove, skipped, failed] = await Promise.all([
     prisma.setupChangesetWrite.groupBy({
       by: ["action"],
       where: { changesetId, entity: { in: ["material", "product"] } },
@@ -93,6 +93,13 @@ async function journalSummary(changesetId: string) {
       take: 50,
       select: { entity: true, key: true, label: true, reason: true },
     }),
+    // Every entity: a BOM line or ref that couldn't be undone holds the rollback up too.
+    prisma.setupChangesetWrite.findMany({
+      where: { changesetId, outcome: "failed" },
+      orderBy: { seq: "asc" },
+      take: 50,
+      select: { entity: true, key: true, label: true, reason: true },
+    }),
   ]);
   const count = (list: Array<{ _count: { _all: number } } & Record<string, unknown>>, field: string, value: string) =>
     list.find((row) => row[field] === value)?._count._all ?? 0;
@@ -105,6 +112,8 @@ async function journalSummary(changesetId: string) {
     outcomes: Object.fromEntries(byOutcome.map((row) => [row.outcome ?? "pending", row._count._all])),
     linksRemoved,
     skipped,
+    /** Entries a rollback couldn't undo (it stopped); rolling back again retries them. */
+    failed,
   };
 }
 
@@ -148,6 +157,8 @@ async function history(changesetId: string) {
       mode: meta.mode === "remove" ? ("remove" as const) : meta.mode === "rollback" ? ("rollback" as const) : null,
       outcomes: (meta.outcomes as Record<string, number> | undefined) ?? null,
       linksRemoved: typeof meta.linksRemoved === "number" ? meta.linksRemoved : null,
+      /** Why a rollback stopped partway. */
+      stopped: typeof meta.stopped === "string" ? meta.stopped : null,
       files: Array.isArray(meta.files) ? (meta.files as string[]) : null,
     };
   });
@@ -553,8 +564,11 @@ export const rollback = userRequired.input(rollbackInput).handler(async ({ input
   if (row.clearedAt) {
     throw new ORPCError("BAD_REQUEST", { message: "This import's files were cleaned up, so it can't be rolled back." });
   }
+  // A stopped rollback carries on from where it stopped.
   const from =
-    input.mode === "remove" ? ["APPLIED", "DRAFT", "DISCARDED", "ROLLED_BACK"] : ["APPLIED", "DRAFT", "DISCARDED"];
+    input.mode === "remove"
+      ? ["APPLIED", "DRAFT", "DISCARDED", "ROLLED_BACK", "ROLLBACK_STOPPED"]
+      : ["APPLIED", "DRAFT", "DISCARDED", "ROLLBACK_STOPPED"];
   if (!from.includes(row.status)) {
     throw new ORPCError("CONFLICT", { message: `This import is ${row.status.toLowerCase().replace("_", " ")}.` });
   }
@@ -563,7 +577,10 @@ export const rollback = userRequired.input(rollbackInput).handler(async ({ input
   }
   const first = await firstStep(row.id);
   if (first.kind === "more") runInBackground(row.id);
-  return { ok: true, status: first.kind === "done" ? ("ROLLED_BACK" as const) : ("ROLLING_BACK" as const) };
+  // Settled (rolled back, or stopped), or still going: in the background, or
+  // after a failed chunk, when the sweep tries again.
+  const now = await prisma.setupChangeset.findUniqueOrThrow({ where: { id: row.id }, select: { status: true } });
+  return { ok: true, status: now.status as "ROLLED_BACK" | "ROLLBACK_STOPPED" | "ROLLING_BACK" };
 });
 
 // Drop an import's spec, rows, files and journal; keep its record and audit.

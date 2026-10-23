@@ -18,11 +18,19 @@ import { rowsFrom, type StoredOrigin, savePlan, withFileIssues } from "./store.j
 // a sweep picks up any changeset whose lease ran out and carries on from
 // its progress. Two runners can't both write a chunk: the second one's
 // replan sees the first one's writes and stops as stale.
+//
+// A rollback chunk that fails as a whole (a timeout, the database going away;
+// one entry failing is handled inside the chunk) is tried again by the sweep,
+// up to ROLLBACK_ATTEMPTS times, then the rollback settles as stopped. Each
+// chunk is its own transaction, so what earlier chunks undid stays undone and
+// rolling back again carries on from there.
 
 const log = moduleLogger("setup-runner");
 const LEASE_MS = 2 * 60 * 1000;
 const SWEEP_MS = 30 * 1000;
 const CHUNK_TX = { timeout: 120_000, maxWait: 10_000 } as const;
+/** Tries at one rollback chunk before the rollback stops. */
+export const ROLLBACK_ATTEMPTS = 3;
 
 export interface SetupProgress {
   phase: "apply" | RollbackMode;
@@ -32,16 +40,25 @@ export interface SetupProgress {
   /** Records created or updated (apply). */
   written?: number;
   startedAt: string;
-  /** Status to go back to if a rollback can't run. */
-  previous?: string;
-  /** Why an apply stopped before the end; the changeset is a draft again. */
+  /**
+   * Why an apply stopped before the end (the changeset is a draft again), or
+   * why a rollback did (ROLLBACK_STOPPED).
+   */
   stopped?: { reason: "stale" | "failed"; message: string };
+  /** Failed tries at the current rollback chunk, and the last error. */
+  attempts?: number;
+  lastError?: string;
   /** A finished rollback's counts for materials and products, and BOM lines taken off. */
   outcomes?: Record<string, number>;
   linksRemoved?: number;
 }
 
-export type StepResult = { kind: "more" } | { kind: "done" } | { kind: "stopped"; error: SetupApplyError };
+export type StepResult =
+  | { kind: "more" }
+  | { kind: "done" }
+  | { kind: "stopped"; error: SetupApplyError }
+  // A rollback chunk failed; the sweep tries it again.
+  | { kind: "paused" };
 
 const leaseUntil = () => new Date(Date.now() + LEASE_MS);
 
@@ -78,13 +95,11 @@ export async function claimApply(id: string, userId: string, totalRows: number):
 /** Start a rollback or removal from any settled status. */
 export async function claimRollback(id: string, userId: string, mode: RollbackMode, from: string[]) {
   const total = await prisma.setupChangesetWrite.count({ where: pendingWhere(id, mode) });
-  const current = await prisma.setupChangeset.findUnique({ where: { id }, select: { status: true } });
   const progress: SetupProgress = {
     phase: mode,
     done: 0,
     total,
     startedAt: new Date().toISOString(),
-    ...(current ? { previous: current.status } : {}),
   };
   const claimed = await prisma.setupChangeset.updateMany({
     where: { id, status: { in: from as never } },
@@ -95,7 +110,13 @@ export async function claimRollback(id: string, userId: string, mode: RollbackMo
       leaseUntil: leaseUntil(),
     },
   });
-  return claimed.count === 1;
+  if (claimed.count !== 1) return false;
+  // Entries an earlier run couldn't undo get another go.
+  await prisma.setupChangesetWrite.updateMany({
+    where: { changesetId: id, outcome: "failed" },
+    data: { outcome: null, reason: null },
+  });
+  return true;
 }
 
 async function stopApply(
@@ -196,29 +217,67 @@ async function stepRollback(changeset: NonNullable<Awaited<ReturnType<typeof loa
   const progress = changeset.progress as unknown as SetupProgress;
   const mode: RollbackMode = progress.phase === "remove" ? "remove" : "rollback";
   const workspaceId = await workspaceOf(changeset.siteId);
-  const result = await prisma.$transaction(async (tx) => {
-    const chunk = await rollbackChunk(tx, { changesetId: changeset.id, siteId: changeset.siteId, workspaceId, mode });
-    await tx.setupChangeset.update({
-      where: { id: changeset.id },
-      data: {
-        progress: { ...progress, done: progress.done + chunk.settled } as unknown as Prisma.InputJsonValue,
-        leaseUntil: leaseUntil(),
-      },
-    });
-    return chunk;
-  }, CHUNK_TX);
+  let result: Awaited<ReturnType<typeof rollbackChunk>>;
+  try {
+    result = await prisma.$transaction(async (tx) => {
+      const chunk = await rollbackChunk(tx, { changesetId: changeset.id, siteId: changeset.siteId, workspaceId, mode });
+      const next: SetupProgress = { ...progress, done: progress.done + chunk.settled };
+      delete next.attempts;
+      delete next.lastError;
+      await tx.setupChangeset.update({
+        where: { id: changeset.id },
+        data: { progress: next as unknown as Prisma.InputJsonValue, leaseUntil: leaseUntil() },
+      });
+      return chunk;
+    }, CHUNK_TX);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const attempts = (progress.attempts ?? 0) + 1;
+    log.error({ err, changesetId: changeset.id, attempts }, "setup rollback chunk failed");
+    if (attempts < ROLLBACK_ATTEMPTS) {
+      // Let the lease lapse now: the sweep tries again on its next tick.
+      await prisma.setupChangeset.update({
+        where: { id: changeset.id },
+        data: {
+          progress: { ...progress, attempts, lastError: message } as unknown as Prisma.InputJsonValue,
+          leaseUntil: new Date(),
+        },
+      });
+      return { kind: "paused" };
+    }
+    await settleRollback(changeset, progress, mode, workspaceId, message);
+    return { kind: "done" };
+  }
   publish(result.events);
   if (result.settled > 0) return { kind: "more" };
+  await settleRollback(changeset, progress, mode, workspaceId, null);
+  return { kind: "done" };
+}
 
+/**
+ * Finish a rollback: ROLLED_BACK when every entry was settled, else
+ * ROLLBACK_STOPPED (entries failed, or `stoppedBy` a chunk that kept failing),
+ * which keeps the journal so rolling back again can carry on.
+ */
+async function settleRollback(
+  changeset: NonNullable<Awaited<ReturnType<typeof load>>>,
+  progress: SetupProgress,
+  mode: RollbackMode,
+  workspaceId: string,
+  stoppedBy: string | null,
+) {
   // Final counts live on the changeset too: removing clears the journal they come from.
   const grouped = await prisma.setupChangesetWrite.groupBy({
     by: ["entity", "outcome"],
-    where: { changesetId: changeset.id, entity: { not: "ref" } },
+    where: { changesetId: changeset.id },
     _count: { _all: true },
   });
   const outcomes: Record<string, number> = {};
   let linksRemoved = 0;
+  let failed = 0;
   for (const row of grouped) {
+    if (row.outcome === "failed") failed += row._count._all;
+    if (row.entity === "ref") continue;
     if (row.entity === "link") {
       if (row.outcome === "removed") linksRemoved += row._count._all;
       continue;
@@ -226,25 +285,40 @@ async function stepRollback(changeset: NonNullable<Awaited<ReturnType<typeof loa
     const key = row.outcome ?? "pending";
     outcomes[key] = (outcomes[key] ?? 0) + row._count._all;
   }
+  const stopped =
+    stoppedBy !== null
+      ? { reason: "failed" as const, message: stoppedBy }
+      : failed > 0
+        ? { reason: "failed" as const, message: `${failed} ${failed === 1 ? "entry" : "entries"} couldn't be undone.` }
+        : null;
   await logEvent({
     action: "SETUP_CHANGESET_ROLLED_BACK",
     actorId: changeset.rolledBackById ?? undefined,
     userId: changeset.createdById ?? undefined,
     workspaceId,
-    metadata: { changesetId: changeset.id, siteId: changeset.siteId, mode, outcomes, linksRemoved },
+    metadata: {
+      changesetId: changeset.id,
+      siteId: changeset.siteId,
+      mode,
+      outcomes,
+      linksRemoved,
+      ...(stopped ? { stopped: stopped.message } : {}),
+    },
   });
   // Removing completely leaves nothing to roll back: drop the import's data, then settle.
-  if (mode === "remove") await clearImportData(changeset.id, changeset.rolledBackById, workspaceId);
+  if (mode === "remove" && !stopped) await clearImportData(changeset.id, changeset.rolledBackById, workspaceId);
+  const next: SetupProgress = { ...progress, outcomes, linksRemoved, ...(stopped ? { stopped } : {}) };
+  delete next.attempts;
+  delete next.lastError;
   await prisma.setupChangeset.update({
     where: { id: changeset.id },
     data: {
-      status: "ROLLED_BACK",
-      rolledBackAt: new Date(),
+      status: stopped ? "ROLLBACK_STOPPED" : "ROLLED_BACK",
+      ...(stopped ? {} : { rolledBackAt: new Date() }),
       leaseUntil: null,
-      progress: { ...progress, outcomes, linksRemoved } as unknown as Prisma.InputJsonValue,
+      progress: next as unknown as Prisma.InputJsonValue,
     },
   });
-  return { kind: "done" };
 }
 
 function load(id: string) {

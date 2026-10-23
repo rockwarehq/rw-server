@@ -478,6 +478,49 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
     expect(await prisma.productVersion.count({ where: { id: imported!.currentVersionId! } })).toBe(1);
   });
 
+  it("stops a rollback with an entry it can't undo, keeps the rest undone, and carries on when rolled back again", async () => {
+    await proposeAndApply(ownSpec("SF"));
+    const before = await productByKey(`SF-P0-${RUN}`);
+    const changed = ownSpec("SF", 3);
+    changed.products[0]!.name = "Renamed, then removed";
+    const { id } = await proposeAndApply(changed);
+    // Point the rename's journal entry at a version that doesn't exist, so undoing it throws.
+    const entry = await prisma.setupChangesetWrite.findFirstOrThrow({
+      where: { changesetId: id, entity: "product", action: "update", entityId: before!.id },
+    });
+    await prisma.setupChangesetWrite.update({ where: { id: entry.id }, data: { beforeVersionId: randomUUID() } });
+
+    const first = await rpcCall(server, "setup/changeset/rollback", { id, mode: "remove" }, adminToken);
+    expect(first.statusCode).toBe(200);
+    const stopped = (await settled(id)) as {
+      status: string;
+      clearedAt: string | null;
+      canRollBack: boolean;
+      journal: { failed: Array<{ key: string; reason: string }> };
+    };
+    expect(stopped.status).toBe("ROLLBACK_STOPPED");
+    expect(stopped.clearedAt).toBeNull();
+    // A stopped rollback can be carried on.
+    expect(stopped.canRollBack).toBe(true);
+    expect(stopped.journal.failed).toEqual([
+      expect.objectContaining({ key: `SF-P0-${RUN}`, reason: expect.stringContaining("Couldn't undo") }),
+    ]);
+    // The rest of the chunk went through: the part the import added is gone.
+    expect(await productByKey(`SF-P2-${RUN}`)).toBeNull();
+    // The failed entry left its record as the import made it.
+    expect((await productByKey(`SF-P0-${RUN}`))?.currentVersion?.name).toBe("Renamed, then removed");
+
+    // Fixed; removing again retries just that entry and finishes.
+    await prisma.setupChangesetWrite.update({
+      where: { id: entry.id },
+      data: { beforeVersionId: entry.beforeVersionId },
+    });
+    const again = await rpcCall(server, "setup/changeset/rollback", { id, mode: "remove" }, adminToken);
+    expect(again.statusCode).toBe(200);
+    expect((await settled(id)).status).toBe("ROLLED_BACK");
+    expect((await productByKey(`SF-P0-${RUN}`))?.currentVersionId).toBe(before?.currentVersionId);
+  });
+
   it("puts a material's stock back on its earlier unit when an import that changed it is removed completely", async () => {
     await proposeAndApply(ownSpec("SU"));
     const material = await prisma.material.findFirstOrThrow({

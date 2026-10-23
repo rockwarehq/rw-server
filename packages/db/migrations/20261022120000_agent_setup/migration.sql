@@ -5,7 +5,7 @@ CREATE TYPE "OAuthTokenKind" AS ENUM ('ACCESS', 'REFRESH');
 CREATE TYPE "SetupEntity" AS ENUM ('MATERIAL', 'PRODUCT', 'TOOL', 'JOB', 'WORKCENTER', 'STATION');
 
 -- CreateEnum
-CREATE TYPE "SetupChangesetStatus" AS ENUM ('DRAFT', 'APPLYING', 'APPLIED', 'DISCARDED', 'ROLLING_BACK', 'ROLLED_BACK');
+CREATE TYPE "SetupChangesetStatus" AS ENUM ('DRAFT', 'APPLYING', 'APPLIED', 'DISCARDED', 'ROLLING_BACK', 'ROLLED_BACK', 'ROLLBACK_STOPPED');
 
 -- AlterEnum
 -- This migration adds more than one value to an enum.

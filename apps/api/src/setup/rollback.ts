@@ -20,7 +20,9 @@ import { emitEntityEvent, type EntityEventInput } from "@rw/services/write";
 //             made that nothing has used since.
 //
 // Anything changed since the import, or used since, is skipped with its
-// reason: rollback never overwrites someone's later work.
+// reason: rollback never overwrites someone's later work. An entry that
+// throws is undone on its own (a savepoint) and marked failed with the
+// error; the rest of the chunk carries on, and rolling back again retries it.
 
 type Tx = Prisma.TransactionClient;
 export type RollbackMode = "rollback" | "remove";
@@ -28,20 +30,28 @@ export type RollbackMode = "rollback" | "remove";
 export const ROLLBACK_CHUNK = 500;
 
 type Entry = Awaited<ReturnType<Tx["setupChangesetWrite"]["findMany"]>>[number];
-type Outcome = { outcome: "deleted" | "removed" | "restored" | "gone" | "skipped"; reason?: string };
+type Outcome = { outcome: "deleted" | "removed" | "restored" | "gone" | "skipped" | "failed"; reason?: string };
 
 const skipped = (reason: string): Outcome => ({ outcome: "skipped", reason });
 const CHANGED_SINCE = "Changed since the import. Roll back later imports or edits first, or leave it.";
 
-/** Journal entries a mode still has to do. */
-export function pendingWhere(changesetId: string, mode: RollbackMode): Prisma.SetupChangesetWriteWhereInput {
+/**
+ * Journal entries a mode still has to do. Failed entries count (rolling back
+ * again retries them) unless `retryFailed` is false: a run marks its own
+ * failures and must not pick them up again.
+ */
+export function pendingWhere(
+  changesetId: string,
+  mode: RollbackMode,
+  retryFailed = true,
+): Prisma.SetupChangesetWriteWhereInput {
+  const open: Prisma.SetupChangesetWriteWhereInput[] = retryFailed
+    ? [{ outcome: null }, { outcome: "failed" }]
+    : [{ outcome: null }];
   return mode === "rollback"
-    ? { changesetId, outcome: null }
+    ? { changesetId, OR: open }
     : // Removing after a rollback finishes off what the rollback only marked deleted.
-      {
-        changesetId,
-        OR: [{ outcome: null }, { outcome: "deleted", entity: { in: ["product", "material"] } }],
-      };
+      { changesetId, OR: [...open, { outcome: "deleted", entity: { in: ["product", "material"] } }] };
 }
 
 function restoreFields(entry: Entry): Record<string, unknown> {
@@ -304,19 +314,36 @@ async function undo(
   }
 }
 
+/** An error's message on one line, short enough to show next to the entry. */
+function errorText(err: unknown): string {
+  const text = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").trim();
+  return text.length > 500 ? `${text.slice(0, 497)}...` : text;
+}
+
 /** Undo up to one chunk of a changeset's journal inside `tx`. Returns how many entries it settled. */
 export async function rollbackChunk(
   tx: Tx,
   input: { changesetId: string; siteId: string; workspaceId: string; mode: RollbackMode },
 ): Promise<{ settled: number; events: EntityEventInput[] }> {
   const entries = await tx.setupChangesetWrite.findMany({
-    where: pendingWhere(input.changesetId, input.mode),
+    where: pendingWhere(input.changesetId, input.mode, false),
     orderBy: [{ rank: "asc" }, { seq: "desc" }],
     take: ROLLBACK_CHUNK,
   });
   const events: EntityEventInput[] = [];
   for (const entry of entries) {
-    const result = await undo(tx, entry, input.mode, { ...input, events });
+    // Its events join the chunk's only if it succeeds.
+    const own: EntityEventInput[] = [];
+    let result: Outcome;
+    await tx.$executeRawUnsafe("SAVEPOINT setup_entry");
+    try {
+      result = await undo(tx, entry, input.mode, { ...input, events: own });
+      await tx.$executeRawUnsafe("RELEASE SAVEPOINT setup_entry");
+      events.push(...own);
+    } catch (err) {
+      await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT setup_entry");
+      result = { outcome: "failed", reason: `Couldn't undo: ${errorText(err)}` };
+    }
     await tx.setupChangesetWrite.update({
       where: { id: entry.id },
       data: { outcome: result.outcome, reason: result.reason ?? null },
