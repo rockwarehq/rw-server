@@ -88,6 +88,7 @@ export function setupSchemaDocument() {
       "Fields left out are left unchanged on existing records; they are never cleared.",
       "Keys resolve through this source's external refs first, then by natural key (material number, SKU).",
       "A product's materials may reference materials in the same spec or ones the plant already has.",
+      "Propose references exactly as the source has them. An unknown material comes back as an UNKNOWN_MATERIAL issue for the person to settle; never swap in a similar key.",
       `Propose at most ${MAX_SETUP_ROWS} rows per changeset; split bigger imports and propose materials before the products that use them.`,
       "Proposing never changes the plant. A person reviews and applies the changeset in IMM.",
     ],
