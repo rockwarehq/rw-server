@@ -7,6 +7,7 @@ import { rpcCall } from "./helpers/rpc-call.js";
 
 const ADMIN = { email: "audit-read-admin@test.local", password: "audit-read-password-1" };
 const VIEWER = { email: "audit-read-viewer@test.local", password: "audit-read-password-2" };
+const CREW = { email: "audit-read-crew@test.local", password: "audit-read-password-3" };
 
 type Entry = {
   action: string;
@@ -103,5 +104,40 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reading the audit trail (Tier 2
     expect(exported.rows).toBe(3);
     expect(exported.csv.split("\n")[0]).toContain("when,action,who");
     expect(exported.csv).toContain("Lid 3");
+  });
+
+  it("shows the crew recent changes in their own cells only, moves included", async () => {
+    const tag = randomUUID().slice(0, 8);
+    const call = async (path: string, input: object) => {
+      const result = await rpcCall(server, path, input, adminToken);
+      expect(result.statusCode).toBe(200);
+      return result.json as { id: string };
+    };
+    const ours = await call("workcenter/create", { siteId, name: `Ours ${tag}` });
+    const theirs = await call("workcenter/create", { siteId, name: `Theirs ${tag}` });
+    const press = await call("station/create", { siteId, workcenterId: ours.id, name: `Press ${tag}` });
+    const lathe = await call("station/create", { siteId, workcenterId: theirs.id, name: `Lathe ${tag}` });
+    await call("station/update", { id: lathe.id, description: "Not ours" });
+    const mill = await call("station/create", { siteId, workcenterId: theirs.id, name: `Mill ${tag}` });
+    await call("station/move", { id: mill.id, workcenterId: ours.id });
+
+    await makeUser(CREW.email, CREW.password, { workcenters: [{ workcenterId: ours.id, level: "VIEW" }] });
+    const crewToken = await siteToken(CREW.email, CREW.password);
+    const labels = async (token: string) => {
+      const result = await rpcCall(server, "audit/recent", { siteId, limit: 25 }, token);
+      expect(result.statusCode).toBe(200);
+      const entries = (result.json as { entries: Entry[] }).entries;
+      expect(entries.every((entry) => !("ipAddress" in entry))).toBe(true);
+      return entries.map((entry) => `${entry.action} ${entry.label}`).filter((label) => label.includes(tag));
+    };
+
+    // The crew see their cell, its stations, and the station moved into it, newest first.
+    expect(await labels(crewToken)).toEqual([
+      `RECORD_UPDATED Mill ${tag}`,
+      `RECORD_CREATED Press ${tag}`,
+      `RECORD_CREATED Ours ${tag}`,
+    ]);
+    // The plant's admins see every cell.
+    expect(await labels(adminToken)).toHaveLength(7);
   });
 });

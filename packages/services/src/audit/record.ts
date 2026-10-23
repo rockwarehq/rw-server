@@ -70,6 +70,12 @@ export interface AuditRecordInput {
   versionId?: string | null;
   previousVersionId?: string | null;
   metadata?: Record<string, unknown>;
+  /**
+   * The workcenters a floor record belongs to (a station's cell; both cells
+   * for a move), so the crew of those cells can find it. Stored in metadata;
+   * it never makes a no-op update worth recording.
+   */
+  workcenterIds?: ReadonlyArray<string | null | undefined>;
 }
 
 /**
@@ -80,6 +86,7 @@ export async function auditRecord(tx: Prisma.TransactionClient, input: AuditReco
   const changes = input.change === "deleted" ? {} : changedValues(input.before, input.after, input.fields);
   const changed = Object.keys(changes).length > 0;
   if (input.change === "updated" && !changed && !input.metadata) return;
+  const workcenterIds = [...new Set((input.workcenterIds ?? []).filter((id): id is string => !!id))];
   await logEvent({
     tx,
     action: ACTIONS[input.change],
@@ -91,6 +98,10 @@ export async function auditRecord(tx: Prisma.TransactionClient, input: AuditReco
     ...(changed ? { changes } : {}),
     versionId: input.versionId ?? undefined,
     previousVersionId: input.previousVersionId ?? undefined,
-    metadata: { ...(input.label ? { label: input.label } : {}), ...input.metadata },
+    metadata: {
+      ...(input.label ? { label: input.label } : {}),
+      ...(workcenterIds.length ? { workcenterIds } : {}),
+      ...input.metadata,
+    },
   });
 }

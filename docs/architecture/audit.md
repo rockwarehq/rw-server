@@ -67,6 +67,8 @@ Master data records its own history: `RECORD_CREATED`, `RECORD_UPDATED` and `REC
 
 Secrets never reach the trail. Credentials, tokens and passwords are left out of the compared fields and recorded only as `credentialsChanged`; an integration's URLs and default headers aren't recorded at all (a webhook URL can itself be a credential), and a device's connection settings drop any key that looks like a secret. A PIN or badge change is `pinChanged` / `badgeChanged`.
 
+Floor records name their workcenters in `metadata.workcenterIds` (a station's cell, both cells for a move, a workcenter itself), so `audit.recent` can show each person the latest changes to the cells they can see: Home's "Most recent activity". Plant admins see every cell; the crew see their own.
+
 Background work (an import applying a chunk at a time) runs in an audit context of its own: the person who started it, and one id for everything it wrote.
 
 Not covered on purpose: stock and ledger rows (they record `performedByUserId` themselves), shop-floor runtime (station state, cycles, calls, logons, shift materialisation), product pictures, alternates-group renames, and order queue reordering.

@@ -63,6 +63,7 @@ export async function applyProfileToStations(profileId: string): Promise<number>
       id: true,
       name: true,
       siteId: true,
+      workcenterId: true,
       currentJobId: true,
       site: { select: { workspaceId: true } },
       currentVersion: true,
@@ -124,6 +125,7 @@ export async function applyProfileToStations(profileId: string): Promise<number>
         versionId: version.id,
         previousVersionId: current?.id,
         metadata: { fromProfile: { id: profile.id, name: profile.name } },
+        workcenterIds: [station.workcenterId],
       });
     });
     changed++;

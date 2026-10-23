@@ -663,6 +663,7 @@ export const coreRouter = {
     recordHistory: audit.recordHistory,
     actors: audit.actors,
     exportCsv: audit.exportCsv,
+    recent: audit.recent,
   },
   apiToken: {
     create: apiToken.create,

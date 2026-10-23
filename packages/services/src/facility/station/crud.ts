@@ -329,6 +329,7 @@ export async function create(input: CreateStationInput) {
         label: created.name,
         after: auditValues(created),
         fields: AUDIT_FIELDS,
+        workcenterIds: [created.workcenterId],
         versionId: version.id,
       });
       return created;
@@ -367,6 +368,7 @@ export async function create(input: CreateStationInput) {
       label: created.name,
       after: auditValues(created),
       fields: AUDIT_FIELDS,
+      workcenterIds: [created.workcenterId],
     });
     return created;
   });
@@ -598,6 +600,7 @@ export async function update(id: string, input: UpdateStationInput) {
         before: auditValues(current),
         after: auditValues(updated),
         fields: AUDIT_FIELDS,
+        workcenterIds: [current.workcenterId, updated.workcenterId],
         versionId: version.id,
         previousVersionId: oldVersion?.id,
       });
@@ -640,6 +643,7 @@ export async function update(id: string, input: UpdateStationInput) {
       before: auditValues(current),
       after: auditValues(updated),
       fields: AUDIT_FIELDS,
+      workcenterIds: [current.workcenterId, updated.workcenterId],
     });
     return updated;
   });
@@ -714,6 +718,7 @@ export async function move(id: string, newWorkcenterId: string | null) {
       before: current,
       after: updated,
       fields: ["workcenterId"],
+      workcenterIds: [current.workcenterId, updated.workcenterId],
       metadata: { fromWorkcenter: current.workcenter?.name ?? null, toWorkcenter: updated.workcenter?.name ?? null },
     });
     return updated;
@@ -774,6 +779,7 @@ export async function reorder(workcenterId: string, orderedIds: string[]) {
         before,
         after: { sortOrder: index },
         fields: ["sortOrder"],
+        workcenterIds: [workcenterId],
       });
     }
   });
@@ -818,6 +824,7 @@ export async function remove(id: string) {
       workspaceId: station.site.workspaceId,
       label: station.name,
       fields: [],
+      workcenterIds: [station.workcenterId],
     });
   });
 

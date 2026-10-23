@@ -120,6 +120,7 @@ export async function create(input: CreateWorkcenterInput) {
       label: created.name,
       after: created,
       fields: AUDIT_FIELDS,
+      workcenterIds: [created.id],
     });
     return created;
   });
@@ -280,6 +281,7 @@ export async function update(id: string, input: UpdateWorkcenterInput) {
       before: current,
       after: updated,
       fields: AUDIT_FIELDS,
+      workcenterIds: [updated.id],
     });
     return updated;
   });
@@ -344,6 +346,7 @@ export async function move(id: string, newParentId: string | null) {
       before: current,
       after: updated,
       fields: ["parentId"],
+      workcenterIds: [updated.id],
       ...(current.parent ? { metadata: { fromParent: current.parent.name, toParent: null } } : {}),
     });
     return updated;
@@ -403,6 +406,7 @@ export async function remove(id: string) {
       workspaceId: workcenter.site.workspaceId,
       label: workcenter.name,
       fields: [],
+      workcenterIds: [workcenter.id],
     });
   });
 
