@@ -319,6 +319,34 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
 
     const page = await rpcCall(server, "setup/changeset/rows", { id, entity: "product", q: "spout" }, memberToken);
     expect((page.json as { total: number }).total).toBe(1);
+
+    // A value that couldn't be read is pinned on the row from its line; a line that became no row isn't.
+    const lid = (await rowsOf(id)).find((row) => row.key === `FP2-${RUN}`);
+    expect(lid?.issues).toEqual([
+      expect.objectContaining({ code: "BAD_VALUE", at: { file: "products.csv", line: 3, column: "weight" } }),
+    ]);
+    const pinned = (replanned.json as { plan: SetupPlan }).plan.issues;
+    expect(pinned[0]).toMatchObject({ code: "BAD_VALUE", row: { entity: "product", key: `FP2-${RUN}` } });
+    expect(pinned[1]).toMatchObject({ code: "UNKNOWN_PRODUCT", at: { file: "bom.csv", line: 3 } });
+    expect(pinned[1]?.row).toBeUndefined();
+
+    // Rows page by file, and "problems" finds the rows that need fixing whatever their action.
+    const fromProducts = await rpcCall(server, "setup/changeset/rows", { id, file: "products.csv" }, memberToken);
+    expect((fromProducts.json as { total: number }).total).toBe(3);
+    const toFix = await rpcCall(server, "setup/changeset/rows", { id, problems: true }, memberToken);
+    expect((toFix.json as { rows: Array<{ key: string }> }).rows.map((row) => row.key)).toEqual([`FP2-${RUN}`]);
+
+    const detail = (await rpcCall(server, "setup/changeset/get", { id }, memberToken)).json as {
+      fileTotals: Array<{ file: string; counts: Record<string, number>; problems: number }>;
+      history: Array<{ kind: string; by: string | null; files: string[] | null }>;
+    };
+    expect(detail.fileTotals).toEqual([
+      { file: "materials.csv", counts: { create: 2, update: 0, unchanged: 0, conflict: 0 }, problems: 0 },
+      { file: "products.csv", counts: { create: 3, update: 0, unchanged: 0, conflict: 0 }, problems: 1 },
+    ]);
+    // What happened, from the audit log: proposed with its files, then checked again.
+    expect(detail.history.map((event) => event.kind)).toEqual(["proposed", "checked"]);
+    expect(detail.history[0]?.files).toEqual(["materials.csv", "products.csv", "bom.csv"]);
   });
 
   it("names the columns a file has when the mapping gets one wrong", async () => {
@@ -476,6 +504,17 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
     expect(row).toMatchObject({ author: "AGENT", clientName: "Claude Code" });
 
     await expect(agent.setup.changeset.replan({ id: created.id })).resolves.toBeDefined();
+    // A fix goes to the same import: same id, new rows, and its history says so.
+    const revised = await agent.setup.changeset.revise({
+      id: created.id,
+      spec: spec({ productName: `Cap, fixed ${RUN}` }) as never,
+    });
+    expect(revised.id).toBe(created.id);
+    const afterRevise = await agent.setup.changeset.get({ id: created.id });
+    expect(afterRevise.history.map((event) => event.kind)).toEqual(["proposed", "checked", "revised"]);
+    expect(afterRevise.history[2]).toMatchObject({ via: "Claude Code" });
+    const fixed = await agent.setup.changeset.rows({ id: created.id, q: "fixed" });
+    expect(fixed.total).toBe(1);
     await expect(agent.setup.changeset.apply({ id: created.id })).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(agent.setup.changeset.rollback({ id: created.id, mode: "rollback" })).rejects.toMatchObject({
       code: "FORBIDDEN",

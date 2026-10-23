@@ -62,6 +62,10 @@ export interface AgentTool<I = unknown> {
   description: string;
   input: z.ZodType<I>;
   permission: { key: string; patterns?: (input: I) => string[] };
+  /** For MCP clients: may it delete or overwrite data? (Read-only follows from the permission.) */
+  destructive?: boolean;
+  /** Extra MCP tool metadata, e.g. ChatGPT's openai/fileParams. */
+  meta?: Record<string, unknown>;
   execute: (input: I, ctx: ToolContext) => Promise<ToolResult>;
 }
 
@@ -70,6 +74,8 @@ function defineTool<S extends z.ZodType>(tool: {
   description: string;
   input: S;
   permission: { key: string; patterns?: (input: z.output<S>) => string[] };
+  destructive?: boolean;
+  meta?: Record<string, unknown>;
   execute: (input: z.output<S>, ctx: ToolContext) => Promise<ToolResult>;
 }): AgentTool {
   return tool as unknown as AgentTool;
@@ -134,7 +140,7 @@ function setupProposalOutput(proposal: {
     next: !id
       ? "Already up to date: every row matches the plant, so nothing was saved and there's nothing for the person to review."
       : !plan.applicable
-        ? "Nothing can be applied until the issues are fixed. Fix them in the files or spec and propose again, or ask the person to fix the records in IMM and then call setup_replan with this id."
+        ? "Nothing can be applied until the issues are fixed. Fix them in the files or spec and send them to this same import with setup_revise (this id), or ask the person to fix the records in IMM and then call setup_replan with this id."
         : `Give the person this link to review and apply it: ${new URL(`/settings/imports/${id}`, appConfig.baseUrl)}`,
   };
 }
@@ -431,7 +437,7 @@ export const AGENT_TOOLS: AgentTool[] = [
   defineTool({
     name: "setup_propose",
     description:
-      "Propose a setup changeset. Send either spec (the rows, up to 2,000) or source + files (uploads from setup_upload and how their columns map to fields). It is planned against the plant and saved as a draft; nothing changes until a person applies it in IMM. When every row already matches the plant, nothing is saved and id is null. Returns counts, the problems (with file lines for uploads) and the next step.",
+      "Propose a setup changeset. Send either spec (the rows, up to 2,000) or source + files (uploads from setup_upload or setup_attach_file, and how their columns map to fields). It is planned against the plant and saved as a draft; nothing changes until a person applies it in IMM. When every row already matches the plant, nothing is saved and id is null. Returns counts, the problems (with file lines for uploads) and the next step.",
     input: z.object({
       title: z
         .string()
@@ -470,6 +476,35 @@ export const AGENT_TOOLS: AgentTool[] = [
     },
   }),
   defineTool({
+    name: "setup_attach_file",
+    description:
+      "Send a file the person attached in this chat (a CSV export) for a setup import, when you can't run setup_upload's curl command. Rockware downloads it and returns uploadId: use it in setup_propose's or setup_revise's files. One file per call, up to 25 MB.",
+    input: z.object({
+      file: z
+        .object({
+          download_url: z.url().describe("Where to download the file"),
+          file_id: z.string().min(1),
+          mime_type: z.string().optional(),
+          file_name: z.string().max(255).optional(),
+        })
+        .describe("The attached file"),
+    }),
+    permission: { key: "setup.propose" },
+    // ChatGPT fills `file` from an attachment in the conversation.
+    meta: { "openai/fileParams": ["file"] },
+    execute: async (input, ctx) => {
+      const upload = await ctx.client.setup.upload.attach({ siteId: ctx.siteId, file: input.file });
+      return {
+        output: {
+          uploadId: upload.id,
+          filename: upload.filename,
+          size: upload.size,
+          next: "Propose with files.<materials|products|bom>.upload set to uploadId (or revise a draft with it).",
+        },
+      };
+    },
+  }),
+  defineTool({
     name: "setup_rows",
     description:
       "Page through a proposed changeset's planned rows: filter by action (create, update, unchanged, conflict), entity (material, product) or text in key or name. Conflicts carry their issues.",
@@ -483,6 +518,23 @@ export const AGENT_TOOLS: AgentTool[] = [
     }),
     permission: { key: "imm.read" },
     execute: (input, ctx) => read(ctx.client.setup.changeset.rows(input)),
+  }),
+  defineTool({
+    name: "setup_revise",
+    description:
+      "Send fixed rows or files to a draft setup changeset you proposed: same import, same review link, and its history shows the revision. Takes the same spec, or source + files, as setup_propose (new uploads for fixed files). Use it instead of proposing again when the person's draft has problems.",
+    input: z.object({
+      id: z.uuid().describe("The draft to revise"),
+      title: z.string().trim().min(1).max(200).optional().describe("A new title, if it should change"),
+      spec: setupSpecSchema.optional(),
+      source: z.string().trim().min(1).max(100).optional().describe("With files: stable name of the source system"),
+      files: setupFilesSchema.optional(),
+    }),
+    permission: { key: "setup.propose" },
+    execute: async (input, ctx) => {
+      const revised = await ctx.client.setup.changeset.revise(input);
+      return { output: setupProposalOutput(revised) };
+    },
   }),
   defineTool({
     name: "setup_replan",

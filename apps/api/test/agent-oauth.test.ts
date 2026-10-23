@@ -59,6 +59,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("agent connections over OAuth (T
   let viewerToken: string;
   let supportToken: string;
   let clientId: string;
+  let issuer: string;
 
   async function siteToken(email: string, password: string) {
     const login = await loginAs(server, email, password);
@@ -99,6 +100,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("agent connections over OAuth (T
     expect(approved.statusCode).toBe(200);
     const redirect = new URL((approved.json as { redirectTo: string }).redirectTo);
     expect(redirect.searchParams.get("state")).toBe("xyz");
+    // RFC 9207: the response names its issuer, as discovered (ChatGPT checks it).
+    expect(redirect.searchParams.get("iss")).toBe(issuer);
     const code = redirect.searchParams.get("code") as string;
     const exchanged = await token(server, {
       grant_type: "authorization_code",
@@ -148,7 +151,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("agent connections over OAuth (T
       code_challenge_methods_supported: ["S256"],
       token_endpoint_auth_methods_supported: ["none"],
       registration_endpoint: expect.stringMatching(/\/oauth\/register$/),
+      authorization_response_iss_parameter_supported: true,
     });
+    issuer = (metadata.json() as { issuer: string }).issuer;
+    expect(resource.json()).toMatchObject({ authorization_servers: [issuer] });
   });
 
   it("registers public clients with loopback or https redirects only", async () => {
@@ -188,7 +194,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("agent connections over OAuth (T
       url: `/oauth/authorize?${new URLSearchParams({ response_type: "code", client_id: clientId, redirect_uri: REDIRECT })}`,
     });
     expect(res.statusCode).toBe(302);
-    expect(new URL(res.headers.location as string).searchParams.get("error")).toBe("invalid_request");
+    const location = new URL(res.headers.location as string);
+    expect(location.searchParams.get("error")).toBe("invalid_request");
+    expect(location.searchParams.get("iss")).toBe(issuer);
   });
 
   it("refuses connections until a plant ADMIN allows them", async () => {
@@ -235,8 +243,31 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("agent connections over OAuth (T
   it("lets a propose grant propose setup over MCP and hands back the review link", async () => {
     const tokens = await connect(memberToken, ["read", "setup:propose"]);
     const list = await mcp(server, tokens.access_token, "tools/list");
-    const names = (list.body.result.tools as Array<{ name: string }>).map((tool) => tool.name);
-    expect(names).toEqual(expect.arrayContaining(["setup_schema", "setup_propose", "setup_replan"]));
+    const tools = list.body.result.tools as Array<{
+      name: string;
+      annotations: Record<string, boolean>;
+      _meta?: Record<string, unknown>;
+    }>;
+    const names = tools.map((tool) => tool.name);
+    expect(names).toEqual(
+      expect.arrayContaining(["setup_schema", "setup_propose", "setup_replan", "setup_revise", "setup_attach_file"]),
+    );
+    // Every tool carries the three hints ChatGPT uses to decide what needs the person's OK.
+    for (const tool of tools) {
+      expect(Object.keys(tool.annotations).sort()).toEqual(["destructiveHint", "openWorldHint", "readOnlyHint"]);
+    }
+    expect(tools.find((tool) => tool.name === "setup_schema")?.annotations.readOnlyHint).toBe(true);
+    expect(tools.find((tool) => tool.name === "setup_propose")?.annotations.readOnlyHint).toBe(false);
+    // ChatGPT hands an attachment to the file param as a link.
+    expect(tools.find((tool) => tool.name === "setup_attach_file")?._meta).toEqual({ "openai/fileParams": ["file"] });
+
+    // A link from anywhere but an allowed file host is refused before anything is fetched.
+    const attach = await mcp(server, tokens.access_token, "tools/call", {
+      name: "setup_attach_file",
+      arguments: { file: { download_url: "https://evil.example/products.csv", file_id: "file_1" } },
+    });
+    expect(attach.body.result.isError).toBe(true);
+    expect(attach.body.result.content[0].text).toContain("evil.example");
 
     const call = await mcp(server, tokens.access_token, "tools/call", {
       name: "setup_propose",

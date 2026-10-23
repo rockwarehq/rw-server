@@ -117,7 +117,9 @@ export const approve = userRequired
       },
     });
 
-    return { redirectTo: redirectWith(request.redirectUri, { code, state: request.state }) };
+    return {
+      redirectTo: redirectWith(request.redirectUri, { code, state: request.state, iss: request.issuer ?? null }),
+    };
   });
 
 export const deny = userRequired.input(handleInput).handler(async ({ input }) => {
@@ -128,6 +130,7 @@ export const deny = userRequired.input(handleInput).handler(async ({ input }) =>
       error: "access_denied",
       error_description: "The person declined the connection",
       state: request.state,
+      iss: request.issuer ?? null,
     }),
   };
 });

@@ -630,6 +630,7 @@ export const coreRouter = {
       list: setup.list,
       get: setup.get,
       replan: setup.replan,
+      revise: setup.revise,
       discard: setup.discard,
       apply: setup.apply,
       rows: setup.rows,
@@ -638,6 +639,7 @@ export const coreRouter = {
     },
     upload: {
       create: setup.createUploadProcedure,
+      attach: setup.attachUploadProcedure,
     },
   },
   agentConnection: {

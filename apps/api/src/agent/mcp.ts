@@ -74,7 +74,13 @@ function mcpServerFor(request: FastifyRequest, current: Current, siteId: string)
       name: tool.name,
       description: tool.description,
       inputSchema: toolInputJsonSchema(tool) as { type: "object" },
-      annotations: { readOnlyHint: tool.permission.key.endsWith(".read") },
+      // ChatGPT asks for all three hints to decide which calls need the person's OK.
+      annotations: {
+        readOnlyHint: tool.permission.key.endsWith(".read"),
+        destructiveHint: tool.destructive ?? false,
+        openWorldHint: false,
+      },
+      ...(tool.meta ? { _meta: tool.meta } : {}),
     })),
   }));
 

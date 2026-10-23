@@ -1,7 +1,7 @@
-import prisma, { type Prisma } from "@rw/db";
+import prisma, { Prisma } from "@rw/db";
 
 import type { SetupOrigin } from "./mapping.js";
-import type { SetupAction, SetupEntityKind, SetupIssue, SetupPlan, SetupRow } from "./plan.js";
+import type { SetupAction, SetupEntityKind, SetupIssue, SetupOriginRef, SetupPlan, SetupRow } from "./plan.js";
 
 // A changeset's plan lives in two places: the totals and spec-level issues on
 // the changeset (planResult, summary), and one SetupChangesetRow per planned
@@ -29,7 +29,33 @@ export function withFileIssues(plan: SetupPlan, origin: StoredOrigin | null | un
   if (!origin) return plan;
   annotate(plan, origin);
   if (origin.issues.length === 0) return plan;
-  return { ...plan, issues: [...origin.issues, ...plan.issues], applicable: false };
+  return { ...plan, issues: [...pinFileIssues(plan, origin.issues), ...plan.issues], applicable: false };
+}
+
+/** "products.csv line 3, weight": the place of an issue stored before issues carried `at`. */
+function placeOf(issue: SetupIssue): SetupOriginRef | undefined {
+  if (issue.at) return issue.at;
+  const match = /^(.+) line (\d+)(?:, (.+))?$/.exec(issue.path);
+  if (!match?.[1] || !match[2]) return undefined;
+  return { file: match[1], line: Number(match[2]), ...(match[3] ? { column: match[3] } : {}) };
+}
+
+/**
+ * A value a file had that couldn't be read is about one line; when that line
+ * became a row, the issue goes on the row too (where a person reviews it), and
+ * the plan's copy says which row it is.
+ */
+function pinFileIssues(plan: SetupPlan, issues: SetupIssue[]): SetupIssue[] {
+  const byLine = new Map<string, SetupRow>();
+  for (const row of plan.rows) if (row.origin) byLine.set(`${row.origin.file}:${row.origin.line}`, row);
+  return issues.map((stored) => {
+    const at = placeOf(stored);
+    const issue: SetupIssue = { ...stored, ...(at ? { at } : {}) };
+    const row = at ? byLine.get(`${at.file}:${at.line}`) : undefined;
+    if (!row) return issue;
+    row.issues.push(issue);
+    return { ...issue, row: { entity: row.entity, key: row.key, label: row.label } };
+  });
 }
 
 /** Point each row, and each issue on it, at the file line it came from. */
@@ -131,6 +157,10 @@ export async function rowsFrom(db: Db, changesetId: string, position: number, ta
 
 export interface RowsQuery {
   action?: SetupAction;
+  /** Rows from this file (null: rows that came from no file). */
+  file?: string | null;
+  /** Rows that need fixing: problems, or values their file line had that couldn't be read. */
+  problems?: boolean;
   entity?: SetupEntityKind;
   /** Matches key or label, case-insensitive. */
   q?: string;
@@ -143,14 +173,20 @@ export async function pageRows(changesetId: string, query: RowsQuery) {
     changesetId,
     ...(query.action ? { action: query.action } : {}),
     ...(query.entity ? { entity: query.entity } : {}),
-    ...(query.q
-      ? {
-          OR: [
-            { key: { contains: query.q, mode: "insensitive" } },
-            { label: { contains: query.q, mode: "insensitive" } },
-          ],
-        }
+    ...(query.file !== undefined
+      ? { origin: query.file === null ? { equals: Prisma.DbNull } : { path: ["file"], equals: query.file } }
       : {}),
+    AND: [
+      query.problems ? { OR: [{ action: "conflict" }, { NOT: { issues: { equals: [] } } }] } : {},
+      query.q
+        ? {
+            OR: [
+              { key: { contains: query.q, mode: "insensitive" } },
+              { label: { contains: query.q, mode: "insensitive" } },
+            ],
+          }
+        : {},
+    ],
   };
   const [total, rows] = await Promise.all([
     prisma.setupChangesetRow.count({ where }),
@@ -162,4 +198,37 @@ export async function pageRows(changesetId: string, query: RowsQuery) {
     }),
   ]);
   return { total, rows: rows.map(toRow) };
+}
+
+export interface SetupFileTotals {
+  /** The file's name; null for rows that came from no file (an inline spec). */
+  file: string | null;
+  counts: Record<SetupAction, number>;
+  /** Rows that need fixing, including rows whose line had a value that couldn't be read. */
+  problems: number;
+}
+
+/** Each file's share of the plan, in the order the files were mapped. */
+export async function fileTotals(changesetId: string, files: string[]): Promise<SetupFileTotals[]> {
+  const grouped = await prisma.$queryRaw<
+    Array<{ file: string | null; action: SetupAction; rows: number; problems: number }>
+  >`
+    SELECT origin->>'file' AS file, action,
+      count(*)::int AS rows,
+      count(*) FILTER (WHERE action = 'conflict' OR jsonb_array_length(issues) > 0)::int AS problems
+    FROM "SetupChangesetRow" WHERE "changesetId" = ${changesetId}::uuid
+    GROUP BY 1, 2`;
+  const byFile = new Map<string | null, SetupFileTotals>();
+  for (const name of files) byFile.set(name, { file: name, counts: emptyCounts(), problems: 0 });
+  for (const row of grouped) {
+    const totals = byFile.get(row.file) ?? { file: row.file, counts: emptyCounts(), problems: 0 };
+    totals.counts[row.action] += row.rows;
+    totals.problems += row.problems;
+    byFile.set(row.file, totals);
+  }
+  return [...byFile.values()];
+}
+
+function emptyCounts(): Record<SetupAction, number> {
+  return { create: 0, update: 0, unchanged: 0, conflict: 0 };
 }

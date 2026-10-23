@@ -156,8 +156,8 @@ async function stepApply(changeset: NonNullable<Awaited<ReturnType<typeof load>>
     return { kind: "done" };
   }
   if (!changeset.spec) {
-    await stopApply(changeset, progress, new SetupApplyError("WRITE_FAILED", "This import's data was cleared."));
-    return { kind: "stopped", error: new SetupApplyError("WRITE_FAILED", "This import's data was cleared.") };
+    await stopApply(changeset, progress, new SetupApplyError("WRITE_FAILED", "This import's files were cleaned up."));
+    return { kind: "stopped", error: new SetupApplyError("WRITE_FAILED", "This import's files were cleaned up.") };
   }
   const lastPosition = slice[slice.length - 1]?.position ?? progress.done;
   try {

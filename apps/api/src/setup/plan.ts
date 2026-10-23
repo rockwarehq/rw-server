@@ -28,11 +28,15 @@ export interface SetupIssue {
   hint?: string;
   /** The file line the issue is about, for imports built from uploaded files. */
   at?: SetupOriginRef;
+  /** A file issue on a line that became a row: that row, so a person sees it there. */
+  row?: { entity: SetupEntityKind; key: string; label: string };
 }
 
 export interface SetupOriginRef {
   file: string;
   line: number;
+  /** The field a file issue is about, as the mapping names it. */
+  column?: string;
 }
 
 export interface SetupChange {

@@ -29,9 +29,11 @@ export const AGENT_CALLABLE: Readonly<Record<string, OAuthScope>> = {
   "setup.changeset.get": "read",
   "setup.changeset.create": "setup:propose",
   "setup.changeset.replan": "setup:propose",
+  "setup.changeset.revise": "setup:propose",
   "setup.changeset.discard": "setup:propose",
   "setup.changeset.rows": "read",
   "setup.upload.create": "setup:propose",
+  "setup.upload.attach": "setup:propose",
 };
 
 /** The scope a connected agent needs for this procedure, or null when closed to agents. */

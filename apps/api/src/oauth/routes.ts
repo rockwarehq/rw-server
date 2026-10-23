@@ -63,6 +63,8 @@ function authorizationServerMetadata(request: FastifyRequest) {
     token_endpoint_auth_methods_supported: ["none"],
     revocation_endpoint_auth_methods_supported: ["none"],
     scopes_supported: [...OAUTH_SCOPES],
+    // Every authorization response names its issuer (RFC 9207); ChatGPT checks it.
+    authorization_response_iss_parameter_supported: true,
   };
 }
 
@@ -131,6 +133,7 @@ async function handleAuthorize(request: FastifyRequest, reply: FastifyReply) {
         error,
         error_description: description,
         state: query.state ?? null,
+        iss: apiOrigin(request),
       }),
     );
   if (query.response_type !== "code") return fail("unsupported_response_type", "Only response_type=code");
@@ -145,6 +148,7 @@ async function handleAuthorize(request: FastifyRequest, reply: FastifyReply) {
     codeChallenge: query.code_challenge,
     state: query.state ?? null,
     scopes: normalizeScopes(requested),
+    issuer: apiOrigin(request),
   });
   const consent = new URL("/oauth/authorize", appConfig.baseUrl);
   consent.searchParams.set("request", handle);

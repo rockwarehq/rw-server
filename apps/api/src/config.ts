@@ -77,6 +77,9 @@ const EnvSchema = z.object({
   // The API's public origin for OAuth metadata. Unset = as the caller
   // reached us (forwarded headers).
   MCP_PUBLIC_URL: z.url().optional(),
+  // Hosts a connected agent's attached files may be downloaded from (ChatGPT
+  // passes attachments as links). Comma-separated; "*." matches subdomains.
+  MCP_FILE_HOSTS: z.string().default("*.oaiusercontent.com"),
   ANTHROPIC_API_KEY: z.string().optional(),
   // Ask the API why a request missed the prompt cache (beta cache diagnosis);
   // recorded on each step.finished. For finding cache breakers, not for prod.
@@ -191,6 +194,9 @@ export const mcpConfig = {
   /** Connected agents (OAuth) are admitted. */
   connections: config.MCP_ENABLED,
   publicUrl: config.MCP_PUBLIC_URL ?? null,
+  fileHosts: config.MCP_FILE_HOSTS.split(",")
+    .map((host) => host.trim().toLowerCase())
+    .filter(Boolean),
 };
 
 export const securityConfig = {

@@ -3,6 +3,8 @@ import { randomBytes } from "node:crypto";
 import { hashToken } from "@rw/auth/secrets";
 import prisma from "@rw/db";
 
+import { mcpConfig } from "../config.js";
+
 import { type CsvTable, parseCsv } from "./csv.js";
 
 // Files for setup imports. Creating an upload returns a one-time token; the
@@ -88,4 +90,57 @@ export async function readUploads(siteId: string, userId: string, ids: string[])
     if (row.data) files.set(row.id, { filename: row.filename, table: parseCsv(decode(row.data)) });
   }
   return files;
+}
+
+export class AttachError extends Error {}
+
+const ATTACH_TIMEOUT_MS = 60_000;
+
+/** Is this host one attachments may come from? "*.example.com" matches its subdomains. */
+export function fileHostAllowed(host: string, allowed: readonly string[] = mcpConfig.fileHosts): boolean {
+  const name = host.toLowerCase();
+  return allowed.some((rule) => (rule.startsWith("*.") ? name.endsWith(rule.slice(1)) : name === rule));
+}
+
+/**
+ * A file a connected agent can only pass as a link (ChatGPT's attachments):
+ * downloaded here, from an allowed https host only, into an upload like one
+ * sent with curl. The link is used once and never stored.
+ */
+export async function attachRemoteFile(input: {
+  siteId: string;
+  createdById: string;
+  grantId: string | null;
+  url: string;
+  filename: string;
+}) {
+  const url = new URL(input.url);
+  if (url.protocol !== "https:" || !fileHostAllowed(url.hostname)) {
+    throw new AttachError(`Files can't be downloaded from ${url.hostname}.`);
+  }
+  const upload = await createUpload({
+    siteId: input.siteId,
+    filename: input.filename,
+    createdById: input.createdById,
+    grantId: input.grantId,
+  });
+  const response = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(ATTACH_TIMEOUT_MS) });
+  const landed = new URL(response.url || url.toString());
+  if (landed.protocol !== "https:" || !fileHostAllowed(landed.hostname)) {
+    throw new AttachError(`The file link went on to ${landed.hostname}, which isn't allowed.`);
+  }
+  if (!response.ok || !response.body) throw new AttachError(`Downloading the file failed (${response.status}).`);
+  const declared = Number(response.headers.get("content-length") ?? 0);
+  if (declared > MAX_UPLOAD_BYTES) throw new AttachError(`The file is over ${MAX_UPLOAD_BYTES / 1024 / 1024} MB.`);
+  // Read at most the limit, whatever the server claims.
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+    size += chunk.byteLength;
+    if (size > MAX_UPLOAD_BYTES) throw new AttachError(`The file is over ${MAX_UPLOAD_BYTES / 1024 / 1024} MB.`);
+    chunks.push(chunk);
+  }
+  const received = await receiveUpload(upload.id, upload.token, Buffer.concat(chunks));
+  if (!received.ok) throw new AttachError(received.message);
+  return { id: upload.id, filename: input.filename, size: received.size };
 }

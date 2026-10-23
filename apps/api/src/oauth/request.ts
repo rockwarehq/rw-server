@@ -15,6 +15,8 @@ export interface AuthorizationRequest {
   codeChallenge: string;
   state: string | null;
   scopes: string[];
+  /** Our issuer as the agent discovered it; every authorization response names it (RFC 9207). */
+  issuer?: string;
 }
 
 const signer = createSigner({

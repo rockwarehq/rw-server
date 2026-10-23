@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import prisma, { type Prisma } from "@rw/db";
+import prisma, { Prisma } from "@rw/db";
 import { logEvent } from "@rw/services/audit/index";
 import { z } from "zod";
 
@@ -8,10 +8,19 @@ import { clearImportData } from "../setup/clear.js";
 import { SetupMappingError, setupFilesSchema, specFromFiles } from "../setup/mapping.js";
 import { planSetup, type SetupPlan } from "../setup/plan.js";
 import { MAX_INLINE_ROWS, type SetupSpec, setupSpecSchema, specRowCount } from "../setup/spec.js";
-import { pageRows, planTotals, problemRows, type StoredOrigin, savePlan, withFileIssues } from "../setup/store.js";
+import {
+  fileTotals,
+  pageRows,
+  planTotals,
+  problemRows,
+  type StoredOrigin,
+  savePlan,
+  summarize,
+  withFileIssues,
+} from "../setup/store.js";
 import { pendingWhere } from "../setup/rollback.js";
 import { claimApply, claimRollback, firstStep, runInBackground, type SetupProgress } from "../setup/runner.js";
-import { createUpload, readUploads } from "../setup/uploads.js";
+import { AttachError, attachRemoteFile, createUpload, readUploads } from "../setup/uploads.js";
 import { userRequired } from "./middleware.js";
 import type { CallerContext } from "./context.js";
 
@@ -99,8 +108,90 @@ async function journalSummary(changesetId: string) {
   };
 }
 
+const HISTORY_ACTIONS = {
+  SETUP_CHANGESET_PROPOSED: "proposed",
+  SETUP_CHANGESET_REPLANNED: "checked",
+  SETUP_CHANGESET_REVISED: "revised",
+  SETUP_CHANGESET_APPLIED: "applied",
+  SETUP_CHANGESET_DISCARDED: "discarded",
+  SETUP_CHANGESET_ROLLED_BACK: "rolledBack",
+  SETUP_CHANGESET_CLEARED: "cleared",
+} as const;
+
+/** What happened to an import, oldest first, from its audit entries. */
+async function history(changesetId: string) {
+  const entries = await prisma.auditLog.findMany({
+    where: {
+      action: { in: Object.keys(HISTORY_ACTIONS) as Array<keyof typeof HISTORY_ACTIONS> },
+      metadata: { path: ["changesetId"], equals: changesetId },
+    },
+    orderBy: { createdAt: "asc" },
+    take: 200,
+    select: { action: true, actorId: true, metadata: true, createdAt: true },
+  });
+  const actorIds = [...new Set(entries.map((entry) => entry.actorId).filter((id): id is string => !!id))];
+  const actors = await prisma.user.findMany({
+    where: { id: { in: actorIds } },
+    select: { id: true, firstName: true, lastName: true, email: true },
+  });
+  const names = new Map(actors.map((actor) => [actor.id, personName(actor)]));
+  return entries.map((entry) => {
+    const meta = (entry.metadata ?? {}) as Record<string, unknown>;
+    return {
+      kind: HISTORY_ACTIONS[entry.action as keyof typeof HISTORY_ACTIONS],
+      at: entry.createdAt,
+      by: entry.actorId ? (names.get(entry.actorId) ?? null) : null,
+      via: typeof meta.clientName === "string" ? meta.clientName : null,
+      summary: (meta.summary as Record<string, unknown> | undefined) ?? null,
+      before: (meta.before as Record<string, unknown> | undefined) ?? null,
+      written: typeof meta.written === "number" ? meta.written : null,
+      mode: meta.mode === "remove" ? ("remove" as const) : meta.mode === "rollback" ? ("rollback" as const) : null,
+      outcomes: (meta.outcomes as Record<string, number> | undefined) ?? null,
+      linksRemoved: typeof meta.linksRemoved === "number" ? meta.linksRemoved : null,
+      files: Array.isArray(meta.files) ? (meta.files as string[]) : null,
+    };
+  });
+}
+
 function upToDate(plan: SetupPlan) {
   return plan.applicable && plan.rows.every((row) => row.action === "unchanged");
+}
+
+/** What to plan from, inline or uploaded files: the spec and, for files, where each row came from. */
+async function buildSpec(
+  input: { spec?: SetupSpec; source?: string; files?: z.infer<typeof setupFilesSchema> },
+  siteId: string,
+  context: UserContext,
+): Promise<{ spec: SetupSpec; origin: StoredOrigin | null }> {
+  let spec: SetupSpec;
+  let origin: StoredOrigin | null = null;
+  if (input.spec) {
+    if (specRowCount(input.spec) > MAX_INLINE_ROWS) {
+      throw new ORPCError("BAD_REQUEST", {
+        message: `An inline spec takes up to ${MAX_INLINE_ROWS} rows. Upload the files instead and propose them with a column mapping.`,
+      });
+    }
+    spec = input.spec;
+  } else if (input.files && input.source) {
+    const mapping = input.files;
+    const ids = [mapping.materials?.upload, mapping.products?.upload, mapping.bom?.upload].filter(
+      (id): id is string => !!id,
+    );
+    if (ids.length === 0) throw new ORPCError("BAD_REQUEST", { message: "Map at least one file." });
+    const files = await readUploads(siteId, context.current.user.id, ids);
+    try {
+      const built = specFromFiles(input.source, mapping, files);
+      spec = built.spec;
+      origin = { ...built.origin, issues: built.issues };
+    } catch (err) {
+      if (err instanceof SetupMappingError) throw new ORPCError("BAD_REQUEST", { message: err.message });
+      throw err;
+    }
+  } else {
+    throw new ORPCError("BAD_REQUEST", { message: "Send either spec, or files with source" });
+  }
+
+  return { spec, origin };
 }
 
 const createInput = z
@@ -118,34 +209,7 @@ const createInput = z
 export const create = userRequired.input(createInput).handler(async ({ input, context }) => {
   await context.access.require("MANAGE", { site: input.siteId });
 
-  let spec: SetupSpec;
-  let origin: StoredOrigin | null = null;
-  if (input.spec) {
-    if (specRowCount(input.spec) > MAX_INLINE_ROWS) {
-      throw new ORPCError("BAD_REQUEST", {
-        message: `An inline spec takes up to ${MAX_INLINE_ROWS} rows. Upload the files instead and propose them with a column mapping.`,
-      });
-    }
-    spec = input.spec;
-  } else if (input.files && input.source) {
-    const mapping = input.files;
-    const ids = [mapping.materials?.upload, mapping.products?.upload, mapping.bom?.upload].filter(
-      (id): id is string => !!id,
-    );
-    if (ids.length === 0) throw new ORPCError("BAD_REQUEST", { message: "Map at least one file." });
-    const files = await readUploads(input.siteId, context.current.user.id, ids);
-    try {
-      const built = specFromFiles(input.source, mapping, files);
-      spec = built.spec;
-      origin = { ...built.origin, issues: built.issues };
-    } catch (err) {
-      if (err instanceof SetupMappingError) throw new ORPCError("BAD_REQUEST", { message: err.message });
-      throw err;
-    }
-  } else {
-    throw new ORPCError("BAD_REQUEST", { message: "Send either spec, or files with source" });
-  }
-
+  const { spec, origin } = await buildSpec(input, input.siteId, context);
   const planned = withFileIssues(await planSetup(prisma, input.siteId, spec), origin);
   // Nothing to apply and nothing wrong: there's nothing for a person to review.
   if (upToDate(planned)) return proposal(null, planned);
@@ -182,7 +246,7 @@ export const create = userRequired.input(createInput).handler(async ({ input, co
     metadata: {
       changesetId: id,
       siteId: input.siteId,
-      summary: planned.summary,
+      summary: summarize(planned),
       ...(origin ? { files: origin.files } : {}),
       ...(via ? { via: "mcp", grantId: via.grantId, clientName: via.clientName } : {}),
     },
@@ -230,7 +294,12 @@ export const get = userRequired.input(z.object({ id: z.uuid() })).handler(async 
     where: { id: row.id },
     select: { createdBy: person, appliedBy: person, rolledBackBy: person },
   });
-  const journal = await journalSummary(row.id);
+  const files = storedOrigin(row)?.files ?? [];
+  const [journal, events, perFile] = await Promise.all([
+    journalSummary(row.id),
+    history(row.id),
+    row.clearedAt ? Promise.resolve([]) : fileTotals(row.id, files),
+  ]);
   const manage = !context.current.via && context.access.can("MANAGE", { site: row.siteId });
   const admin = !context.current.via && context.access.can("ADMIN", { site: row.siteId });
   const running = row.status === "APPLYING" || row.status === "ROLLING_BACK";
@@ -256,7 +325,10 @@ export const get = userRequired.input(z.object({ id: z.uuid() })).handler(async 
     rolledBackBy: people?.rolledBackBy && { id: people.rolledBackBy.id, name: personName(people.rolledBackBy) },
     clearedAt: row.clearedAt,
     plan: planTotals(row),
-    files: storedOrigin(row)?.files ?? [],
+    files,
+    /** Each file's share of the plan; one entry with file null when it came from no file. */
+    fileTotals: perFile.filter((totals) => Object.values(totals.counts).some((count) => count > 0)),
+    history: events,
     writes: writeCount(planTotals(row)),
     progress: (row.progress as SetupProgress | null) ?? null,
     journal,
@@ -277,6 +349,86 @@ export const replan = userRequired.input(z.object({ id: z.uuid() })).handler(asy
     storedOrigin(row),
   );
   await prisma.$transaction((tx) => savePlan(tx, row.id, planned), { timeout: 60_000 });
+  const via = context.current.via;
+  await logEvent({
+    action: "SETUP_CHANGESET_REPLANNED",
+    actorId: context.current.user.id,
+    workspaceId: context.current.workspaceId,
+    metadata: {
+      changesetId: row.id,
+      siteId: row.siteId,
+      before: row.summary ?? null,
+      summary: summarize(planned),
+      ...(via ? { via: "mcp", grantId: via.grantId, clientName: via.clientName } : {}),
+    },
+  });
+  return proposal(row.id, planned);
+});
+
+const reviseInput = z
+  .object({
+    id: z.uuid(),
+    title: z.string().trim().min(1).max(200).optional().describe("A new title, if it should change"),
+    spec: setupSpecSchema.optional().describe(`The rows themselves, for up to ${MAX_INLINE_ROWS} rows`),
+    source: z.string().trim().min(1).max(100).optional().describe("With files: the source system's name"),
+    files: setupFilesSchema.optional().describe("Uploaded files and how their columns map to fields"),
+  })
+  .refine((input) => (input.spec ? !input.files : !!input.files && !!input.source), {
+    message: "Send either spec, or files with source",
+  });
+
+function uploadIds(mapping: unknown): string[] {
+  const files = mapping as z.infer<typeof setupFilesSchema> | null;
+  return [files?.materials?.upload, files?.products?.upload, files?.bom?.upload].filter((id): id is string => !!id);
+}
+
+/**
+ * Replace a draft's rows with fixed ones, like pushing a commit to an open
+ * pull request: same import, same link, its history gains a "revised" entry.
+ * The files it was built from before are dropped.
+ */
+export const revise = userRequired.input(reviseInput).handler(async ({ input, context }) => {
+  const row = await load(input.id);
+  await context.access.require("MANAGE", { site: row.siteId });
+  requireOwnDraftForAgent(row, context);
+  requireDraft(row);
+  if (row.clearedAt) throw new ORPCError("BAD_REQUEST", { message: "This import's files were cleaned up." });
+
+  const { spec, origin } = await buildSpec(input, row.siteId, context);
+  const planned = withFileIssues(await planSetup(prisma, row.siteId, spec), origin);
+  const kept = new Set(uploadIds(input.files));
+  const dropped = uploadIds(row.mapping).filter((id) => !kept.has(id));
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.setupChangeset.update({
+        where: { id: row.id },
+        data: {
+          ...(input.title ? { title: input.title } : {}),
+          source: spec.source,
+          spec: spec as unknown as Prisma.InputJsonValue,
+          mapping: input.files ? (input.files as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
+          origin: origin ? (origin as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
+        },
+      });
+      await savePlan(tx, row.id, planned);
+      if (dropped.length) await tx.setupUpload.deleteMany({ where: { id: { in: dropped } } });
+    },
+    { timeout: 60_000 },
+  );
+  const via = context.current.via;
+  await logEvent({
+    action: "SETUP_CHANGESET_REVISED",
+    actorId: context.current.user.id,
+    workspaceId: context.current.workspaceId,
+    metadata: {
+      changesetId: row.id,
+      siteId: row.siteId,
+      before: row.summary ?? null,
+      summary: summarize(planned),
+      ...(origin ? { files: origin.files } : {}),
+      ...(via ? { via: "mcp", grantId: via.grantId, clientName: via.clientName } : {}),
+    },
+  });
   return proposal(row.id, planned);
 });
 
@@ -284,6 +436,8 @@ const rowsInput = z.object({
   id: z.uuid(),
   action: z.enum(["create", "update", "unchanged", "conflict"]).optional(),
   entity: z.enum(["material", "product"]).optional(),
+  file: z.string().max(255).nullable().optional().describe("Rows from this file; null for rows from no file"),
+  problems: z.boolean().optional().describe("Only rows that need fixing"),
   q: z.string().trim().max(200).optional(),
   offset: z.number().int().min(0).default(0),
   limit: z.number().int().min(1).max(500).default(100),
@@ -309,6 +463,35 @@ export const createUploadProcedure = userRequired
       grantId: context.current.via?.grantId ?? null,
     });
     return { ...upload, path: `/setup/uploads/${upload.id}` };
+  });
+
+/** A file a connected agent could only pass as a link (a ChatGPT attachment), downloaded into an upload. */
+export const attachUploadProcedure = userRequired
+  .input(
+    z.object({
+      siteId: z.uuid(),
+      file: z.object({
+        download_url: z.url(),
+        file_id: z.string().min(1).max(500),
+        mime_type: z.string().max(200).optional(),
+        file_name: z.string().trim().min(1).max(255).optional(),
+      }),
+    }),
+  )
+  .handler(async ({ input, context }) => {
+    await context.access.require("MANAGE", { site: input.siteId });
+    try {
+      return await attachRemoteFile({
+        siteId: input.siteId,
+        createdById: context.current.user.id,
+        grantId: context.current.via?.grantId ?? null,
+        url: input.file.download_url,
+        filename: input.file.file_name ?? `${input.file.file_id}.csv`,
+      });
+    } catch (err) {
+      if (err instanceof AttachError) throw new ORPCError("BAD_REQUEST", { message: err.message });
+      throw err;
+    }
   });
 
 export const discard = userRequired.input(z.object({ id: z.uuid() })).handler(async ({ input, context }) => {
@@ -338,7 +521,7 @@ export const apply = userRequired.input(z.object({ id: z.uuid() })).handler(asyn
   const row = await load(input.id);
   await context.access.require("MANAGE", { site: row.siteId });
   requireDraft(row);
-  if (row.clearedAt) throw new ORPCError("BAD_REQUEST", { message: "This import's data was cleared." });
+  if (row.clearedAt) throw new ORPCError("BAD_REQUEST", { message: "This import's files were cleaned up." });
   if (!planTotals(row).applicable) {
     throw new ORPCError("BAD_REQUEST", { message: "Resolve the changeset's problems before applying it." });
   }
@@ -368,7 +551,7 @@ export const rollback = userRequired.input(rollbackInput).handler(async ({ input
   const row = await load(input.id);
   await context.access.require(input.mode === "remove" ? "ADMIN" : "MANAGE", { site: row.siteId });
   if (row.clearedAt) {
-    throw new ORPCError("BAD_REQUEST", { message: "This import's data was cleared, so it can't be rolled back." });
+    throw new ORPCError("BAD_REQUEST", { message: "This import's files were cleaned up, so it can't be rolled back." });
   }
   const from =
     input.mode === "remove" ? ["APPLIED", "DRAFT", "DISCARDED", "ROLLED_BACK"] : ["APPLIED", "DRAFT", "DISCARDED"];
@@ -389,7 +572,7 @@ export const clear = userRequired.input(z.object({ id: z.uuid() })).handler(asyn
   await context.access.require("MANAGE", { site: row.siteId });
   if (row.clearedAt) return { ok: true };
   if (!["APPLIED", "DISCARDED", "ROLLED_BACK"].includes(row.status)) {
-    throw new ORPCError("CONFLICT", { message: "Only an applied, discarded or rolled back import can be cleared." });
+    throw new ORPCError("CONFLICT", { message: "Only an applied, discarded or rolled back import can be cleaned up." });
   }
   await clearImportData(row.id, context.current.user.id, context.current.workspaceId);
   return { ok: true };

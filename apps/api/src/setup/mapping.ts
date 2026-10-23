@@ -156,8 +156,9 @@ export function specFromFiles(
     return { file, fileIndex, reader };
   }
 
+  /** Where an issue is, for people (path) and for pinning it to its row (at). */
   function where(file: Uploaded, line: number, what: string) {
-    return `${file.filename} line ${line}, ${what}`;
+    return { path: `${file.filename} line ${line}, ${what}`, at: { file: file.filename, line, column: what } };
   }
 
   function number(raw: string | undefined, file: Uploaded, line: number, what: string): number | undefined {
@@ -168,7 +169,7 @@ export function specFromFiles(
     if (text === "" || !Number.isFinite(value) || value < 0) {
       issues.push({
         code: "BAD_VALUE",
-        path: where(file, line, what),
+        ...where(file, line, what),
         message: `"${raw}" isn't a number of zero or more.`,
         hint:
           decimal === "." && /,\d{1,2}$/.test(raw)
@@ -186,7 +187,7 @@ export function specFromFiles(
     if (!unit) {
       issues.push({
         code: "BAD_VALUE",
-        path: where(file, line, what),
+        ...where(file, line, what),
         message: `"${raw}" isn't a weight unit. Use KG, LB, G or OZ.`,
       });
       return undefined;
@@ -212,7 +213,7 @@ export function specFromFiles(
     for (const { line, cells } of file.table.rows) {
       const key = read.key(cells);
       if (!key) {
-        issues.push({ code: "BAD_VALUE", path: where(file, line, "key"), message: "This row has no key." });
+        issues.push({ code: "BAD_VALUE", ...where(file, line, "key"), message: "This row has no key." });
         continue;
       }
       spec.materials.push({
@@ -252,7 +253,7 @@ export function specFromFiles(
     for (const { line, cells } of file.table.rows) {
       const key = read.key(cells);
       if (!key) {
-        issues.push({ code: "BAD_VALUE", path: where(file, line, "key"), message: "This row has no key." });
+        issues.push({ code: "BAD_VALUE", ...where(file, line, "key"), message: "This row has no key." });
         continue;
       }
       const index = spec.products.length;
@@ -301,7 +302,7 @@ export function specFromFiles(
       if (!productKey || !material) {
         issues.push({
           code: "BAD_VALUE",
-          path: where(file, line, productKey ? "material" : "product"),
+          ...where(file, line, productKey ? "material" : "product"),
           message: "This row needs both a product and a material.",
         });
         continue;
@@ -311,7 +312,7 @@ export function specFromFiles(
       if (index === undefined || !product) {
         issues.push({
           code: "UNKNOWN_PRODUCT",
-          path: where(file, line, "product"),
+          ...where(file, line, "product"),
           message: `Product ${productKey} isn't in this import's products.`,
           hint: "Add the product to the products file, or leave its bill of materials for a later import.",
         });
@@ -321,7 +322,7 @@ export function specFromFiles(
       if (materials.some((m) => m.material === material)) {
         issues.push({
           code: "DUPLICATE_KEY",
-          path: where(file, line, "material"),
+          ...where(file, line, "material"),
           message: `Product ${productKey} already lists material ${material}.`,
         });
         continue;
