@@ -307,6 +307,21 @@ export async function rematerializePattern(patternId: string): Promise<void> {
 }
 
 /**
+ * After a site timezone change: rebuild every live schedule at the site from
+ * now, so definitions land on the same local clock in the new zone. Rows
+ * already in use (the running shift, anything stamped) stay as they are.
+ */
+export async function rematerializeSite(siteId: string): Promise<void> {
+  const now = new Date();
+  const assignments = await prisma.shiftAssignment.findMany({
+    where: { siteId, OR: [{ rotationEndDate: null }, { rotationEndDate: { gt: now } }] },
+    include: assignmentIncludeForMaterialize,
+  });
+  const ids = assignments.map((a) => a.id);
+  if (ids.length > 0) await rebuildShiftInstances(ids, assignments, now);
+}
+
+/**
  * Rebuild instances from `fromTime` onward: rows of `staleAssignmentIds`
  * ending after `fromTime` that are not yet stamped on any fact row are
  * deleted; in-use ones are preserved and become reserved windows the rows
@@ -855,6 +870,14 @@ function computeShiftUtcTimes(
   const utcEndMs = localWallClockToUtcMs(naiveStart + durationHrs * MS_PER_HOUR, timezone);
 
   return { utcStartMs, utcEndMs };
+}
+
+/**
+ * The instant showing the same local clock time in `toTimezone` as `ms` shows
+ * in `fromTimezone`: 18:00 New York becomes 18:00 Chicago.
+ */
+export function sameWallClockInstant(ms: number, fromTimezone: string, toTimezone: string): number {
+  return localWallClockToUtcMs(ms + getTimezoneOffsetMs(fromTimezone, new Date(ms)), toTimezone);
 }
 
 /**

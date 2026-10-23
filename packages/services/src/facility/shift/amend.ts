@@ -30,7 +30,7 @@ import {
   toRule,
 } from "./materialize.js";
 import { type CreateShiftOverrideInput, OVERLAP_ERROR, validateRule } from "./override.js";
-import { RESTAMPED_TABLES, SHIFT_BOUND_FACTS, STAMPED_FACTS } from "./stamped-facts.js";
+import { RESTAMPED_TABLES, SHIFT_ANNOTATION_TABLES, SHIFT_BOUND_FACTS, STAMPED_FACTS } from "./stamped-facts.js";
 
 type Tx = Prisma.TransactionClient;
 type Result<T> = { data: T } | { error: string; code: string };
@@ -144,9 +144,10 @@ export async function amendShift(input: AmendShiftInput): Promise<Result<ShiftAm
       if (!window) return { error: "Amendment changes nothing", code: "INVALID_AMENDMENT" };
       const obsoleteIds = plan.obsolete.map((r) => r.id);
       // Only a reference the re-stamp cannot move keeps an obsolete row alive.
+      // Notes and sign-offs do not: the amendment replaces the shift they were on.
       const inUse = await findInUseShiftInstanceIds(obsoleteIds, {
         ignoreBuckets: true,
-        ignoreTables: RESTAMPED_TABLES,
+        ignoreTables: [...RESTAMPED_TABLES, ...SHIFT_ANNOTATION_TABLES],
         client: tx,
       });
       // Rows written for a shift (SHIFT_BOUND_FACTS) stay on it, so they keep it alive too.
