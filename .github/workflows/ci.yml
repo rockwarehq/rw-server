@@ -41,6 +41,12 @@ jobs:
       - name: Build (typecheck)
         run: pnpm build
 
+      # The root build doesn't emit the client's declarations; this is where
+      # TS7056 on the app router shows up, so catch it before a release does.
+      - name: Build RPC client
+        run: pnpm build
+        working-directory: packages/rpc-client
+
       - name: Lint
         run: pnpm lint
 
