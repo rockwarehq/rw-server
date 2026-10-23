@@ -91,6 +91,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("audit trail (Tier 2)", () => {
     expect(row.workspaceId).toBeTruthy();
     expect(row.via).toBe("ui");
     expect(row.ipAddress).toBeTruthy();
-    expect(row.requestId).toBeTruthy();
+    // Unique, not Fastify's per-process counter (req-1, req-2, ...).
+    expect(row.requestId).toMatch(/^[0-9a-f-]{36}$/);
   });
 });

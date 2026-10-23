@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import type { JsonSchemaToTsProvider } from "@fastify/type-provider-json-schema-to-ts";
 import cors from "@fastify/cors";
@@ -35,6 +36,9 @@ let unhandledRejectionLoggerInstalled = false;
 export function createServer(options: IServerOptions) {
   const server = Fastify({
     loggerInstance: options.loggerInstance ?? rootLogger.child({ module: "http" }),
+    // Unique across restarts and machines: audit entries carry it to tie
+    // together what one request did, and logs carry it as reqId.
+    genReqId: () => randomUUID(),
   }).withTypeProvider<JsonSchemaToTsProvider<{ SerializerSchemaOptions: SerializerSchemaOptions }>>();
 
   // Register plugins
