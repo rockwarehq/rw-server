@@ -100,4 +100,39 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("record history in the audit tra
     expect(history[1]?.changes).toEqual({ description: { from: null, to: "Two presses" } });
     expect(history[1]?.versionId).toBeNull();
   });
+  it("records an integration's settings but never its credentials", async () => {
+    // Secrets are sealed with this key (read when used); a test key is enough here.
+    const key = process.env.INTEGRATION_ENCRYPTION_KEY;
+    process.env.INTEGRATION_ENCRYPTION_KEY ??= "0".repeat(64);
+    try {
+    const token = `tok-${randomUUID()}`;
+    const created = await call("integration/create", {
+      siteId,
+      name: `ERP ${randomUUID().slice(0, 6)}`,
+      type: "rest",
+      config: { baseUrl: "https://erp.example.com", authType: "bearer" },
+      secret: { authType: "bearer", token },
+    });
+    const rotated = `tok-${randomUUID()}`;
+    await call("integration/update", {
+      id: created.id,
+      siteId,
+      enabled: false,
+      secret: { authType: "bearer", token: rotated },
+    });
+
+    const history = await entries("integration", created.id);
+    expect(history.map((entry) => entry.action)).toEqual(["RECORD_CREATED", "RECORD_UPDATED"]);
+    expect(history[1]?.changes).toMatchObject({ enabled: { from: true, to: false } });
+    expect(history[1]?.metadata).toMatchObject({ credentialsChanged: true });
+    const stored = JSON.stringify(history);
+    expect(stored).not.toContain(token);
+    expect(stored).not.toContain(rotated);
+    // A base URL can carry a credential (a webhook's), so it isn't recorded either.
+    expect(stored).not.toContain("erp.example.com");
+    } finally {
+      if (key === undefined) delete process.env.INTEGRATION_ENCRYPTION_KEY;
+      else process.env.INTEGRATION_ENCRYPTION_KEY = key;
+    }
+  });
 });

@@ -56,6 +56,18 @@ Master data records its own history: `RECORD_CREATED`, `RECORD_UPDATED` and `REC
 | Production modes | `production-mode` | `facility/production-mode/crud.ts` |
 | Labels | `label` | `label/crud.ts` |
 | Customers, orders (and lines, status) | `customer`, `order` | `order/*` |
+| A person's access: plant level, workcenter grants, account admin; removed from the workspace | `member` (the user's id, one entry per plant) | `apps/api/src/services/account/workspace/members.ts` |
+| Profile edits (name, email) | `user` | `apps/api/src/services/account/user/crud.ts` |
+| Team roles | `employee-role` | `employee/role.ts` |
+| Integrations (and their triggers) | `integration` | `integration/crud.ts`, `livestore/src/graph/triggers.ts` |
+| Automations | `automation` | `automation/store.ts` |
+| Notification groups, saved overhead pages | `notification-group`, `overhead-page` | `notification/group.ts`, `paging/pages.ts` |
+| Gateways, devices (datasources, published or not) | `gateway`, `datasource` | `device/gateway/crud.ts`, `apps/api/src/services/device/datasource/crud.ts` |
+| Documents (folders, uploads, versions, links) | `document` (versions point at their DocumentFile) | `document/index.ts` |
+
+Secrets never reach the trail. Credentials, tokens and passwords are left out of the compared fields and recorded only as `credentialsChanged`; an integration's URLs and default headers aren't recorded at all (a webhook URL can itself be a credential), and a device's connection settings drop any key that looks like a secret. A PIN or badge change is `pinChanged` / `badgeChanged`.
+
+Background work (an import applying a chunk at a time) runs in an audit context of its own: the person who started it, and one id for everything it wrote.
 
 Not covered on purpose: stock and ledger rows (they record `performedByUserId` themselves), shop-floor runtime (station state, cycles, calls, logons, shift materialisation), product pictures, alternates-group renames, and order queue reordering.
 
@@ -67,6 +79,5 @@ Four `AuditAction` values are kept but never written (Postgres can't drop enum v
 
 ## Next
 
-1. Explicit actions for security-relevant settings: workspace access and roles, user profiles, integrations, automations, employee roles, devices, documents.
-2. Reading: `audit.search` and a record's history, an IMM Activity page and History on each record, CSV export.
-3. Append-only enforced in the database, and a written retention policy.
+1. History on stations, workcenters and team members in IMM (reading is otherwise done: `audit.*`, Settings → Activity, History on products, materials, jobs, tools).
+2. Append-only enforced in the database, and a written retention policy.

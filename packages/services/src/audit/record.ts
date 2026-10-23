@@ -85,7 +85,8 @@ export async function auditRecord(tx: Prisma.TransactionClient, input: AuditReco
     action: ACTIONS[input.change],
     entityType: input.entityType,
     entityId: input.entityId,
-    siteId: input.siteId ?? undefined,
+    // A record says where it belongs: no plant means none, not the caller's.
+    siteId: input.siteId ?? null,
     workspaceId: input.workspaceId ?? undefined,
     ...(changed ? { changes } : {}),
     versionId: input.versionId ?? undefined,

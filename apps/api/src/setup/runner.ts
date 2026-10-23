@@ -1,5 +1,5 @@
 import prisma, { type Prisma } from "@rw/db";
-import { logEvent } from "@rw/services/audit/index";
+import { auditContext, logEvent, runWithAuditContext } from "@rw/services/audit/index";
 import { publishEntityEvent } from "@rw/services/entity/events";
 import type { EntityEventInput } from "@rw/services/write";
 
@@ -268,9 +268,26 @@ export async function firstStep(id: string): Promise<StepResult> {
 export async function step(id: string): Promise<StepResult> {
   const changeset = await load(id);
   if (!changeset) return { kind: "done" };
-  if (changeset.status === "APPLYING") return stepApply(changeset);
-  if (changeset.status === "ROLLING_BACK") return stepRollback(changeset);
-  return { kind: "done" };
+  const run = () => {
+    if (changeset.status === "APPLYING") return stepApply(changeset);
+    if (changeset.status === "ROLLING_BACK") return stepRollback(changeset);
+    return Promise.resolve<StepResult>({ kind: "done" });
+  };
+  // The request that started the run already says who and from where. In the
+  // background, the run speaks for the person who started it, and one id ties
+  // together everything it wrote.
+  if (auditContext()) return run();
+  const applying = changeset.status === "APPLYING";
+  return runWithAuditContext(
+    {
+      requestId: `${applying ? "apply" : "rollback"}:${changeset.id}`,
+      actor: {
+        actorId: (applying ? changeset.appliedById : changeset.rolledBackById) ?? undefined,
+        siteId: changeset.siteId,
+      },
+    },
+    run,
+  );
 }
 
 const running = new Set<string>();

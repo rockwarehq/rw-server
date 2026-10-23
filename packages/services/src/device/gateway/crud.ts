@@ -1,10 +1,13 @@
 import { customAlphabet } from "nanoid";
 import prisma from "@rw/db";
+import { auditRecord } from "../../audit/index.js";
 
 // Alphabet without ambiguous chars (0,1,I,L,O)
 const alphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
 const generateSerial = customAlphabet(alphabet, 8);
 const generateClaimCode = customAlphabet(alphabet, 6);
+
+const AUDIT_FIELDS = ["name", "description", "hosting", "siteId"] as const;
 
 function generateSerialNumber() {
   const id = generateSerial();
@@ -66,21 +69,34 @@ export async function create(input: CreateGatewayInput) {
 
   const claimCode = generateClaimCode();
 
-  const gateway = await prisma.gateway.create({
-    data: {
-      name,
-      description,
-      serialNumber,
-      claimCode,
-      hosting: hosting || "SELF",
-      metadata: metadata ?? {},
-      siteId,
-    },
-    include: {
-      site: {
-        select: { id: true, name: true, workspaceId: true },
+  const gateway = await prisma.$transaction(async (tx) => {
+    const created = await tx.gateway.create({
+      data: {
+        name,
+        description,
+        serialNumber,
+        claimCode,
+        hosting: hosting || "SELF",
+        metadata: metadata ?? {},
+        siteId,
       },
-    },
+      include: {
+        site: {
+          select: { id: true, name: true, workspaceId: true },
+        },
+      },
+    });
+    await auditRecord(tx, {
+      change: "created",
+      entityType: "gateway",
+      entityId: created.id,
+      siteId: created.siteId,
+      workspaceId: created.site?.workspaceId,
+      label: created.name,
+      after: created,
+      fields: AUDIT_FIELDS,
+    });
+    return created;
   });
 
   return { data: gateway };
@@ -152,7 +168,7 @@ export async function update(id: string, input: UpdateGatewayInput) {
 
   const current = await prisma.gateway.findUnique({
     where: { id },
-    select: { id: true, siteId: true },
+    select: { id: true, name: true, description: true, hosting: true, siteId: true, metadata: true },
   });
 
   if (!current) {
@@ -178,14 +194,31 @@ export async function update(id: string, input: UpdateGatewayInput) {
   if (metadata !== undefined) updateData.metadata = metadata;
   if (siteId !== undefined) updateData.siteId = siteId;
 
-  const gateway = await prisma.gateway.update({
-    where: { id },
-    data: updateData,
-    include: {
-      site: {
-        select: { id: true, name: true, workspaceId: true },
+  const gateway = await prisma.$transaction(async (tx) => {
+    const updated = await tx.gateway.update({
+      where: { id },
+      data: updateData,
+      include: {
+        site: {
+          select: { id: true, name: true, workspaceId: true },
+        },
       },
-    },
+    });
+    const metadataChanged =
+      metadata !== undefined && JSON.stringify(current.metadata) !== JSON.stringify(updated.metadata);
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "gateway",
+      entityId: updated.id,
+      siteId: updated.siteId,
+      workspaceId: updated.site?.workspaceId,
+      label: updated.name,
+      before: current,
+      after: updated,
+      fields: AUDIT_FIELDS,
+      ...(metadataChanged ? { metadata: { metadataChanged: true } } : {}),
+    });
+    return updated;
   });
 
   return { data: gateway };
@@ -194,14 +227,25 @@ export async function update(id: string, input: UpdateGatewayInput) {
 export async function remove(id: string) {
   const gateway = await prisma.gateway.findUnique({
     where: { id },
-    select: { id: true },
+    select: { id: true, name: true, siteId: true, site: { select: { workspaceId: true } } },
   });
 
   if (!gateway) {
     return { error: "Gateway not found", code: "GATEWAY_NOT_FOUND" };
   }
 
-  await prisma.gateway.delete({ where: { id } });
+  await prisma.$transaction(async (tx) => {
+    await tx.gateway.delete({ where: { id } });
+    await auditRecord(tx, {
+      change: "deleted",
+      entityType: "gateway",
+      entityId: gateway.id,
+      siteId: gateway.siteId,
+      workspaceId: gateway.site?.workspaceId,
+      label: gateway.name,
+      fields: AUDIT_FIELDS,
+    });
+  });
   return { success: true };
 }
 

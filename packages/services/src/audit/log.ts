@@ -10,7 +10,8 @@ export interface LogEventParams {
   /** Who did it. Defaults to the request's caller. */
   actorId?: string;
   workspaceId?: string;
-  siteId?: string;
+  /** The plant; null when the event belongs to none (don't fall back to the caller's). */
+  siteId?: string | null;
   /** The record it happened to, e.g. ("product", id). */
   entityType?: string;
   entityId?: string;
@@ -46,7 +47,7 @@ export async function logEvent(params: LogEventParams): Promise<void> {
     userId: params.userId,
     actorId: params.actorId ?? actor?.actorId,
     workspaceId: params.workspaceId ?? actor?.workspaceId,
-    siteId: params.siteId ?? stringOf(params.metadata?.siteId) ?? actor?.siteId,
+    siteId: params.siteId === null ? null : (params.siteId ?? stringOf(params.metadata?.siteId) ?? actor?.siteId),
     entityType: params.entityType,
     entityId: params.entityId,
     changes: (params.changes as Prisma.InputJsonValue | undefined) ?? undefined,
