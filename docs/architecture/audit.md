@@ -77,6 +77,15 @@ Not covered on purpose: stock and ledger rows (they record `performedByUserId` t
 
 Operators aren't users: their logon events name the employee as the record (`entityType: "employee"`) and carry the display's workspace and plant. Ending several sessions at once (log everyone off, single-logon enforcement) writes one entry per session ended, in the same transaction. `audit.teamMemberLogons` (plant ADMIN) lists one team member's logons at that plant's terminals together with their login's sign-ins and password and invitation events, without edits to their record; reads name the operator and the station.
 
+## Agents
+
+An agent never acts as itself: it acts for a person, and the trail says both.
+
+- **Connected agents** (Claude Code, Codex, ChatGPT over MCP + OAuth) can read and propose, revise or discard imports, nothing else (`apps/api/src/agent/scopes.ts`). Their entries name the person who connected them, `via: agent:<client>`, the IP and a request id. Connecting, revoking and the agent-connections policy are recorded (`OAUTH_GRANT_*`, `AGENT_CONNECTIONS_POLICY_CHANGED`).
+- **The Console's own agent** (`apps/api/src/agent/runner.ts`) runs in the background and calls the router in-process, so each tool call runs in an audit context of its own: its session's person, `via: agent:<agent name>`, request id `agent:<session id>`, and in metadata the session, what started a run that wasn't a chat (`trigger: hook | schedule | subagent`) and who approved the call (`approvedById`). There's no IP: there's no request.
+- **Imports an agent proposed** say so: the changeset records the agent (`author: AGENT`, `clientName`), and a person applies it in IMM (`via: ui`). Every change the apply makes carries `metadata.origin` — the changeset, its title and `proposedVia` — so a record's history says which import, and which agent, it came from. An undo carries the same origin with `undo: true`.
+- **Reads aren't recorded**, an agent's or a person's: the trail records changes and proposals.
+
 ## Reading it
 
 All in `apps/api/src/rpc/audit.ts`; none is agent-callable.

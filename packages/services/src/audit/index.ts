@@ -1,5 +1,6 @@
 export { logEvent, extractRequestContext, type LogEventParams } from "./log.js";
 export {
+  auditAgentName,
   auditContext,
   runWithAuditContext,
   setAuditActor,

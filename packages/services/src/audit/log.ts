@@ -57,7 +57,10 @@ export async function logEvent(params: LogEventParams): Promise<void> {
     requestId: context?.requestId,
     ipAddress: params.ipAddress ?? context?.ipAddress,
     userAgent: params.userAgent ?? context?.userAgent,
-    metadata: (params.metadata as Prisma.InputJsonValue | undefined) ?? undefined,
+    metadata:
+      context?.metadata || params.metadata
+        ? ({ ...context?.metadata, ...params.metadata } as Prisma.InputJsonValue)
+        : undefined,
   };
 
   if (params.tx) {

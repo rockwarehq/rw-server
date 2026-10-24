@@ -21,6 +21,11 @@ export interface AuditContext {
   userAgent?: string;
   requestId?: string;
   actor?: AuditActor;
+  /**
+   * Said on every entry written in this context, under the entry's own
+   * metadata: what started an agent's run, the import a change came from.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 const storage = new AsyncLocalStorage<AuditContext>();
@@ -39,4 +44,10 @@ export function auditContext(): AuditContext | undefined {
 export function setAuditActor(actor: AuditActor | undefined): void {
   const context = storage.getStore();
   if (context) context.actor = actor;
+}
+
+/** The agent acting in this context, by name, when it is one. */
+export function auditAgentName(): string | null {
+  const via = storage.getStore()?.actor?.via;
+  return via?.startsWith("agent:") ? via.slice("agent:".length) : null;
 }

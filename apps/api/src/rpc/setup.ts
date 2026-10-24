@@ -1,6 +1,6 @@
 import { ORPCError } from "@orpc/server";
 import prisma, { Prisma } from "@rw/db";
-import { logEvent } from "@rw/services/audit/index";
+import { auditAgentName, logEvent } from "@rw/services/audit/index";
 import { z } from "zod";
 
 import { writeCount } from "../setup/apply.js";
@@ -226,6 +226,9 @@ export const create = userRequired.input(createInput).handler(async ({ input, co
   if (upToDate(planned)) return proposal(null, planned);
 
   const via = context.current.via;
+  // A connected agent comes with its OAuth grant; the Console's own agent
+  // comes in-process, named by its run's audit context.
+  const agentName = via?.clientName ?? auditAgentName();
   const id = await prisma.$transaction(
     async (tx) => {
       const row = await tx.setupChangeset.create({
@@ -233,14 +236,14 @@ export const create = userRequired.input(createInput).handler(async ({ input, co
           siteId: input.siteId,
           title: input.title,
           source: spec.source,
-          author: via ? "AGENT" : "USER",
+          author: agentName ? "AGENT" : "USER",
           spec: spec as unknown as Prisma.InputJsonValue,
           planResult: {},
           summary: {},
           ...(input.files ? { mapping: input.files as unknown as Prisma.InputJsonValue } : {}),
           ...(origin ? { origin: origin as unknown as Prisma.InputJsonValue } : {}),
           grantId: via?.grantId ?? null,
-          clientName: via?.clientName ?? null,
+          clientName: agentName,
           createdById: context.current.user.id,
         },
         select: { id: true },

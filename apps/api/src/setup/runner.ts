@@ -347,11 +347,20 @@ export async function step(id: string): Promise<StepResult> {
     if (changeset.status === "ROLLING_BACK") return stepRollback(changeset);
     return Promise.resolve<StepResult>({ kind: "done" });
   };
+  const applying = changeset.status === "APPLYING";
+  // Every change the run makes names the import it came from, and who
+  // proposed it when that was an agent.
+  const origin = {
+    changesetId: changeset.id,
+    title: changeset.title,
+    ...(changeset.clientName ? { proposedVia: changeset.clientName } : {}),
+    ...(applying ? {} : { undo: true }),
+  };
   // The request that started the run already says who and from where. In the
   // background, the run speaks for the person who started it, and one id ties
   // together everything it wrote.
-  if (auditContext()) return run();
-  const applying = changeset.status === "APPLYING";
+  const request = auditContext();
+  if (request) return runWithAuditContext({ ...request, metadata: { ...request.metadata, origin } }, run);
   return runWithAuditContext(
     {
       requestId: `${applying ? "apply" : "rollback"}:${changeset.id}`,
@@ -359,6 +368,7 @@ export async function step(id: string): Promise<StepResult> {
         actorId: (applying ? changeset.appliedById : changeset.rolledBackById) ?? undefined,
         siteId: changeset.siteId,
       },
+      metadata: { origin },
     },
     run,
   );
