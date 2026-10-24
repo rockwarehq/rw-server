@@ -2,6 +2,7 @@ import prisma from "@rw/db";
 import { Prisma, type WeightUnit } from "@rw/db";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
+import { auditActorId, auditRecord } from "../audit/index.js";
 import { lockMaterialBalance, pendingMaterialUsage, setMaterialStockUnit } from "../stock/balance.js";
 import { createForStockable } from "../stock/item.js";
 import { emitEntityEvent, inTransaction, reader, type WriteOptions } from "../write.js";
@@ -9,6 +10,19 @@ import { emitEntityEvent, inTransaction, reader, type WriteOptions } from "../wr
 // ============================================================================
 // Types
 // ============================================================================
+
+// What a material's audit trail compares between versions.
+const AUDIT_FIELDS = [
+  "materialNumber",
+  "name",
+  "shortCode",
+  "classification",
+  "description",
+  "externalNumber",
+  "weightUnits",
+  "unitCost",
+  "attrs",
+] as const;
 
 export interface CreateMaterialInput {
   siteId: string;
@@ -112,7 +126,20 @@ export async function create(input: CreateMaterialInput, options?: WriteOptions)
         weightUnits: weightUnits ?? null,
         unitCost: unitCost != null ? new Prisma.Decimal(unitCost) : null,
         attrs: attrs ?? {},
+        createdById: auditActorId(),
       },
+    });
+
+    await auditRecord(tx, {
+      change: "created",
+      entityType: "material",
+      entityId: mat.id,
+      siteId,
+      workspaceId: site.workspaceId,
+      label: version.name ?? version.materialNumber,
+      after: version,
+      fields: AUDIT_FIELDS,
+      versionId: version.id,
     });
 
     // 3. Its stock record, made in the same save (ADR-0016). Material stock
@@ -259,7 +286,11 @@ export async function update(id: string, input: UpdateMaterialInput, options?: W
   // Get current material with version
   const current = await db.material.findUnique({
     where: { id },
-    include: { currentVersion: true, site: { select: { workspaceId: true } } },
+    include: {
+      currentVersion: true,
+      site: { select: { workspaceId: true } },
+      labels: { select: { id: true, name: true } },
+    },
   });
 
   if (!current) {
@@ -325,6 +356,7 @@ export async function update(id: string, input: UpdateMaterialInput, options?: W
         unitCost:
           unitCost !== undefined ? (unitCost != null ? new Prisma.Decimal(unitCost) : null) : currentVersion.unitCost,
         attrs: attrs !== undefined ? attrs : (currentVersion.attrs as Record<string, unknown>),
+        createdById: auditActorId(),
       },
     });
 
@@ -342,6 +374,24 @@ export async function update(id: string, input: UpdateMaterialInput, options?: W
         labels: { select: { id: true, name: true, color: true } },
         _count: { select: { products: true, versions: true } },
       },
+    });
+
+    const labelsFrom = current.labels.map((l) => l.name).sort();
+    const labelsTo = updated.labels.map((l) => l.name).sort();
+    const labelsChanged = labelIds !== undefined && JSON.stringify(labelsFrom) !== JSON.stringify(labelsTo);
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "material",
+      entityId: id,
+      siteId: current.siteId,
+      workspaceId: current.site.workspaceId,
+      label: version.name ?? version.materialNumber,
+      before: currentVersion,
+      after: version,
+      fields: AUDIT_FIELDS,
+      versionId: version.id,
+      previousVersionId: currentVersion.id,
+      ...(labelsChanged ? { metadata: { labels: { from: labelsFrom, to: labelsTo } } } : {}),
     });
     return { data: updated };
   });
@@ -371,6 +421,7 @@ export async function remove(id: string, options?: WriteOptions) {
     where: { id },
     include: {
       site: { select: { workspaceId: true } },
+      currentVersion: { select: { name: true, materialNumber: true } },
       _count: { select: { products: true } },
     },
   });
@@ -390,9 +441,20 @@ export async function remove(id: string, options?: WriteOptions) {
     };
   }
 
-  await reader(options).material.update({
-    where: { id },
-    data: { deletedAt: new Date() },
+  await inTransaction(options, async (tx) => {
+    await tx.material.update({
+      where: { id },
+      data: { deletedAt: new Date() },
+    });
+    await auditRecord(tx, {
+      change: "deleted",
+      entityType: "material",
+      entityId: id,
+      siteId: material.siteId,
+      workspaceId: material.site.workspaceId,
+      label: material.currentVersion?.name ?? material.currentVersion?.materialNumber,
+      fields: [],
+    });
   });
 
   emitEntityEvent(options, {

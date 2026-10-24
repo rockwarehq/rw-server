@@ -10,6 +10,8 @@ import { loadUserCurrent } from "../auth/plugin.js";
 import { agentConfig, mcpConfig } from "../config.js";
 import { apiOrigin, protectedResourceMetadataUrl } from "../oauth/routes.js";
 import { OAUTH_ACCESS_PREFIX, resolveAccessToken } from "../oauth/store.js";
+import { setAuditActor } from "@rw/services/audit/index";
+import { auditActorOf } from "../auth/audit.js";
 import { builtInAgent, type ResolvedAgent } from "./agents.js";
 import type { Ruleset } from "./permission.js";
 import {
@@ -190,6 +192,8 @@ async function handleMcp(request: FastifyRequest, reply: FastifyReply) {
     return reply.status(403).send({ error: "Agent connections are turned off for this plant" });
   }
   const current = caller.current;
+  // An OAuth caller is resolved here, not by the auth plugin: say who it is.
+  setAuditActor(auditActorOf(current));
   const siteId = current.siteId;
   if (!siteId) return reply.status(400).send({ error: "Token is not bound to a site; switch to a site first" });
   await current.access.require("VIEW", { site: siteId });

@@ -1,5 +1,6 @@
 import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
+import { auditActorId, auditRecord, changedValues } from "../audit/index.js";
 import { LIVE_VARIATIONS } from "../facility/station-profile/spec.js";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
@@ -12,6 +13,27 @@ export { usage } from "./job-usage.js";
 // Keep it on the wire, always 0.
 function withOrderCount<T extends { _count: object }>(job: T) {
   return { ...job, _count: { ...job._count, orders: 0 } };
+}
+
+const JOB_AUDIT_FIELDS = [
+  "name",
+  "description",
+  "standardCycle",
+  "standardCycleUnit",
+  "standardRate",
+  "standardRateUnit",
+  "standardRatePeriod",
+  "standardQuantity",
+  "productsPerCycle",
+  "profileId",
+  "attrs",
+  "labels",
+] as const;
+
+const JOB_PRODUCT_AUDIT_FIELDS = ["quantity", "isActive", "tool", "cavity"] as const;
+
+function labelNames(labels: { name: string }[]) {
+  return labels.map((l) => l.name).sort();
 }
 
 // The profile a job version points at, as the job endpoints return it.
@@ -182,11 +204,12 @@ export async function create(input: CreateJobInput) {
         productsPerCycle: productsPerCycle ?? 1,
         attrs: attrs ?? {},
         ...(profile ? profile.fields : {}),
+        createdById: auditActorId(),
       },
     });
 
     // 3. Link version as current and return
-    return tx.job.update({
+    const created = await tx.job.update({
       where: { id: j.id },
       data: { currentVersionId: version.id },
       include: {
@@ -196,6 +219,20 @@ export async function create(input: CreateJobInput) {
         _count: { select: { tools: true, jobProducts: true, versions: true } },
       },
     });
+
+    await auditRecord(tx, {
+      change: "created",
+      entityType: "job",
+      entityId: created.id,
+      siteId,
+      workspaceId: site.workspaceId,
+      label: version.name,
+      after: { ...version, labels: labelNames(created.labels) },
+      fields: JOB_AUDIT_FIELDS,
+      versionId: version.id,
+    });
+
+    return created;
   });
 
   publishEntityEvent({
@@ -419,7 +456,11 @@ export async function update(id: string, input: UpdateJobInput) {
   // Get current job with version
   const current = await prisma.job.findUnique({
     where: { id },
-    include: { currentVersion: true, site: { select: { workspaceId: true } } },
+    include: {
+      currentVersion: true,
+      site: { select: { workspaceId: true } },
+      labels: { select: { name: true } },
+    },
   });
 
   if (!current) {
@@ -474,10 +515,11 @@ export async function update(id: string, input: UpdateJobInput) {
         attrs: attrs !== undefined ? attrs : (currentVersion.attrs as Record<string, unknown>),
         profileId: currentVersion.profileId,
         ...(profile ? profile.fields : {}),
+        createdById: auditActorId(),
       },
     });
 
-    return tx.job.update({
+    const updated = await tx.job.update({
       where: { id },
       data: {
         currentVersionId: version.id,
@@ -490,6 +532,22 @@ export async function update(id: string, input: UpdateJobInput) {
         _count: { select: { tools: true, jobProducts: true, versions: true } },
       },
     });
+
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "job",
+      entityId: id,
+      siteId: current.siteId,
+      workspaceId: current.site.workspaceId,
+      label: version.name,
+      before: { ...currentVersion, labels: labelNames(current.labels) },
+      after: { ...version, labels: labelNames(updated.labels) },
+      fields: JOB_AUDIT_FIELDS,
+      versionId: version.id,
+      previousVersionId: currentVersion.id,
+    });
+
+    return updated;
   });
 
   publishEntityEvent({
@@ -539,7 +597,7 @@ export async function update(id: string, input: UpdateJobInput) {
 export async function remove(id: string) {
   const job = await prisma.job.findUnique({
     where: { id },
-    include: { site: { select: { workspaceId: true } } },
+    include: { site: { select: { workspaceId: true } }, currentVersion: { select: { name: true } } },
   });
 
   if (!job) {
@@ -550,9 +608,21 @@ export async function remove(id: string) {
     return { error: "Job already deleted", code: "JOB_DELETED" };
   }
 
-  await prisma.job.update({
-    where: { id },
-    data: { deletedAt: new Date() },
+  await prisma.$transaction(async (tx) => {
+    await tx.job.update({
+      where: { id },
+      data: { deletedAt: new Date() },
+    });
+
+    await auditRecord(tx, {
+      change: "deleted",
+      entityType: "job",
+      entityId: id,
+      siteId: job.siteId,
+      workspaceId: job.site.workspaceId,
+      label: job.currentVersion?.name,
+      fields: [],
+    });
   });
 
   publishEntityEvent({
@@ -590,7 +660,13 @@ export async function addTool(input: AddToolInput) {
   // Verify job exists and is not deleted
   const job = await prisma.job.findUnique({
     where: { id: jobId },
-    select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } },
+    select: {
+      id: true,
+      siteId: true,
+      deletedAt: true,
+      site: { select: { workspaceId: true } },
+      currentVersion: { select: { name: true } },
+    },
   });
 
   if (!job) {
@@ -629,43 +705,46 @@ export async function addTool(input: AddToolInput) {
     return { error: "Tool is already linked to this job", code: "ALREADY_LINKED" };
   }
 
-  // Create or restore JobTool
-  let jobTool: Awaited<ReturnType<typeof prisma.jobTool.update>>;
+  const include = {
+    tool: {
+      include: {
+        currentVersion: true,
+        toolCavities: {
+          where: { deletedAt: null },
+          include: { currentVersion: true },
+        },
+      },
+    },
+  } satisfies Prisma.JobToolInclude;
 
-  if (existing) {
-    // Restore soft-deleted link
-    jobTool = await prisma.jobTool.update({
-      where: { id: existing.id },
-      data: { deletedAt: null, isActive: true },
-      include: {
-        tool: {
-          include: {
-            currentVersion: true,
-            toolCavities: {
-              where: { deletedAt: null },
-              include: { currentVersion: true },
-            },
-          },
-        },
-      },
+  // Create or restore JobTool
+  const jobTool = await prisma.$transaction(async (tx) => {
+    const linked = existing
+      ? // Restore soft-deleted link
+        await tx.jobTool.update({
+          where: { id: existing.id },
+          data: { deletedAt: null, isActive: true },
+          include,
+        })
+      : // Create new link
+        await tx.jobTool.create({
+          data: { jobId, toolId, isActive: true },
+          include,
+        });
+
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "job",
+      entityId: job.id,
+      siteId: job.siteId,
+      workspaceId: job.site.workspaceId,
+      label: job.currentVersion?.name,
+      fields: [],
+      metadata: { tools: "added", tool: linked.tool.currentVersion?.name ?? null },
     });
-  } else {
-    // Create new link
-    jobTool = await prisma.jobTool.create({
-      data: { jobId, toolId, isActive: true },
-      include: {
-        tool: {
-          include: {
-            currentVersion: true,
-            toolCavities: {
-              where: { deletedAt: null },
-              include: { currentVersion: true },
-            },
-          },
-        },
-      },
-    });
-  }
+
+    return linked;
+  });
 
   publishEntityEvent({
     action: "updated",
@@ -693,7 +772,10 @@ export async function addTool(input: AddToolInput) {
 export async function removeTool(jobId: string, toolId: string) {
   const jobTool = await prisma.jobTool.findUnique({
     where: { jobId_toolId: { jobId, toolId } },
-    include: { job: { include: { site: { select: { workspaceId: true } } } }, tool: true },
+    include: {
+      job: { include: { site: { select: { workspaceId: true } }, currentVersion: { select: { name: true } } } },
+      tool: { include: { currentVersion: { select: { name: true } } } },
+    },
   });
 
   if (!jobTool) {
@@ -704,9 +786,22 @@ export async function removeTool(jobId: string, toolId: string) {
     return { error: "Link already deleted", code: "ALREADY_DELETED" };
   }
 
-  await prisma.jobTool.update({
-    where: { id: jobTool.id },
-    data: { deletedAt: new Date() },
+  await prisma.$transaction(async (tx) => {
+    await tx.jobTool.update({
+      where: { id: jobTool.id },
+      data: { deletedAt: new Date() },
+    });
+
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "job",
+      entityId: jobTool.jobId,
+      siteId: jobTool.job.siteId,
+      workspaceId: jobTool.job.site.workspaceId,
+      label: jobTool.job.currentVersion?.name,
+      fields: [],
+      metadata: { tools: "removed", tool: jobTool.tool.currentVersion?.name ?? null },
+    });
   });
 
   publishEntityEvent({
@@ -780,7 +875,13 @@ export async function addItem(input: AddItemInput) {
   // Verify job exists and is not deleted
   const job = await prisma.job.findUnique({
     where: { id: jobId },
-    select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } },
+    select: {
+      id: true,
+      siteId: true,
+      deletedAt: true,
+      site: { select: { workspaceId: true } },
+      currentVersion: { select: { name: true } },
+    },
   });
 
   if (!job) {
@@ -868,11 +969,12 @@ export async function addItem(input: AddItemInput) {
         version: 1,
         isActive: true,
         quantity: quantity ?? 1,
+        createdById: auditActorId(),
       },
     });
 
     // 3. Link version as current and return
-    return tx.jobProduct.update({
+    const linked = await tx.jobProduct.update({
       where: { id: jp.id },
       data: { currentVersionId: version.id },
       include: {
@@ -894,6 +996,25 @@ export async function addItem(input: AddItemInput) {
         },
       },
     });
+
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "job",
+      entityId: job.id,
+      siteId: job.siteId,
+      workspaceId: job.site.workspaceId,
+      label: job.currentVersion?.name,
+      fields: [],
+      metadata: {
+        products: "added",
+        product: linked.product.currentVersion?.name ?? null,
+        quantity: version.quantity,
+        ...(linked.tool ? { tool: linked.tool.currentVersion?.name ?? null } : {}),
+        ...(linked.toolCavity ? { cavity: linked.toolCavity.currentVersion?.name ?? null } : {}),
+      },
+    });
+
+    return linked;
   });
 
   publishEntityEvent({
@@ -931,7 +1052,18 @@ export async function updateItem(itemId: string, input: UpdateItemInput) {
     where: { id: itemId },
     include: {
       currentVersion: true,
-      job: { select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } } },
+      job: {
+        select: {
+          id: true,
+          siteId: true,
+          deletedAt: true,
+          site: { select: { workspaceId: true } },
+          currentVersion: { select: { name: true } },
+        },
+      },
+      product: { select: { currentVersion: { select: { name: true } } } },
+      tool: { select: { currentVersion: { select: { name: true } } } },
+      toolCavity: { select: { currentVersion: { select: { name: true } } } },
     },
   });
 
@@ -1015,10 +1147,11 @@ export async function updateItem(itemId: string, input: UpdateItemInput) {
         version: nextVersion,
         isActive: isActive !== undefined ? isActive : currentVersion.isActive,
         quantity: quantity !== undefined ? quantity : currentVersion.quantity,
+        createdById: auditActorId(),
       },
     });
 
-    return tx.jobProduct.update({
+    const updated = await tx.jobProduct.update({
       where: { id: itemId },
       data: {
         currentVersionId: version.id,
@@ -1044,6 +1177,35 @@ export async function updateItem(itemId: string, input: UpdateItemInput) {
         },
       },
     });
+
+    const before = {
+      quantity: currentVersion.quantity,
+      isActive: currentVersion.isActive,
+      tool: current.tool?.currentVersion?.name ?? null,
+      cavity: current.toolCavity?.currentVersion?.name ?? null,
+    };
+    const after = {
+      quantity: version.quantity,
+      isActive: version.isActive,
+      tool: updated.tool?.currentVersion?.name ?? null,
+      cavity: updated.toolCavity?.currentVersion?.name ?? null,
+    };
+    if (Object.keys(changedValues(before, after, JOB_PRODUCT_AUDIT_FIELDS)).length > 0) {
+      await auditRecord(tx, {
+        change: "updated",
+        entityType: "job",
+        entityId: current.jobId,
+        siteId: current.job.siteId,
+        workspaceId: current.job.site.workspaceId,
+        label: current.job.currentVersion?.name,
+        before,
+        after,
+        fields: JOB_PRODUCT_AUDIT_FIELDS,
+        metadata: { product: current.product.currentVersion?.name ?? null },
+      });
+    }
+
+    return updated;
   });
 
   publishEntityEvent({
@@ -1079,7 +1241,10 @@ export async function updateItem(itemId: string, input: UpdateItemInput) {
 export async function removeItem(itemId: string) {
   const item = await prisma.jobProduct.findUnique({
     where: { id: itemId },
-    include: { job: { include: { site: { select: { workspaceId: true } } } } },
+    include: {
+      job: { include: { site: { select: { workspaceId: true } }, currentVersion: { select: { name: true } } } },
+      product: { select: { currentVersion: { select: { name: true } } } },
+    },
   });
 
   if (!item) {
@@ -1090,9 +1255,22 @@ export async function removeItem(itemId: string) {
     return { error: "Job product already deleted", code: "ITEM_DELETED" };
   }
 
-  await prisma.jobProduct.update({
-    where: { id: itemId },
-    data: { deletedAt: new Date() },
+  await prisma.$transaction(async (tx) => {
+    await tx.jobProduct.update({
+      where: { id: itemId },
+      data: { deletedAt: new Date() },
+    });
+
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "job",
+      entityId: item.jobId,
+      siteId: item.job.siteId,
+      workspaceId: item.job.site.workspaceId,
+      label: item.job.currentVersion?.name,
+      fields: [],
+      metadata: { products: "removed", product: item.product.currentVersion?.name ?? null },
+    });
   });
 
   publishEntityEvent({

@@ -1,6 +1,64 @@
 import prisma from "@rw/db";
 import { getDriverInfo, validateConnection } from "../../validation.js";
 import { bumpSpecVersion } from "@rw/services/device/gateway/index";
+import { auditRecord } from "@rw/services/audit/index";
+
+const AUDIT_FIELDS = [
+  "name",
+  "type",
+  "status",
+  "driver",
+  "driverVersion",
+  "connection",
+  "attrs",
+  "gatewayId",
+  "siteId",
+] as const;
+
+// Connection settings and attrs are driver-defined JSON; anything that looks
+// like a credential is kept out of the trail and only noted as changed.
+const SECRET_KEY = /pass|secret|token|cred|auth|cert|private|key/i;
+
+function withoutSecrets(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutSecrets);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => !SECRET_KEY.test(key))
+        .map(([key, v]) => [key, withoutSecrets(v)]),
+    );
+  }
+  return value;
+}
+
+function secretsOf(value: unknown, path = ""): Record<string, unknown> {
+  if (Array.isArray(value)) {
+    return Object.assign({}, ...value.map((v, i) => secretsOf(v, `${path}[${i}]`)));
+  }
+  if (value && typeof value === "object") {
+    return Object.assign(
+      {},
+      ...Object.entries(value as Record<string, unknown>).map(([key, v]) =>
+        SECRET_KEY.test(key) ? { [`${path}.${key}`]: v } : secretsOf(v, `${path}.${key}`),
+      ),
+    );
+  }
+  return {};
+}
+
+interface AuditedDatasource {
+  connection: unknown;
+  attrs: unknown;
+}
+
+function auditView<T extends AuditedDatasource>(datasource: T) {
+  return { ...datasource, connection: withoutSecrets(datasource.connection), attrs: withoutSecrets(datasource.attrs) };
+}
+
+function credentialsChanged(before: AuditedDatasource, after: AuditedDatasource) {
+  const secrets = (d: AuditedDatasource) => JSON.stringify([secretsOf(d.connection), secretsOf(d.attrs)]);
+  return secrets(before) !== secrets(after);
+}
 
 export interface CreateDatasourceInput {
   name: string;
@@ -83,26 +141,39 @@ export async function create(input: CreateDatasourceInput) {
     }
   }
 
-  const datasource = await prisma.datasource.create({
-    data: {
-      name,
-      type: type || "DEVICE",
-      status: "DRAFT",
-      attrs: attrs || {},
-      driver: driverInfo.name,
-      driverVersion: driverInfo.version,
-      connection: connection || {},
-      gatewayId,
-      siteId,
-    },
-    include: {
-      gateway: {
-        select: { id: true, name: true },
+  const datasource = await prisma.$transaction(async (tx) => {
+    const created = await tx.datasource.create({
+      data: {
+        name,
+        type: type || "DEVICE",
+        status: "DRAFT",
+        attrs: attrs || {},
+        driver: driverInfo.name,
+        driverVersion: driverInfo.version,
+        connection: connection || {},
+        gatewayId,
+        siteId,
       },
-      site: {
-        select: { id: true, name: true, workspaceId: true },
+      include: {
+        gateway: {
+          select: { id: true, name: true },
+        },
+        site: {
+          select: { id: true, name: true, workspaceId: true },
+        },
       },
-    },
+    });
+    await auditRecord(tx, {
+      change: "created",
+      entityType: "datasource",
+      entityId: created.id,
+      siteId: created.siteId,
+      workspaceId: created.site?.workspaceId,
+      label: created.name,
+      after: auditView(created),
+      fields: AUDIT_FIELDS,
+    });
+    return created;
   });
 
   // Note: Don't bump gateway spec for DRAFT datasources - they're excluded from sync
@@ -242,14 +313,29 @@ export async function update(id: string, input: UpdateDatasourceInput) {
   if (attrs !== undefined) updateData.attrs = attrs;
   if (connection !== undefined) updateData.connection = connection;
 
-  const datasource = await prisma.datasource.update({
-    where: { id },
-    data: updateData,
-    include: {
-      site: {
-        select: { id: true, name: true, workspaceId: true },
+  const datasource = await prisma.$transaction(async (tx) => {
+    const updated = await tx.datasource.update({
+      where: { id },
+      data: updateData,
+      include: {
+        site: {
+          select: { id: true, name: true, workspaceId: true },
+        },
       },
-    },
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "datasource",
+      entityId: updated.id,
+      siteId: updated.siteId,
+      workspaceId: updated.site?.workspaceId,
+      label: updated.name,
+      before: auditView(existing),
+      after: auditView(updated),
+      fields: AUDIT_FIELDS,
+      ...(credentialsChanged(existing, updated) ? { metadata: { credentialsChanged: true } } : {}),
+    });
+    return updated;
   });
 
   // Update gateway spec if ACTIVE and associated with a gateway
@@ -264,7 +350,10 @@ export async function update(id: string, input: UpdateDatasourceInput) {
  * Delete datasource
  */
 export async function remove(id: string) {
-  const existing = await prisma.datasource.findUnique({ where: { id } });
+  const existing = await prisma.datasource.findUnique({
+    where: { id },
+    include: { site: { select: { workspaceId: true } } },
+  });
 
   if (!existing) {
     return { error: "Datasource not found", code: "NOT_FOUND" };
@@ -273,7 +362,18 @@ export async function remove(id: string) {
   const gatewayId = existing.gatewayId;
   const wasActive = existing.status === "ACTIVE";
 
-  await prisma.datasource.delete({ where: { id } });
+  await prisma.$transaction(async (tx) => {
+    await tx.datasource.delete({ where: { id } });
+    await auditRecord(tx, {
+      change: "deleted",
+      entityType: "datasource",
+      entityId: existing.id,
+      siteId: existing.siteId,
+      workspaceId: existing.site?.workspaceId,
+      label: existing.name,
+      fields: AUDIT_FIELDS,
+    });
+  });
 
   // Update gateway spec if was ACTIVE and associated with a gateway
   if (wasActive && gatewayId) {
@@ -320,17 +420,32 @@ export async function publish(id: string) {
     };
   }
 
-  const datasource = await prisma.datasource.update({
-    where: { id },
-    data: { status: "ACTIVE" },
-    include: {
-      gateway: {
-        select: { id: true, name: true },
+  const datasource = await prisma.$transaction(async (tx) => {
+    const updated = await tx.datasource.update({
+      where: { id },
+      data: { status: "ACTIVE" },
+      include: {
+        gateway: {
+          select: { id: true, name: true },
+        },
+        site: {
+          select: { id: true, name: true, workspaceId: true },
+        },
       },
-      site: {
-        select: { id: true, name: true, workspaceId: true },
-      },
-    },
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "datasource",
+      entityId: updated.id,
+      siteId: updated.siteId,
+      workspaceId: updated.site?.workspaceId,
+      label: updated.name,
+      before: existing,
+      after: updated,
+      fields: ["status"],
+      metadata: { published: true },
+    });
+    return updated;
   });
 
   // Bump gateway spec if assigned (datasource now included in sync)
@@ -359,17 +474,32 @@ export async function unpublish(id: string) {
     };
   }
 
-  const datasource = await prisma.datasource.update({
-    where: { id },
-    data: { status: "DRAFT" },
-    include: {
-      gateway: {
-        select: { id: true, name: true },
+  const datasource = await prisma.$transaction(async (tx) => {
+    const updated = await tx.datasource.update({
+      where: { id },
+      data: { status: "DRAFT" },
+      include: {
+        gateway: {
+          select: { id: true, name: true },
+        },
+        site: {
+          select: { id: true, name: true, workspaceId: true },
+        },
       },
-      site: {
-        select: { id: true, name: true, workspaceId: true },
-      },
-    },
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "datasource",
+      entityId: updated.id,
+      siteId: updated.siteId,
+      workspaceId: updated.site?.workspaceId,
+      label: updated.name,
+      before: existing,
+      after: updated,
+      fields: ["status"],
+      metadata: { published: false },
+    });
+    return updated;
   });
 
   // Bump gateway spec if assigned (datasource now excluded from sync)
@@ -402,9 +532,25 @@ export async function assign(id: string, gatewayId: string | null) {
   const oldGatewayId = existing.gatewayId;
   const isActive = existing.status === "ACTIVE";
 
-  const datasource = await prisma.datasource.update({
-    where: { id },
-    data: { gatewayId },
+  const datasource = await prisma.$transaction(async (tx) => {
+    const updated = await tx.datasource.update({
+      where: { id },
+      data: { gatewayId },
+      include: { site: { select: { workspaceId: true } } },
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "datasource",
+      entityId: updated.id,
+      siteId: updated.siteId,
+      workspaceId: updated.site?.workspaceId,
+      label: updated.name,
+      before: existing,
+      after: updated,
+      fields: ["gatewayId"],
+    });
+    const { site: _site, ...rest } = updated;
+    return rest;
   });
 
   // Only bump gateway specs if datasource is ACTIVE (DRAFT excluded from sync)

@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { createRouterClient } from "@orpc/server";
 import prisma from "@rw/db";
+import { runWithAuditContext } from "@rw/services/audit/index";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { auditActorOf } from "../src/auth/audit.js";
 import { loadUserCurrent } from "../src/auth/plugin.js";
 import { router } from "../src/rpc/index.js";
 import type { SetupPlan, SetupRow } from "../src/setup/plan.js";
@@ -610,4 +612,46 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("setup changesets (Tier 2)", () 
     const detail = await agent.setup.changeset.get({ id: created.id });
     expect(detail.canApply).toBe(false);
   });
+
+  it("traces an agent's import to the agent: its proposal, and every change it applied", async () => {
+    const person = await prisma.user.findUniqueOrThrow({ where: { email: MEMBER.email }, select: { id: true } });
+    const site = await prisma.site.findUniqueOrThrow({ where: { id: siteId }, select: { workspaceId: true } });
+    const current = await loadUserCurrent(person.id, site.workspaceId, siteId);
+    if (current?.kind !== "user") throw new Error("expected a user");
+    // The Console's own agent: in-process, no OAuth grant, named by its run's audit context.
+    const client = createRouterClient(router, {
+      context: { request: { headers: {} }, current, access: current.access },
+    });
+    const session = randomUUID();
+    const created = await runWithAuditContext(
+      {
+        requestId: `agent:${session}`,
+        actor: { ...auditActorOf(current), via: "agent:Rockware" },
+        metadata: { agentSessionId: session, trigger: "schedule" },
+      },
+      () => client.setup.changeset.create({ siteId, title: "agent import", spec: ownSpec("AGT", 1) as never }),
+    );
+    const id = (created as { id: string }).id;
+    expect(await prisma.setupChangeset.findUniqueOrThrow({ where: { id } })).toMatchObject({
+      author: "AGENT",
+      clientName: "Rockware",
+    });
+    const proposed = await prisma.auditLog.findFirstOrThrow({
+      where: { action: "SETUP_CHANGESET_PROPOSED", metadata: { path: ["changesetId"], equals: id } },
+    });
+    expect(proposed).toMatchObject({ actorId: person.id, via: "agent:Rockware", requestId: `agent:${session}` });
+    expect(proposed.metadata).toMatchObject({ agentSessionId: session, trigger: "schedule" });
+
+    // A person applies it; each change says which import it came from, and who proposed it.
+    expect((await rpcCall(server, "setup/changeset/apply", { id }, memberToken)).statusCode).toBe(200);
+    const product = await productByKey(`AGT-P0-${RUN}`);
+    const made = await prisma.auditLog.findFirstOrThrow({
+      where: { action: "RECORD_CREATED", entityType: "product", entityId: product!.id },
+    });
+    expect(made).toMatchObject({ actorId: person.id, via: "ui" });
+    expect(made.metadata).toMatchObject({
+      origin: { changesetId: id, title: "agent import", proposedVia: "Rockware" },
+    });
+  });
 });
+

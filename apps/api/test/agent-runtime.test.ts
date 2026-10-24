@@ -180,6 +180,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("agent runtime (Tier 2)", () => 
     expect(await prisma.graphNode.count({ where: { siteId, name: `${PREFIX}-ok` } })).toBe(1);
     const changeset = await prisma.graphChangeset.findFirstOrThrow({ where: { title: `${PREFIX} applied` } });
     expect(changeset).toMatchObject({ status: "APPLIED", appliedById: adminId, sessionId });
+
+    // The trail says the agent did it, for whom, in which session, and who approved it.
+    const entry = await prisma.auditLog.findFirstOrThrow({
+      where: { action: "GRAPH_CHANGESET_APPLIED", metadata: { path: ["changesetId"], equals: changeset.id } },
+    });
+    expect(entry.via).toMatch(/^agent:/);
+    expect(entry).toMatchObject({ actorId: adminId, requestId: `agent:${sessionId}` });
+    expect(entry.metadata).toMatchObject({ agentSessionId: sessionId, approvedById: adminId });
   });
 
   it("hands a rejection's feedback to the agent and applies nothing", async () => {

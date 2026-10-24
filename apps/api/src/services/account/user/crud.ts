@@ -2,7 +2,7 @@ import prisma from "@rw/db";
 import type { UserStatus } from "@rw/db";
 import type { UserCurrent } from "@rw/auth/context";
 import { describeAccess, staffLabel, visibleSites } from "@rw/auth/iam/access";
-import { logEvent } from "@rw/services/audit/index";
+import { auditRecord, logEvent } from "@rw/services/audit/index";
 import { resolveAvatarUrl } from "./avatar.js";
 import { supportIdentitySignature } from "./support-identity.js";
 import { update as updateEmployee } from "../../employee/crud.js";
@@ -210,20 +210,36 @@ export async function update(id: string, input: UpdateUserInput) {
   if (lastName !== undefined) updateData.lastName = lastName;
   if (email !== undefined) updateData.email = email.toLowerCase();
 
-  const updated = await prisma.user.update({
-    where: { id },
-    data: updateData,
-    select: {
-      id: true,
-      email: true,
-      firstName: true,
-      lastName: true,
-      status: true,
-      lastLoginAt: true,
-      createdAt: true,
-      updatedAt: true,
-      employeeId: true,
-    },
+  const updated = await prisma.$transaction(async (tx) => {
+    const before = await tx.user.findUnique({
+      where: { id },
+      select: { firstName: true, lastName: true, email: true },
+    });
+    const after = await tx.user.update({
+      where: { id },
+      data: updateData,
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        status: true,
+        lastLoginAt: true,
+        createdAt: true,
+        updatedAt: true,
+        employeeId: true,
+      },
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "user",
+      entityId: id,
+      label: [after.firstName, after.lastName].filter(Boolean).join(" ") || after.email,
+      before,
+      after,
+      fields: ["firstName", "lastName", "email"],
+    });
+    return after;
   });
 
   // The person's team profile carries their name (User's name fields are
