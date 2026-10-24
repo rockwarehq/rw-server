@@ -4,6 +4,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { makeUser } from "./helpers/access.js";
 import { buildServer, loginAs, type TestServer } from "./helpers/build-server.js";
 import { rpcCall } from "./helpers/rpc-call.js";
+import * as datasources from "../src/services/device/datasource/crud.js";
+import { driverRegistry } from "../src/services/device/driver/index.js";
 
 const ADMIN = { email: "audit-records-admin@test.local", password: "audit-records-password-1" };
 
@@ -134,5 +136,37 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("record history in the audit tra
       if (key === undefined) delete process.env.INTEGRATION_ENCRYPTION_KEY;
       else process.env.INTEGRATION_ENCRYPTION_KEY = key;
     }
+  });
+
+  it("never records a device's password, even inside a connection string or a URL", async () => {
+    await driverRegistry.initialize();
+    const password = `pw-${randomUUID().slice(0, 8)}`;
+    const created = await datasources.create({
+      siteId,
+      name: `Legacy ${randomUUID().slice(0, 6)}`,
+      driver: "rockware-legacy",
+      connection: {
+        connectionString: `Server=sql01;Database=mes;User Id=svc;Password=${password}`,
+        tableName: "dbo.tblTag",
+        endpointUrl: `opc.tcp://svc:${password}@plc01:4840`,
+      },
+    });
+    if (!("data" in created) || !created.data) throw new Error(JSON.stringify(created));
+    const rotated = `pw-${randomUUID().slice(0, 8)}`;
+    await datasources.update(created.data.id, {
+      connection: {
+        connectionString: `Server=sql01;Database=mes;User Id=svc;Password=${rotated}`,
+        tableName: "dbo.tblTag",
+        endpointUrl: `opc.tcp://svc:${password}@plc01:4840`,
+      },
+    });
+    const history = await entries("datasource", created.data.id);
+    const stored = JSON.stringify(history);
+    expect(stored).not.toContain(password);
+    expect(stored).not.toContain(rotated);
+    // The rest of the connection is still there, and the URL keeps its host.
+    expect(stored).toContain("dbo.tblTag");
+    expect(stored).toContain("plc01:4840");
+    expect(history.at(-1)?.metadata).toMatchObject({ credentialsChanged: true });
   });
 });

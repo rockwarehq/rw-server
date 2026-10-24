@@ -494,6 +494,7 @@ export async function remove(id: string) {
     data: { logoffTime: now },
   });
 
+  // A delete cascades through the record's history: give it longer than the default 5s.
   await prisma.$transaction(async (tx) => {
     await tx.employee.delete({ where: { id } });
     await auditRecord(tx, {
@@ -504,7 +505,7 @@ export async function remove(id: string) {
       label: employee.version ? employeeLabel(employee.version) : null,
       fields: [],
     });
-  });
+  }, { timeout: 60_000 });
 
   await Promise.all(affected.map((row) => publishStationCurrentLogonsMetric(row.stationId, now)));
 

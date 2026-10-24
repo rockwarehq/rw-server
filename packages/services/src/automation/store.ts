@@ -89,8 +89,10 @@ export async function createDbAutomationStore(): Promise<AutomationStore> {
             fields: [],
           });
         });
-      } catch {
-        // Row was already gone (race) — proceed to clear cache below.
+      } catch (error) {
+        // Row was already gone (race) — proceed to clear cache below. Anything
+        // else (the audit entry failing) rolled the delete back: it stands.
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025")) throw error;
       }
       cache.delete(id);
       return true;

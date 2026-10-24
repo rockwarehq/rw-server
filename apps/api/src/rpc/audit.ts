@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import prisma, { type Prisma } from "@rw/db";
+import prisma, { AuditAction, type Prisma } from "@rw/db";
 import { z } from "zod";
 
 import { logEvent } from "@rw/services/audit/index";
@@ -8,9 +8,9 @@ import { userRequired } from "./middleware.js";
 
 // Reading the audit trail (docs/architecture/audit.md). A plant's activity is
 // for its admins: who did what, when, from where. A record's history is for
-// anyone who can see the record. Both include workspace-level entries (an
-// employee, who belongs to the workspace, not a plant) alongside the plant's
-// own. Never agent-callable (not in AGENT_CALLABLE).
+// anyone who can see the record: the catalog and the floor for the plant's
+// crew, everything else (people, access, the plant's setup) for its admins.
+// Never agent-callable (not in AGENT_CALLABLE).
 
 const PAGE = 50;
 const EXPORT_MAX = 20_000;
@@ -20,7 +20,7 @@ const filtersSchema = z.object({
   actorId: z.uuid().optional(),
   entityType: z.string().min(1).max(64).optional(),
   entityId: z.string().min(1).max(64).optional(),
-  actions: z.array(z.string().min(1).max(64)).max(50).optional(),
+  actions: z.array(z.enum(AuditAction)).max(50).optional(),
   via: z.string().min(1).max(120).optional(),
   from: z.iso.datetime().optional(),
   to: z.iso.datetime().optional(),
@@ -35,7 +35,7 @@ function where(filters: Filters, workspaceId: string): Prisma.AuditLogWhereInput
     ...(filters.actorId ? { actorId: filters.actorId } : {}),
     ...(filters.entityType ? { entityType: filters.entityType } : {}),
     ...(filters.entityId ? { entityId: filters.entityId } : {}),
-    ...(filters.actions?.length ? { action: { in: filters.actions as never } } : {}),
+    ...(filters.actions?.length ? { action: { in: filters.actions } } : {}),
     ...(filters.via ? { via: filters.via } : {}),
     ...(filters.from || filters.to
       ? {
@@ -52,8 +52,9 @@ function where(filters: Filters, workspaceId: string): Prisma.AuditLogWhereInput
 function cursorWhere(cursor: string | undefined): Prisma.AuditLogWhereInput {
   if (!cursor) return {};
   const [at, id] = cursor.split("|");
-  if (!at || !id) throw new ORPCError("BAD_REQUEST", { message: "Bad cursor" });
-  const createdAt = new Date(at);
+  const createdAt = new Date(at ?? "");
+  if (!id || Number.isNaN(createdAt.getTime()) || !z.uuid().safeParse(id).success)
+    throw new ORPCError("BAD_REQUEST", { message: "Bad cursor" });
   return { OR: [{ createdAt: { lt: createdAt } }, { createdAt, id: { lt: id } }] };
 }
 
@@ -165,6 +166,24 @@ export const search = userRequired
     return { entries: await present(result.rows, { network: true }), nextCursor: result.nextCursor };
   });
 
+/**
+ * Records the plant's crew can read the history of: what they can see. The
+ * rest — team members, users, roles, access, integrations, devices and the
+ * plant's setup — is for plant admins, as their own pages are.
+ */
+const CREW_RECORDS = new Set([
+  "product",
+  "material",
+  "job",
+  "tool",
+  "order",
+  "customer",
+  "document",
+  "label",
+  "station",
+  "workcenter",
+]);
+
 /** One record's history, newest first. Anyone who can see the record. */
 export const recordHistory = userRequired
   .input(
@@ -177,12 +196,26 @@ export const recordHistory = userRequired
     }),
   )
   .handler(async ({ input, context }) => {
-    await context.access.require("VIEW", { site: input.siteId });
-    // A station or workcenter is for the crew who can see that cell.
-    if (input.entityType === "station") await context.access.require("VIEW", { station: input.entityId });
-    if (input.entityType === "workcenter") await context.access.require("VIEW", { workcenter: input.entityId });
-    const filters = { siteId: input.siteId, entityType: input.entityType, entityId: input.entityId };
-    const result = await page(where(filters, context.current.workspaceId), input.cursor, input.limit);
+    const { siteId, entityType, entityId } = input;
+    const crew = CREW_RECORDS.has(entityType);
+    await context.access.require(crew ? "VIEW" : "ADMIN", { site: siteId });
+    // A station or workcenter is for the crew who can see that cell; once it's
+    // deleted there's no cell to check, and its history is the plant admins'.
+    if (entityType === "station" || entityType === "workcenter") {
+      const exists = z.uuid().safeParse(entityId).success
+        ? entityType === "station"
+          ? await prisma.station.findUnique({ where: { id: entityId }, select: { id: true } })
+          : await prisma.workcenter.findUnique({ where: { id: entityId }, select: { id: true } })
+        : null;
+      if (!exists) await context.access.require("ADMIN", { site: siteId });
+      else if (entityType === "station") await context.access.require("VIEW", { station: entityId });
+      else await context.access.require("VIEW", { workcenter: entityId });
+    }
+    // The crew's records belong to the plant; people and access to the workspace too.
+    const whereInput = crew
+      ? { siteId, entityType, entityId }
+      : where({ siteId, entityType, entityId }, context.current.workspaceId);
+    const result = await page(whereInput, input.cursor, input.limit);
     return {
       entries: await present(result.rows, { network: false }),
       nextCursor: result.nextCursor,
@@ -274,9 +307,15 @@ export const actors = userRequired.input(z.object({ siteId: z.uuid() })).handler
   return people.map((p) => ({ id: p.id, name: personName(p) })).sort((a, b) => a.name.localeCompare(b.name));
 });
 
+/**
+ * One CSV cell. Text that a spreadsheet would run as a formula (a name or a
+ * user agent starting with = + - @, a tab or a return) is defused with a
+ * leading apostrophe, as OWASP recommends.
+ */
 const csvCell = (value: unknown) => {
-  const text = value === null || value === undefined ? "" : typeof value === "string" ? value : JSON.stringify(value);
-  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  const raw = value === null || value === undefined ? "" : typeof value === "string" ? value : JSON.stringify(value);
+  const text = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+  return /[",\n\r']/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 };
 
 /**

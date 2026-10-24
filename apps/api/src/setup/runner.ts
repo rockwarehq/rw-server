@@ -367,6 +367,8 @@ export async function step(id: string): Promise<StepResult> {
       actor: {
         actorId: (applying ? changeset.appliedById : changeset.rolledBackById) ?? undefined,
         siteId: changeset.siteId,
+        // Picked up after a restart: carried on by the system, for that person.
+        via: "system",
       },
       metadata: { origin },
     },

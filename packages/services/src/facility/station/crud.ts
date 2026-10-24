@@ -719,7 +719,10 @@ export async function move(id: string, newWorkcenterId: string | null) {
       after: updated,
       fields: ["workcenterId"],
       workcenterIds: [current.workcenterId, updated.workcenterId],
-      metadata: { fromWorkcenter: current.workcenter?.name ?? null, toWorkcenter: updated.workcenter?.name ?? null },
+      // Moving it to where it already is changes nothing worth recording.
+      ...(current.workcenterId !== updated.workcenterId
+        ? { metadata: { fromWorkcenter: current.workcenter?.name ?? null, toWorkcenter: updated.workcenter?.name ?? null } }
+        : {}),
     });
     return updated;
   });
@@ -765,8 +768,10 @@ export async function reorder(workcenterId: string, orderedIds: string[]) {
   }
 
   const byId = new Map(existing.map((station) => [station.id, station]));
+  // Only the stations that moved: their write and their entry.
+  const moved = orderedIds.flatMap((id, index) => (byId.get(id)?.sortOrder === index ? [] : [{ id, index }]));
   await prisma.$transaction(async (tx) => {
-    for (const [index, id] of orderedIds.entries()) {
+    for (const { id, index } of moved) {
       await tx.station.update({ where: { id }, data: { sortOrder: index } });
       const before = byId.get(id);
       await auditRecord(tx, {
@@ -814,6 +819,7 @@ export async function remove(id: string) {
     return { error: "Station not found", code: "STATION_NOT_FOUND" };
   }
 
+  // A delete cascades through the record's history: give it longer than the default 5s.
   await prisma.$transaction(async (tx) => {
     await tx.station.delete({ where: { id } });
     await auditRecord(tx, {
@@ -826,7 +832,7 @@ export async function remove(id: string) {
       fields: [],
       workcenterIds: [station.workcenterId],
     });
-  });
+  }, { timeout: 60_000 });
 
   publishStationEntityEvent({
     action: "deleted",

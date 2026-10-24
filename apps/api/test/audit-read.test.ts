@@ -210,4 +210,52 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reading the audit trail (Tier 2
     expect(logon.label).toContain(tag);
     expect(logon.metadata.stationName).toBe(`Press ${tag}`);
   });
+
+  it("keeps people's history to admins, and a deleted station's too", async () => {
+    const tag = randomUUID().slice(0, 8);
+    const made = await rpcCall(server, "employee/create", { siteId, firstName: "Pat", lastName: tag }, adminToken);
+    const employeeId = (made.json as { id: string }).id;
+    await rpcCall(server, "employee/update", { id: employeeId, phone: "555-0101" }, adminToken);
+    const employeeHistory = (token: string) =>
+      rpcCall(server, "audit/recordHistory", { siteId, entityType: "employee", entityId: employeeId }, token);
+    expect((await employeeHistory(viewerToken)).statusCode).toBe(403);
+    expect((await employeeHistory(adminToken)).statusCode).toBe(200);
+
+    const station = await rpcCall(server, "station/create", { siteId, name: `Gone ${tag}` }, adminToken);
+    const stationId = (station.json as { id: string }).id;
+    expect((await rpcCall(server, "station/delete", { id: stationId }, adminToken)).statusCode).toBe(200);
+    const stationHistory = (token: string) =>
+      rpcCall(server, "audit/recordHistory", { siteId, entityType: "station", entityId: stationId }, token);
+    expect((await stationHistory(viewerToken)).statusCode).toBe(403);
+    const gone = await stationHistory(adminToken);
+    expect(gone.statusCode).toBe(200);
+    expect((gone.json as { entries: Entry[] }).entries.map((entry) => entry.action)).toEqual([
+      "RECORD_DELETED",
+      "RECORD_CREATED",
+    ]);
+  });
+
+  it("records failed sign-ins in the plant's log, and defuses formulas in the export", async () => {
+    const failed = await server.inject({
+      method: "POST",
+      url: "/auth/login",
+      payload: { email: VIEWER.email, password: "not-the-password" },
+    });
+    expect(failed.statusCode).not.toBe(200);
+    const search = await rpcCall(server, "audit/search", { siteId, actions: ["LOGIN_FAILED"], limit: 5 }, adminToken);
+    expect(search.statusCode).toBe(200);
+    expect((search.json as { entries: Entry[] }).entries.length).toBeGreaterThan(0);
+    // An unknown action is a bad request, not a server error.
+    expect(
+      (await rpcCall(server, "audit/search", { siteId, actions: ["NOT_AN_ACTION"] }, adminToken)).statusCode,
+    ).toBe(400);
+
+    const sku = `CSV-${randomUUID().slice(0, 8)}`;
+    const product = await rpcCall(server, "product/create", { siteId, sku, name: '=HYPERLINK("x")' }, adminToken);
+    const id = (product.json as { id: string }).id;
+    const csv = await rpcCall(server, "audit/exportCsv", { siteId, entityType: "product", entityId: id }, adminToken);
+    const text = (csv.json as { csv: string }).csv;
+    expect(text).toContain(`'=HYPERLINK(""x"")`);
+    expect(text).not.toMatch(/(^|,)=HYPERLINK/m);
+  });
 });

@@ -1190,7 +1190,12 @@ export async function updateItem(itemId: string, input: UpdateItemInput) {
       tool: updated.tool?.currentVersion?.name ?? null,
       cavity: updated.toolCavity?.currentVersion?.name ?? null,
     };
-    if (Object.keys(changedValues(before, after, JOB_PRODUCT_AUDIT_FIELDS)).length > 0) {
+    // Shown by name, told apart by id: two tools (or cavities) can share a name.
+    const identities = {
+      tool: { before: current.toolId, after: updated.toolId },
+      cavity: { before: current.toolCavityId, after: updated.toolCavityId },
+    };
+    if (Object.keys(changedValues(before, after, JOB_PRODUCT_AUDIT_FIELDS, identities)).length > 0) {
       await auditRecord(tx, {
         change: "updated",
         entityType: "job",
@@ -1201,6 +1206,7 @@ export async function updateItem(itemId: string, input: UpdateItemInput) {
         before,
         after,
         fields: JOB_PRODUCT_AUDIT_FIELDS,
+        identities,
         metadata: { product: current.product.currentVersion?.name ?? null },
       });
     }

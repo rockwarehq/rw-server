@@ -190,9 +190,14 @@ export async function logoff(sessionId: string, displayId: string) {
   if (session.displayId !== displayId) return { error: "Session does not belong to this display", code: "FORBIDDEN" };
   if (session.logoffTime) return { error: "Session already ended", code: "ALREADY_ENDED" };
 
-  const updated = await prisma.stationLogonSession.update({
-    where: { id: sessionId },
+  // Only while it's still open: a bulk logoff may have just ended it.
+  const { count } = await prisma.stationLogonSession.updateMany({
+    where: { id: sessionId, logoffTime: null },
     data: { logoffTime: new Date() },
+  });
+  if (count === 0) return { error: "Session already ended", code: "ALREADY_ENDED" };
+  const updated = await prisma.stationLogonSession.findUniqueOrThrow({
+    where: { id: sessionId },
     select: sessionSelect,
   });
 
@@ -238,11 +243,20 @@ async function endSessions(
       select: { id: true, employeeId: true, stationId: true, displayId: true },
     });
     if (open.length === 0) return { count: 0, stationIds: [] };
+    // Lock them and keep the ones still open: an operator logging off at the
+    // same moment ends their own session, and it gets one entry, not two.
+    const locked = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM "StationLogonSession"
+      WHERE id = ANY(${open.map((session) => session.id)}::uuid[]) AND "logoffTime" IS NULL
+      FOR UPDATE`;
+    const stillOpen = new Set(locked.map((row) => row.id));
+    const ended = open.filter((session) => stillOpen.has(session.id));
+    if (ended.length === 0) return { count: 0, stationIds: [] };
     const result = await tx.stationLogonSession.updateMany({
-      where: { id: { in: open.map((session) => session.id) }, logoffTime: null },
+      where: { id: { in: ended.map((session) => session.id) } },
       data: { logoffTime: now },
     });
-    for (const session of open) {
+    for (const session of ended) {
       await logEvent({
         tx,
         action: "OPERATOR_LOGOFF",
@@ -256,7 +270,7 @@ async function endSessions(
         },
       });
     }
-    return { count: result.count, stationIds: [...new Set(open.map((session) => session.stationId))] };
+    return { count: result.count, stationIds: [...new Set(ended.map((session) => session.stationId))] };
   });
 }
 

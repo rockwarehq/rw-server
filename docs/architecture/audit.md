@@ -32,7 +32,7 @@ Use `logEvent` from `@rw/services/audit`.
 - **The context fills in who and where.** The API opens an audit context for every request (`apps/api/src/auth/plugin.ts`, `onRequest`) with the IP, user agent and request id, and adds the actor once the caller is known: the person, workspace, plant and `via` (`apps/api/src/auth/audit.ts`). `/mcp` does the same for OAuth callers. A call site passes only what it knows better: the action, the record, the changes, the metadata.
 - **Write inside the transaction when there is one.** `logEvent({ ..., tx })` writes in the caller's transaction: the change and its entry commit or roll back together, and a failed audit write fails the change. Without `tx` it writes on its own afterwards and never throws (an entry that fails is logged); keep that for events with no transaction of their own, such as logins.
 - **Name the record.** Set `entityType` and `entityId` whenever the event is about one record, so its history can be found.
-- **Background work** (workers, the setup runner) has no request context: pass `actorId` (the person who started it) and, when it's nobody, `via: "system"`.
+- **Background work** (workers, the setup runner) has no request context: open one with `runWithAuditContext` naming the person who started it, and `via: "system"` (the setup runner does, for a run picked up after a restart). An entry with no caller still belongs to the account: `logEvent` falls back to the one workspace, so a failed sign-in shows in the Audit Log.
 
 ## Record history
 
@@ -67,7 +67,7 @@ Master data records its own history: `RECORD_CREATED`, `RECORD_UPDATED` and `REC
 | Gateways, devices (datasources, published or not) | `gateway`, `datasource` | `device/gateway/crud.ts`, `apps/api/src/services/device/datasource/crud.ts` |
 | Documents (folders, uploads, versions, links) | `document` (versions point at their DocumentFile) | `document/index.ts` |
 
-Secrets never reach the trail. Credentials, tokens and passwords are left out of the compared fields and recorded only as `credentialsChanged`; an integration's URLs and default headers aren't recorded at all (a webhook URL can itself be a credential), and a device's connection settings drop any key that looks like a secret. A PIN or badge change is `pinChanged` / `badgeChanged`.
+Secrets never reach the trail. Credentials, tokens and passwords are left out of the compared fields and recorded only as `credentialsChanged`; an integration's URLs and default headers aren't recorded at all (a webhook URL can itself be a credential), and a device's connection settings drop any key that looks like a secret, any value that carries one (a connection string with `Password=`), and a URL's `user:password@`. A PIN or badge change is `pinChanged` / `badgeChanged`.
 
 Floor records name their workcenters in `metadata.workcenterIds` (a station's cell, both cells for a move, a workcenter itself): where a change happened, as it was then.
 
@@ -95,7 +95,7 @@ An entry has one of three authors, and the trail says which:
 All in `apps/api/src/rpc/audit.ts`; none is agent-callable.
 
 - `audit.search` — a plant's trail, newest first, filtered by person, record, action, `via` and time, cursor-paged, with where-from. Plant ADMIN.
-- `audit.recordHistory` — one record's history, without where-from. Anyone who can see the record; a station or workcenter needs access to that cell.
+- `audit.recordHistory` — one record's history, without where-from. The catalog and the floor (products, materials, jobs, tools, orders, customers, documents, labels, stations, workcenters) for anyone at the plant; a station or workcenter needs access to that cell, and once deleted, plant ADMIN. Everything else — team members, users, roles, access, devices, integrations, the plant's setup — plant ADMIN, as their own pages are.
 - `audit.teamMemberLogons` — see above. Plant ADMIN.
 - `audit.actors` — the people in a plant's trail, for the filter. Plant ADMIN.
 - `audit.exportCsv` — the filtered trail as CSV, up to 20,000 rows. Plant ADMIN. **Taking the trail out is recorded**: `AUDIT_EXPORTED` with the filters and row count, written before the file is returned; no entry, no export.
@@ -108,7 +108,7 @@ Four `AuditAction` values are kept but never written (Postgres can't drop enum v
 
 ## Keeping it
 
-**Append-only.** The database refuses `UPDATE`, `DELETE` and `TRUNCATE` on `AuditLog` (trigger `audit_log_append_only`, migration `20261023130000_audit_trail`), whatever the application or anyone with write access tries. The one sanctioned rewrite is a maintenance script's own transaction that sets `SET LOCAL rockware.audit_bypass = 'on'` first — today only `apps/api/scripts/collapse-workspaces.ts`, a dev tool that refuses to run in production. Nothing in the application sets it. A correction is a new entry, never an edit.
+**Append-only.** The database refuses `UPDATE`, `DELETE` and `TRUNCATE` on `AuditLog` (trigger `audit_log_append_only`, migration `20261023130000_audit_trail`), whatever the application tries. It guards against the application, not the database's owner: any role can set the bypass setting, and the table's owner can disable the trigger. Hardening that is deployment work — the application's role without `UPDATE`/`DELETE` on `AuditLog`, and a separate owner. The one sanctioned rewrite is a maintenance script's own transaction that sets `SET LOCAL rockware.audit_bypass = 'on'` first — today only `apps/api/scripts/collapse-workspaces.ts`, a dev tool that refuses to run in production. Nothing in the application sets it. A correction is a new entry, never an edit.
 
 **Retention.** Entries are kept for as long as the workspace exists; nothing purges them. They are small (a few hundred bytes; a plant making a few thousand changes a day writes well under a gigabyte a year), and an audit trail that forgets defeats its purpose. If a customer needs a limit (a contract, a regulation), it becomes a per-workspace setting with a purge job that runs in a sanctioned maintenance transaction, records that it ran, and keeps the record of the purge itself. Until then there is no limit, and none should be added ad hoc.
 

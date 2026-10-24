@@ -16,15 +16,23 @@ const AUDIT_FIELDS = [
 ] as const;
 
 // Connection settings and attrs are driver-defined JSON; anything that looks
-// like a credential is kept out of the trail and only noted as changed.
-const SECRET_KEY = /pass|secret|token|cred|auth|cert|private|key/i;
+// like a credential is kept out of the trail and only noted as changed. By its
+// key (a password, a token), by its value (a connection string with
+// "Password=" in it), and a URL keeps its host but not its "user:password@".
+const SECRET_KEY = /pass|secret|token|cred|auth|cert|private|key|connection.?string|dsn/i;
+const SECRET_TEXT = /(?:^|;)\s*(?:password|pwd)\s*=/i;
+const URL_PASSWORD = /(\/\/[^/:@\s]*):[^@/\s]*@/;
+
+const isSecret = (key: string, value: unknown) =>
+  SECRET_KEY.test(key) || (typeof value === "string" && SECRET_TEXT.test(value));
 
 function withoutSecrets(value: unknown): unknown {
+  if (typeof value === "string") return value.replace(URL_PASSWORD, "$1:***@");
   if (Array.isArray(value)) return value.map(withoutSecrets);
   if (value && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
-        .filter(([key]) => !SECRET_KEY.test(key))
+        .filter(([key, v]) => !isSecret(key, v))
         .map(([key, v]) => [key, withoutSecrets(v)]),
     );
   }
@@ -32,6 +40,7 @@ function withoutSecrets(value: unknown): unknown {
 }
 
 function secretsOf(value: unknown, path = ""): Record<string, unknown> {
+  if (typeof value === "string") return URL_PASSWORD.test(value) ? { [path]: value } : {};
   if (Array.isArray(value)) {
     return Object.assign({}, ...value.map((v, i) => secretsOf(v, `${path}[${i}]`)));
   }
@@ -39,7 +48,7 @@ function secretsOf(value: unknown, path = ""): Record<string, unknown> {
     return Object.assign(
       {},
       ...Object.entries(value as Record<string, unknown>).map(([key, v]) =>
-        SECRET_KEY.test(key) ? { [`${path}.${key}`]: v } : secretsOf(v, `${path}.${key}`),
+        isSecret(key, v) ? { [`${path}.${key}`]: v } : secretsOf(v, `${path}.${key}`),
       ),
     );
   }
@@ -362,6 +371,7 @@ export async function remove(id: string) {
   const gatewayId = existing.gatewayId;
   const wasActive = existing.status === "ACTIVE";
 
+  // A delete cascades through the record's history: give it longer than the default 5s.
   await prisma.$transaction(async (tx) => {
     await tx.datasource.delete({ where: { id } });
     await auditRecord(tx, {
@@ -373,7 +383,7 @@ export async function remove(id: string) {
       label: existing.name,
       fields: AUDIT_FIELDS,
     });
-  });
+  }, { timeout: 60_000 });
 
   // Update gateway spec if was ACTIVE and associated with a gateway
   if (wasActive && gatewayId) {

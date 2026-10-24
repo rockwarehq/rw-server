@@ -42,13 +42,24 @@ function plain(value: unknown): unknown {
   return value;
 }
 
-/** The named fields that differ: { field: { from, to } }. */
-export function changedValues(before: Values, after: Values, fields: readonly string[]) {
+/** For fields shown by name but told apart by id: the ids, before and after. */
+export type Identities = Record<string, { before: unknown; after: unknown }>;
+
+/**
+ * The named fields that differ: { field: { from, to } }. A field in
+ * `identities` differs when its ids do (two tools can share a name), and is
+ * still recorded with the values people read.
+ */
+export function changedValues(before: Values, after: Values, fields: readonly string[], identities?: Identities) {
   const changes: Record<string, { from: unknown; to: unknown }> = {};
   for (const field of fields) {
     const from = plain(before?.[field]);
     const to = plain(after?.[field]);
-    if (JSON.stringify(from) !== JSON.stringify(to)) changes[field] = { from, to };
+    const identity = identities?.[field];
+    const differs = identity
+      ? JSON.stringify(plain(identity.before)) !== JSON.stringify(plain(identity.after))
+      : JSON.stringify(from) !== JSON.stringify(to);
+    if (differs) changes[field] = { from, to };
   }
   return changes;
 }
@@ -66,6 +77,8 @@ export interface AuditRecordInput {
   after?: Values;
   /** Which fields to compare. Never list secrets. */
   fields: readonly string[];
+  /** Fields shown by name but compared by id. */
+  identities?: Identities;
   /** A versioned record: the version this change made, and the one it replaced. */
   versionId?: string | null;
   previousVersionId?: string | null;
@@ -83,7 +96,7 @@ export interface AuditRecordInput {
  * changed none of the named fields (and says nothing else) records nothing.
  */
 export async function auditRecord(tx: Prisma.TransactionClient, input: AuditRecordInput): Promise<void> {
-  const changes = input.change === "deleted" ? {} : changedValues(input.before, input.after, input.fields);
+  const changes = input.change === "deleted" ? {} : changedValues(input.before, input.after, input.fields, input.identities);
   const changed = Object.keys(changes).length > 0;
   if (input.change === "updated" && !changed && !input.metadata) return;
   const workcenterIds = [...new Set((input.workcenterIds ?? []).filter((id): id is string => !!id))];

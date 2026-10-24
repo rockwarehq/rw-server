@@ -234,6 +234,7 @@ export async function remove(id: string) {
     return { error: "Gateway not found", code: "GATEWAY_NOT_FOUND" };
   }
 
+  // A delete cascades through the record's history: give it longer than the default 5s.
   await prisma.$transaction(async (tx) => {
     await tx.gateway.delete({ where: { id } });
     await auditRecord(tx, {
@@ -245,7 +246,7 @@ export async function remove(id: string) {
       label: gateway.name,
       fields: AUDIT_FIELDS,
     });
-  });
+  }, { timeout: 60_000 });
   return { success: true };
 }
 

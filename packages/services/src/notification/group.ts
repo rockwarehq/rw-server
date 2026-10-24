@@ -35,6 +35,8 @@ function auditValues(group: NotificationGroupRecord) {
   };
 }
 
+const memberIds = (group: NotificationGroupRecord) => group.members.map((m) => m.id).sort();
+
 async function auditGroup(
   tx: Prisma.TransactionClient,
   change: "created" | "updated",
@@ -52,6 +54,8 @@ async function auditGroup(
     before: before ? auditValues(before) : undefined,
     after: auditValues(after),
     fields: AUDITED_FIELDS,
+    // Members are listed by name, but two people can share one.
+    identities: { members: { before: before ? memberIds(before) : [], after: memberIds(after) } },
   });
 }
 

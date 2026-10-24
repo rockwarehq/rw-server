@@ -46,7 +46,9 @@ export async function logEvent(params: LogEventParams): Promise<void> {
     action: params.action,
     userId: params.userId,
     actorId: params.actorId ?? actor?.actorId,
-    workspaceId: params.workspaceId ?? actor?.workspaceId,
+    // Before anyone is signed in (a failed sign-in, a reset by code) there's no
+    // caller: the entry still belongs to the account, the one workspace.
+    workspaceId: params.workspaceId ?? actor?.workspaceId ?? (await accountWorkspaceId(params.tx)),
     siteId: params.siteId === null ? null : (params.siteId ?? stringOf(params.metadata?.siteId) ?? actor?.siteId),
     entityType: params.entityType,
     entityId: params.entityId,
@@ -76,6 +78,15 @@ export async function logEvent(params: LogEventParams): Promise<void> {
       error: error instanceof Error ? error.message : "Unknown error",
     });
   }
+}
+
+/** The account's workspace; on its own (no `tx`) a failed lookup leaves it out rather than throw. */
+async function accountWorkspaceId(tx?: Prisma.TransactionClient): Promise<string | undefined> {
+  if (tx) return (await tx.workspace.findFirst({ select: { id: true } }))?.id;
+  return prisma.workspace
+    .findFirst({ select: { id: true } })
+    .then((workspace) => workspace?.id)
+    .catch(() => undefined);
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

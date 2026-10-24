@@ -17,15 +17,19 @@ import { auditRecord } from "../audit/index.js";
 
 const AUDIT_FIELDS = ["name", "description", "labels", "parentId", "siteId"] as const;
 
+/** What a link points at, by name, looked up before the transaction opens. */
+async function targetName(targetType: DocumentTargetType, targetId: string) {
+  return (await targetNames([{ targetType, targetId }])).get(`${targetType}:${targetId}`) ?? null;
+}
+
 async function auditLink(
   tx: Prisma.TransactionClient,
   document: { id: string; name: string; siteId: string | null },
   change: "linked" | "unlinked",
   targetType: DocumentTargetType,
   targetId: string,
+  name: string | null,
 ) {
-  const names = await targetNames([{ targetType, targetId }]);
-  const name = names.get(`${targetType}:${targetId}`);
   await auditRecord(tx, {
     change: "updated",
     entityType: "document",
@@ -863,6 +867,7 @@ export async function link(documentId: string, targetType: DocumentTargetType, t
     return { error: "Document and target must belong to the same site", code: "SITE_MISMATCH" };
   }
 
+  const name = await targetName(targetType, targetId);
   const documentLink = await prisma.$transaction(async (tx) => {
     const key = { documentId_targetType_targetId: { documentId, targetType, targetId } };
     const existing = await tx.documentLink.findUnique({ where: key, select: { id: true } });
@@ -871,7 +876,7 @@ export async function link(documentId: string, targetType: DocumentTargetType, t
       create: { documentId, targetType, targetId },
       update: {},
     });
-    if (!existing) await auditLink(tx, document, "linked", targetType, targetId);
+    if (!existing) await auditLink(tx, document, "linked", targetType, targetId, name);
     return upserted;
   });
 
@@ -879,6 +884,7 @@ export async function link(documentId: string, targetType: DocumentTargetType, t
 }
 
 export async function unlink(documentId: string, targetType: DocumentTargetType, targetId: string) {
+  const name = await targetName(targetType, targetId);
   await prisma.$transaction(async (tx) => {
     const { count } = await tx.documentLink.deleteMany({ where: { documentId, targetType, targetId } });
     if (count === 0) return;
@@ -886,7 +892,7 @@ export async function unlink(documentId: string, targetType: DocumentTargetType,
       where: { id: documentId },
       select: { id: true, name: true, siteId: true },
     });
-    if (document) await auditLink(tx, document, "unlinked", targetType, targetId);
+    if (document) await auditLink(tx, document, "unlinked", targetType, targetId, name);
   });
   return { success: true };
 }
