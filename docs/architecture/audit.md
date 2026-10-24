@@ -23,6 +23,8 @@ It is a record, not a feed. It is complete (failed sign-ins and secrets-changed 
 | `metadata` | Anything else the action needs (counts, reasons, ids) |
 | `createdAt` | When |
 
+**Where from is the person's address.** On fly the API sits behind fly's edge proxy, so the socket is the proxy; `TRUST_PROXY=1` (every tenant, `apps/api/fly/base.toml`) takes the address the proxy added to `X-Forwarded-For` and ignores any the client wrote itself. A CDN in front of fly would add a hop. A plant behind one router shows as one address. Callers reaching the API inside fly's network (`.internal`) skip the proxy; they're our own services. Entries written before this setting hold the proxy's address (`fdaa:…`) and keep it.
+
 Indexes serve the three questions we ask: what happened at a plant or workspace (`siteId`/`workspaceId` + `createdAt`), what happened to a record (`entityType` + `entityId` + `createdAt`), and what a person did (`actorId` + `createdAt`).
 
 ## Writing

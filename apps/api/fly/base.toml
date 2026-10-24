@@ -32,6 +32,10 @@ app = 'node dist/main.js'
 [env]
 NODE_ENV = 'production'
 PORT = '3000'
+# Fly's edge proxy is the one hop in front of us: trust its X-Forwarded-For
+# entry so the audit trail and rate limits see the person's address. A CDN in
+# front of fly would add a hop (2).
+TRUST_PROXY = '1'
 # pnpm 11 defaults verify-deps-before-run to "install", which re-runs a full
 # `pnpm install --production` before the release_command's `pnpm db:migrate`
 # and OOMs the release machine. The image is immutable — never reinstall.

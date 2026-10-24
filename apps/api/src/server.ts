@@ -39,6 +39,9 @@ export function createServer(options: IServerOptions) {
     // Unique across restarts and machines: audit entries carry it to tie
     // together what one request did, and logs carry it as reqId.
     genReqId: () => randomUUID(),
+    // Behind fly's edge proxy the socket is the proxy: trust that many hops
+    // so request.ip (the audit trail, rate limits) is the person's address.
+    trustProxy: options.trustProxy || false,
   }).withTypeProvider<JsonSchemaToTsProvider<{ SerializerSchemaOptions: SerializerSchemaOptions }>>();
 
   // Register plugins
