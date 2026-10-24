@@ -69,8 +69,10 @@ async function present(rows: Row[], options: { network: boolean }) {
     select: { id: true, firstName: true, lastName: true, email: true },
   });
   const names = new Map(people.map((p) => [p.id, personName(p)]));
+  const operators = await operatorNames(rows);
   return rows.map((row) => {
     const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+    const operator = operators(row);
     return {
       id: row.id,
       at: row.createdAt,
@@ -81,16 +83,57 @@ async function present(rows: Row[], options: { network: boolean }) {
       siteId: row.siteId,
       entityType: row.entityType,
       entityId: row.entityId,
-      label: typeof metadata.label === "string" ? metadata.label : null,
+      label: typeof metadata.label === "string" ? metadata.label : (operator.employee ?? null),
       changes: (row.changes as Record<string, { from: unknown; to: unknown }> | null) ?? null,
       versionId: row.versionId,
       previousVersionId: row.previousVersionId,
-      metadata,
+      metadata: operator.station ? { ...metadata, stationName: operator.station } : metadata,
       requestId: row.requestId,
       // Where from is for the plant's admins, not everyone who can see a record.
       ...(options.network ? { ipAddress: row.ipAddress, userAgent: row.userAgent } : {}),
     };
   });
+}
+
+const OPERATOR_ACTIONS = ["OPERATOR_LOGON", "OPERATOR_LOGOFF", "OPERATOR_LOGON_FAILED"] as const;
+
+/**
+ * Operators aren't users and their logon entries carry ids only: name the
+ * team member and the station, as they are now, so the entry reads as a
+ * sentence.
+ */
+async function operatorNames(rows: Row[]) {
+  const operatorRows = rows.filter((row) => (OPERATOR_ACTIONS as readonly string[]).includes(row.action));
+  const employeeIds = new Set<string>();
+  const stationIds = new Set<string>();
+  for (const row of operatorRows) {
+    if (row.entityType === "employee" && row.entityId) employeeIds.add(row.entityId);
+    const stationId = (row.metadata as Record<string, unknown> | null)?.stationId;
+    if (typeof stationId === "string") stationIds.add(stationId);
+  }
+  const [employees, stations] = await Promise.all([
+    employeeIds.size
+      ? prisma.employee.findMany({
+          where: { id: { in: [...employeeIds] } },
+          select: { id: true, version: { select: { firstName: true, lastName: true } } },
+        })
+      : [],
+    stationIds.size
+      ? prisma.station.findMany({ where: { id: { in: [...stationIds] } }, select: { id: true, name: true } })
+      : [],
+  ]);
+  const employeeName = new Map(
+    employees.map((e) => [e.id, [e.version?.firstName, e.version?.lastName].filter(Boolean).join(" ") || null]),
+  );
+  const stationName = new Map(stations.map((s) => [s.id, s.name]));
+  return (row: Row) => {
+    if (!(OPERATOR_ACTIONS as readonly string[]).includes(row.action)) return { employee: null, station: null };
+    const stationId = (row.metadata as Record<string, unknown> | null)?.stationId;
+    return {
+      employee: row.entityType === "employee" && row.entityId ? (employeeName.get(row.entityId) ?? null) : null,
+      station: typeof stationId === "string" ? (stationName.get(stationId) ?? null) : null,
+    };
+  };
 }
 
 async function page(whereInput: Prisma.AuditLogWhereInput, cursor: string | undefined, limit: number) {
@@ -138,6 +181,76 @@ export const recordHistory = userRequired
     return {
       entries: await present(result.rows, { network: false }),
       nextCursor: result.nextCursor,
+    };
+  });
+
+/** Signing in to Rockware: what a team member's login did, or had done to it. */
+const SIGN_IN_ACTIONS = [
+  "LOGIN_SUCCESS",
+  "LOGIN_FAILED",
+  "LOGIN_LOCKED",
+  "LOGOUT",
+  "ACCOUNT_UNLOCKED",
+  "PASSWORD_CHANGED",
+  "PASSWORD_ADMIN_RESET",
+  "PASSWORD_RESET_REQUESTED",
+  "PASSWORD_RESET_COMPLETED",
+  "USER_INVITED",
+  "INVITE_COMPLETED",
+  "INVITE_REVOKED",
+  "INVITE_EXPIRED",
+  "USER_DISABLED",
+  "USER_ENABLED",
+] as const;
+
+/**
+ * A team member's logons, newest first: at a terminal (logged on, logged
+ * off, a failed PIN) and, when they have a login, signing in to Rockware
+ * (signed in and out, failed or locked out, password and invitation events).
+ * Not edits to their record. Plant ADMIN, with where-from.
+ */
+export const teamMemberLogons = userRequired
+  .input(
+    z.object({
+      siteId: z.uuid(),
+      employeeId: z.uuid(),
+      cursor: z.string().max(200).optional(),
+      limit: z.number().int().min(1).max(200).default(PAGE),
+    }),
+  )
+  .handler(async ({ input, context }) => {
+    await context.access.require("ADMIN", { site: input.siteId });
+    const employee = await prisma.employee.findFirst({
+      where: { id: input.employeeId, workspaceId: context.current.workspaceId },
+      select: { user: { select: { id: true } } },
+    });
+    if (!employee) throw new ORPCError("NOT_FOUND", { message: "Team member not found" });
+    const login = employee.user?.id;
+    const result = await page(
+      {
+        OR: [
+          // At this plant's terminals.
+          {
+            siteId: input.siteId,
+            entityType: "employee",
+            entityId: input.employeeId,
+            action: { in: [...OPERATOR_ACTIONS] },
+          },
+          ...(login
+            ? [
+                { userId: login, action: { in: [...SIGN_IN_ACTIONS] } },
+                { actorId: login, userId: null, action: { in: [...SIGN_IN_ACTIONS] } },
+              ]
+            : []),
+        ],
+      },
+      input.cursor,
+      input.limit,
+    );
+    return {
+      entries: await present(result.rows, { network: true }),
+      nextCursor: result.nextCursor,
+      hasLogin: !!login,
     };
   });
 

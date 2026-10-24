@@ -664,6 +664,7 @@ export const coreRouter = {
     actors: audit.actors,
     exportCsv: audit.exportCsv,
     recent: audit.recent,
+    teamMemberLogons: audit.teamMemberLogons,
   },
   apiToken: {
     create: apiToken.create,

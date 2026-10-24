@@ -140,4 +140,46 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reading the audit trail (Tier 2
     // The plant's admins see every cell.
     expect(await labels(adminToken)).toHaveLength(7);
   });
+
+  it("lists a team member's logons and sign-ins, not edits to their record", async () => {
+    const tag = randomUUID().slice(0, 8);
+    const email = `audit-logons-${tag}@test.local`;
+    const password = "audit-logons-password-1";
+    const { userId } = await makeUser(email, password, { plants: [{ siteId, level: "VIEW" }] });
+    let employeeId = (await prisma.user.findUniqueOrThrow({ where: { id: userId } })).employeeId;
+    if (!employeeId) {
+      const made = await rpcCall(server, "employee/create", { siteId, firstName: "Sam", lastName: tag }, adminToken);
+      employeeId = (made.json as { id: string }).id;
+      await prisma.user.update({ where: { id: userId }, data: { employeeId } });
+    }
+    await rpcCall(server, "employee/update", { id: employeeId, phone: "555-0100" }, adminToken);
+    await loginAs(server, email, password);
+    const station = await rpcCall(server, "station/create", { siteId, name: `Press ${tag}` }, adminToken);
+    const stationId = (station.json as { id: string }).id;
+    const otherSite = await prisma.site.findFirst({ where: { id: { not: siteId } }, select: { id: true } });
+    await prisma.auditLog.createMany({
+      data: [
+        { action: "OPERATOR_LOGON", siteId, entityType: "employee", entityId: employeeId, metadata: { stationId } },
+        { action: "OPERATOR_LOGON_FAILED", siteId, entityType: "employee", entityId: employeeId, metadata: {} },
+        // Another plant's terminal isn't this plant's to show.
+        ...(otherSite
+          ? [{ action: "OPERATOR_LOGON" as const, siteId: otherSite.id, entityType: "employee", entityId: employeeId }]
+          : []),
+      ],
+    });
+
+    const call = (token: string) => rpcCall(server, "audit/teamMemberLogons", { siteId, employeeId }, token);
+    expect((await call(viewerToken)).statusCode).toBe(403);
+    const result = (await call(adminToken)).json as { entries: Entry[]; hasLogin: boolean };
+    expect(result.hasLogin).toBe(true);
+    const actions = result.entries.map((entry) => entry.action);
+    expect(actions.filter((action) => action.startsWith("OPERATOR"))).toHaveLength(2);
+    expect(actions).toContain("LOGIN_SUCCESS");
+    expect(actions.some((action) => action.startsWith("RECORD_"))).toBe(false);
+    const logon = result.entries.find((entry) => entry.action === "OPERATOR_LOGON") as Entry & {
+      metadata: Record<string, unknown>;
+    };
+    expect(logon.label).toContain(tag);
+    expect(logon.metadata.stationName).toBe(`Press ${tag}`);
+  });
 });

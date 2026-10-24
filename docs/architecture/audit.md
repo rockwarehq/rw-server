@@ -73,7 +73,7 @@ Background work (an import applying a chunk at a time) runs in an audit context 
 
 Not covered on purpose: stock and ledger rows (they record `performedByUserId` themselves), shop-floor runtime (station state, cycles, calls, logons, shift materialisation), product pictures, alternates-group renames, and order queue reordering.
 
-Operators aren't users: their logon events name the employee as the record (`entityType: "employee"`) and carry the display's workspace and plant.
+Operators aren't users: their logon events name the employee as the record (`entityType: "employee"`) and carry the display's workspace and plant. `audit.teamMemberLogons` (plant ADMIN) lists one team member's logons at that plant's terminals together with their login's sign-ins and password and invitation events, without edits to their record; reads name the operator and the station.
 
 ## Not written
 
