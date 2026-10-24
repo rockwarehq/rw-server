@@ -104,9 +104,19 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reading the audit trail (Tier 2
     expect(exported.rows).toBe(3);
     expect(exported.csv.split("\n")[0]).toContain("when,action,who");
     expect(exported.csv).toContain("Lid 3");
+    // Taking the trail out is on the record too.
+    const exportEntry = await prisma.auditLog.findFirst({
+      where: { action: "AUDIT_EXPORTED", actorId: adminId, siteId },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(exportEntry?.metadata).toMatchObject({
+      format: "csv",
+      rows: 3,
+      filters: { entityType: "product", entityId: id },
+    });
   });
 
-  it("shows the crew recent changes in their own cells only, moves included", async () => {
+  it("keeps station and workcenter history to the crew who can see the cell", async () => {
     const tag = randomUUID().slice(0, 8);
     const call = async (path: string, input: object) => {
       const result = await rpcCall(server, path, input, adminToken);
@@ -143,22 +153,20 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reading the audit trail (Tier 2
         )
       ).statusCode,
     ).toBe(403);
-    const labels = async (token: string) => {
-      const result = await rpcCall(server, "audit/recent", { siteId, limit: 25 }, token);
-      expect(result.statusCode).toBe(200);
-      const entries = (result.json as { entries: Entry[] }).entries;
-      expect(entries.every((entry) => !("ipAddress" in entry))).toBe(true);
-      return entries.map((entry) => `${entry.action} ${entry.label}`).filter((label) => label.includes(tag));
-    };
-
-    // The crew see their cell, its stations, and the station moved into it, newest first.
-    expect(await labels(crewToken)).toEqual([
-      `RECORD_UPDATED Mill ${tag}`,
-      `RECORD_CREATED Press ${tag}`,
-      `RECORD_CREATED Ours ${tag}`,
-    ]);
-    // The plant's admins see every cell.
-    expect(await labels(adminToken)).toHaveLength(7);
+    // A move names both cells, as they were then.
+    const millHistory = await rpcCall(
+      server,
+      "audit/recordHistory",
+      { siteId, entityType: "station", entityId: mill.id },
+      adminToken,
+    );
+    const moved = (millHistory.json as { entries: Array<Entry & { metadata: Record<string, unknown> }> })
+      .entries[0];
+    expect(moved?.metadata).toMatchObject({
+      workcenterIds: [theirs.id, ours.id],
+      fromWorkcenter: `Theirs ${tag}`,
+      toWorkcenter: `Ours ${tag}`,
+    });
   });
 
   it("lists a team member's logons and sign-ins, not edits to their record", async () => {

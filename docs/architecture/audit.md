@@ -1,6 +1,8 @@
 # Audit trail
 
-The audit trail is how we answer **who did what, when, where from, and to which record**: for customers ("who changed this part?"), for support, and for security, including anything a connected agent did.
+The audit trail is how we answer **who did what, when, where from, and to which record**: for customers ("who changed this part?"), for compliance, for support, and for security, including anything a connected agent did.
+
+It is a record, not a feed. It is complete (failed sign-ins and secrets-changed flags included), append-only, kept for the life of the workspace, and read by plant admins. It is **not** where engagement or usage lives: page views, "who's active", adoption counts and activity feeds for everyone are a separate concern, built from production data (logon sessions, calls, sign-offs) or their own store, never by reading or widening this table.
 
 ## The record
 
@@ -67,13 +69,25 @@ Master data records its own history: `RECORD_CREATED`, `RECORD_UPDATED` and `REC
 
 Secrets never reach the trail. Credentials, tokens and passwords are left out of the compared fields and recorded only as `credentialsChanged`; an integration's URLs and default headers aren't recorded at all (a webhook URL can itself be a credential), and a device's connection settings drop any key that looks like a secret. A PIN or badge change is `pinChanged` / `badgeChanged`.
 
-Floor records name their workcenters in `metadata.workcenterIds` (a station's cell, both cells for a move, a workcenter itself), so `audit.recent` can show each person the latest changes to the cells they can see: Home's "Most recent activity". Plant admins see every cell; the crew see their own.
+Floor records name their workcenters in `metadata.workcenterIds` (a station's cell, both cells for a move, a workcenter itself): where a change happened, as it was then.
 
 Background work (an import applying a chunk at a time) runs in an audit context of its own: the person who started it, and one id for everything it wrote.
 
 Not covered on purpose: stock and ledger rows (they record `performedByUserId` themselves), shop-floor runtime (station state, cycles, calls, logons, shift materialisation), product pictures, alternates-group renames, and order queue reordering.
 
-Operators aren't users: their logon events name the employee as the record (`entityType: "employee"`) and carry the display's workspace and plant. `audit.teamMemberLogons` (plant ADMIN) lists one team member's logons at that plant's terminals together with their login's sign-ins and password and invitation events, without edits to their record; reads name the operator and the station.
+Operators aren't users: their logon events name the employee as the record (`entityType: "employee"`) and carry the display's workspace and plant. Ending several sessions at once (log everyone off, single-logon enforcement) writes one entry per session ended, in the same transaction. `audit.teamMemberLogons` (plant ADMIN) lists one team member's logons at that plant's terminals together with their login's sign-ins and password and invitation events, without edits to their record; reads name the operator and the station.
+
+## Reading it
+
+All in `apps/api/src/rpc/audit.ts`; none is agent-callable.
+
+- `audit.search` — a plant's trail, newest first, filtered by person, record, action, `via` and time, cursor-paged, with where-from. Plant ADMIN.
+- `audit.recordHistory` — one record's history, without where-from. Anyone who can see the record; a station or workcenter needs access to that cell.
+- `audit.teamMemberLogons` — see above. Plant ADMIN.
+- `audit.actors` — the people in a plant's trail, for the filter. Plant ADMIN.
+- `audit.exportCsv` — the filtered trail as CSV, up to 20,000 rows. Plant ADMIN. **Taking the trail out is recorded**: `AUDIT_EXPORTED` with the filters and row count, written before the file is returned; no entry, no export.
+
+IMM shows it as Settings → Audit log, and as History / Change history / Logons on records.
 
 ## Not written
 
@@ -81,7 +95,7 @@ Four `AuditAction` values are kept but never written (Postgres can't drop enum v
 
 ## Keeping it
 
-**Append-only.** The database refuses `UPDATE`, `DELETE` and `TRUNCATE` on `AuditLog` (trigger `audit_log_append_only`, migration `20261023150000_audit_append_only`), whatever the application or anyone with write access tries. The one sanctioned rewrite is a maintenance script's own transaction that sets `SET LOCAL rockware.audit_bypass = 'on'` first — today only `apps/api/scripts/collapse-workspaces.ts`, a dev tool that refuses to run in production. Nothing in the application sets it. A correction is a new entry, never an edit.
+**Append-only.** The database refuses `UPDATE`, `DELETE` and `TRUNCATE` on `AuditLog` (trigger `audit_log_append_only`, migration `20261023130000_audit_trail`), whatever the application or anyone with write access tries. The one sanctioned rewrite is a maintenance script's own transaction that sets `SET LOCAL rockware.audit_bypass = 'on'` first — today only `apps/api/scripts/collapse-workspaces.ts`, a dev tool that refuses to run in production. Nothing in the application sets it. A correction is a new entry, never an edit.
 
 **Retention.** Entries are kept for as long as the workspace exists; nothing purges them. They are small (a few hundred bytes; a plant making a few thousand changes a day writes well under a gigabyte a year), and an audit trail that forgets defeats its purpose. If a customer needs a limit (a contract, a regulation), it becomes a per-workspace setting with a purge job that runs in a sanctioned maintenance transaction, records that it ran, and keeps the record of the purge itself. Until then there is no limit, and none should be added ad hoc.
 
@@ -94,5 +108,5 @@ Four `AuditAction` values are kept but never written (Postgres can't drop enum v
 
 ## Next
 
-1. History on stations, workcenters and team members in IMM (reading is otherwise done: `audit.*`, Settings → Activity, History on products, materials, jobs, tools).
-2. Station delete as a soft delete (ADR-0007), decided on its own.
+1. Station delete as a soft delete (ADR-0007), decided on its own.
+2. If customers need it (regulated manufacturing, e.g. 21 CFR Part 11): tamper evidence (a hash chain over entries, checkable on export), a reason for change on regulated edits, and electronic signatures.

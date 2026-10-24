@@ -60,6 +60,9 @@ enum AuditAction {
   RECORD_CREATED
   RECORD_UPDATED
   RECORD_DELETED
+
+  // The trail itself: reading it out of the system is recorded too.
+  AUDIT_EXPORTED
 }
 
 // The audit trail: who did what, when, where from, and to which record.

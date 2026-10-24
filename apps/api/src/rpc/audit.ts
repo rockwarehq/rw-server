@@ -2,6 +2,8 @@ import { ORPCError } from "@orpc/server";
 import prisma, { type Prisma } from "@rw/db";
 import { z } from "zod";
 
+import { logEvent } from "@rw/services/audit/index";
+
 import { userRequired } from "./middleware.js";
 
 // Reading the audit trail (docs/architecture/audit.md). A plant's activity is
@@ -257,38 +259,6 @@ export const teamMemberLogons = userRequired
     };
   });
 
-const FLOOR_RECORDS = ["workcenter", "station"];
-const RECENT = 8;
-
-/**
- * The latest changes to the workcenters and stations the caller can see, for
- * Home. Plant admins see every cell; the crew see their own cells (an entry
- * names its cells in metadata.workcenterIds: a station's, both for a move).
- * No where-from: this is for everyone on the floor.
- */
-export const recent = userRequired
-  .input(z.object({ siteId: z.uuid(), limit: z.number().int().min(1).max(25).default(RECENT) }))
-  .handler(async ({ input, context }) => {
-    const scope = context.access.list("VIEW", input.siteId, "WORKCENTER");
-    const rows = await prisma.auditLog.findMany({
-      where: {
-        siteId: input.siteId,
-        action: { in: ["RECORD_CREATED", "RECORD_UPDATED", "RECORD_DELETED"] },
-        entityType: { in: FLOOR_RECORDS },
-        ...(scope.workcenterIds
-          ? {
-              OR: scope.workcenterIds.map((id) => ({
-                metadata: { path: ["workcenterIds"], array_contains: [id] },
-              })),
-            }
-          : {}),
-      },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: input.limit,
-    });
-    return { entries: await present(rows, { network: false }) };
-  });
-
 /** The people who appear as actors in a plant's activity, for the filter. Plant ADMIN. */
 export const actors = userRequired.input(z.object({ siteId: z.uuid() })).handler(async ({ input, context }) => {
   await context.access.require("ADMIN", { site: input.siteId });
@@ -309,7 +279,11 @@ const csvCell = (value: unknown) => {
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 };
 
-/** The filtered activity as CSV, newest first, up to 20,000 rows. Plant ADMIN. */
+/**
+ * The filtered trail as CSV, newest first, up to 20,000 rows. Plant ADMIN.
+ * Taking the trail out of the system is itself recorded — who, which filters,
+ * how many rows — and no export is handed over without that entry.
+ */
 export const exportCsv = userRequired.input(filtersSchema).handler(async ({ input, context }) => {
   await context.access.require("ADMIN", { site: input.siteId });
   const rows = await prisma.auditLog.findMany({
@@ -356,6 +330,15 @@ export const exportCsv = userRequired.input(filtersSchema).handler(async ({ inpu
     ]
       .map(csvCell)
       .join(","),
+  );
+  const { siteId, ...filters } = input;
+  await prisma.$transaction((tx) =>
+    logEvent({
+      tx,
+      action: "AUDIT_EXPORTED",
+      siteId,
+      metadata: { format: "csv", filters, rows: entries.length, truncated },
+    }),
   );
   return { csv: [header.join(","), ...lines].join("\n"), rows: entries.length, truncated };
 });
