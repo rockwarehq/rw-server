@@ -123,6 +123,26 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("reading the audit trail (Tier 2
 
     await makeUser(CREW.email, CREW.password, { workcenters: [{ workcenterId: ours.id, level: "VIEW" }] });
     const crewToken = await siteToken(CREW.email, CREW.password);
+
+    // A station's history is for the crew who can see its cell.
+    const history = (stationId: string) =>
+      rpcCall(server, "audit/recordHistory", { siteId, entityType: "station", entityId: stationId }, crewToken);
+    const pressHistory = await history(press.id);
+    expect(pressHistory.statusCode).toBe(200);
+    expect((pressHistory.json as { entries: Entry[] }).entries.map((entry) => entry.action)).toEqual([
+      "RECORD_CREATED",
+    ]);
+    expect((await history(lathe.id)).statusCode).toBe(403);
+    expect(
+      (
+        await rpcCall(
+          server,
+          "audit/recordHistory",
+          { siteId, entityType: "workcenter", entityId: theirs.id },
+          crewToken,
+        )
+      ).statusCode,
+    ).toBe(403);
     const labels = async (token: string) => {
       const result = await rpcCall(server, "audit/recent", { siteId, limit: 25 }, token);
       expect(result.statusCode).toBe(200);

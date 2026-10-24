@@ -163,7 +163,7 @@ export const search = userRequired
     return { entries: await present(result.rows, { network: true }), nextCursor: result.nextCursor };
   });
 
-/** One record's history, newest first. Anyone who can see the plant. */
+/** One record's history, newest first. Anyone who can see the record. */
 export const recordHistory = userRequired
   .input(
     z.object({
@@ -176,6 +176,9 @@ export const recordHistory = userRequired
   )
   .handler(async ({ input, context }) => {
     await context.access.require("VIEW", { site: input.siteId });
+    // A station or workcenter is for the crew who can see that cell.
+    if (input.entityType === "station") await context.access.require("VIEW", { station: input.entityId });
+    if (input.entityType === "workcenter") await context.access.require("VIEW", { workcenter: input.entityId });
     const filters = { siteId: input.siteId, entityType: input.entityType, entityId: input.entityId };
     const result = await page(where(filters, context.current.workspaceId), input.cursor, input.limit);
     return {
