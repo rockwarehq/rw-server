@@ -1,4 +1,5 @@
 import type { Prisma } from "@rw/db";
+import { auditRecord } from "@rw/services/audit/index";
 import { SYSTEM_ENTITY_KEYS } from "@rw/services/entity/registry";
 import { material as materialService, product as productService } from "@rw/services/inventory/index";
 import { setMaterialStockUnit } from "@rw/services/stock/balance";
@@ -208,6 +209,25 @@ async function undo(
   const options = { tx, events: ctx.events };
   const emit = (entityKey: string, entityId: string, action: "updated" | "deleted") =>
     emitEntityEvent(options, { action, entityKey, entityId, siteId: ctx.siteId, workspaceId: ctx.workspaceId });
+  // Removing completely writes here, not through the services: record it as they would.
+  const audited = (
+    change: "updated" | "deleted",
+    entityType: "product" | "material",
+    entityId: string,
+    extra: { versionId?: string | null; previousVersionId?: string | null; metadata?: Record<string, unknown> },
+  ) =>
+    auditRecord(tx, {
+      change,
+      entityType,
+      entityId,
+      siteId: ctx.siteId,
+      workspaceId: ctx.workspaceId,
+      label: entry.label,
+      fields: [],
+      versionId: extra.versionId,
+      previousVersionId: extra.previousVersionId,
+      metadata: { removedWithImport: ctx.changesetId, ...extra.metadata },
+    });
 
   switch (entry.entity) {
     case "link": {
@@ -231,6 +251,9 @@ async function undo(
       }
       if (mode === "remove" && (await revertVersion(tx, entry))) {
         emit(SYSTEM_ENTITY_KEYS.Product, entry.entityId, "updated");
+        await audited("updated", "product", entry.entityId, {
+          metadata: { materialsList: "restored", material: entry.materialId },
+        });
         return { outcome: "restored" };
       }
       const result = await productService.updateMaterial(
@@ -269,6 +292,9 @@ async function undo(
         if (isProduct) await removeProduct(tx, entry.entityId);
         else await removeMaterial(tx, entry.entityId);
         emit(entityKey, entry.entityId, "deleted");
+        await audited("deleted", entry.entity as "product" | "material", entry.entityId, {
+          metadata: { permanently: true },
+        });
         return { outcome: "removed" };
       }
 
@@ -277,6 +303,12 @@ async function undo(
       if (record.currentVersionId !== entry.afterVersionId) return skipped(CHANGED_SINCE);
       if (mode === "remove" && (await revertVersion(tx, entry))) {
         emit(entityKey, entry.entityId, "updated");
+        // Back on the version it had: the entry points from the import's version to that one.
+        await audited("updated", entry.entity as "product" | "material", entry.entityId, {
+          versionId: entry.beforeVersionId,
+          previousVersionId: entry.afterVersionId,
+          metadata: { revertedToEarlierVersion: true },
+        });
         return { outcome: "restored" };
       }
       const fields = restoreFields(entry) as never;

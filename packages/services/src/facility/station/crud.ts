@@ -1,4 +1,5 @@
 import prisma from "@rw/db";
+import { auditActorId, auditRecord } from "../../audit/index.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { crewFilter } from "../../lib/crew-filter.js";
@@ -147,6 +148,40 @@ const VERSION_FIELDS = [
   "inStationCalculations",
 ] as const;
 
+const AUDIT_FIELDS = [
+  "name",
+  "description",
+  "attrs",
+  "sortOrder",
+  "workcenterId",
+  "labels",
+  ...VERSION_FIELDS,
+  "profileId",
+  "variationId",
+  "speedFromProfile",
+] as const;
+
+/** A station and its current version as one flat record, for the audit trail. */
+function auditValues(station: {
+  name: string;
+  description: string | null;
+  attrs: unknown;
+  sortOrder: number;
+  workcenterId: string | null;
+  labels?: { name: string }[];
+  currentVersion?: object | null;
+}) {
+  return {
+    ...station.currentVersion,
+    name: station.name,
+    description: station.description,
+    attrs: station.attrs,
+    sortOrder: station.sortOrder,
+    workcenterId: station.workcenterId,
+    labels: (station.labels ?? []).map((label) => label.name).sort(),
+  } as Record<string, unknown>;
+}
+
 /** Check if any version config fields are provided in input */
 function hasVersionFields(input: Record<string, unknown>): boolean {
   return VERSION_FIELDS.some((key) => input[key] !== undefined);
@@ -260,6 +295,7 @@ export async function create(input: CreateStationInput) {
         data: {
           stationId: s.id,
           version: 1,
+          createdById: auditActorId(),
           standardCycle: standardCycle ?? null,
           cycleMode: cycleMode ?? "DISCRETE",
           standardQuantity: standardQuantity ?? null,
@@ -279,11 +315,24 @@ export async function create(input: CreateStationInput) {
       });
 
       // 3. Link version as current and return with includes
-      return tx.station.update({
+      const created = await tx.station.update({
         where: { id: s.id },
         data: { currentVersionId: version.id },
         include: stationInclude,
       });
+      await auditRecord(tx, {
+        change: "created",
+        entityType: "station",
+        entityId: created.id,
+        siteId: created.siteId,
+        workspaceId: site.workspaceId,
+        label: created.name,
+        after: auditValues(created),
+        fields: AUDIT_FIELDS,
+        workcenterIds: [created.workcenterId],
+        versionId: version.id,
+      });
+      return created;
     });
 
     publishStationEntityEvent({
@@ -297,17 +346,31 @@ export async function create(input: CreateStationInput) {
   }
 
   // No config fields — simple create without version
-  const station = await prisma.station.create({
-    data: {
-      name,
-      description,
-      attrs: attrs ?? {},
-      sortOrder,
-      siteId,
-      workcenterId: workcenterId ?? null,
-      ...(labelIds?.length ? { labels: { connect: labelIds.map((id) => ({ id })) } } : {}),
-    },
-    include: stationInclude,
+  const station = await prisma.$transaction(async (tx) => {
+    const created = await tx.station.create({
+      data: {
+        name,
+        description,
+        attrs: attrs ?? {},
+        sortOrder,
+        siteId,
+        workcenterId: workcenterId ?? null,
+        ...(labelIds?.length ? { labels: { connect: labelIds.map((id) => ({ id })) } } : {}),
+      },
+      include: stationInclude,
+    });
+    await auditRecord(tx, {
+      change: "created",
+      entityType: "station",
+      entityId: created.id,
+      siteId: created.siteId,
+      workspaceId: site.workspaceId,
+      label: created.name,
+      after: auditValues(created),
+      fields: AUDIT_FIELDS,
+      workcenterIds: [created.workcenterId],
+    });
+    return created;
   });
 
   publishStationEntityEvent({
@@ -417,6 +480,7 @@ export async function update(id: string, input: UpdateStationInput) {
     include: {
       site: { select: { workspaceId: true } },
       currentVersion: true,
+      labels: { select: { name: true } },
     },
   });
 
@@ -490,6 +554,7 @@ export async function update(id: string, input: UpdateStationInput) {
         data: {
           stationId: id,
           version: nextVersion,
+          createdById: auditActorId(),
           standardCycle: standardCycle !== undefined ? standardCycle : (oldVersion?.standardCycle ?? null),
           cycleMode: cycleMode !== undefined ? cycleMode : (oldVersion?.cycleMode ?? "DISCRETE"),
           standardQuantity: standardQuantity !== undefined ? standardQuantity : (oldVersion?.standardQuantity ?? null),
@@ -517,7 +582,7 @@ export async function update(id: string, input: UpdateStationInput) {
       });
 
       // 2. Update station: entity fields + swing version pointer
-      return tx.station.update({
+      const updated = await tx.station.update({
         where: { id },
         data: {
           ...stationUpdateData,
@@ -525,6 +590,21 @@ export async function update(id: string, input: UpdateStationInput) {
         },
         include: stationInclude,
       });
+      await auditRecord(tx, {
+        change: "updated",
+        entityType: "station",
+        entityId: updated.id,
+        siteId: updated.siteId,
+        workspaceId: current.site.workspaceId,
+        label: updated.name,
+        before: auditValues(current),
+        after: auditValues(updated),
+        fields: AUDIT_FIELDS,
+        workcenterIds: [current.workcenterId, updated.workcenterId],
+        versionId: version.id,
+        previousVersionId: oldVersion?.id,
+      });
+      return updated;
     });
 
     publishStationEntityEvent({
@@ -547,10 +627,25 @@ export async function update(id: string, input: UpdateStationInput) {
   }
 
   // No config changes — simple station entity update
-  const station = await prisma.station.update({
-    where: { id },
-    data: stationUpdateData,
-    include: stationInclude,
+  const station = await prisma.$transaction(async (tx) => {
+    const updated = await tx.station.update({
+      where: { id },
+      data: stationUpdateData,
+      include: stationInclude,
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "station",
+      entityId: updated.id,
+      siteId: updated.siteId,
+      workspaceId: current.site.workspaceId,
+      label: updated.name,
+      before: auditValues(current),
+      after: auditValues(updated),
+      fields: AUDIT_FIELDS,
+      workcenterIds: [current.workcenterId, updated.workcenterId],
+    });
+    return updated;
   });
 
   publishStationEntityEvent({
@@ -575,6 +670,7 @@ export async function move(id: string, newWorkcenterId: string | null) {
       site: {
         select: { id: true, workspaceId: true },
       },
+      workcenter: { select: { name: true } },
     },
   });
 
@@ -589,6 +685,7 @@ export async function move(id: string, newWorkcenterId: string | null) {
       select: {
         id: true,
         siteId: true,
+        name: true,
       },
     });
 
@@ -605,10 +702,26 @@ export async function move(id: string, newWorkcenterId: string | null) {
     }
   }
 
-  const station = await prisma.station.update({
-    where: { id },
-    data: { workcenterId: newWorkcenterId },
-    include: stationInclude,
+  const station = await prisma.$transaction(async (tx) => {
+    const updated = await tx.station.update({
+      where: { id },
+      data: { workcenterId: newWorkcenterId },
+      include: stationInclude,
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "station",
+      entityId: updated.id,
+      siteId: updated.siteId,
+      workspaceId: current.site.workspaceId,
+      label: updated.name,
+      before: current,
+      after: updated,
+      fields: ["workcenterId"],
+      workcenterIds: [current.workcenterId, updated.workcenterId],
+      metadata: { fromWorkcenter: current.workcenter?.name ?? null, toWorkcenter: updated.workcenter?.name ?? null },
+    });
+    return updated;
   });
 
   publishStationEntityEvent({
@@ -641,16 +754,35 @@ export async function reorder(workcenterId: string, orderedIds: string[]) {
     return { error: "Ordered IDs cannot contain duplicates", code: "INVALID_ORDER" };
   }
 
-  const existing = await prisma.station.findMany({ where: { workcenterId }, select: { id: true } });
+  const existing = await prisma.station.findMany({
+    where: { workcenterId },
+    select: { id: true, name: true, sortOrder: true },
+  });
   const existingIds = new Set(existing.map((station) => station.id));
 
   if (existing.length !== orderedIds.length || orderedIds.some((id) => !existingIds.has(id))) {
     return { error: "Ordered IDs must be exactly the workcenter's stations", code: "INVALID_ORDER" };
   }
 
-  await prisma.$transaction(
-    orderedIds.map((id, index) => prisma.station.update({ where: { id }, data: { sortOrder: index } })),
-  );
+  const byId = new Map(existing.map((station) => [station.id, station]));
+  await prisma.$transaction(async (tx) => {
+    for (const [index, id] of orderedIds.entries()) {
+      await tx.station.update({ where: { id }, data: { sortOrder: index } });
+      const before = byId.get(id);
+      await auditRecord(tx, {
+        change: "updated",
+        entityType: "station",
+        entityId: id,
+        siteId: workcenter.siteId,
+        workspaceId: workcenter.site.workspaceId,
+        label: before?.name,
+        before,
+        after: { sortOrder: index },
+        fields: ["sortOrder"],
+        workcenterIds: [workcenterId],
+      });
+    }
+  });
 
   for (const stationId of orderedIds) {
     publishStationEntityEvent({
@@ -682,7 +814,19 @@ export async function remove(id: string) {
     return { error: "Station not found", code: "STATION_NOT_FOUND" };
   }
 
-  await prisma.station.delete({ where: { id } });
+  await prisma.$transaction(async (tx) => {
+    await tx.station.delete({ where: { id } });
+    await auditRecord(tx, {
+      change: "deleted",
+      entityType: "station",
+      entityId: station.id,
+      siteId: station.siteId,
+      workspaceId: station.site.workspaceId,
+      label: station.name,
+      fields: [],
+      workcenterIds: [station.workcenterId],
+    });
+  });
 
   publishStationEntityEvent({
     action: "deleted",

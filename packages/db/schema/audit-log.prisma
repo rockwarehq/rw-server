@@ -1,9 +1,9 @@
 enum AuditAction {
   // User invitations
   USER_INVITED
-  INVITE_VERIFIED
+  INVITE_VERIFIED // not written: invites complete through the password reset (INVITE_COMPLETED)
   INVITE_COMPLETED
-  INVITE_FAILED
+  INVITE_FAILED // not written: invites complete through the password reset (INVITE_COMPLETED)
   INVITE_EXPIRED
   INVITE_REVOKED
 
@@ -31,8 +31,8 @@ enum AuditAction {
   OPERATOR_LOGON
   OPERATOR_LOGOFF
   OPERATOR_LOGON_FAILED
-  OPERATOR_SUPERVISOR_CHALLENGE
-  OPERATOR_SUPERVISOR_CHALLENGE_FAILED
+  OPERATOR_SUPERVISOR_CHALLENGE // not written: supervisor approval is not built
+  OPERATOR_SUPERVISOR_CHALLENGE_FAILED // not written: supervisor approval is not built
 
   // Customer/app API tokens
   API_TOKEN_CREATED
@@ -54,21 +54,43 @@ enum AuditAction {
   SETUP_CHANGESET_DISCARDED
   SETUP_CHANGESET_ROLLED_BACK
   SETUP_CHANGESET_CLEARED
+
+  // Records: master data's own history (packages/services/src/audit/record.ts).
+  // entityType/entityId name the record; changes holds { field: { from, to } }.
+  RECORD_CREATED
+  RECORD_UPDATED
+  RECORD_DELETED
 }
 
+// The audit trail: who did what, when, where from, and to which record.
+// Append-only. Who, the plant, IP, user agent and how they came in are filled
+// from the request's audit context (packages/services/src/audit/context.ts).
 model AuditLog {
   id          String      @id @default(uuid()) @db.Uuid
   action      AuditAction
-  userId      String?     @db.Uuid // Target user (may be null for failed lookups)
-  actorId     String?     @db.Uuid // Who performed action (null for self-service)
+  userId      String?     @db.Uuid // The person the event is about (may be null for failed lookups)
+  actorId     String?     @db.Uuid // Who did it (null for anonymous, e.g. a failed login)
   workspaceId String?     @db.Uuid
+  siteId      String?     @db.Uuid // The plant it happened in, when it belongs to one
+  entityType  String? // The record it happened to, e.g. "product"
+  entityId    String?
+  changes     Json? // { field: { from, to } }, never secrets
+  // For versioned records (recording + immutable versions): the version this
+  // change made, and the one it replaced. The versions hold the full values.
+  versionId         String? @db.Uuid
+  previousVersionId String? @db.Uuid
+  via         String? // ui | staff | display | api-token | system | agent:<client name>
+  requestId   String? // Ties together the entries one request wrote
   ipAddress   String?
   userAgent   String?
   metadata    Json? // Additional context (e.g., reason, attempts count)
   createdAt   DateTime    @default(now()) @db.Timestamptz(3)
 
   @@index([userId])
-  @@index([actorId])
+  @@index([actorId, createdAt])
   @@index([action])
   @@index([createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([siteId, createdAt])
+  @@index([entityType, entityId, createdAt])
 }

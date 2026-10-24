@@ -1,6 +1,7 @@
 import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
 import { createDefaultIntegrationRegistry, templateFieldNames, type IntegrationRegistry } from "@rw/integrations";
+import { auditRecord, changedValues } from "@rw/services/audit/index";
 import {
   getLivestoreHookEventSchema,
   normalizeLivestoreEventToken,
@@ -127,6 +128,41 @@ async function assertTemplateFields(resolved: ResolvedTrigger, scope: GraphScope
   return null;
 }
 
+const TRIGGER_FIELDS = [
+  "name",
+  "enabled",
+  "eventNamespace",
+  "eventName",
+  "eventVersion",
+  "hookId",
+  "actionKey",
+  "actionVersion",
+  "input",
+] as const;
+
+// A trigger is part of its integration's setup, so its changes land in the
+// integration's history. The template input can carry header values, so only
+// the trigger's name is recorded.
+async function auditTrigger(
+  tx: Prisma.TransactionClient,
+  integrationId: string,
+  trigger: string,
+  triggers: "added" | "changed" | "removed",
+  scope: GraphScope,
+) {
+  const integration = await tx.integration.findUnique({ where: { id: integrationId }, select: { name: true } });
+  await auditRecord(tx, {
+    change: "updated",
+    entityType: "integration",
+    entityId: integrationId,
+    siteId: scope.siteId,
+    workspaceId: scope.workspaceId,
+    label: integration?.name,
+    fields: [],
+    metadata: { trigger, triggers },
+  });
+}
+
 async function assertReferences(resolved: ResolvedTrigger, scope: GraphScope) {
   const integration = await prisma.integration.findUnique({
     where: { id: resolved.integrationId },
@@ -198,9 +234,13 @@ export async function create(input: CreateTriggerInput, scope: GraphScope) {
     isDeleted: false,
   };
 
-  const row = existing
-    ? await prisma.integrationTrigger.update({ where: { id: existing.id }, data, select: triggerSelect })
-    : await prisma.integrationTrigger.create({ data, select: triggerSelect });
+  const row = await prisma.$transaction(async (tx) => {
+    const written = existing
+      ? await tx.integrationTrigger.update({ where: { id: existing.id }, data, select: triggerSelect })
+      : await tx.integrationTrigger.create({ data, select: triggerSelect });
+    await auditTrigger(tx, written.integrationId, written.name, "added", scope);
+    return written;
+  });
 
   return { data: row };
 }
@@ -260,14 +300,29 @@ export async function update(id: string, input: UpdateTriggerInput, scope: Graph
   }
   if (input.enabled !== undefined) data.enabled = input.enabled;
 
-  const row = await prisma.integrationTrigger.update({ where: { id }, data, select: triggerSelect });
+  const row = await prisma.$transaction(async (tx) => {
+    const written = await tx.integrationTrigger.update({ where: { id }, data, select: triggerSelect });
+    if (written.integrationId !== current.integrationId) {
+      await auditTrigger(tx, current.integrationId, current.name, "removed", scope);
+      await auditTrigger(tx, written.integrationId, written.name, "added", scope);
+    } else if (Object.keys(changedValues(current, written, TRIGGER_FIELDS)).length > 0) {
+      await auditTrigger(tx, written.integrationId, written.name, "changed", scope);
+    }
+    return written;
+  });
   return { data: row };
 }
 
 export async function remove(id: string, scope: GraphScope) {
   const current = await prisma.integrationTrigger.findUnique({
     where: { id },
-    select: { siteId: true, isDeleted: true, site: { select: { workspaceId: true } } },
+    select: {
+      siteId: true,
+      name: true,
+      integrationId: true,
+      isDeleted: true,
+      site: { select: { workspaceId: true } },
+    },
   });
   if (!current || current.isDeleted) return errorResult("TRIGGER_NOT_FOUND", "Trigger not found");
   if (current.site.workspaceId !== scope.workspaceId) {
@@ -275,7 +330,10 @@ export async function remove(id: string, scope: GraphScope) {
   }
   if (current.siteId !== scope.siteId) return errorResult("SITE_MISMATCH", "Trigger does not belong to this site");
 
-  await prisma.integrationTrigger.update({ where: { id }, data: { isDeleted: true } });
+  await prisma.$transaction(async (tx) => {
+    await tx.integrationTrigger.update({ where: { id }, data: { isDeleted: true } });
+    await auditTrigger(tx, current.integrationId, current.name, "removed", scope);
+  });
   return { data: { success: true as const } };
 }
 

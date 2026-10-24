@@ -1,4 +1,5 @@
 import prisma from "@rw/db";
+import { auditRecord } from "../audit/index.js";
 
 // ============================================================================
 // Types
@@ -16,6 +17,8 @@ export interface UpdateRoleInput {
 }
 
 // Default roles seeded for new sites
+const ROLE_FIELDS = ["name", "permissions"] as const;
+
 const DEFAULT_ROLES = ["Operator", "Supervisor", "Lead", "Quality", "Maintenance", "Contractor", "Engineer", "Manager"];
 
 // ============================================================================
@@ -45,12 +48,24 @@ export async function getByName(siteId: string, name: string) {
 }
 
 export async function create(input: CreateRoleInput) {
-  const role = await prisma.employeeRole.create({
-    data: {
-      siteId: input.siteId,
-      name: input.name,
-      permissions: input.permissions ?? [],
-    },
+  const role = await prisma.$transaction(async (tx) => {
+    const created = await tx.employeeRole.create({
+      data: {
+        siteId: input.siteId,
+        name: input.name,
+        permissions: input.permissions ?? [],
+      },
+    });
+    await auditRecord(tx, {
+      change: "created",
+      entityType: "employee-role",
+      entityId: created.id,
+      siteId: created.siteId,
+      label: created.name,
+      after: created,
+      fields: ROLE_FIELDS,
+    });
+    return created;
   });
   return { data: role };
 }
@@ -59,12 +74,25 @@ export async function update(id: string, input: UpdateRoleInput) {
   const role = await prisma.employeeRole.findUnique({ where: { id } });
   if (!role) return { error: "Role not found", code: "NOT_FOUND" as const };
 
-  const updated = await prisma.employeeRole.update({
-    where: { id },
-    data: {
-      ...(input.name !== undefined && { name: input.name }),
-      ...(input.permissions !== undefined && { permissions: input.permissions }),
-    },
+  const updated = await prisma.$transaction(async (tx) => {
+    const after = await tx.employeeRole.update({
+      where: { id },
+      data: {
+        ...(input.name !== undefined && { name: input.name }),
+        ...(input.permissions !== undefined && { permissions: input.permissions }),
+      },
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "employee-role",
+      entityId: id,
+      siteId: after.siteId,
+      label: after.name,
+      before: role,
+      after,
+      fields: ROLE_FIELDS,
+    });
+    return after;
   });
   return { data: updated };
 }
@@ -78,7 +106,18 @@ export async function remove(id: string) {
     return { error: "Cannot delete role that is assigned to employees", code: "CONFLICT" as const };
   }
 
-  await prisma.employeeRole.delete({ where: { id } });
+  await prisma.$transaction(async (tx) => {
+    const removed = await tx.employeeRole.delete({ where: { id } });
+    await auditRecord(tx, {
+      change: "deleted",
+      entityType: "employee-role",
+      entityId: id,
+      siteId: removed.siteId,
+      label: removed.name,
+      before: removed,
+      fields: ROLE_FIELDS,
+    });
+  });
   return { data: { success: true } };
 }
 

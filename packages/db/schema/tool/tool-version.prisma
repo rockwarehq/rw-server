@@ -17,6 +17,8 @@ model ToolVersion {
 
   attrs Json @default("{}")
 
+  createdById String? @db.Uuid // Who made this version (from the audit context)
+
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@unique([toolId, version])

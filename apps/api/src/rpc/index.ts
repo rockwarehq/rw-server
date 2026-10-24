@@ -1,3 +1,4 @@
+import * as audit from "./audit.js";
 import * as device from "./device.js";
 import * as site from "./site.js";
 import * as workcenter from "./workcenter.js";
@@ -665,6 +666,14 @@ export const coreRouter = {
     revoke: agentConnection.revoke,
     policy: agentConnection.policy,
     setPolicy: agentConnection.setPolicy,
+  },
+  audit: {
+    search: audit.search,
+    recordHistory: audit.recordHistory,
+    actors: audit.actors,
+    exportCsv: audit.exportCsv,
+    recent: audit.recent,
+    teamMemberLogons: audit.teamMemberLogons,
   },
   apiToken: {
     create: apiToken.create,

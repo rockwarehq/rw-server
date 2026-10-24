@@ -169,6 +169,7 @@ export async function logon(input: LogonInput) {
 
   await logEvent({
     action: "OPERATOR_LOGON",
+    ...employeeEntity(employeeId),
     metadata: {
       sessionId: session.id,
       employeeId,
@@ -206,6 +207,7 @@ export async function logoff(sessionId: string, displayId: string) {
 
   await logEvent({
     action: "OPERATOR_LOGOFF",
+    ...employeeEntity(updated.employeeId),
     metadata: {
       sessionId: updated.id,
       employeeId: updated.employeeId,
@@ -362,6 +364,7 @@ export async function transferSessions(displayId: string, stationId: string) {
   for (const { from, to } of moved) {
     await logEvent({
       action: "OPERATOR_LOGOFF",
+      ...employeeEntity(from.employeeId),
       metadata: {
         sessionId: from.id,
         employeeId: from.employeeId,
@@ -372,6 +375,7 @@ export async function transferSessions(displayId: string, stationId: string) {
     });
     await logEvent({
       action: "OPERATOR_LOGON",
+      ...employeeEntity(from.employeeId),
       metadata: {
         sessionId: to.id,
         employeeId: from.employeeId,
@@ -408,4 +412,9 @@ export async function getActiveSessions(displayId: string) {
   });
 
   return { data: sessions };
+}
+
+/** The employee an operator event is about, as its audit record (operators aren't users). */
+function employeeEntity(employeeId: string | null | undefined) {
+  return employeeId ? { entityType: "employee", entityId: employeeId } : {};
 }

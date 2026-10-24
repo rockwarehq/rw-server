@@ -1,6 +1,18 @@
 import { randomUUID } from "node:crypto";
 import type { Automation, AutomationAction, AutomationStore, DailySchedule, RuleGroupType } from "@rw/automations";
 import prisma, { Prisma } from "@rw/db";
+import { auditRecord } from "../audit/index.js";
+
+const AUDITED_FIELDS = [
+  "label",
+  "enabled",
+  "event",
+  "eventVersion",
+  "cooldownMs",
+  "conditions",
+  "actions",
+  "schedule",
+] as const;
 
 /**
  * Prisma-backed implementation of @rw/automations' `AutomationStore`.
@@ -36,10 +48,24 @@ export async function createDbAutomationStore(): Promise<AutomationStore> {
         actions: automation.actions as unknown as Parameters<typeof prisma.automation.upsert>[0]["update"]["actions"],
         schedule: automation.schedule ? { ...automation.schedule } : Prisma.DbNull,
       };
-      const row = await prisma.automation.upsert({
-        where: { id: automation.id },
-        create: { id: automation.id, ...data },
-        update: data,
+      const before = cache.get(automation.id);
+      const row = await prisma.$transaction(async (tx) => {
+        const written = await tx.automation.upsert({
+          where: { id: automation.id },
+          create: { id: automation.id, ...data },
+          update: data,
+        });
+        await auditRecord(tx, {
+          change: before ? "updated" : "created",
+          entityType: "automation",
+          entityId: written.id,
+          siteId: written.siteId,
+          label: written.label,
+          before: before ? { ...before } : undefined,
+          after: { ...rowToAutomation(written) },
+          fields: AUDITED_FIELDS,
+        });
+        return written;
       });
       const out = rowToAutomation(row);
       cache.set(out.id, out);
@@ -49,9 +75,20 @@ export async function createDbAutomationStore(): Promise<AutomationStore> {
     async remove(id) {
       // The cache + DB are kept consistent: if the DB delete fails (no row), the cache miss tells
       // the caller the same thing it'd see if it had just done a get() first.
-      if (!cache.has(id)) return false;
+      const existing = cache.get(id);
+      if (!existing) return false;
       try {
-        await prisma.automation.delete({ where: { id } });
+        await prisma.$transaction(async (tx) => {
+          await tx.automation.delete({ where: { id } });
+          await auditRecord(tx, {
+            change: "deleted",
+            entityType: "automation",
+            entityId: id,
+            siteId: existing.partition,
+            label: existing.label,
+            fields: [],
+          });
+        });
       } catch {
         // Row was already gone (race) — proceed to clear cache below.
       }

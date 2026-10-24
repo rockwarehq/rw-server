@@ -1,5 +1,6 @@
 import prisma from "@rw/db";
 import type { OrderStatus, Prisma } from "@rw/db";
+import { auditRecord } from "../audit/index.js";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { resolveShiftStamp } from "../facility/work-context.js";
@@ -63,6 +64,27 @@ export interface ListOrdersFilter {
   sortDir?: "asc" | "desc";
   limit?: number;
   offset?: number;
+}
+
+// What an order's audit trail compares. Line items are recorded as metadata.
+const AUDIT_FIELDS = [
+  "orderNumber",
+  "status",
+  "customerId",
+  "poNumber",
+  "startDate",
+  "dueDate",
+  "defaultTargetQuantity",
+  "notes",
+  "completedAt",
+  "cancelledAt",
+] as const;
+
+type LineProduct = { currentVersion: { sku: string; name: string | null } | null } | null;
+
+/** A line's product as the trail names it. */
+function productLabel(product: LineProduct): string | null {
+  return product?.currentVersion?.name ?? product?.currentVersion?.sku ?? null;
 }
 
 // ============================================================================
@@ -304,7 +326,7 @@ export async function create(input: CreateOrderInput) {
       where: { siteId, deletedAt: null, status: "OPEN" },
       _max: { sequence: true },
     });
-    return tx.order.create({
+    const created = await tx.order.create({
       data: {
         siteId,
         orderNumber,
@@ -325,6 +347,30 @@ export async function create(input: CreateOrderInput) {
       },
       include: orderInclude,
     });
+    await auditRecord(tx, {
+      change: "created",
+      entityType: "order",
+      entityId: created.id,
+      siteId,
+      workspaceId: site.workspaceId,
+      label: created.orderNumber,
+      after: created,
+      fields: AUDIT_FIELDS,
+      ...(created.customer ? { metadata: { customer: created.customer.name } } : {}),
+    });
+    for (const li of created.lineItems) {
+      await auditRecord(tx, {
+        change: "updated",
+        entityType: "order",
+        entityId: created.id,
+        siteId,
+        workspaceId: site.workspaceId,
+        label: created.orderNumber,
+        fields: [],
+        metadata: { lineItem: "added", product: productLabel(li.product), targetQuantity: Number(li.targetQuantity) },
+      });
+    }
+    return created;
   });
 
   publishEntityEvent({
@@ -435,7 +481,7 @@ export async function get(id: string) {
 export async function update(id: string, input: UpdateOrderInput) {
   const order = await prisma.order.findUnique({
     where: { id },
-    select: { id: true, siteId: true, status: true, deletedAt: true, site: { select: { workspaceId: true } } },
+    include: { site: { select: { workspaceId: true } }, customer: { select: { name: true } } },
   });
 
   if (!order || order.deletedAt) {
@@ -458,10 +504,28 @@ export async function update(id: string, input: UpdateOrderInput) {
     }
   }
 
-  const updated = await prisma.order.update({
-    where: { id },
-    data: input,
-    include: orderInclude,
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await tx.order.update({
+      where: { id },
+      data: input,
+      include: orderInclude,
+    });
+    const customerChanged = order.customerId !== row.customerId;
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "order",
+      entityId: id,
+      siteId: row.siteId,
+      workspaceId: order.site.workspaceId,
+      label: row.orderNumber,
+      before: order,
+      after: row,
+      fields: AUDIT_FIELDS,
+      ...(customerChanged
+        ? { metadata: { customer: { from: order.customer?.name ?? null, to: row.customer?.name ?? null } } }
+        : {}),
+    });
+    return row;
   });
 
   publishEntityEvent({
@@ -479,7 +543,14 @@ export async function update(id: string, input: UpdateOrderInput) {
 export async function remove(id: string) {
   const order = await prisma.order.findUnique({
     where: { id },
-    select: { id: true, siteId: true, status: true, deletedAt: true, site: { select: { workspaceId: true } } },
+    select: {
+      id: true,
+      orderNumber: true,
+      siteId: true,
+      status: true,
+      deletedAt: true,
+      site: { select: { workspaceId: true } },
+    },
   });
 
   if (!order || order.deletedAt) {
@@ -493,9 +564,20 @@ export async function remove(id: string) {
     return { error: "Only cancelled orders can be deleted", code: "NOT_DELETABLE" };
   }
 
-  await prisma.order.update({
-    where: { id },
-    data: { deletedAt: new Date() },
+  await prisma.$transaction(async (tx) => {
+    await tx.order.update({
+      where: { id },
+      data: { deletedAt: new Date() },
+    });
+    await auditRecord(tx, {
+      change: "deleted",
+      entityType: "order",
+      entityId: id,
+      siteId: order.siteId,
+      workspaceId: order.site.workspaceId,
+      label: order.orderNumber,
+      fields: [],
+    });
   });
 
   publishEntityEvent({
@@ -528,6 +610,7 @@ export async function transitionStatus(id: string, targetStatus: OrderStatus, op
       id: true,
       siteId: true,
       status: true,
+      cancelledAt: true,
       deletedAt: true,
       site: { select: { workspaceId: true } },
     },
@@ -561,10 +644,24 @@ export async function transitionStatus(id: string, targetStatus: OrderStatus, op
     cancelledAt: new Date(),
   };
 
-  const updated = await prisma.order.update({
-    where: { id },
-    data: updateData,
-    include: orderInclude,
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await tx.order.update({
+      where: { id },
+      data: updateData,
+      include: orderInclude,
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "order",
+      entityId: id,
+      siteId: row.siteId,
+      workspaceId: order.site.workspaceId,
+      label: row.orderNumber,
+      before: order,
+      after: row,
+      fields: ["status", "cancelledAt"],
+    });
+    return row;
   });
 
   publishEntityEvent({
@@ -597,6 +694,7 @@ async function completeOrder(orderId: string, siteId: string, workspaceId: strin
       where: { id: orderId },
       select: {
         status: true,
+        completedAt: true,
         deletedAt: true,
         lineItems: { select: { id: true, productId: true, targetQuantity: true } },
       },
@@ -692,6 +790,18 @@ async function completeOrder(orderId: string, siteId: string, workspaceId: strin
       data: { status: "COMPLETED", completedAt: new Date() },
       include: orderDetailInclude,
     });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "order",
+      entityId: orderId,
+      siteId,
+      workspaceId,
+      label: updated.orderNumber,
+      before: fresh,
+      after: updated,
+      fields: ["status", "completedAt"],
+      ...(source === "AUTO" ? { metadata: { source } } : {}),
+    });
     return { data: updated, consumedProducts: consuming.map((t) => t.productId) };
   });
 
@@ -726,7 +836,14 @@ async function completeOrder(orderId: string, siteId: string, workspaceId: strin
 export async function addLineItem(orderId: string, input: { productId: string; targetQuantity: number }) {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
-    select: { id: true, siteId: true, status: true, deletedAt: true, site: { select: { workspaceId: true } } },
+    select: {
+      id: true,
+      orderNumber: true,
+      siteId: true,
+      status: true,
+      deletedAt: true,
+      site: { select: { workspaceId: true } },
+    },
   });
 
   if (!order || order.deletedAt) {
@@ -746,20 +863,33 @@ export async function addLineItem(orderId: string, input: { productId: string; t
     return { error: "This product is already on the order", code: "DUPLICATE_PRODUCT" };
   }
 
-  const lineItem = await prisma.orderLineItem.create({
-    data: {
-      orderId,
-      productId: input.productId,
-      targetQuantity: input.targetQuantity,
-    },
-    include: {
-      product: {
-        select: {
-          id: true,
-          currentVersion: { select: { sku: true, name: true } },
+  const lineItem = await prisma.$transaction(async (tx) => {
+    const row = await tx.orderLineItem.create({
+      data: {
+        orderId,
+        productId: input.productId,
+        targetQuantity: input.targetQuantity,
+      },
+      include: {
+        product: {
+          select: {
+            id: true,
+            currentVersion: { select: { sku: true, name: true } },
+          },
         },
       },
-    },
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "order",
+      entityId: orderId,
+      siteId: order.siteId,
+      workspaceId: order.site.workspaceId,
+      label: order.orderNumber,
+      fields: [],
+      metadata: { lineItem: "added", product: productLabel(row.product), targetQuantity: Number(row.targetQuantity) },
+    });
+    return row;
   });
 
   publishEntityEvent({
@@ -789,7 +919,9 @@ export async function updateLineItem(lineItemId: string, input: { targetQuantity
       id: true,
       orderId: true,
       productId: true,
-      order: { select: { siteId: true, status: true, site: { select: { workspaceId: true } } } },
+      targetQuantity: true,
+      product: { select: { currentVersion: { select: { sku: true, name: true } } } },
+      order: { select: { orderNumber: true, siteId: true, status: true, site: { select: { workspaceId: true } } } },
     },
   });
 
@@ -801,17 +933,34 @@ export async function updateLineItem(lineItemId: string, input: { targetQuantity
     return { error: "Cannot modify line items on a completed or cancelled order", code: "NOT_EDITABLE" };
   }
 
-  const updated = await prisma.orderLineItem.update({
-    where: { id: lineItemId },
-    data: input,
-    include: {
-      product: {
-        select: {
-          id: true,
-          currentVersion: { select: { sku: true, name: true } },
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await tx.orderLineItem.update({
+      where: { id: lineItemId },
+      data: input,
+      include: {
+        product: {
+          select: {
+            id: true,
+            currentVersion: { select: { sku: true, name: true } },
+          },
         },
       },
-    },
+    });
+    const from = Number(lineItem.targetQuantity);
+    const to = Number(row.targetQuantity);
+    if (from !== to) {
+      await auditRecord(tx, {
+        change: "updated",
+        entityType: "order",
+        entityId: lineItem.orderId,
+        siteId: lineItem.order.siteId,
+        workspaceId: lineItem.order.site.workspaceId,
+        label: lineItem.order.orderNumber,
+        fields: [],
+        metadata: { lineItem: "changed", product: productLabel(row.product), targetQuantity: { from, to } },
+      });
+    }
+    return row;
   });
 
   publishEntityEvent({
@@ -841,7 +990,9 @@ export async function removeLineItem(lineItemId: string) {
       id: true,
       orderId: true,
       productId: true,
-      order: { select: { siteId: true, status: true, site: { select: { workspaceId: true } } } },
+      targetQuantity: true,
+      product: { select: { currentVersion: { select: { sku: true, name: true } } } },
+      order: { select: { orderNumber: true, siteId: true, status: true, site: { select: { workspaceId: true } } } },
     },
   });
 
@@ -853,8 +1004,24 @@ export async function removeLineItem(lineItemId: string) {
     return { error: "Cannot modify line items on a completed or cancelled order", code: "NOT_EDITABLE" };
   }
 
-  await prisma.orderLineItem.delete({
-    where: { id: lineItemId },
+  await prisma.$transaction(async (tx) => {
+    await tx.orderLineItem.delete({
+      where: { id: lineItemId },
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "order",
+      entityId: lineItem.orderId,
+      siteId: lineItem.order.siteId,
+      workspaceId: lineItem.order.site.workspaceId,
+      label: lineItem.order.orderNumber,
+      fields: [],
+      metadata: {
+        lineItem: "removed",
+        product: productLabel(lineItem.product),
+        targetQuantity: Number(lineItem.targetQuantity),
+      },
+    });
   });
 
   publishEntityEvent({

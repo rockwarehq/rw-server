@@ -1,4 +1,5 @@
 import prisma from "@rw/db";
+import { auditRecord } from "../../audit/index.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 
@@ -36,13 +37,27 @@ export async function getSiteSettings(siteId: string) {
 
 export async function updateSiteSettings(siteId: string, patch: Partial<SiteSettings>) {
   const result = await prisma.$transaction(async (tx) => {
-    const site = await tx.site.findUnique({ where: { id: siteId }, select: { attrs: true, workspaceId: true } });
+    const site = await tx.site.findUnique({
+      where: { id: siteId },
+      select: { name: true, attrs: true, workspaceId: true },
+    });
     if (!site) return null;
     const attrs = { ...((site.attrs ?? {}) as Record<string, unknown>) };
     for (const key of SETTINGS_KEYS) {
       if (patch[key] !== undefined) attrs[key] = patch[key];
     }
     await tx.site.update({ where: { id: siteId }, data: { attrs } });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "site",
+      entityId: siteId,
+      siteId,
+      workspaceId: site.workspaceId,
+      label: site.name,
+      before: parseSiteSettings(site.attrs) as unknown as Record<string, unknown>,
+      after: parseSiteSettings(attrs) as unknown as Record<string, unknown>,
+      fields: SETTINGS_KEYS,
+    });
     return { workspaceId: site.workspaceId, settings: parseSiteSettings(attrs) };
   });
 

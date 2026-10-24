@@ -371,6 +371,7 @@ async function logFailure(
 ) {
   await logEvent({
     action: "OPERATOR_LOGON_FAILED",
+    ...(employeeId ? { entityType: "employee", entityId: employeeId } : {}),
     metadata: {
       siteId,
       employeeId,
