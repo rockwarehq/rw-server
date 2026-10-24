@@ -82,7 +82,7 @@ Operators aren't users: their logon events name the employee as the record (`ent
 An entry has one of three authors, and the trail says which:
 
 - **A person**: `actorId`, no agent `via`.
-- **An agent acting for a person**: `actorId` is the person, `via: agent:<name>`. They asked it (a Console chat) or connected it and it used their access (MCP). IMM says "Claude Code on behalf of Admin", with the agent's logo on the person's avatar.
+- **An agent acting for a person**: `actorId` is the person, `via: agent:<name>`. They asked it (a Console chat) or connected it and it used their access (MCP). IMM says "Claude Code and Admin changed …", with the agent's logo on the person's avatar.
 - **An agent acting on its own**: `via: agent:<name>`, started by `trigger: hook | schedule` rather than by anyone at the time. `actorId` is whoever set it going, whose access it runs with; IMM names the agent as the author and that person after ("on a schedule Admin set up"). An agent with an identity of its own (no person behind it) writes no `actorId` at all, and IMM names the agent alone. None exists yet: every Console session today has a person.
 
 - **Connected agents** (Claude Code, Codex, ChatGPT over MCP + OAuth) can read and propose, revise or discard imports, nothing else (`apps/api/src/agent/scopes.ts`). Their entries name the person who connected them, `via: agent:<client>`, the IP and a request id. Connecting, revoking and the agent-connections policy are recorded (`OAUTH_GRANT_*`, `AGENT_CONNECTIONS_POLICY_CHANGED`).
