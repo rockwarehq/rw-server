@@ -1,6 +1,5 @@
 import prisma from "@rw/db";
 import { Prisma, type WeightUnit } from "@rw/db";
-import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { auditActorId, auditRecord } from "../audit/index.js";
 import { lockMaterialBalance, pendingMaterialUsage, setMaterialStockUnit } from "../stock/balance.js";

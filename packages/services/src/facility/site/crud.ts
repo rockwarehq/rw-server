@@ -323,18 +323,21 @@ export async function remove(id: string) {
   }
 
   // A delete cascades through the record's history: give it longer than the default 5s.
-  await prisma.$transaction(async (tx) => {
-    await tx.site.delete({ where: { id } });
-    await auditRecord(tx, {
-      change: "deleted",
-      entityType: "site",
-      entityId: site.id,
-      siteId: site.id,
-      workspaceId: site.workspaceId,
-      label: site.name,
-      fields: [],
-    });
-  }, { timeout: 60_000 });
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.site.delete({ where: { id } });
+      await auditRecord(tx, {
+        change: "deleted",
+        entityType: "site",
+        entityId: site.id,
+        siteId: site.id,
+        workspaceId: site.workspaceId,
+        label: site.name,
+        fields: [],
+      });
+    },
+    { timeout: 60_000 },
+  );
 
   publishEntityEvent({
     action: "deleted",

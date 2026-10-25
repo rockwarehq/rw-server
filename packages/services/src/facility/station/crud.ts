@@ -721,7 +721,12 @@ export async function move(id: string, newWorkcenterId: string | null) {
       workcenterIds: [current.workcenterId, updated.workcenterId],
       // Moving it to where it already is changes nothing worth recording.
       ...(current.workcenterId !== updated.workcenterId
-        ? { metadata: { fromWorkcenter: current.workcenter?.name ?? null, toWorkcenter: updated.workcenter?.name ?? null } }
+        ? {
+            metadata: {
+              fromWorkcenter: current.workcenter?.name ?? null,
+              toWorkcenter: updated.workcenter?.name ?? null,
+            },
+          }
         : {}),
     });
     return updated;
@@ -820,19 +825,22 @@ export async function remove(id: string) {
   }
 
   // A delete cascades through the record's history: give it longer than the default 5s.
-  await prisma.$transaction(async (tx) => {
-    await tx.station.delete({ where: { id } });
-    await auditRecord(tx, {
-      change: "deleted",
-      entityType: "station",
-      entityId: station.id,
-      siteId: station.siteId,
-      workspaceId: station.site.workspaceId,
-      label: station.name,
-      fields: [],
-      workcenterIds: [station.workcenterId],
-    });
-  }, { timeout: 60_000 });
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.station.delete({ where: { id } });
+      await auditRecord(tx, {
+        change: "deleted",
+        entityType: "station",
+        entityId: station.id,
+        siteId: station.siteId,
+        workspaceId: station.site.workspaceId,
+        label: station.name,
+        fields: [],
+        workcenterIds: [station.workcenterId],
+      });
+    },
+    { timeout: 60_000 },
+  );
 
   publishStationEntityEvent({
     action: "deleted",

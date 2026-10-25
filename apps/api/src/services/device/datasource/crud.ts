@@ -372,18 +372,21 @@ export async function remove(id: string) {
   const wasActive = existing.status === "ACTIVE";
 
   // A delete cascades through the record's history: give it longer than the default 5s.
-  await prisma.$transaction(async (tx) => {
-    await tx.datasource.delete({ where: { id } });
-    await auditRecord(tx, {
-      change: "deleted",
-      entityType: "datasource",
-      entityId: existing.id,
-      siteId: existing.siteId,
-      workspaceId: existing.site?.workspaceId,
-      label: existing.name,
-      fields: AUDIT_FIELDS,
-    });
-  }, { timeout: 60_000 });
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.datasource.delete({ where: { id } });
+      await auditRecord(tx, {
+        change: "deleted",
+        entityType: "datasource",
+        entityId: existing.id,
+        siteId: existing.siteId,
+        workspaceId: existing.site?.workspaceId,
+        label: existing.name,
+        fields: AUDIT_FIELDS,
+      });
+    },
+    { timeout: 60_000 },
+  );
 
   // Update gateway spec if was ACTIVE and associated with a gateway
   if (wasActive && gatewayId) {

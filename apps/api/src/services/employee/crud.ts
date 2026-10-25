@@ -495,17 +495,20 @@ export async function remove(id: string) {
   });
 
   // A delete cascades through the record's history: give it longer than the default 5s.
-  await prisma.$transaction(async (tx) => {
-    await tx.employee.delete({ where: { id } });
-    await auditRecord(tx, {
-      change: "deleted",
-      entityType: "employee",
-      entityId: employee.id,
-      workspaceId: employee.workspaceId,
-      label: employee.version ? employeeLabel(employee.version) : null,
-      fields: [],
-    });
-  }, { timeout: 60_000 });
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.employee.delete({ where: { id } });
+      await auditRecord(tx, {
+        change: "deleted",
+        entityType: "employee",
+        entityId: employee.id,
+        workspaceId: employee.workspaceId,
+        label: employee.version ? employeeLabel(employee.version) : null,
+        fields: [],
+      });
+    },
+    { timeout: 60_000 },
+  );
 
   await Promise.all(affected.map((row) => publishStationCurrentLogonsMetric(row.stationId, now)));
 

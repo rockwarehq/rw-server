@@ -96,7 +96,8 @@ export interface AuditRecordInput {
  * changed none of the named fields (and says nothing else) records nothing.
  */
 export async function auditRecord(tx: Prisma.TransactionClient, input: AuditRecordInput): Promise<void> {
-  const changes = input.change === "deleted" ? {} : changedValues(input.before, input.after, input.fields, input.identities);
+  const changes =
+    input.change === "deleted" ? {} : changedValues(input.before, input.after, input.fields, input.identities);
   const changed = Object.keys(changes).length > 0;
   if (input.change === "updated" && !changed && !input.metadata) return;
   const workcenterIds = [...new Set((input.workcenterIds ?? []).filter((id): id is string => !!id))];

@@ -19,8 +19,8 @@ describe("changedValues", () => {
     expect(changedValues(before, after, ["tool"], { tool: { before: "t1", after: "t2" } })).toEqual({
       tool: { from: "Mold A", to: "Mold A" },
     });
-    expect(changedValues({ tool: "Mold A" }, { tool: "Mold B" }, ["tool"], { tool: { before: "t1", after: "t1" } })).toEqual(
-      {},
-    );
+    expect(
+      changedValues({ tool: "Mold A" }, { tool: "Mold B" }, ["tool"], { tool: { before: "t1", after: "t1" } }),
+    ).toEqual({});
   });
 });
