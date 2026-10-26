@@ -1,6 +1,7 @@
 import prisma from "@rw/db";
 import type { Prisma, StationJobLog } from "@rw/db";
 import { resolveShiftStamp, type ShiftStamp } from "../work-context.js";
+import { currentJobLogStandards } from "./effective-standards.js";
 import { createStationJobLog } from "./jobs.js";
 import { acquireStationLock, findOpenStateEntry, splitStateEntryAt } from "./state.js";
 
@@ -79,19 +80,31 @@ export const cutStateEntry =
   (tx: Tx) => async (row: Parameters<typeof splitStateEntryAt>[1], at: Date, stamp: ShiftStamp) =>
     (await splitStateEntryAt(tx, row, at, stamp))[1];
 
-export const cutJobLog = (tx: Tx, station: StationScope) => async (row: StationJobLog, at: Date) => {
-  await tx.stationJobLog.update({ where: { id: row.id }, data: { endTime: at } });
-  return createStationJobLog(tx, station, {
-    blockId: row.blockId,
-    jobId: row.jobId,
-    jobVersionId: row.jobVersionId,
-    startTime: at,
-    endTime: row.endTime,
-    standardCycle: row.standardCycle?.toNumber() ?? null,
-    standardQuantity: row.standardQuantity?.toNumber() ?? null,
-    quantityUnit: row.quantityUnit,
-  });
-};
+/**
+ * `fromJob`: the continuation reads the job's current version and standards
+ * instead of copying the row's. A new shift takes the job as it is now, so a
+ * standard edited mid-run (or an edit whose refresh failed) catches up at the
+ * next boundary. Re-cutting history (shift amendments) leaves it off and
+ * carries the row's snapshot.
+ */
+export const cutJobLog =
+  (tx: Tx, station: StationScope, { fromJob = false } = {}) =>
+  async (row: StationJobLog, at: Date) => {
+    await tx.stationJobLog.update({ where: { id: row.id }, data: { endTime: at } });
+    const current = fromJob ? await currentJobLogStandards(tx, station.id, row.jobId) : null;
+    return createStationJobLog(tx, station, {
+      blockId: row.blockId,
+      jobId: row.jobId,
+      startTime: at,
+      endTime: row.endTime,
+      ...(current?.log ?? {
+        jobVersionId: row.jobVersionId,
+        standardCycle: row.standardCycle?.toNumber() ?? null,
+        standardQuantity: row.standardQuantity?.toNumber() ?? null,
+        quantityUnit: row.quantityUnit,
+      }),
+    });
+  };
 
 /** Cut the station's open state row and open job log at any boundary they have crossed. Caller holds the lock. */
 export async function splitOpenPeriodsAtShiftBoundaries(
@@ -104,7 +117,7 @@ export async function splitOpenPeriodsAtShiftBoundaries(
     tx.stationJobLog.findFirst({ where: { stationId: station.id, endTime: null }, orderBy: { startTime: "desc" } }),
   ]);
   if (state) await cutAtShiftBoundaries(tx, station, state, now, cutStateEntry(tx));
-  if (job) await cutAtShiftBoundaries(tx, station, job, now, cutJobLog(tx, station));
+  if (job) await cutAtShiftBoundaries(tx, station, job, now, cutJobLog(tx, station, { fromJob: true }));
 }
 
 /** Ensure-tick sweep: every station whose open rows are stamped with a shift other than the one running now. */

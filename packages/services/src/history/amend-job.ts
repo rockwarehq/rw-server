@@ -67,17 +67,13 @@ export async function amendJobHistory(input: AmendJobHistoryInput): Promise<Amen
           deletedAt: true,
           currentVersionId: true,
           currentVersion: { select: { name: true } },
-          versions: {
-            where: { createdAt: { lte: from } },
-            orderBy: { createdAt: "desc" },
-            take: 1,
-            select: { id: true },
-          },
         },
       })
     : null;
   if (input.jobId && (!job || job.deletedAt)) return { error: "Job not found", code: "JOB_NOT_FOUND" };
-  const jobVersionId = job?.versions[0]?.id ?? job?.currentVersionId ?? null;
+  // The job as it is now, not as it was at `from`: most standard edits are
+  // corrections, and amended history should be graded on the corrected one.
+  const jobVersionId = job?.currentVersionId ?? null;
   if (job && !jobVersionId) return { error: "Job has no version", code: "NO_CURRENT_VERSION" };
 
   const result = await prisma.$transaction(
@@ -104,7 +100,7 @@ export async function amendJobHistory(input: AmendJobHistoryInput): Promise<Amen
         if (reason) return { error: reason.message, code: reason.code };
       }
 
-      const std = job && jobVersionId ? await resolveEffectiveStandards(tx, stationId, job.id, jobVersionId) : null;
+      const std = job && jobVersionId ? await resolveEffectiveStandards(tx, stationId, job.id) : null;
       const rows = await loadTimelineRows(tx, stationId, from, to);
       const previous = rows.filter((r) => r.startTime < toEff && (r.endTime === null || r.endTime > from));
       const displacedJobIds = [...new Set(previous.map((r) => r.jobId))].filter((id) => id !== job?.id);
@@ -144,6 +140,8 @@ export async function amendJobHistory(input: AmendJobHistoryInput): Promise<Amen
                 standardCycle: std.standardCycleSeconds,
                 standardQuantity: std.standardQuantity,
                 quantityUnit: std.quantityUnit,
+                mode: std.mode,
+                secondsPerUnit: std.secondsPerUnit,
               }
             : null,
       };
