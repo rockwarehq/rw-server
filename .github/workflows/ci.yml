@@ -1,9 +1,9 @@
 name: CI
 
+# PRs only: a push to dev/main lands code its PR already checked, so
+# re-running there just doubles the minutes. Run by hand if needed.
 on:
   pull_request:
-  push:
-    branches: [main, dev]
   workflow_dispatch:
 
 concurrency:
