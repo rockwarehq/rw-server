@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import prisma from "@rw/db";
 import { resolveEffectiveStandards } from "./effective-standards.js";
+import { applyCurrentStandardsToOpenJobLog } from "./job-log-standards.js";
 import type { Prisma, StationStateLog } from "@rw/db";
 import { publishMetricValueChange } from "../../rpc/metrics-bus.js";
 import { publishStationShiftContext } from "../../metrics/graph-context.js";
@@ -901,8 +902,14 @@ export async function transitionToDown(stationId: string, timestamp: Date) {
 }
 
 // A station's or its job's standards changed mid-run (job edit, station
-// profile edit): re-resolve the effective standard and re-publish it.
+// profile edit): re-resolve the effective standard and re-publish it, and move
+// the open job log and this shift's cycles onto it so the target and OEE agree.
+// The rebuild runs in the background: a profile applied to many stations
+// should not wait on each station's shift of metrics.
 export async function refreshStationStandards(stationId: string, jobId: string, observedAt: Date): Promise<void> {
+  void applyCurrentStandardsToOpenJobLog(stationId, jobId).catch((err) => {
+    console.error(`[refreshStationStandards] job log update failed for station ${stationId}:`, err);
+  });
   const std = await resolveEffectiveStandards(prisma, stationId, jobId);
   await publishStationStandardCycleMetric(stationId, std.standardCycleSeconds, observedAt);
   const ctx = await loadStationMetricContext(prisma, stationId);

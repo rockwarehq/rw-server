@@ -1,3 +1,4 @@
+import type { CycleModeValue } from "../cycle/standards.js";
 import type { Prisma } from "@rw/db";
 
 /** What every module handler needs to rewrite its facts for one amendment. */
@@ -18,5 +19,8 @@ export interface AmendContext {
     standardCycle: number | null;
     standardQuantity: number | null;
     quantityUnit: string;
+    /** For each cycle's earned standard; see earnedStandardCycleSql. */
+    mode: CycleModeValue;
+    secondsPerUnit: number | null;
   } | null;
 }
