@@ -21,6 +21,14 @@ on:
         options:
           - sim
         default: sim
+      runner:
+        description: 'Runner (default follows the RUNNER_LABEL repo variable)'
+        type: choice
+        options:
+          - default
+          - rw-wsl
+          - ubuntu-latest
+        default: default
 
 permissions:
   contents: read
@@ -31,7 +39,7 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner != 'default' && inputs.runner || vars.RUNNER_LABEL || 'ubuntu-latest' }}
     # Simulator tenants are non-customer, so they deploy through `development`.
     environment: development
     timeout-minutes: 25
@@ -57,4 +65,4 @@ jobs:
       - name: Deploy simulator
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: pnpm fly:deploy --app sim ${{ inputs.tenant }}
+        run: pnpm fly:deploy --app sim ${{ inputs.tenant }} ${{ runner.arch == 'ARM64' && '--remote' || '' }}
