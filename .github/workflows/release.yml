@@ -28,7 +28,7 @@ jobs:
   # Build both clients before anything is tagged, so a client that can't build
   # stops the release instead of failing after it's published.
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
@@ -59,7 +59,7 @@ jobs:
 
   tag:
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     permissions:
       contents: write
       pull-requests: read

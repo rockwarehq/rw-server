@@ -15,7 +15,7 @@ jobs:
   # Integration tests that need real Postgres + Redis are intentionally
   # deferred for now (no service containers / migrations wired up yet).
   quality:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
 
     steps:
       - name: Checkout code

@@ -15,7 +15,7 @@ permissions: {}
 
 jobs:
   source-branch:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - name: Check PR source
         env:
@@ -27,7 +27,7 @@ jobs:
           esac
 
   release-title:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:

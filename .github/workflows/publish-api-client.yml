@@ -9,11 +9,22 @@ on:
         description: "Dry run (skip actual publish)"
         type: boolean
         default: false
+      runner:
+        description: "Runner (default follows the RUNNER_LABEL repo variable)"
+        type: choice
+        options:
+          - default
+          - rw-wsl
+          - ubuntu-latest
+        default: default
   workflow_call:
     inputs:
       dry_run:
         type: boolean
         default: false
+      runner:
+        type: string
+        default: default
 
 permissions:
   contents: read
@@ -21,7 +32,7 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner != 'default' && inputs.runner || vars.RUNNER_LABEL || 'ubuntu-latest' }}
     # Only main publishes packages (the production environment allows main only).
     environment: production
 
