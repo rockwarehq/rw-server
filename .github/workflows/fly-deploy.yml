@@ -43,6 +43,14 @@ on:
         required: false
         type: string
         default: ''
+      runner:
+        description: 'Runner (default follows the RUNNER_LABEL repo variable)'
+        type: choice
+        options:
+          - default
+          - rw-wsl
+          - ubuntu-latest
+        default: default
 
 permissions:
   contents: read
@@ -54,7 +62,7 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner != 'default' && inputs.runner || vars.RUNNER_LABEL || 'ubuntu-latest' }}
     environment: ${{ (inputs.tenant == 'dev' || inputs.tenant == 'sim') && 'development' || 'production' }}
     timeout-minutes: 25
     steps:
@@ -68,7 +76,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24'
-          cache: 'pnpm'
+          # Self-hosted runners keep pnpm's store on disk; uploading it to GitHub's cache is slow.
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -80,7 +89,7 @@ jobs:
         if: inputs.app == 'api' || inputs.app == 'all'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: pnpm fly:deploy --app api ${{ inputs.tenant }}
+        run: pnpm fly:deploy --app api ${{ inputs.tenant }} ${{ runner.arch == 'ARM64' && '--remote' || '' }}
 
       # `groups` only applies to a workers-only deploy. When app == 'all' the
       # input is ignored (a targeted roll of one group across a full-stack deploy
@@ -89,10 +98,10 @@ jobs:
         if: inputs.app == 'workers' || inputs.app == 'all'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: pnpm fly:deploy --app workers ${{ inputs.tenant }}${{ (inputs.app == 'workers' && inputs.groups != '') && format(' --groups {0}', inputs.groups) || '' }}
+        run: pnpm fly:deploy --app workers ${{ inputs.tenant }}${{ (inputs.app == 'workers' && inputs.groups != '') && format(' --groups {0}', inputs.groups) || '' }} ${{ runner.arch == 'ARM64' && '--remote' || '' }}
 
       - name: Deploy livestore
         if: inputs.app == 'livestore' || inputs.app == 'all'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: pnpm fly:deploy --app livestore ${{ inputs.tenant }}
+        run: pnpm fly:deploy --app livestore ${{ inputs.tenant }} ${{ runner.arch == 'ARM64' && '--remote' || '' }}

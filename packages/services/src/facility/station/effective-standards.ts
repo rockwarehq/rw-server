@@ -5,34 +5,41 @@ import { decimalToNumber } from "../../metrics/sync.js";
 
 type Client = Prisma.TransactionClient | typeof prisma;
 
+const STATION_STANDARDS_SELECT = {
+  cycleMode: true,
+  standardQuantity: true,
+  quantityUnit: true,
+  standardCycle: true,
+  standardRate: true,
+  standardRateUnit: true,
+  standardRatePeriod: true,
+} as const satisfies Prisma.StationVersionSelect;
+
+/** The station-version fields the standards come from. */
+export type StationStandardsFields = Prisma.StationVersionGetPayload<{ select: typeof STATION_STANDARDS_SELECT }>;
+
 /**
  * Resolve the effective standards for a station+job pairing from the CURRENT
  * station and job versions; callers snapshot the result (StationJobLog at
  * assignment, Cycle at record time). DISCRETE resolves to the job's entered
- * standardCycle — unchanged behavior. History amendments pass the job version
- * that was current at the amended time.
+ * standardCycle — unchanged behavior.
  */
 export async function resolveEffectiveStandards(
   client: Client,
   stationId: string,
   jobId: string,
-  jobVersionId?: string,
+  /** The station's current version, when the caller already has it (saves re-reading it). */
+  currentStationVersion?: StationStandardsFields | null,
 ): Promise<ResolvedStandards> {
   const [stationVersion, jobVersion] = await Promise.all([
-    client.stationVersion.findFirst({
-      where: { station: { id: stationId }, currentOfStation: { isNot: null } },
-      select: {
-        cycleMode: true,
-        standardQuantity: true,
-        quantityUnit: true,
-        standardCycle: true,
-        standardRate: true,
-        standardRateUnit: true,
-        standardRatePeriod: true,
-      },
-    }),
+    currentStationVersion !== undefined
+      ? currentStationVersion
+      : client.stationVersion.findFirst({
+          where: { station: { id: stationId }, currentOfStation: { isNot: null } },
+          select: STATION_STANDARDS_SELECT,
+        }),
     client.jobVersion.findFirst({
-      where: jobVersionId ? { id: jobVersionId } : { job: { id: jobId }, currentOfJob: { isNot: null } },
+      where: { job: { id: jobId }, currentOfJob: { isNot: null } },
       select: {
         standardCycle: true,
         standardRate: true,
@@ -55,4 +62,27 @@ export async function resolveEffectiveStandards(
     jobStandardRateUnit: jobVersion?.standardRateUnit,
     jobStandardRatePeriod: jobVersion?.standardRatePeriod,
   });
+}
+
+/**
+ * What a StationJobLog for this pairing carries: the job's current version and
+ * the standards resolved from it. Every job log takes these, never a copy of
+ * an older log's, so a job edited mid-run cannot leave its target on the old
+ * standard. Null when the job has no current version.
+ */
+export async function currentJobLogStandards(client: Client, stationId: string, jobId: string) {
+  const [job, std] = await Promise.all([
+    client.job.findUnique({ where: { id: jobId }, select: { currentVersionId: true } }),
+    resolveEffectiveStandards(client, stationId, jobId),
+  ]);
+  if (!job?.currentVersionId) return null;
+  return {
+    std,
+    log: {
+      jobVersionId: job.currentVersionId,
+      standardCycle: std.standardCycleSeconds,
+      standardQuantity: std.standardQuantity,
+      quantityUnit: std.quantityUnit,
+    },
+  };
 }

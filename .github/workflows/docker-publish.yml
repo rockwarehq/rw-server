@@ -17,12 +17,24 @@ name: Publish Docker Images
 # release tag, e.g. v1.1.0); it can also be run by hand from the Actions tab.
 on:
   workflow_dispatch:
+    inputs:
+      runner:
+        description: "Runner (default follows the RUNNER_LABEL repo variable)"
+        type: choice
+        options:
+          - default
+          - rw-wsl
+          - ubuntu-latest
+        default: default
   workflow_call:
     inputs:
       release_tag:
         description: "Release tag to add to the images (e.g. v1.1.0)"
         type: string
         default: ""
+      runner:
+        type: string
+        default: default
 
 permissions:
   contents: read
@@ -36,9 +48,12 @@ jobs:
         target: [api, workers, livestore]
         arch:
           - platform: linux/amd64
-            runner: ubuntu-latest
+            # Stays on GitHub's amd64 runner: the self-hosted runner is arm64
+            # and emulated Node builds aren't reliable (see above).
+            runner: ${{ vars.AMD64_RUNNER_LABEL || 'ubuntu-latest' }}
           - platform: linux/arm64
-            runner: ubuntu-24.04-arm # native ARM runner — no QEMU
+            # native ARM runner — no QEMU; a self-hosted arm64 runner when set
+            runner: ${{ inputs.runner == 'ubuntu-latest' && 'ubuntu-24.04-arm' || inputs.runner != 'default' && inputs.runner || vars.RUNNER_LABEL || 'ubuntu-24.04-arm' }}
     runs-on: ${{ matrix.arch.runner }}
     steps:
       - name: Prepare platform pair
@@ -76,8 +91,10 @@ jobs:
           target: ${{ matrix.target }}
           platforms: ${{ matrix.arch.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.target }}-${{ env.PLATFORM_PAIR }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.target }}-${{ env.PLATFORM_PAIR }}
+          # GitHub's cache on hosted runners; a self-hosted runner keeps the build
+          # cache in its tool cache (persists between jobs) instead of uploading it.
+          cache-from: ${{ runner.environment == 'github-hosted' && format('type=gha,scope={0}-{1}', matrix.target, env.PLATFORM_PAIR) || format('type=local,src={0}/buildx-cache/{1}-{2}', runner.tool_cache, matrix.target, env.PLATFORM_PAIR) }}
+          cache-to: ${{ runner.environment == 'github-hosted' && format('type=gha,mode=max,scope={0}-{1}', matrix.target, env.PLATFORM_PAIR) || format('type=local,mode=max,dest={0}/buildx-cache/{1}-{2}', runner.tool_cache, matrix.target, env.PLATFORM_PAIR) }}
           outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
@@ -95,7 +112,7 @@ jobs:
           retention-days: 1
 
   merge:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner != 'default' && inputs.runner || vars.RUNNER_LABEL || 'ubuntu-latest' }}
     needs: build
     strategy:
       fail-fast: false

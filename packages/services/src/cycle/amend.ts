@@ -1,4 +1,22 @@
+import { Prisma } from "@rw/db";
 import type { AmendContext } from "../history/context.js";
+import type { ResolvedStandards } from "./standards.js";
+
+/**
+ * A cycle's earned standard as resolveCycleActuals stamps it at record time,
+ * for restamping stored cycles in SQL: quantity x seconds-per-unit on a rate,
+ * else the flat standard (none for an interval report without a rate).
+ */
+export function earnedStandardCycleSql(
+  std: Pick<ResolvedStandards, "mode" | "secondsPerUnit" | "standardCycleSeconds">,
+): Prisma.Sql {
+  return Prisma.sql`CASE
+    WHEN ${std.mode} <> 'DISCRETE' AND ${std.secondsPerUnit}::float8 IS NOT NULL AND "quantity" IS NOT NULL
+      THEN "quantity" * ${std.secondsPerUnit}::float8
+    WHEN ${std.mode} = 'QUANTITY_PER_INTERVAL' THEN NULL
+    ELSE ${std.standardCycleSeconds}::float8
+  END`;
+}
 
 /**
  * Point the window's cycles at the amended job: stable id, version, standards
@@ -14,7 +32,7 @@ export async function restampCycles(ctx: AmendContext): Promise<{ cycleIds: stri
     UPDATE "Cycle"
     SET "jobId" = ${job.id}::uuid,
         "jobVersionId" = ${job.versionId}::uuid,
-        "standardCycle" = ${job.standardCycle},
+        "standardCycle" = ${earnedStandardCycleSql({ ...job, standardCycleSeconds: job.standardCycle })},
         "standardQuantity" = ${job.standardQuantity},
         "quantityUnit" = ${job.quantityUnit},
         "amendmentId" = ${amendmentId}::uuid,

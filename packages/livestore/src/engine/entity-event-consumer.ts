@@ -91,13 +91,16 @@ export class EntityEventConsumer {
           continue;
         }
 
-        try {
-          await this.sink.handleEntityEvent(event);
-          message.ack();
-        } catch (err) {
-          this.logger.error({ err, event }, "livestore entity event failed");
-          message.nak(1_000);
-        }
+        // Don't wait for the read: the sink merges events for a record that is
+        // already being read and reads different records in parallel, which only
+        // works if the next events reach it. Ack once the covering read commits.
+        void this.sink.handleEntityEvent(event).then(
+          () => message.ack(),
+          (err: unknown) => {
+            this.logger.error({ err, event }, "livestore entity event failed");
+            message.nak(1_000);
+          },
+        );
       }
     } catch (err) {
       this.logger.error({ err }, "livestore entity event consumer failed");

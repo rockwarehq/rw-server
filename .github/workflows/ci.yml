@@ -1,9 +1,9 @@
 name: CI
 
+# PRs only: a push to dev/main lands code its PR already checked, so
+# re-running there just doubles the minutes. Run by hand if needed.
 on:
   pull_request:
-  push:
-    branches: [main, dev]
   workflow_dispatch:
 
 concurrency:
@@ -15,7 +15,7 @@ jobs:
   # Integration tests that need real Postgres + Redis are intentionally
   # deferred for now (no service containers / migrations wired up yet).
   quality:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
 
     steps:
       - name: Checkout code
@@ -28,7 +28,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24"
-          cache: "pnpm"
+          # Self-hosted runners keep pnpm's store on disk; uploading it to GitHub's cache is slow.
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
