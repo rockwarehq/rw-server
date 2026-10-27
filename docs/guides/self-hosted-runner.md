@@ -47,6 +47,10 @@ The current self-hosted runner is a WSL2 Ubuntu box on arm64 (label `rw-wsl`).
 
 3. Set `RUNNER_LABEL=rw-wsl`.
 
+On a self-hosted runner, workflows don't upload caches to GitHub (slow, and
+pointless there): pnpm reuses its store on the machine's disk, and Docker
+builds cache under the runner's tool cache folder.
+
 A runner takes one job at a time; jobs queue until it's free or online
 (WSL stops when Windows sleeps). Register more runners on the same machine
 (separate directories, same label) to run jobs in parallel.
