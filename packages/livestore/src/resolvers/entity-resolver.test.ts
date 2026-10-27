@@ -1,11 +1,14 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const readEntityFieldValue = vi.fn();
+const readEntityFieldValues = vi.fn();
 vi.mock("../graph/index.js", () => ({
   nodes: {
-    readEntityFieldValue: (...args: unknown[]) => readEntityFieldValue(...args),
+    readEntityFieldValues: (...args: unknown[]) => readEntityFieldValues(...args),
   },
 }));
+
+// Default reader: every requested path resolves to "station-7".
+const valuesFor = (args: { paths: string[] }) => ({ data: new Map(args.paths.map((path) => [path, "station-7"])) });
 
 const { EntityResolver } = await import("./entity-resolver.js");
 import type { LivestoreLogger, PropertyRuntime, ValueEnvelope } from "../types/index.js";
@@ -44,16 +47,17 @@ function harness(
       commits.push({ propertyId, envelope, source });
     }),
   };
-  const prisma = { graphNode: { findUnique: vi.fn(async () => node) } } as never;
+  const findUnique = vi.fn(async () => node);
+  const prisma = { graphNode: { findUnique } } as never;
   const properties = new Map<string, PropertyRuntime>();
   const getProperty = (id: string) => properties.get(id) ?? null;
   const resolver = new EntityResolver(prisma, sink, logger, getProperty);
-  return { resolver, sink, commits, properties };
+  return { resolver, sink, commits, properties, findUnique };
 }
 
 beforeEach(() => {
-  readEntityFieldValue.mockReset();
-  readEntityFieldValue.mockResolvedValue({ data: "station-7" });
+  readEntityFieldValues.mockReset();
+  readEntityFieldValues.mockImplementation(async (args: { paths: string[] }) => valuesFor(args));
 });
 
 describe("EntityResolver", () => {
@@ -62,10 +66,10 @@ describe("EntityResolver", () => {
 
     await resolver.resolveProperty(entityProperty());
 
-    expect(readEntityFieldValue).toHaveBeenCalledWith({
+    expect(readEntityFieldValues).toHaveBeenCalledWith({
       entityType: "imm.station",
       entityId: "station-7",
-      path: "id",
+      paths: ["id"],
       scope: { workspaceId: "ws-1", siteId: "site-1" },
     });
     expect(commits[0]).toMatchObject({
@@ -78,12 +82,12 @@ describe("EntityResolver", () => {
   it("commits stale when the node scope is not found", async () => {
     const { resolver, commits } = harness(null);
     await resolver.resolveProperty(entityProperty());
-    expect(readEntityFieldValue).not.toHaveBeenCalled();
+    expect(readEntityFieldValues).not.toHaveBeenCalled();
     expect(commits[0]?.envelope.quality).toBe("stale");
   });
 
   it("commits stale when the entity read fails", async () => {
-    readEntityFieldValue.mockResolvedValue({ error: "not found", code: "ENTITY_REF_NOT_FOUND" });
+    readEntityFieldValues.mockResolvedValue({ error: "not found", code: "ENTITY_REF_NOT_FOUND" });
     const { resolver, commits } = harness();
     await resolver.resolveProperty(entityProperty());
     expect(commits[0]?.envelope.quality).toBe("stale");
@@ -214,5 +218,157 @@ describe("EntityResolver", () => {
     await resolver.handleEntityEvent(event());
 
     expect(commits).toHaveLength(0);
+  });
+
+  it("start() reads each record once for all the properties bound to it", async () => {
+    const { resolver, commits } = harness();
+    const a = entityProperty({ id: "prop-a" });
+    const b = entityProperty({
+      id: "prop-b",
+      resolver: { type: "entity", entityType: "imm.station", entityId: "station-7", path: "name" },
+    });
+    const other = entityProperty({
+      id: "prop-other",
+      resolver: { type: "entity", entityType: "imm.station", entityId: "station-8", path: "id" },
+    });
+
+    await resolver.start([a, b, other]);
+
+    expect(readEntityFieldValues).toHaveBeenCalledTimes(2);
+    expect(readEntityFieldValues).toHaveBeenCalledWith(
+      expect.objectContaining({ entityId: "station-7", paths: ["id", "name"] }),
+    );
+    expect(commits.map((c) => c.propertyId).sort()).toEqual(["prop-a", "prop-b", "prop-other"]);
+  });
+
+  it("handleEntityEvent reads the record once and commits each matched property's own value", async () => {
+    const { resolver, commits, properties } = harness();
+    for (const [id, path] of [
+      ["prop-status", "status"],
+      ["prop-since", "statusStartAt"],
+      ["prop-job", "currentJob"],
+    ] as const) {
+      const property = entityProperty({
+        id,
+        resolver: { type: "entity", entityType: "imm.station", entityId: "station-7", path },
+      });
+      properties.set(id, property);
+      await resolver.upsertProperty(property);
+    }
+    readEntityFieldValues.mockClear();
+    readEntityFieldValues.mockImplementation(async (args: { paths: string[] }) => ({
+      data: new Map(args.paths.map((path) => [path, `value-of-${path}`])),
+    }));
+    commits.length = 0;
+
+    await resolver.handleEntityEvent(event({ changedFields: ["status", "statusStartAt"] }));
+
+    expect(readEntityFieldValues).toHaveBeenCalledTimes(1);
+    expect(readEntityFieldValues.mock.calls[0][0].paths.sort()).toEqual(["status", "statusStartAt"]);
+    expect(Object.fromEntries(commits.map((c) => [c.propertyId, c.envelope.value]))).toEqual({
+      "prop-status": "value-of-status",
+      "prop-since": "value-of-statusStartAt",
+    });
+  });
+
+  it("merges events that arrive while the record is being read into one follow-up read", async () => {
+    const { resolver, properties } = harness();
+    const property = entityProperty();
+    properties.set(property.id, property);
+    await resolver.upsertProperty(property);
+    readEntityFieldValues.mockClear();
+
+    let release: () => void = () => {};
+    readEntityFieldValues.mockImplementationOnce(
+      (args: { paths: string[] }) => new Promise((resolve) => (release = () => resolve(valuesFor(args)))),
+    );
+
+    const first = resolver.handleEntityEvent(event({ id: "evt-1" }));
+    await vi.waitFor(() => expect(readEntityFieldValues).toHaveBeenCalledTimes(1));
+    const later = [2, 3, 4].map((n) => resolver.handleEntityEvent(event({ id: `evt-${n}` })));
+    release();
+    await Promise.all([first, ...later]);
+
+    // One read for evt-1, one more covering evt-2..4 (they may have been written after it started).
+    expect(readEntityFieldValues).toHaveBeenCalledTimes(2);
+  });
+
+  it("merged events re-resolve the union of their changed fields", async () => {
+    const { resolver, properties } = harness();
+    for (const [id, path] of [
+      ["prop-status", "status"],
+      ["prop-cycle", "lastCycleSeconds"],
+      ["prop-name", "name"],
+    ] as const) {
+      const property = entityProperty({
+        id,
+        resolver: { type: "entity", entityType: "imm.station", entityId: "station-7", path },
+      });
+      properties.set(id, property);
+      await resolver.upsertProperty(property);
+    }
+    readEntityFieldValues.mockClear();
+
+    let release: () => void = () => {};
+    readEntityFieldValues.mockImplementationOnce(
+      (args: { paths: string[] }) => new Promise((resolve) => (release = () => resolve(valuesFor(args)))),
+    );
+    const first = resolver.handleEntityEvent(event({ changedFields: ["name"] }));
+    await vi.waitFor(() => expect(readEntityFieldValues).toHaveBeenCalledTimes(1));
+    const second = resolver.handleEntityEvent(event({ changedFields: ["status"] }));
+    const third = resolver.handleEntityEvent(event({ changedFields: ["lastCycleSeconds"] }));
+    release();
+    await Promise.all([first, second, third]);
+
+    expect(readEntityFieldValues.mock.calls[1][0].paths.sort()).toEqual(["lastCycleSeconds", "status"]);
+  });
+
+  it("reads different records in parallel", async () => {
+    const { resolver, properties } = harness();
+    for (const stationId of ["station-7", "station-8"]) {
+      const property = entityProperty({
+        id: `prop-${stationId}`,
+        resolver: { type: "entity", entityType: "imm.station", entityId: stationId, path: "id" },
+      });
+      properties.set(property.id, property);
+      await resolver.upsertProperty(property);
+    }
+    readEntityFieldValues.mockClear();
+    const releases: Array<() => void> = [];
+    readEntityFieldValues.mockImplementation(
+      (args: { paths: string[] }) => new Promise((resolve) => releases.push(() => resolve(valuesFor(args)))),
+    );
+
+    const done = Promise.all([
+      resolver.handleEntityEvent(event({ entityId: "station-7" })),
+      resolver.handleEntityEvent(event({ entityId: "station-8" })),
+    ]);
+    await vi.waitFor(() => expect(readEntityFieldValues).toHaveBeenCalledTimes(2));
+    for (const release of releases) release();
+    await done;
+  });
+
+  it("looks up a node's site once and reuses it", async () => {
+    const { resolver, properties, findUnique } = harness();
+    const property = entityProperty();
+    properties.set(property.id, property);
+    await resolver.upsertProperty(property);
+
+    await resolver.handleEntityEvent(event());
+    await resolver.handleEntityEvent(event());
+
+    expect(findUnique).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects the event when the read throws, so the consumer can redeliver it", async () => {
+    const { resolver, properties } = harness();
+    const property = entityProperty();
+    properties.set(property.id, property);
+    await resolver.upsertProperty(property);
+    readEntityFieldValues.mockRejectedValueOnce(new Error("db down"));
+
+    await expect(resolver.handleEntityEvent(event())).rejects.toThrow("db down");
+    // The next event reads again.
+    await expect(resolver.handleEntityEvent(event())).resolves.toBeUndefined();
   });
 });
