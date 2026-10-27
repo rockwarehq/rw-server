@@ -91,8 +91,10 @@ jobs:
           target: ${{ matrix.target }}
           platforms: ${{ matrix.arch.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.target }}-${{ env.PLATFORM_PAIR }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.target }}-${{ env.PLATFORM_PAIR }}
+          # GitHub's cache on hosted runners; a self-hosted runner keeps the build
+          # cache in its tool cache (persists between jobs) instead of uploading it.
+          cache-from: ${{ runner.environment == 'github-hosted' && format('type=gha,scope={0}-{1}', matrix.target, env.PLATFORM_PAIR) || format('type=local,src={0}/buildx-cache/{1}-{2}', runner.tool_cache, matrix.target, env.PLATFORM_PAIR) }}
+          cache-to: ${{ runner.environment == 'github-hosted' && format('type=gha,mode=max,scope={0}-{1}', matrix.target, env.PLATFORM_PAIR) || format('type=local,mode=max,dest={0}/buildx-cache/{1}-{2}', runner.tool_cache, matrix.target, env.PLATFORM_PAIR) }}
           outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest

@@ -47,7 +47,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24"
-          cache: "pnpm"
+          # Self-hosted runners keep pnpm's store on disk; uploading it to GitHub's cache is slow.
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
           registry-url: "https://npm.pkg.github.com"
 
       - name: Install dependencies
