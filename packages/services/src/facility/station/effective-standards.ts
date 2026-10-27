@@ -5,6 +5,19 @@ import { decimalToNumber } from "../../metrics/sync.js";
 
 type Client = Prisma.TransactionClient | typeof prisma;
 
+const STATION_STANDARDS_SELECT = {
+  cycleMode: true,
+  standardQuantity: true,
+  quantityUnit: true,
+  standardCycle: true,
+  standardRate: true,
+  standardRateUnit: true,
+  standardRatePeriod: true,
+} as const satisfies Prisma.StationVersionSelect;
+
+/** The station-version fields the standards come from. */
+export type StationStandardsFields = Prisma.StationVersionGetPayload<{ select: typeof STATION_STANDARDS_SELECT }>;
+
 /**
  * Resolve the effective standards for a station+job pairing from the CURRENT
  * station and job versions; callers snapshot the result (StationJobLog at
@@ -15,20 +28,16 @@ export async function resolveEffectiveStandards(
   client: Client,
   stationId: string,
   jobId: string,
+  /** The station's current version, when the caller already has it (saves re-reading it). */
+  currentStationVersion?: StationStandardsFields | null,
 ): Promise<ResolvedStandards> {
   const [stationVersion, jobVersion] = await Promise.all([
-    client.stationVersion.findFirst({
-      where: { station: { id: stationId }, currentOfStation: { isNot: null } },
-      select: {
-        cycleMode: true,
-        standardQuantity: true,
-        quantityUnit: true,
-        standardCycle: true,
-        standardRate: true,
-        standardRateUnit: true,
-        standardRatePeriod: true,
-      },
-    }),
+    currentStationVersion !== undefined
+      ? currentStationVersion
+      : client.stationVersion.findFirst({
+          where: { station: { id: stationId }, currentOfStation: { isNot: null } },
+          select: STATION_STANDARDS_SELECT,
+        }),
     client.jobVersion.findFirst({
       where: { job: { id: jobId }, currentOfJob: { isNot: null } },
       select: {

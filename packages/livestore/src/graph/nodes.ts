@@ -298,10 +298,19 @@ export async function validateTypeInputs(args: {
   return { data: args.typeContext };
 }
 
+// Top-level record keys a reader was asked for; undefined means the whole record.
+type RecordNeeds = ReadonlySet<string> | undefined;
+
+const wants = (needs: RecordNeeds, ...keys: string[]): boolean => !needs || keys.some((key) => needs.has(key));
+
+// Speed is derived from the version, profile, job standards, state and last cycle.
+const STATION_SPEED_KEYS = ["speedShape", "speedUnit", "speedPeriod", "currentSpeed", "standardSpeed"];
+
 async function resolveSystemEntityRecord(
   entityKey: string,
   entityId: string,
   scope: GraphScope,
+  needs?: RecordNeeds,
 ): Promise<ServiceResult<Record<string, unknown>>> {
   if (entityKey === SYSTEM_ENTITY_KEYS.Site) {
     const site = await prisma.site.findFirst({
@@ -342,12 +351,29 @@ async function resolveSystemEntityRecord(
   }
 
   if (entityKey === SYSTEM_ENTITY_KEYS.Station) {
-    const station = await prisma.station.findFirst({
-      where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null },
-      include: {
-        currentVersion: { include: { profile: { select: { countedAs: true, standardRatePeriod: true } } } },
-      },
-    });
+    // Each part below is read only when a requested key needs it: a full
+    // Station read is ~15 queries, and every cycle sends a Station event.
+    const needSpeed = wants(needs, ...STATION_SPEED_KEYS);
+    const needVersion = needSpeed || wants(needs, "currentVersion");
+    // Speed uses the job's standards; only items per cycle needs the job's products and log.
+    const needStandards =
+      needSpeed || wants(needs, "currentSecondsPerUnit", "currentStandardQuantity", "currentStandardCycleSeconds");
+    const needItems = wants(needs, "itemsPerCycle");
+    const needState = needSpeed || wants(needs, "status", "statusReasonId", "statusReason", "statusStartAt");
+    const needReasonName = wants(needs, "statusReason");
+    const needMode = wants(needs, "productionMode", "productionModeId", "productionModeStartAt");
+    const needLastCycle = needSpeed || wants(needs, "lastCycleSeconds", "lastCycleCompletedAt", "lastCycleQuantity");
+    const needCalls = wants(needs, "openCallCount", "callsUpdatedAt");
+
+    const where = { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null };
+    const station = needVersion
+      ? await prisma.station.findFirst({
+          where,
+          include: {
+            currentVersion: { include: { profile: { select: { countedAs: true, standardRatePeriod: true } } } },
+          },
+        })
+      : await prisma.station.findFirst({ where }).then((row) => row && { ...row, currentVersion: null });
     if (!station) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
     // Items per cycle mirrors inventory.createFromCycle: standard quantity per
     // cycle (snapshotted on the open StationJobLog; 1 for discrete) × the sum
@@ -359,66 +385,96 @@ async function resolveSystemEntityRecord(
     let currentSecondsPerUnit: number | null = null;
     let currentStandardQuantity: number | null = null;
     let currentStandardCycleSeconds: number | null = null;
-    if (station.currentJobId) {
-      const [jobProducts, openJobLog, effective] = await Promise.all([
-        prisma.jobProduct.findMany({
-          where: {
-            jobId: station.currentJobId,
-            deletedAt: null,
-            currentVersion: { isActive: true },
-            product: { currentVersionId: { not: null } },
-          },
-          select: { currentVersion: { select: { quantity: true } } },
-        }),
-        prisma.stationJobLog.findFirst({
-          where: { stationId: station.id, endTime: null },
-          orderBy: { startTime: "desc" },
-          select: { standardQuantity: true },
-        }),
-        resolveEffectiveStandards(prisma, station.id, station.currentJobId),
-      ]);
-      const productSum = jobProducts.reduce((sum, jp) => sum + (jp.currentVersion?.quantity ?? 1), 0);
-      const standardQuantity = openJobLog?.standardQuantity != null ? Number(openJobLog.standardQuantity) : 1;
-      itemsPerCycle = standardQuantity * productSum;
-      currentSecondsPerUnit = effective.secondsPerUnit;
-      currentStandardQuantity = effective.standardQuantity;
-      currentStandardCycleSeconds = effective.standardCycleSeconds;
-    }
+    const currentJobId = station.currentJobId;
+    // The job reads and the live fields below don't depend on each other: read them together.
+    const itemsRead =
+      currentJobId && needItems
+        ? Promise.all([
+            prisma.jobProduct.findMany({
+              where: {
+                jobId: currentJobId,
+                deletedAt: null,
+                currentVersion: { isActive: true },
+                product: { currentVersionId: { not: null } },
+              },
+              select: { currentVersion: { select: { quantity: true } } },
+            }),
+            prisma.stationJobLog.findFirst({
+              where: { stationId: station.id, endTime: null },
+              orderBy: { startTime: "desc" },
+              select: { standardQuantity: true },
+            }),
+          ])
+        : null;
+    // Hand over the station version when it's loaded, so it isn't read twice.
+    const standardsRead =
+      currentJobId && needStandards
+        ? resolveEffectiveStandards(
+            prisma,
+            station.id,
+            currentJobId,
+            needVersion ? (station.currentVersion ?? null) : undefined,
+          )
+        : null;
     // Derived live fields, each re-resolved off entity.changes published by
     // its write path: status from the open state-log row (station/state.ts),
     // production mode from the open mode-log row (production-mode/log.ts),
     // last cycle from cycle completion, and the call fields from open/close
     // (facility/call/lifecycle.ts — callsUpdatedAt moves on every open AND
     // close so subscribers see a change even when the count doesn't move).
-    const [openState, openMode, lastCycle, openCallCount, lastCallChange] = await Promise.all([
-      prisma.stationStateLog.findFirst({
-        where: { stationId: station.id, endTime: null, deletedAt: null },
-        orderBy: { startTime: "desc" },
-        select: {
-          state: true,
-          status: true,
-          statusReasonId: true,
-          startTime: true,
-          blockId: true,
-          statusReason: { select: { name: true } },
-        },
-      }),
-      prisma.stationModeLog.findFirst({
-        where: { stationId: station.id, endTime: null },
-        select: { modeId: true, startTime: true, mode: { select: { name: true } } },
-      }),
-      prisma.cycle.findFirst({
-        where: { stationId: station.id, end: { not: null } },
-        orderBy: { end: "desc" },
-        select: { start: true, end: true, quantity: true },
-      }),
-      prisma.call.count({ where: { stationId: station.id, closedAt: null, deletedAt: null } }),
-      prisma.call.findFirst({
-        where: { stationId: station.id, deletedAt: null },
-        orderBy: { updatedAt: "desc" },
-        select: { updatedAt: true },
-      }),
+    const liveRead = Promise.all([
+      needState
+        ? prisma.stationStateLog.findFirst({
+            where: { stationId: station.id, endTime: null, deletedAt: null },
+            orderBy: { startTime: "desc" },
+            select: {
+              state: true,
+              status: true,
+              statusReasonId: true,
+              startTime: true,
+              blockId: true,
+              statusReason: needReasonName && { select: { name: true } },
+            },
+          })
+        : null,
+      needMode
+        ? prisma.stationModeLog.findFirst({
+            where: { stationId: station.id, endTime: null },
+            select: { modeId: true, startTime: true, mode: { select: { name: true } } },
+          })
+        : null,
+      needLastCycle
+        ? prisma.cycle.findFirst({
+            where: { stationId: station.id, end: { not: null } },
+            orderBy: { end: "desc" },
+            select: { start: true, end: true, quantity: true },
+          })
+        : null,
+      needCalls ? prisma.call.count({ where: { stationId: station.id, closedAt: null, deletedAt: null } }) : null,
+      needCalls
+        ? prisma.call.findFirst({
+            where: { stationId: station.id, deletedAt: null },
+            orderBy: { updatedAt: "desc" },
+            select: { updatedAt: true },
+          })
+        : null,
     ]);
+    const [items, effective, [openState, openMode, lastCycle, openCallCount, lastCallChange]] = await Promise.all([
+      itemsRead,
+      standardsRead,
+      liveRead,
+    ]);
+    if (items) {
+      const [jobProducts, openJobLog] = items;
+      const productSum = jobProducts.reduce((sum, jp) => sum + (jp.currentVersion?.quantity ?? 1), 0);
+      const standardQuantity = openJobLog?.standardQuantity != null ? Number(openJobLog.standardQuantity) : 1;
+      itemsPerCycle = standardQuantity * productSum;
+    }
+    if (effective) {
+      currentSecondsPerUnit = effective.secondsPerUnit;
+      currentStandardQuantity = effective.standardQuantity;
+      currentStandardCycleSeconds = effective.standardCycleSeconds;
+    }
     const lastCycleSeconds =
       lastCycle?.end != null
         ? Math.round(((lastCycle.end.getTime() - lastCycle.start.getTime()) / 1000) * 10) / 10
@@ -453,9 +509,10 @@ async function resolveSystemEntityRecord(
         statusReasonId: openState?.statusReasonId ?? null,
         statusReason: openState?.statusReason?.name ?? null,
         // Rows are per-shift pieces: "since" is the start of the status run, not the open piece.
-        statusStartAt: openState
-          ? await findStatusSince(prisma, station.id, openState.status ?? openState.state, openState.blockId)
-          : null,
+        statusStartAt:
+          openState && wants(needs, "statusStartAt")
+            ? await findStatusSince(prisma, station.id, openState.status ?? openState.state, openState.blockId)
+            : null,
         productionMode: openMode?.mode.name ?? null,
         productionModeId: openMode?.modeId ?? null,
         productionModeStartAt: openMode?.startTime ?? null,
@@ -514,12 +571,20 @@ async function resolveSystemEntityRecord(
   }
 
   if (entityKey === SYSTEM_ENTITY_KEYS.Product) {
+    // Relations are read only when asked for: every cycle sends a Product
+    // event, and each include is its own query.
     const product = await prisma.product.findFirst({
       where: { id: entityId, siteId: scope.siteId, site: { workspaceId: scope.workspaceId }, deletedAt: null },
       include: {
-        currentVersion: true,
-        materials: { where: { archivedAt: null, material: { deletedAt: null } }, select: { materialId: true } },
-        jobProducts: { where: { deletedAt: null, job: { deletedAt: null } }, select: { jobId: true } },
+        currentVersion: wants(needs, "currentVersion"),
+        materials: wants(needs, "materials") && {
+          where: { archivedAt: null, material: { deletedAt: null } },
+          select: { materialId: true },
+        },
+        jobProducts: wants(needs, "jobs") && {
+          where: { deletedAt: null, job: { deletedAt: null } },
+          select: { jobId: true },
+        },
       },
     });
     if (!product) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
@@ -527,8 +592,8 @@ async function resolveSystemEntityRecord(
       data: {
         ...product,
         site: product.siteId,
-        materials: product.materials.map((row) => row.materialId),
-        jobs: product.jobProducts.map((row) => row.jobId),
+        materials: product.materials?.map((row) => row.materialId) ?? null,
+        jobs: product.jobProducts?.map((row) => row.jobId) ?? null,
         currentVersion: product.currentVersion
           ? { ...product.currentVersion, weight: product.currentVersion.weight?.toNumber() ?? null }
           : null,
@@ -653,16 +718,24 @@ async function resolveSystemEntityValue(
   return { data: valueAtPath(record.data, path) };
 }
 
-export async function readEntityFieldValue(args: {
+// Reads an entity once and returns the value at each path, so every property
+// bound to one record shares a single read. System records skip the parts no
+// path needs ("*" still reads everything).
+export async function readEntityFieldValues(args: {
   entityType: string;
   entityId: string;
-  path: string;
+  paths: readonly string[];
   scope: GraphScope;
-}): Promise<ServiceResult<unknown>> {
+}): Promise<ServiceResult<Map<string, unknown>>> {
   if (systemEntityCatalogEntryByKey(args.entityType, false)) {
-    return resolveSystemEntityValue(args.entityType, args.entityId, args.path, args.scope);
+    const needs = args.paths.includes("*") ? undefined : new Set(args.paths.map((path) => path.split(".")[0]));
+    const record = await resolveSystemEntityRecord(args.entityType, args.entityId, args.scope, needs);
+    if ("error" in record) return record;
+    return { data: new Map(args.paths.map((path) => [path, valueAtPath(record.data, path)])) };
   }
-  return resolveUserEntityValue(args.entityType, args.entityId, args.path, args.scope);
+  const instance = await resolveUserEntityInstance(args.entityType, args.entityId, args.scope);
+  if ("error" in instance) return instance;
+  return { data: new Map(args.paths.map((path) => [path, userEntityValue(instance.data, path)])) };
 }
 
 async function resolveUserEntityValue(
@@ -671,6 +744,21 @@ async function resolveUserEntityValue(
   path: string,
   scope: GraphScope,
 ): Promise<ServiceResult<unknown>> {
+  const instance = await resolveUserEntityInstance(entityKey, entityId, scope);
+  if ("error" in instance) return instance;
+  return { data: userEntityValue(instance.data, path) };
+}
+
+function userEntityValue(instance: { id: string; values: unknown }, path: string): unknown {
+  if (path === "id") return instance.id;
+  return jsonRecord(instance.values)[path] ?? null;
+}
+
+async function resolveUserEntityInstance(
+  entityKey: string,
+  entityId: string,
+  scope: GraphScope,
+): Promise<ServiceResult<{ id: string; values: unknown }>> {
   const schema = await prisma.objectSchema.findFirst({
     where: {
       workspaceId: scope.workspaceId,
@@ -688,8 +776,7 @@ async function resolveUserEntityValue(
     select: { id: true, values: true },
   });
   if (!instance) return errorResult("ENTITY_REF_NOT_FOUND", "Entity reference was not found");
-  if (path === "id") return { data: instance.id };
-  return { data: jsonRecord(instance.values)[path] ?? null };
+  return { data: instance };
 }
 
 async function resolveEntityFacetValue(
