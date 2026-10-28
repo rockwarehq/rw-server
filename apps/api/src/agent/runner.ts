@@ -8,7 +8,9 @@ import type {
 import { createRouterClient, type Router } from "@orpc/server";
 import type { Current } from "@rw/auth/context";
 import prisma from "@rw/db";
+import { runWithAuditContext } from "@rw/services/audit/index";
 
+import { auditActorOf } from "../auth/audit.js";
 import { loadUserCurrent } from "../auth/plugin.js";
 import { agentConfig } from "../config.js";
 import { moduleLogger } from "../logger.js";
@@ -153,6 +155,27 @@ function toolContext(run: RunContext, toolUseId: string, approval: ToolContext["
   };
 }
 
+const TRIGGER_WORDS = { HOOK_EVENT: "hook", SCHEDULE: "schedule", AGENT: "subagent" } as const;
+
+/**
+ * What the audit trail says about an agent's tool call: its person acting
+ * through the agent (`via: agent:<name>`), one id for the whole session, what
+ * started the run when it wasn't a chat, and who approved the call. A run has
+ * no request, so no IP or user agent.
+ */
+function agentAuditContext(run: RunContext, approval: ToolContext["approval"]) {
+  const trigger = run.session.trigger === "CHAT" ? null : TRIGGER_WORDS[run.session.trigger];
+  return {
+    requestId: `agent:${run.session.id}`,
+    actor: { ...auditActorOf(run.current), via: `agent:${run.agent.name}` as const },
+    metadata: {
+      agentSessionId: run.session.id,
+      ...(trigger ? { trigger } : {}),
+      ...(approval ? { approvedById: approval.repliedById } : {}),
+    },
+  };
+}
+
 /** Run an allowed or approved call and record its outcome. */
 async function execute(
   run: RunContext,
@@ -167,7 +190,9 @@ async function execute(
     return { type: "tool_result", tool_use_id: call.id, is_error: true, content: decision.error };
   }
   try {
-    const result = await executeToolCall(decision.tool, decision.input, toolContext(run, call.id, approval));
+    const result = await runWithAuditContext(agentAuditContext(run, approval), () =>
+      executeToolCall(decision.tool, decision.input, toolContext(run, call.id, approval)),
+    );
     const serialized = serializeOutput(result.output, call.id);
     await commitEvents(run.session.id, [
       {

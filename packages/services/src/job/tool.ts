@@ -1,9 +1,18 @@
 import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
+import { auditActorId, auditRecord, changedValues } from "../audit/index.js";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 
 export { summarizeUsage, usage, type ToolUsage, type ToolUsageRun } from "./tool-usage.js";
+
+const TOOL_AUDIT_FIELDS = ["name", "description", "cavityCount", "pmLimit", "pmWarn", "attrs", "labels"] as const;
+
+const CAVITY_AUDIT_FIELDS = ["name", "position"] as const;
+
+function labelNames(labels: { name: string }[]) {
+  return labels.map((l) => l.name).sort();
+}
 
 // ============================================================================
 // Types - Tool
@@ -100,11 +109,12 @@ export async function create(input: CreateToolInput) {
         description: description ?? null,
         cavityCount: cavityCount ?? null,
         attrs: attrs ?? {},
+        createdById: auditActorId(),
       },
     });
 
     // 3. Link version as current and return
-    return tx.tool.update({
+    const created = await tx.tool.update({
       where: { id: t.id },
       data: { currentVersionId: version.id },
       include: {
@@ -114,6 +124,20 @@ export async function create(input: CreateToolInput) {
         _count: { select: { toolCavities: true, jobs: true, versions: true } },
       },
     });
+
+    await auditRecord(tx, {
+      change: "created",
+      entityType: "tool",
+      entityId: created.id,
+      siteId,
+      workspaceId: site.workspaceId,
+      label: version.name,
+      after: { ...version, labels: labelNames(created.labels) },
+      fields: TOOL_AUDIT_FIELDS,
+      versionId: version.id,
+    });
+
+    return created;
   });
 
   publishEntityEvent({
@@ -217,7 +241,11 @@ export async function update(id: string, input: UpdateToolInput) {
   // Get current tool with version
   const current = await prisma.tool.findUnique({
     where: { id },
-    include: { currentVersion: true, site: { select: { workspaceId: true } } },
+    include: {
+      currentVersion: true,
+      site: { select: { workspaceId: true } },
+      labels: { select: { name: true } },
+    },
   });
 
   if (!current) {
@@ -266,10 +294,11 @@ export async function update(id: string, input: UpdateToolInput) {
         pmLimit: pmLimit !== undefined ? pmLimit : currentVersion.pmLimit,
         pmWarn: pmWarn !== undefined ? pmWarn : currentVersion.pmWarn,
         attrs: attrs !== undefined ? attrs : (currentVersion.attrs as Record<string, unknown>),
+        createdById: auditActorId(),
       },
     });
 
-    return tx.tool.update({
+    const updated = await tx.tool.update({
       where: { id },
       data: {
         currentVersionId: version.id,
@@ -282,6 +311,22 @@ export async function update(id: string, input: UpdateToolInput) {
         _count: { select: { toolCavities: true, jobs: true, versions: true } },
       },
     });
+
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "tool",
+      entityId: id,
+      siteId: current.siteId,
+      workspaceId: current.site.workspaceId,
+      label: version.name,
+      before: { ...currentVersion, labels: labelNames(current.labels) },
+      after: { ...version, labels: labelNames(updated.labels) },
+      fields: TOOL_AUDIT_FIELDS,
+      versionId: version.id,
+      previousVersionId: currentVersion.id,
+    });
+
+    return updated;
   });
 
   publishEntityEvent({
@@ -306,6 +351,7 @@ export async function remove(id: string) {
     where: { id },
     include: {
       site: { select: { workspaceId: true } },
+      currentVersion: { select: { name: true } },
       _count: { select: { jobs: true, jobProducts: true } },
     },
   });
@@ -332,9 +378,21 @@ export async function remove(id: string) {
     };
   }
 
-  await prisma.tool.update({
-    where: { id },
-    data: { deletedAt: new Date() },
+  await prisma.$transaction(async (tx) => {
+    await tx.tool.update({
+      where: { id },
+      data: { deletedAt: new Date() },
+    });
+
+    await auditRecord(tx, {
+      change: "deleted",
+      entityType: "tool",
+      entityId: id,
+      siteId: tool.siteId,
+      workspaceId: tool.site.workspaceId,
+      label: tool.currentVersion?.name,
+      fields: [],
+    });
   });
 
   publishEntityEvent({
@@ -372,7 +430,13 @@ export async function addCavity(input: AddCavityInput) {
   // Verify tool exists and is not deleted
   const tool = await prisma.tool.findUnique({
     where: { id: toolId },
-    select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } },
+    select: {
+      id: true,
+      siteId: true,
+      deletedAt: true,
+      site: { select: { workspaceId: true } },
+      currentVersion: { select: { name: true } },
+    },
   });
 
   if (!tool) {
@@ -397,17 +461,31 @@ export async function addCavity(input: AddCavityInput) {
         version: 1,
         name,
         position: position ?? null,
+        createdById: auditActorId(),
       },
     });
 
     // 3. Link version as current and return
-    return tx.toolCavity.update({
+    const created = await tx.toolCavity.update({
       where: { id: c.id },
       data: { currentVersionId: version.id },
       include: {
         currentVersion: true,
       },
     });
+
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "tool",
+      entityId: tool.id,
+      siteId: tool.siteId,
+      workspaceId: tool.site.workspaceId,
+      label: tool.currentVersion?.name,
+      fields: [],
+      metadata: { cavities: "added", cavity: name, ...(position != null ? { position } : {}) },
+    });
+
+    return created;
   });
 
   publishEntityEvent({
@@ -433,7 +511,15 @@ export async function updateCavity(cavityId: string, input: UpdateCavityInput) {
     where: { id: cavityId },
     include: {
       currentVersion: true,
-      tool: { select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } } },
+      tool: {
+        select: {
+          id: true,
+          siteId: true,
+          deletedAt: true,
+          site: { select: { workspaceId: true } },
+          currentVersion: { select: { name: true } },
+        },
+      },
     },
   });
 
@@ -472,16 +558,34 @@ export async function updateCavity(cavityId: string, input: UpdateCavityInput) {
         version: nextVersion,
         name: name ?? currentVersion.name,
         position: position !== undefined ? position : currentVersion.position,
+        createdById: auditActorId(),
       },
     });
 
-    return tx.toolCavity.update({
+    const updated = await tx.toolCavity.update({
       where: { id: cavityId },
       data: { currentVersionId: version.id },
       include: {
         currentVersion: true,
       },
     });
+
+    if (Object.keys(changedValues(currentVersion, version, CAVITY_AUDIT_FIELDS)).length > 0) {
+      await auditRecord(tx, {
+        change: "updated",
+        entityType: "tool",
+        entityId: current.tool.id,
+        siteId: current.tool.siteId,
+        workspaceId: current.tool.site.workspaceId,
+        label: current.tool.currentVersion?.name,
+        before: currentVersion,
+        after: version,
+        fields: CAVITY_AUDIT_FIELDS,
+        metadata: { cavity: currentVersion.name },
+      });
+    }
+
+    return updated;
   });
 
   publishEntityEvent({
@@ -503,7 +607,16 @@ export async function removeCavity(cavityId: string) {
   const cavity = await prisma.toolCavity.findUnique({
     where: { id: cavityId },
     include: {
-      tool: { select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } } },
+      currentVersion: { select: { name: true } },
+      tool: {
+        select: {
+          id: true,
+          siteId: true,
+          deletedAt: true,
+          site: { select: { workspaceId: true } },
+          currentVersion: { select: { name: true } },
+        },
+      },
       // Only live job products block deletion — soft-deleted items don't.
       _count: { select: { jobProducts: { where: { deletedAt: null } } } },
     },
@@ -524,9 +637,22 @@ export async function removeCavity(cavityId: string) {
     };
   }
 
-  await prisma.toolCavity.update({
-    where: { id: cavityId },
-    data: { deletedAt: new Date() },
+  await prisma.$transaction(async (tx) => {
+    await tx.toolCavity.update({
+      where: { id: cavityId },
+      data: { deletedAt: new Date() },
+    });
+
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "tool",
+      entityId: cavity.tool.id,
+      siteId: cavity.tool.siteId,
+      workspaceId: cavity.tool.site.workspaceId,
+      label: cavity.tool.currentVersion?.name,
+      fields: [],
+      metadata: { cavities: "removed", cavity: cavity.currentVersion?.name ?? null },
+    });
   });
 
   publishEntityEvent({

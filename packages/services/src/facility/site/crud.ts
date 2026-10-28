@@ -1,10 +1,36 @@
 import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
+import { auditRecord } from "../../audit/index.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import { seedDefaults as seedDefaultRoles } from "../../employee/role.js";
 import { forgetSiteTimezone } from "../../metrics/bucket.js";
 import { rematerializeSite, sameWallClockInstant } from "../shift/materialize.js";
+
+const AUDIT_FIELDS = ["name", "description", "timezone", "weekStart"] as const;
+
+/** A site's fields with each attrs key as its own `attrs.<key>` field, so a change names the setting. */
+function auditValues(site: {
+  name: string;
+  description: string | null;
+  timezone: string;
+  weekStart: string;
+  attrs: unknown;
+}) {
+  const attrs = (site.attrs ?? {}) as Record<string, unknown>;
+  return {
+    name: site.name,
+    description: site.description,
+    timezone: site.timezone,
+    weekStart: site.weekStart,
+    ...Object.fromEntries(Object.entries(attrs).map(([key, value]) => [`attrs.${key}`, value])),
+  } as Record<string, unknown>;
+}
+
+function auditFields(...values: Record<string, unknown>[]) {
+  const attrKeys = new Set(values.flatMap((each) => Object.keys(each).filter((key) => key.startsWith("attrs."))));
+  return [...AUDIT_FIELDS, ...attrKeys];
+}
 
 export interface CreateSiteInput {
   name: string;
@@ -35,20 +61,34 @@ export interface ListSitesFilter {
 export async function create(input: CreateSiteInput) {
   const { name, description, attrs, workspaceId } = input;
 
-  const site = await prisma.site.create({
-    data: {
-      name,
-      description,
-      attrs: attrs ?? {},
-      workspaceId,
-      // The plant's access container is born with the plant.
-      buckets: { create: { workspaceId, kind: "PLANT", name } },
-    },
-    include: {
-      _count: {
-        select: { workcenters: true, gateways: true, datasources: true },
+  const site = await prisma.$transaction(async (tx) => {
+    const created = await tx.site.create({
+      data: {
+        name,
+        description,
+        attrs: attrs ?? {},
+        workspaceId,
+        // The plant's access container is born with the plant.
+        buckets: { create: { workspaceId, kind: "PLANT", name } },
       },
-    },
+      include: {
+        _count: {
+          select: { workcenters: true, gateways: true, datasources: true },
+        },
+      },
+    });
+    const after = auditValues(created);
+    await auditRecord(tx, {
+      change: "created",
+      entityType: "site",
+      entityId: created.id,
+      siteId: created.id,
+      workspaceId,
+      label: created.name,
+      after,
+      fields: auditFields(after),
+    });
+    return created;
   });
 
   // Seed default employee roles for the new site
@@ -169,7 +209,7 @@ export async function update(id: string, input: UpdateSiteInput) {
   // Get current site
   const current = await prisma.site.findUnique({
     where: { id },
-    select: { id: true, attrs: true, timezone: true },
+    select: { id: true, name: true, description: true, attrs: true, timezone: true, weekStart: true },
   });
 
   if (!current) {
@@ -197,7 +237,7 @@ export async function update(id: string, input: UpdateSiteInput) {
 
   const site = await prisma.$transaction(async (tx) => {
     if (movesTimezone) await keepOverrideClockTimes(tx, id, current.timezone, timezone);
-    return tx.site.update({
+    const updated = await tx.site.update({
       where: { id },
       data: {
         ...updateData,
@@ -210,6 +250,20 @@ export async function update(id: string, input: UpdateSiteInput) {
         },
       },
     });
+    const before = auditValues(current);
+    const after = auditValues(updated);
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "site",
+      entityId: updated.id,
+      siteId: updated.id,
+      workspaceId: updated.workspaceId,
+      label: updated.name,
+      before,
+      after,
+      fields: auditFields(before, after),
+    });
+    return updated;
   });
 
   // A timezone change is a schedule edit (ADR-0015): upcoming shifts keep
@@ -268,7 +322,22 @@ export async function remove(id: string) {
     };
   }
 
-  await prisma.site.delete({ where: { id } });
+  // A delete cascades through the record's history: give it longer than the default 5s.
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.site.delete({ where: { id } });
+      await auditRecord(tx, {
+        change: "deleted",
+        entityType: "site",
+        entityId: site.id,
+        siteId: site.id,
+        workspaceId: site.workspaceId,
+        label: site.name,
+        fields: [],
+      });
+    },
+    { timeout: 60_000 },
+  );
 
   publishEntityEvent({
     action: "deleted",

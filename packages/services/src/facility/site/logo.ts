@@ -1,4 +1,5 @@
 import prisma from "@rw/db";
+import { auditRecord } from "../../audit/index.js";
 import * as storage from "@rw/runtime/storage";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
@@ -30,7 +31,7 @@ function parseLogoAttr(attrs: unknown): SiteLogoAttr | null {
 function getSiteForLogo(siteId: string) {
   return prisma.site.findUnique({
     where: { id: siteId },
-    select: { id: true, workspaceId: true, attrs: true },
+    select: { id: true, name: true, workspaceId: true, attrs: true },
   });
 }
 
@@ -70,9 +71,23 @@ export async function createLogoUpload(siteId: string, input: CreateLogoUploadIn
   const key = storage.generateKey(`site-logo/${siteId}`, filename);
   const attrs = site.attrs && typeof site.attrs === "object" ? (site.attrs as Record<string, unknown>) : {};
 
-  await prisma.site.update({
-    where: { id: siteId },
-    data: { attrs: { ...attrs, logo: { key, filename, contentType, size } } },
+  await prisma.$transaction(async (tx) => {
+    await tx.site.update({
+      where: { id: siteId },
+      data: { attrs: { ...attrs, logo: { key, filename, contentType, size } } },
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "site",
+      entityId: siteId,
+      siteId,
+      workspaceId: site.workspaceId,
+      label: site.name,
+      before: { logo: previousLogo?.filename ?? null },
+      after: { logo: filename },
+      fields: ["logo"],
+      metadata: { logoChanged: true },
+    });
   });
 
   if (previousLogo) {
@@ -110,9 +125,23 @@ export async function removeLogo(siteId: string) {
   const attrs = { ...(site.attrs as Record<string, unknown>) };
   delete attrs.logo;
 
-  await prisma.site.update({
-    where: { id: siteId },
-    data: { attrs },
+  await prisma.$transaction(async (tx) => {
+    await tx.site.update({
+      where: { id: siteId },
+      data: { attrs },
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "site",
+      entityId: siteId,
+      siteId,
+      workspaceId: site.workspaceId,
+      label: site.name,
+      before: { logo: logo.filename },
+      after: { logo: null },
+      fields: ["logo"],
+      metadata: { logoChanged: true },
+    });
   });
 
   await deleteObjectBestEffort(logo.key);

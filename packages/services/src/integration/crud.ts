@@ -9,6 +9,7 @@ import {
   sealSecret,
   type IntegrationRegistry,
 } from "@rw/integrations";
+import { auditRecord } from "../audit/index.js";
 
 // Site-scoped outbound integrations (ADR 0003 error contract). @rw/integrations
 // owns config/secret shape; this owns storage, sealing, and redaction.
@@ -59,6 +60,46 @@ function errorResult(code: string, error: string) {
 
 function toView(row: PublicIntegration, hasSecret: boolean): IntegrationView {
   return { ...row, hasSecret };
+}
+
+// Config keys safe to show in the audit trail. URLs and headers stay out: a
+// webhook URL or a default header can itself be a credential.
+const AUDITED_CONFIG_KEYS = [
+  "authType",
+  "headerName",
+  "method",
+  "signatureHeader",
+  "host",
+  "port",
+  "database",
+  "username",
+  "encrypt",
+  "trustServerCertificate",
+  "timeoutMs",
+  "connectTimeoutMs",
+  "poolMax",
+  "idleTimeoutMs",
+] as const;
+
+const AUDITED_FIELDS = ["name", "type", "enabled", ...AUDITED_CONFIG_KEYS.map((key) => `config.${key}`)];
+
+function auditValues(row: { name: string; type: string; enabled: boolean; config: unknown }) {
+  const config = (row.config ?? {}) as Record<string, unknown>;
+  return {
+    name: row.name,
+    type: row.type,
+    enabled: row.enabled,
+    ...Object.fromEntries(AUDITED_CONFIG_KEYS.map((key) => [`config.${key}`, config[key]])),
+  };
+}
+
+function unauditedConfigChanged(before: unknown, after: unknown) {
+  const strip = (config: unknown) => {
+    const rest = { ...((config ?? {}) as Record<string, unknown>) };
+    for (const key of AUDITED_CONFIG_KEYS) delete rest[key];
+    return JSON.stringify(Object.entries(rest).sort(([a], [b]) => a.localeCompare(b)));
+  };
+  return strip(before) !== strip(after);
 }
 
 async function assertSite(scope: IntegrationScope) {
@@ -132,9 +173,23 @@ export async function create(input: CreateIntegrationInput, scope: IntegrationSc
     secretCipher,
   };
 
-  const row = existing
-    ? await prisma.integration.update({ where: { id: existing.id }, data, select: publicSelect })
-    : await prisma.integration.create({ data: { id: rowId, ...data }, select: publicSelect });
+  const row = await prisma.$transaction(async (tx) => {
+    const written = existing
+      ? await tx.integration.update({ where: { id: existing.id }, data, select: publicSelect })
+      : await tx.integration.create({ data: { id: rowId, ...data }, select: publicSelect });
+    await auditRecord(tx, {
+      change: "created",
+      entityType: "integration",
+      entityId: written.id,
+      siteId: scope.siteId,
+      workspaceId: scope.workspaceId,
+      label: written.name,
+      after: auditValues(written),
+      fields: AUDITED_FIELDS,
+      metadata: hasSecret ? { credentialsChanged: true } : undefined,
+    });
+    return written;
+  });
 
   return { data: toView(row, hasSecret) };
 }
@@ -183,7 +238,27 @@ export async function update(id: string, input: UpdateIntegrationInput, scope: I
     data.secretCipher = sealed.data;
   }
 
-  const row = await prisma.integration.update({ where: { id }, data, select: publicSelect });
+  const row = await prisma.$transaction(async (tx) => {
+    const written = await tx.integration.update({ where: { id }, data, select: publicSelect });
+    const credentialsChanged = input.secret !== undefined;
+    const configChanged = unauditedConfigChanged(current.config, written.config);
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "integration",
+      entityId: id,
+      siteId: scope.siteId,
+      workspaceId: scope.workspaceId,
+      label: written.name,
+      before: auditValues(current),
+      after: auditValues(written),
+      fields: AUDITED_FIELDS,
+      metadata:
+        credentialsChanged || configChanged
+          ? { ...(credentialsChanged ? { credentialsChanged } : {}), ...(configChanged ? { configChanged } : {}) }
+          : undefined,
+    });
+    return written;
+  });
 
   // Connection details may have changed under a live pool.
   await closeSqlServerPools(id);
@@ -202,7 +277,18 @@ export async function remove(id: string, scope: IntegrationScope) {
   }
 
   // Secret is dropped on delete rather than left sealed in a dead row.
-  await prisma.integration.update({ where: { id }, data: { isDeleted: true, secretCipher: null } });
+  await prisma.$transaction(async (tx) => {
+    await tx.integration.update({ where: { id }, data: { isDeleted: true, secretCipher: null } });
+    await auditRecord(tx, {
+      change: "deleted",
+      entityType: "integration",
+      entityId: id,
+      siteId: scope.siteId,
+      workspaceId: scope.workspaceId,
+      label: loaded.current.name,
+      fields: [],
+    });
+  });
   await closeSqlServerPools(id);
 
   return { data: { success: true as const } };
