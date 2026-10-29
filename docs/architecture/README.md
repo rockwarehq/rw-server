@@ -41,7 +41,6 @@ graph TD
 | `apps/api` | HTTP/RPC surface, auth, edge protocol, light in-process workers | Horizontal (stateless) |
 | `apps/workers` | Single binary, mode per process: `--worker rollups \| imm-events \| gateway-health \| integration-events` | Per-mode; **rollups must stay at 1** |
 | `apps/livestore` | Reactive graph engine + `/ws/graph` websocket gateway | Single machine per tenant (HA deferred) |
-| `apps/docs` | Product documentation site | — |
 
 Deployment is **per-tenant**: each tenant (e.g. `sim`, `dixie`, `dev`) gets its own fly.io app pair plus its own Postgres/Redis/NATS. `scripts/fly-deploy.ts` merges `fly/base.toml` with `apps/*/fly/tenants/<tenant>.toml`, validates required secrets, and deploys. Migrations run as the API app's `release_command`.
 
