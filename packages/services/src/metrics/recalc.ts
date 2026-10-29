@@ -102,7 +102,7 @@ export async function getBaseBucketForTimestamp(
 // ── Job log helpers ──────────────────────────────────────────────
 
 /** StationJobLog entry with fields needed for JOB bucket computation. */
-interface ActiveJobLog {
+export interface ActiveJobLog {
   id: string;
   stationId: string;
   jobId: string;
@@ -193,6 +193,30 @@ function toJobFilter(log: ActiveJobLog): JobFilter {
     standardCycle: log.standardCycle,
     itemsPerCycle: log.itemsPerCycle,
   };
+}
+
+/**
+ * The job whose standard prices a STATION hour that had no cycles: the
+ * latest log overlapping it, as the hour's currentJobId is chosen. A station
+ * hour otherwise takes its standard from its cycles' average, so a rebuilt
+ * hour the station was down for all of would expect nothing, while the live
+ * tick had priced it from the running job. An hour with cycles keeps their
+ * average (two jobs may share it); an hour with no job stays unpriced.
+ */
+export function idleHourJob(
+  logs: readonly ActiveJobLog[],
+  bucketStart: Date,
+  bucketEnd: Date,
+  totalCycles: number,
+): JobFilter | undefined {
+  if (totalCycles > 0) return undefined;
+  const log = logs
+    .filter((row) => row.startTime < bucketEnd && (row.endTime === null || row.endTime > bucketStart))
+    .reduce<ActiveJobLog | undefined>(
+      (latest, row) => (!latest || row.startTime > latest.startTime ? row : latest),
+      undefined,
+    );
+  return log && log.standardCycle != null && log.standardCycle > 0 ? toJobFilter(log) : undefined;
 }
 
 /**
@@ -1328,6 +1352,17 @@ export async function recalcAll(
   };
   const t0 = lapStart;
 
+  // The range's job logs, to price hours with no cycles (see idleHourJob).
+  const rangeStart = Math.min(startTime.getTime(), ...baseBuckets.map((bucket) => bucket.startTime.getTime()));
+  const rangeEnd = Math.max(
+    endTime.getTime(),
+    ...baseBuckets.map((bucket) => bucket.startTime.getTime() + bucket.durationSeconds * 1000),
+  );
+  const jobLogs = baseBuckets.length
+    ? await getActiveJobLogsForRange(stationId, new Date(rangeStart), new Date(rangeEnd))
+    : [];
+  lap("jobLogs");
+
   // Recompute ALL KPIs for each affected base bucket. Durations come from the
   // state log, which cycle completions never write, so they are computed
   // before taking the station lock; the lock is held only for the indexed
@@ -1359,7 +1394,11 @@ export async function recalcAll(
         // from incrementing between this count and the SET.
         await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${stationId}))::text`;
         const counts = await computeBucketCounts(stationId, bucket.startTime, bucket.durationSeconds);
-        const kpis = deriveBucketKPIs(durations, counts);
+        const kpis = deriveBucketKPIs(
+          durations,
+          counts,
+          idleHourJob(jobLogs, bucket.startTime, bucketEnd, counts.cycleTally.totalCycles),
+        );
 
         const kpiData: Record<string, number | null> = {};
         for (const key of ADDITIVE_KPI_KEYS) {
