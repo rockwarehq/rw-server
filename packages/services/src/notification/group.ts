@@ -1,5 +1,6 @@
 import prisma, { Prisma } from "@rw/db";
 import type { NotificationChannel } from "@rw/db";
+import { auditRecord } from "../audit/index.js";
 
 export const groupInclude = {
   members: {
@@ -18,6 +19,44 @@ const NOT_FOUND: ServiceError = { error: "Notification group not found", code: "
 
 export function isUniqueViolation(err: unknown): boolean {
   return err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
+}
+
+const AUDITED_FIELDS = ["name", "description", "channels", "members", "archivedAt"] as const;
+
+function auditValues(group: NotificationGroupRecord) {
+  return {
+    name: group.name,
+    description: group.description,
+    channels: [...group.channels].sort(),
+    members: group.members
+      .map((m) => [m.version?.firstName, m.version?.lastName].filter(Boolean).join(" ") || m.id)
+      .sort((a, b) => a.localeCompare(b)),
+    archivedAt: group.archivedAt,
+  };
+}
+
+const memberIds = (group: NotificationGroupRecord) => group.members.map((m) => m.id).sort();
+
+async function auditGroup(
+  tx: Prisma.TransactionClient,
+  change: "created" | "updated",
+  workspaceId: string,
+  after: NotificationGroupRecord,
+  before?: NotificationGroupRecord,
+) {
+  await auditRecord(tx, {
+    change,
+    entityType: "notification-group",
+    entityId: after.id,
+    siteId: after.siteId,
+    workspaceId,
+    label: after.name,
+    before: before ? auditValues(before) : undefined,
+    after: auditValues(after),
+    fields: AUDITED_FIELDS,
+    // Members are listed by name, but two people can share one.
+    identities: { members: { before: before ? memberIds(before) : [], after: memberIds(after) } },
+  });
 }
 
 export interface CreateGroupInput {
@@ -56,15 +95,19 @@ export async function createGroup(input: CreateGroupInput): Promise<ServiceError
   if (memberError) return memberError;
 
   try {
-    const group = await prisma.notificationGroup.create({
-      data: {
-        siteId: input.siteId,
-        name: input.name,
-        description: input.description ?? null,
-        channels: input.channels ?? ["EMAIL"],
-        members: { connect: memberIds.map((id) => ({ id })) },
-      },
-      include: groupInclude,
+    const group = await prisma.$transaction(async (tx) => {
+      const created = await tx.notificationGroup.create({
+        data: {
+          siteId: input.siteId,
+          name: input.name,
+          description: input.description ?? null,
+          channels: input.channels ?? ["EMAIL"],
+          members: { connect: memberIds.map((id) => ({ id })) },
+        },
+        include: groupInclude,
+      });
+      await auditGroup(tx, "created", site.workspaceId, created);
+      return created;
     });
     return { data: group };
   } catch (err) {
@@ -105,7 +148,7 @@ export async function updateGroup(
 ): Promise<ServiceError | { data: NotificationGroupRecord }> {
   const existing = await prisma.notificationGroup.findUnique({
     where: { id },
-    select: { archivedAt: true, site: { select: { workspaceId: true } } },
+    include: { ...groupInclude, site: { select: { workspaceId: true } } },
   });
   if (!existing || existing.archivedAt) return NOT_FOUND;
 
@@ -115,15 +158,19 @@ export async function updateGroup(
   }
 
   try {
-    const group = await prisma.notificationGroup.update({
-      where: { id },
-      data: {
-        name: input.name,
-        description: input.description,
-        channels: input.channels,
-        ...(input.memberIds ? { members: { set: input.memberIds.map((id) => ({ id })) } } : {}),
-      },
-      include: groupInclude,
+    const group = await prisma.$transaction(async (tx) => {
+      const updated = await tx.notificationGroup.update({
+        where: { id },
+        data: {
+          name: input.name,
+          description: input.description,
+          channels: input.channels,
+          ...(input.memberIds ? { members: { set: input.memberIds.map((id) => ({ id })) } } : {}),
+        },
+        include: groupInclude,
+      });
+      await auditGroup(tx, "updated", existing.site.workspaceId, updated, existing);
+      return updated;
     });
     return { data: group };
   } catch (err) {
@@ -133,12 +180,19 @@ export async function updateGroup(
 }
 
 export async function archiveGroup(id: string): Promise<ServiceError | { data: NotificationGroupRecord }> {
-  const existing = await prisma.notificationGroup.findUnique({ where: { id }, select: { archivedAt: true } });
-  if (!existing || existing.archivedAt) return NOT_FOUND;
-  const group = await prisma.notificationGroup.update({
+  const existing = await prisma.notificationGroup.findUnique({
     where: { id },
-    data: { archivedAt: new Date() },
-    include: groupInclude,
+    include: { ...groupInclude, site: { select: { workspaceId: true } } },
+  });
+  if (!existing || existing.archivedAt) return NOT_FOUND;
+  const group = await prisma.$transaction(async (tx) => {
+    const archived = await tx.notificationGroup.update({
+      where: { id },
+      data: { archivedAt: new Date() },
+      include: groupInclude,
+    });
+    await auditGroup(tx, "updated", existing.site.workspaceId, archived, existing);
+    return archived;
   });
   return { data: group };
 }

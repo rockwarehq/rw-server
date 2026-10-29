@@ -52,7 +52,6 @@ pnpm dev:livestore  # just the livestore app
 | `apps/api` | Fastify/oRPC HTTP server + in-process BullMQ workers |
 | `apps/workers` | Single worker binary with `--worker` startup modes (`rollups`, `imm-events`, `gateway-health`, `integration-events`) |
 | `apps/livestore` | Livestore app |
-| `apps/docs` | Product documentation site |
 | `packages/db` | Prisma schema, migrations, generated client |
 | `packages/runtime` | Events bus, BullMQ tuning, logger, http-host, lifecycle |
 | `packages/services` | Shared business logic |

@@ -1,4 +1,5 @@
 import prisma from "@rw/db";
+import { auditActorId, auditRecord } from "../../audit/index.js";
 import { publishEntityEvent } from "../../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../../entity/registry.js";
 import type { RatePeriod } from "../../lib/units/quantity.js";
@@ -60,7 +61,9 @@ export async function applyProfileToStations(profileId: string): Promise<number>
     where: { deletedAt: null, currentVersion: { profileId } },
     select: {
       id: true,
+      name: true,
       siteId: true,
+      workcenterId: true,
       currentJobId: true,
       site: { select: { workspaceId: true } },
       currentVersion: true,
@@ -106,9 +109,24 @@ export async function applyProfileToStations(profileId: string): Promise<number>
       });
       const { id: _id, version: _v, createdAt: _c, ...rest } = current;
       const version = await tx.stationVersion.create({
-        data: { ...rest, ...fields, version: (latest?.version ?? 0) + 1 },
+        data: { ...rest, ...fields, version: (latest?.version ?? 0) + 1, createdById: auditActorId() },
       });
       await tx.station.update({ where: { id: station.id }, data: { currentVersionId: version.id } });
+      await auditRecord(tx, {
+        change: "updated",
+        entityType: "station",
+        entityId: station.id,
+        siteId: station.siteId,
+        workspaceId: station.site.workspaceId,
+        label: station.name,
+        before: current,
+        after: version,
+        fields: COPIED,
+        versionId: version.id,
+        previousVersionId: current?.id,
+        metadata: { fromProfile: { id: profile.id, name: profile.name } },
+        workcenterIds: [station.workcenterId],
+      });
     });
     changed++;
 

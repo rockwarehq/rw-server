@@ -19,6 +19,11 @@ const EnvSchema = z.object({
   // finish — a dropped /auth/refresh response makes the client retry with an
   // already-rotated token (see REFRESH_REUSE_GRACE_MS in @rw/auth/tokens).
   CLOSE_GRACE_DELAY: z.coerce.number().int().positive().default(8000),
+  // How many proxies sit in front of the API (1 on fly: its edge proxy). The
+  // caller's address is then the one the nearest trusted proxy saw, from
+  // X-Forwarded-For; an address a client writes there itself is ignored.
+  // 0 (local) reads the socket. Never "trust everything": that's spoofable.
+  TRUST_PROXY: z.coerce.number().int().min(0).max(5).default(0),
 
   // Infrastructure the app cannot run without in production. Both are already
   // listed in every tenant's _meta.required_secrets; validating here turns a
@@ -142,6 +147,7 @@ export const serverConfig = {
   // fly's 6PN network (apps reach each other by IPv6 via <app>.internal).
   host: config.HOST,
   graceDelay: config.CLOSE_GRACE_DELAY, // milliseconds
+  trustProxy: config.TRUST_PROXY,
 };
 
 export const corsConfig = {

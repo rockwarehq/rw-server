@@ -59,6 +59,9 @@ async function main() {
   const has = new Set(present.map((t) => t.name));
 
   await prisma.$transaction(async (tx) => {
+    // The audit trail is append-only (migration 20261023150000_audit_append_only);
+    // re-pointing its workspace is the one sanctioned rewrite, for this transaction only.
+    await tx.$executeRawUnsafe(`SET LOCAL rockware.audit_bypass = 'on'`);
     const suffix = `' (' || left(t."workspaceId"::text, 8) || ')'`;
     // Rename rows whose name is already used in the kept workspace.
     for (const [table, extra] of [

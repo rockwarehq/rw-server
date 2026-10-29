@@ -17,6 +17,8 @@ import { OAUTH_ACCESS_PREFIX } from "../oauth/store.js";
 import type { AccessTokenPayload } from "@rw/auth/verify";
 import type { Current } from "@rw/auth/context";
 import prisma from "@rw/db";
+import { runWithAuditContext, setAuditActor } from "@rw/services/audit/index";
+import { auditActorOf } from "./audit.js";
 
 // Who is calling, worked out once per request (like Basecamp's `Current`):
 // request.current is the caller (null when anonymous or invalid), and
@@ -208,6 +210,7 @@ async function currentDecorator(request: FastifyRequest) {
     request.log.warn({ err }, "auth: failed to resolve caller");
   }
   request.access = request.current?.access ?? noAccess;
+  setAuditActor(auditActorOf(request.current));
 }
 
 async function verifyAccessTokenDecorator(request: FastifyRequest, _reply: FastifyReply) {
@@ -247,6 +250,18 @@ async function enforcePasswordChange(request: FastifyRequest, reply: FastifyRepl
 async function authPluginImpl(server: FastifyInstance) {
   server.decorateRequest("current", null);
   server.decorateRequest("access", null as unknown as Access);
+
+  // Every request runs in its own audit context (see @rw/services/audit), so
+  // whatever it records carries its IP, user agent and request id, and the
+  // caller once currentDecorator knows it. Callback style so the rest of the
+  // request lifecycle runs inside the context.
+  server.addHook("onRequest", (request, _reply, done) => {
+    const userAgent = request.headers["user-agent"];
+    runWithAuditContext(
+      { ipAddress: request.ip, userAgent: Array.isArray(userAgent) ? userAgent[0] : userAgent, requestId: request.id },
+      done,
+    );
+  });
 
   // Work out the caller on every request
   server.addHook("preHandler", currentDecorator);

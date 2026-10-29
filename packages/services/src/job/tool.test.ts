@@ -1,10 +1,19 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-const db = vi.hoisted(() => ({
-  tool: { findUnique: vi.fn(), update: vi.fn() },
-}));
+const db = vi.hoisted(() => {
+  const db = {
+    tool: { findUnique: vi.fn(), update: vi.fn() },
+    // The delete and its audit entry run in one transaction.
+    $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(db)),
+  };
+  return db;
+});
 vi.mock("@rw/db", async (importOriginal) => ({ ...(await importOriginal<object>()), default: db }));
 vi.mock("../entity/events.js", () => ({ publishEntityEvent: vi.fn() }));
+vi.mock("../audit/index.js", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  auditRecord: vi.fn(),
+}));
 
 const { remove } = await import("./tool.js");
 
@@ -16,6 +25,7 @@ const tool = (counts: { jobs: number; jobProducts: number }) => ({
   siteId: "site",
   deletedAt: null,
   site: { workspaceId: "workspace" },
+  currentVersion: { name: "100B1TPRFR" },
   _count: counts,
 });
 

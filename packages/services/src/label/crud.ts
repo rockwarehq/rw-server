@@ -1,5 +1,6 @@
 import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
+import { auditRecord } from "../audit/index.js";
 
 // One shared list of labels per site, used by jobs, tools, products,
 // materials, stations, status/downtime codes, and scrap codes. Labels
@@ -28,6 +29,8 @@ export interface ListLabelsFilter {
   offset?: number;
 }
 
+const AUDIT_FIELDS = ["name", "color"] as const;
+
 const usageCount = {
   _count: {
     select: {
@@ -46,7 +49,7 @@ const usageCount = {
 export async function create(input: CreateLabelInput) {
   const { siteId, name, color } = input;
 
-  const site = await prisma.site.findUnique({ where: { id: siteId }, select: { id: true } });
+  const site = await prisma.site.findUnique({ where: { id: siteId }, select: { id: true, workspaceId: true } });
   if (!site) {
     return { error: "Site not found", code: "SITE_NOT_FOUND" };
   }
@@ -59,9 +62,22 @@ export async function create(input: CreateLabelInput) {
     return { error: "A label with this name already exists for this site", code: "DUPLICATE_NAME" };
   }
 
-  const label = await prisma.label.create({
-    data: { siteId, name, color },
-    include: usageCount,
+  const label = await prisma.$transaction(async (tx) => {
+    const created = await tx.label.create({
+      data: { siteId, name, color },
+      include: usageCount,
+    });
+    await auditRecord(tx, {
+      change: "created",
+      entityType: "label",
+      entityId: created.id,
+      siteId,
+      workspaceId: site.workspaceId,
+      label: created.name,
+      after: created,
+      fields: AUDIT_FIELDS,
+    });
+    return created;
   });
   return { data: label };
 }
@@ -96,7 +112,10 @@ export async function getById(id: string) {
 export async function update(id: string, input: UpdateLabelInput) {
   const { name } = input;
 
-  const current = await prisma.label.findUnique({ where: { id }, select: { id: true, siteId: true } });
+  const current = await prisma.label.findUnique({
+    where: { id },
+    select: { id: true, siteId: true, name: true, color: true, site: { select: { workspaceId: true } } },
+  });
   if (!current) {
     return { error: "Label not found", code: "LABEL_NOT_FOUND" };
   }
@@ -115,14 +134,34 @@ export async function update(id: string, input: UpdateLabelInput) {
   if (name !== undefined) data.name = name;
   if (input.color !== undefined) data.color = input.color;
 
-  const label = await prisma.label.update({ where: { id }, data, include: usageCount });
+  const label = await prisma.$transaction(async (tx) => {
+    const updated = await tx.label.update({ where: { id }, data, include: usageCount });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "label",
+      entityId: updated.id,
+      siteId: updated.siteId,
+      workspaceId: current.site.workspaceId,
+      label: updated.name,
+      before: current,
+      after: updated,
+      fields: AUDIT_FIELDS,
+    });
+    return updated;
+  });
   return { data: label };
 }
 
 export async function remove(id: string) {
   const current = await prisma.label.findUnique({
     where: { id },
-    select: { id: true, _count: { select: { labelFilters: true } } },
+    select: {
+      id: true,
+      siteId: true,
+      name: true,
+      site: { select: { workspaceId: true } },
+      _count: { select: { labelFilters: true } },
+    },
   });
   if (!current) {
     return { error: "Label not found", code: "LABEL_NOT_FOUND" };
@@ -139,6 +178,17 @@ export async function remove(id: string) {
     };
   }
 
-  await prisma.label.delete({ where: { id } });
+  await prisma.$transaction(async (tx) => {
+    await tx.label.delete({ where: { id } });
+    await auditRecord(tx, {
+      change: "deleted",
+      entityType: "label",
+      entityId: current.id,
+      siteId: current.siteId,
+      workspaceId: current.site.workspaceId,
+      label: current.name,
+      fields: [],
+    });
+  });
   return { success: true };
 }

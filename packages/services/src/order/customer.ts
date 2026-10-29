@@ -1,4 +1,5 @@
 import prisma from "@rw/db";
+import { auditRecord } from "../audit/index.js";
 import { publishEntityEvent } from "../entity/events.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 
@@ -47,8 +48,21 @@ export async function create(input: CreateCustomerInput) {
     return { error: "A customer with this name already exists", code: "DUPLICATE_NAME" };
   }
 
-  const customer = await prisma.customer.create({
-    data: { name, siteId },
+  const customer = await prisma.$transaction(async (tx) => {
+    const created = await tx.customer.create({
+      data: { name, siteId },
+    });
+    await auditRecord(tx, {
+      change: "created",
+      entityType: "customer",
+      entityId: created.id,
+      siteId,
+      workspaceId: site.workspaceId,
+      label: created.name,
+      after: created,
+      fields: ["name"],
+    });
+    return created;
   });
 
   publishEntityEvent({
@@ -103,7 +117,7 @@ export async function getById(id: string) {
 export async function update(id: string, input: UpdateCustomerInput) {
   const customer = await prisma.customer.findUnique({
     where: { id },
-    select: { id: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } },
+    select: { id: true, name: true, siteId: true, deletedAt: true, site: { select: { workspaceId: true } } },
   });
 
   if (!customer || customer.deletedAt) {
@@ -120,9 +134,23 @@ export async function update(id: string, input: UpdateCustomerInput) {
     }
   }
 
-  const updated = await prisma.customer.update({
-    where: { id },
-    data: input,
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await tx.customer.update({
+      where: { id },
+      data: input,
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "customer",
+      entityId: id,
+      siteId: row.siteId,
+      workspaceId: customer.site.workspaceId,
+      label: row.name,
+      before: customer,
+      after: row,
+      fields: ["name"],
+    });
+    return row;
   });
 
   publishEntityEvent({
@@ -142,6 +170,7 @@ export async function remove(id: string) {
     where: { id },
     select: {
       id: true,
+      name: true,
       siteId: true,
       deletedAt: true,
       site: { select: { workspaceId: true } },
@@ -157,9 +186,20 @@ export async function remove(id: string) {
     return { error: "Cannot delete customer with active orders", code: "HAS_ORDERS" };
   }
 
-  await prisma.customer.update({
-    where: { id },
-    data: { deletedAt: new Date() },
+  await prisma.$transaction(async (tx) => {
+    await tx.customer.update({
+      where: { id },
+      data: { deletedAt: new Date() },
+    });
+    await auditRecord(tx, {
+      change: "deleted",
+      entityType: "customer",
+      entityId: id,
+      siteId: customer.siteId,
+      workspaceId: customer.site.workspaceId,
+      label: customer.name,
+      fields: [],
+    });
   });
 
   publishEntityEvent({

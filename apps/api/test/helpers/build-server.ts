@@ -1,10 +1,11 @@
 import { createServer } from "../../src/server.js";
 
-export function buildServer(options?: { swagger?: boolean }) {
+export function buildServer(options?: { swagger?: boolean; trustProxy?: number }) {
   const { server } = createServer({
     port: 0,
     host: "127.0.0.1",
     graceDelay: 500,
+    trustProxy: options?.trustProxy,
     swagger: options?.swagger ?? false,
     installShutdownHandlers: false,
   });
