@@ -306,7 +306,14 @@ export async function remove(id: string) {
     where: { id },
     include: {
       site: { select: { workspaceId: true } },
-      _count: { select: { jobs: true, jobProducts: true } },
+      // Only live links block deletion: a link taken off a job, or any link
+      // of a deleted job (deleting a job leaves its rows behind), doesn't.
+      _count: {
+        select: {
+          jobs: { where: { deletedAt: null, job: { deletedAt: null } } },
+          jobProducts: { where: { deletedAt: null, job: { deletedAt: null } } },
+        },
+      },
     },
   });
 
