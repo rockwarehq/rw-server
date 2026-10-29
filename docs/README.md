@@ -1,7 +1,6 @@
 # Internal Dev Docs
 
-Internal documentation for the rw-server monorepo. The published product
-documentation site is separate — see `apps/docs`.
+Internal documentation for the rw-server monorepo.
 
 ## Sections
 

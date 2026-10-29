@@ -1,5 +1,6 @@
 import prisma, { Prisma } from "@rw/db";
 import type { OverheadPage, OverheadPagePriority } from "@rw/db";
+import { auditRecord } from "../audit/index.js";
 
 // Saved overhead pages (Settings → Overhead paging): a message plus the gateways
 // and speaker settings to play it with, sent by hand with sendSavedPage().
@@ -14,6 +15,38 @@ const NOT_FOUND: ServiceError = { error: "Overhead page not found", code: "OVERH
 
 function isUniqueViolation(err: unknown): boolean {
   return err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
+}
+
+const AUDITED_FIELDS = [
+  "name",
+  "text",
+  "gatewayIds",
+  "priority",
+  "chimeBefore",
+  "chimeAfter",
+  "repeat",
+  "voice",
+  "speed",
+  "archivedAt",
+] as const;
+
+async function auditPage(
+  tx: Prisma.TransactionClient,
+  change: "created" | "updated",
+  after: OverheadPage,
+  before?: OverheadPage,
+) {
+  const values = (page: OverheadPage) => ({ ...page, gatewayIds: [...page.gatewayIds].sort() });
+  await auditRecord(tx, {
+    change,
+    entityType: "overhead-page",
+    entityId: after.id,
+    siteId: after.siteId,
+    label: after.name,
+    before: before ? values(before) : undefined,
+    after: values(after),
+    fields: AUDITED_FIELDS,
+  });
 }
 
 /** What to say and how: shared by saved pages and one-off sends. */
@@ -57,19 +90,23 @@ export async function createPage(input: CreatePageInput): Promise<ServiceError |
   if (gatewayError) return gatewayError;
 
   try {
-    const page = await prisma.overheadPage.create({
-      data: {
-        siteId: input.siteId,
-        name: input.name,
-        text: input.text,
-        gatewayIds: [...new Set(input.gatewayIds ?? [])],
-        priority: input.priority,
-        chimeBefore: input.chimeBefore ?? null,
-        chimeAfter: input.chimeAfter ?? null,
-        repeat: input.repeat,
-        voice: input.voice ?? null,
-        speed: input.speed ?? null,
-      },
+    const page = await prisma.$transaction(async (tx) => {
+      const created = await tx.overheadPage.create({
+        data: {
+          siteId: input.siteId,
+          name: input.name,
+          text: input.text,
+          gatewayIds: [...new Set(input.gatewayIds ?? [])],
+          priority: input.priority,
+          chimeBefore: input.chimeBefore ?? null,
+          chimeAfter: input.chimeAfter ?? null,
+          repeat: input.repeat,
+          voice: input.voice ?? null,
+          speed: input.speed ?? null,
+        },
+      });
+      await auditPage(tx, "created", created);
+      return created;
     });
     return { data: page };
   } catch (err) {
@@ -99,7 +136,7 @@ export async function getPageById(id: string): Promise<{ data: OverheadPage } | 
 }
 
 export async function updatePage(id: string, input: UpdatePageInput): Promise<ServiceError | { data: OverheadPage }> {
-  const existing = await prisma.overheadPage.findUnique({ where: { id }, select: { siteId: true, archivedAt: true } });
+  const existing = await prisma.overheadPage.findUnique({ where: { id } });
   if (!existing || existing.archivedAt) return NOT_FOUND;
 
   if (input.gatewayIds) {
@@ -108,19 +145,23 @@ export async function updatePage(id: string, input: UpdatePageInput): Promise<Se
   }
 
   try {
-    const page = await prisma.overheadPage.update({
-      where: { id },
-      data: {
-        name: input.name,
-        text: input.text,
-        gatewayIds: input.gatewayIds ? [...new Set(input.gatewayIds)] : undefined,
-        priority: input.priority,
-        chimeBefore: input.chimeBefore,
-        chimeAfter: input.chimeAfter,
-        repeat: input.repeat,
-        voice: input.voice,
-        speed: input.speed,
-      },
+    const page = await prisma.$transaction(async (tx) => {
+      const updated = await tx.overheadPage.update({
+        where: { id },
+        data: {
+          name: input.name,
+          text: input.text,
+          gatewayIds: input.gatewayIds ? [...new Set(input.gatewayIds)] : undefined,
+          priority: input.priority,
+          chimeBefore: input.chimeBefore,
+          chimeAfter: input.chimeAfter,
+          repeat: input.repeat,
+          voice: input.voice,
+          speed: input.speed,
+        },
+      });
+      await auditPage(tx, "updated", updated, existing);
+      return updated;
     });
     return { data: page };
   } catch (err) {
@@ -130,8 +171,11 @@ export async function updatePage(id: string, input: UpdatePageInput): Promise<Se
 }
 
 export async function archivePage(id: string): Promise<ServiceError | { data: { success: true } }> {
-  const existing = await prisma.overheadPage.findUnique({ where: { id }, select: { archivedAt: true } });
+  const existing = await prisma.overheadPage.findUnique({ where: { id } });
   if (!existing || existing.archivedAt) return NOT_FOUND;
-  await prisma.overheadPage.update({ where: { id }, data: { archivedAt: new Date() } });
+  await prisma.$transaction(async (tx) => {
+    const archived = await tx.overheadPage.update({ where: { id }, data: { archivedAt: new Date() } });
+    await auditPage(tx, "updated", archived, existing);
+  });
   return { data: { success: true } };
 }

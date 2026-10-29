@@ -13,6 +13,33 @@ import { resolveContext, targetNames } from "./context.js";
 
 export { contextTargets, resolveContext } from "./context.js";
 import * as storage from "@rw/runtime/storage";
+import { auditRecord } from "../audit/index.js";
+
+const AUDIT_FIELDS = ["name", "description", "labels", "parentId", "siteId"] as const;
+
+/** What a link points at, by name, looked up before the transaction opens. */
+async function targetName(targetType: DocumentTargetType, targetId: string) {
+  return (await targetNames([{ targetType, targetId }])).get(`${targetType}:${targetId}`) ?? null;
+}
+
+async function auditLink(
+  tx: Prisma.TransactionClient,
+  document: { id: string; name: string; siteId: string | null },
+  change: "linked" | "unlinked",
+  targetType: DocumentTargetType,
+  targetId: string,
+  name: string | null,
+) {
+  await auditRecord(tx, {
+    change: "updated",
+    entityType: "document",
+    entityId: document.id,
+    siteId: document.siteId,
+    label: document.name,
+    fields: [],
+    metadata: { [change]: { type: targetType, id: targetId, ...(name ? { name } : {}) } },
+  });
+}
 
 export interface CreateFolderInput {
   name: string;
@@ -218,18 +245,32 @@ export async function createFolder(input: CreateFolderInput) {
   const location = await resolveParentAndSite(input);
   if ("error" in location) return location;
 
-  const document = await prisma.document.create({
-    data: {
-      kind: "FOLDER",
-      status: "READY",
-      name: input.name,
-      description: input.description ?? null,
-      labels: normalizeLabels(input.labels),
-      attrs: input.attrs ?? {},
-      siteId: location.siteId,
-      parentId: location.parentId,
-    },
-    include: documentInclude,
+  const document = await prisma.$transaction(async (tx) => {
+    const created = await tx.document.create({
+      data: {
+        kind: "FOLDER",
+        status: "READY",
+        name: input.name,
+        description: input.description ?? null,
+        labels: normalizeLabels(input.labels),
+        attrs: input.attrs ?? {},
+        siteId: location.siteId,
+        parentId: location.parentId,
+      },
+      include: documentInclude,
+    });
+    await auditRecord(tx, {
+      change: "created",
+      entityType: "document",
+      entityId: created.id,
+      siteId: created.siteId,
+      workspaceId: input.workspaceId,
+      label: created.name,
+      after: created,
+      fields: AUDIT_FIELDS,
+      metadata: { kind: "FOLDER" },
+    });
+    return created;
   });
 
   return { data: toDocument(document) };
@@ -318,10 +359,26 @@ export async function completeUpload(documentId: string) {
     return { error: "Uploaded object was not found", code: "UPLOAD_NOT_FOUND" };
   }
 
-  const [, updated] = await prisma.$transaction([
-    prisma.documentFile.update({ where: { id: file.id }, data: { status: "READY" } }),
-    prisma.document.update({ where: { id: documentId }, data: { status: "READY" }, include: documentInclude }),
-  ]);
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.documentFile.update({ where: { id: file.id }, data: { status: "READY" } });
+    const ready = await tx.document.update({
+      where: { id: documentId },
+      data: { status: "READY" },
+      include: documentInclude,
+    });
+    await auditRecord(tx, {
+      change: "created",
+      entityType: "document",
+      entityId: ready.id,
+      siteId: ready.siteId,
+      label: ready.name,
+      after: ready,
+      fields: AUDIT_FIELDS,
+      versionId: file.id,
+      metadata: { kind: "FILE", version: file.version },
+    });
+    return ready;
+  });
 
   return { data: toDocument(updated) };
 }
@@ -329,7 +386,7 @@ export async function completeUpload(documentId: string) {
 async function findReadyFile(documentId: string) {
   const document = await prisma.document.findUnique({
     where: { id: documentId },
-    select: { id: true, kind: true, status: true, currentFileId: true, deletedAt: true },
+    select: { id: true, kind: true, status: true, name: true, siteId: true, currentFileId: true, deletedAt: true },
   });
 
   if (!document || document.deletedAt) {
@@ -433,14 +490,31 @@ export async function completeVersionUpload(documentId: string, fileId: string) 
   // A slower upload that finishes after a newer one never moves current back.
   const becomesCurrent = !current || file.version > current.version;
 
-  const [, document] = await prisma.$transaction([
-    prisma.documentFile.update({ where: { id: file.id }, data: { status: "READY" } }),
-    prisma.document.update({
+  const previousFileId = found.data.currentFileId;
+  const document = await prisma.$transaction(async (tx) => {
+    await tx.documentFile.update({ where: { id: file.id }, data: { status: "READY" } });
+    const updated = await tx.document.update({
       where: { id: documentId },
       data: becomesCurrent ? { currentFileId: file.id } : {},
       include: documentInclude,
-    }),
-  ]);
+    });
+    if (file.status === "PENDING_UPLOAD" || (becomesCurrent && previousFileId !== file.id)) {
+      await auditRecord(tx, {
+        change: "updated",
+        entityType: "document",
+        entityId: updated.id,
+        siteId: updated.siteId,
+        label: updated.name,
+        before: { version: current?.version ?? null },
+        after: { version: becomesCurrent ? file.version : (current?.version ?? null) },
+        fields: ["version"],
+        versionId: file.id,
+        previousVersionId: previousFileId,
+        metadata: { versionUploaded: file.version, ...(becomesCurrent ? {} : { current: false }) },
+      });
+    }
+    return updated;
+  });
 
   return { data: toDocument(document) };
 }
@@ -478,16 +552,36 @@ export async function setCurrentVersion(documentId: string, fileId: string) {
 
   const file = await prisma.documentFile.findUnique({
     where: { id: fileId },
-    select: { documentId: true, status: true },
+    select: { documentId: true, status: true, version: true },
   });
   if (!file || file.documentId !== documentId || file.status !== "READY") {
     return { error: "Version not found", code: "VERSION_NOT_FOUND" };
   }
 
-  const document = await prisma.document.update({
-    where: { id: documentId },
-    data: { currentFileId: fileId },
-    include: documentInclude,
+  const previousFileId = found.data.currentFileId;
+  const previous = previousFileId
+    ? await prisma.documentFile.findUnique({ where: { id: previousFileId }, select: { version: true } })
+    : null;
+
+  const document = await prisma.$transaction(async (tx) => {
+    const updated = await tx.document.update({
+      where: { id: documentId },
+      data: { currentFileId: fileId },
+      include: documentInclude,
+    });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "document",
+      entityId: updated.id,
+      siteId: updated.siteId,
+      label: updated.name,
+      before: { version: previous?.version ?? null },
+      after: { version: file.version },
+      fields: ["version"],
+      versionId: fileId,
+      previousVersionId: previousFileId,
+    });
+    return updated;
   });
 
   return { data: toDocument(document) };
@@ -654,7 +748,16 @@ export async function getOpenUrl(documentId: string) {
 export async function update(documentId: string, input: UpdateDocumentInput) {
   const current = await prisma.document.findUnique({
     where: { id: documentId },
-    select: { id: true, kind: true, siteId: true, parentId: true, deletedAt: true },
+    select: {
+      id: true,
+      kind: true,
+      name: true,
+      description: true,
+      labels: true,
+      siteId: true,
+      parentId: true,
+      deletedAt: true,
+    },
   });
 
   if (!current || current.deletedAt) {
@@ -687,14 +790,27 @@ export async function update(documentId: string, input: UpdateDocumentInput) {
     }
   }
 
-  const document = await prisma.document.update({ where: { id: documentId }, data, include: documentInclude });
+  const document = await prisma.$transaction(async (tx) => {
+    const updated = await tx.document.update({ where: { id: documentId }, data, include: documentInclude });
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "document",
+      entityId: updated.id,
+      siteId: updated.siteId,
+      label: updated.name,
+      before: current,
+      after: updated,
+      fields: AUDIT_FIELDS,
+    });
+    return updated;
+  });
   return { data: toDocument(document) };
 }
 
 export async function remove(documentId: string) {
   const document = await prisma.document.findUnique({
     where: { id: documentId },
-    select: { id: true, deletedAt: true },
+    select: { id: true, kind: true, name: true, siteId: true, currentFileId: true, deletedAt: true },
   });
 
   if (!document || document.deletedAt) {
@@ -709,7 +825,19 @@ export async function remove(documentId: string) {
   });
   const storageKeys = files.map((file) => file.storageKey);
 
-  await prisma.document.deleteMany({ where: { id: { in: ids } } });
+  await prisma.$transaction(async (tx) => {
+    await tx.document.deleteMany({ where: { id: { in: ids } } });
+    await auditRecord(tx, {
+      change: "deleted",
+      entityType: "document",
+      entityId: document.id,
+      siteId: document.siteId,
+      label: document.name,
+      fields: AUDIT_FIELDS,
+      previousVersionId: document.currentFileId,
+      metadata: { kind: document.kind, ...(ids.length > 1 ? { descendants: ids.length - 1 } : {}) },
+    });
+  });
 
   if (storageKeys.length > 0 && storage.isStorageEnabled()) {
     try {
@@ -725,7 +853,7 @@ export async function remove(documentId: string) {
 export async function link(documentId: string, targetType: DocumentTargetType, targetId: string) {
   const document = await prisma.document.findUnique({
     where: { id: documentId },
-    select: { id: true, siteId: true, deletedAt: true },
+    select: { id: true, name: true, siteId: true, deletedAt: true },
   });
 
   if (!document || document.deletedAt) {
@@ -739,17 +867,33 @@ export async function link(documentId: string, targetType: DocumentTargetType, t
     return { error: "Document and target must belong to the same site", code: "SITE_MISMATCH" };
   }
 
-  const documentLink = await prisma.documentLink.upsert({
-    where: { documentId_targetType_targetId: { documentId, targetType, targetId } },
-    create: { documentId, targetType, targetId },
-    update: {},
+  const name = await targetName(targetType, targetId);
+  const documentLink = await prisma.$transaction(async (tx) => {
+    const key = { documentId_targetType_targetId: { documentId, targetType, targetId } };
+    const existing = await tx.documentLink.findUnique({ where: key, select: { id: true } });
+    const upserted = await tx.documentLink.upsert({
+      where: key,
+      create: { documentId, targetType, targetId },
+      update: {},
+    });
+    if (!existing) await auditLink(tx, document, "linked", targetType, targetId, name);
+    return upserted;
   });
 
   return { data: documentLink };
 }
 
 export async function unlink(documentId: string, targetType: DocumentTargetType, targetId: string) {
-  await prisma.documentLink.deleteMany({ where: { documentId, targetType, targetId } });
+  const name = await targetName(targetType, targetId);
+  await prisma.$transaction(async (tx) => {
+    const { count } = await tx.documentLink.deleteMany({ where: { documentId, targetType, targetId } });
+    if (count === 0) return;
+    const document = await tx.document.findUnique({
+      where: { id: documentId },
+      select: { id: true, name: true, siteId: true },
+    });
+    if (document) await auditLink(tx, document, "unlinked", targetType, targetId, name);
+  });
   return { success: true };
 }
 

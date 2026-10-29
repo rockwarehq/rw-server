@@ -2,10 +2,18 @@ import prisma from "@rw/db";
 import type { Prisma } from "@rw/db";
 import { hashPassword } from "@rw/auth/password";
 import { toE164 } from "@rw/runtime/phone";
+import { auditActorId, auditRecord } from "@rw/services/audit/index";
 import { consentByPhone } from "@rw/services/notification/consent";
 import { publishStationCurrentLogonsMetric } from "./logon.js";
 
 type DbClient = typeof prisma | Prisma.TransactionClient;
+
+// Never the PIN hash or badge number: a change to either is recorded as a flag.
+const AUDIT_FIELDS = ["firstName", "lastName", "employeeNumber", "email", "phone", "status"] as const;
+
+function employeeLabel(version: { firstName: string; lastName: string }) {
+  return `${version.firstName} ${version.lastName}`.trim();
+}
 
 export interface CreateEmployeeInput {
   workspaceId?: string;
@@ -158,7 +166,7 @@ async function ensureIdentityAvailable(
   }
 }
 
-async function createWithClient(input: CreateEmployeeInput, db: DbClient) {
+async function createWithClient(input: CreateEmployeeInput, db: Prisma.TransactionClient) {
   const workspaceId = await resolveWorkspaceId(input, db);
   await ensureIdentityAvailable(
     {
@@ -190,6 +198,7 @@ async function createWithClient(input: CreateEmployeeInput, db: DbClient) {
       email: input.email || null,
       phone: input.phone || null,
       pinHash,
+      createdById: auditActorId(),
     },
   });
 
@@ -215,6 +224,24 @@ async function createWithClient(input: CreateEmployeeInput, db: DbClient) {
   });
 
   if (!employee) throw new Error("Employee was not created");
+
+  const role = employee.siteAccess.find((access) => access.siteId === input.siteId)?.role;
+  await auditRecord(db, {
+    change: "created",
+    entityType: "employee",
+    entityId: employee.id,
+    workspaceId,
+    label: employeeLabel(version),
+    after: { ...version, status: employee.status },
+    fields: AUDIT_FIELDS,
+    versionId: version.id,
+    metadata: {
+      ...(pinHash ? { pinChanged: true } : {}),
+      ...(version.badgeNumber ? { badgeChanged: true } : {}),
+      ...(role && input.siteId ? { role: { siteId: input.siteId, to: role.name } } : {}),
+    },
+  });
+
   return { data: employee };
 }
 
@@ -328,18 +355,18 @@ export async function update(id: string, input: UpdateEmployeeInput) {
     badgeNumber: nextBadgeNumber,
   });
 
-  let roleUpdate: { siteId: string; roleId: string } | null = null;
+  let roleUpdate: { siteId: string; roleId: string; name: string } | null = null;
   if (input.roleId) {
     const role = await prisma.employeeRole.findUnique({
       where: { id: input.roleId },
-      select: { id: true, siteId: true },
+      select: { id: true, siteId: true, name: true },
     });
     if (!role)
       return {
         error: "Employee role not found",
         code: "ROLE_NOT_FOUND" as const,
       };
-    roleUpdate = { siteId: role.siteId, roleId: role.id };
+    roleUpdate = { siteId: role.siteId, roleId: role.id, name: role.name };
   }
 
   const needsNewVersion =
@@ -359,6 +386,13 @@ export async function update(id: string, input: UpdateEmployeeInput) {
       });
     }
 
+    const previousAccess = roleUpdate
+      ? await tx.employeeSiteAccess.findUnique({
+          where: { employeeId_siteId: { employeeId: id, siteId: roleUpdate.siteId } },
+          select: { roleId: true, role: { select: { name: true } } },
+        })
+      : null;
+
     if (roleUpdate) {
       await tx.employeeSiteAccess.upsert({
         where: {
@@ -374,7 +408,11 @@ export async function update(id: string, input: UpdateEmployeeInput) {
       });
     }
 
+    let pinChanged = false;
+    let badgeChanged = false;
     if (needsNewVersion) {
+      pinChanged = input.pin !== undefined && (input.pin !== null || currentVersion.pinHash !== null);
+      badgeChanged = nextBadgeNumber !== currentVersion.badgeNumber;
       const pinHash =
         input.pin === undefined ? currentVersion.pinHash : input.pin ? await hashPassword(input.pin) : null;
 
@@ -389,6 +427,7 @@ export async function update(id: string, input: UpdateEmployeeInput) {
           email: input.email !== undefined ? input.email || null : currentVersion.email,
           phone: input.phone !== undefined ? input.phone || null : currentVersion.phone,
           pinHash,
+          createdById: auditActorId(),
         },
       });
 
@@ -398,7 +437,37 @@ export async function update(id: string, input: UpdateEmployeeInput) {
       });
     }
 
-    return tx.employee.findUnique({ where: { id }, include: employeeInclude });
+    const updated = await tx.employee.findUnique({ where: { id }, include: employeeInclude });
+    if (updated?.version) {
+      const roleChanged = roleUpdate && previousAccess?.roleId !== roleUpdate.roleId;
+      await auditRecord(tx, {
+        change: "updated",
+        entityType: "employee",
+        entityId: id,
+        workspaceId: employee.workspaceId,
+        label: employeeLabel(updated.version),
+        before: { ...currentVersion, status: employee.status },
+        after: { ...updated.version, status: updated.status },
+        fields: AUDIT_FIELDS,
+        ...(updated.version.id !== currentVersion.id
+          ? { versionId: updated.version.id, previousVersionId: currentVersion.id }
+          : {}),
+        ...(pinChanged || badgeChanged || roleChanged
+          ? {
+              metadata: {
+                ...(pinChanged ? { pinChanged: true } : {}),
+                ...(badgeChanged ? { badgeChanged: true } : {}),
+                ...(roleUpdate && roleChanged
+                  ? {
+                      role: { siteId: roleUpdate.siteId, from: previousAccess?.role.name ?? null, to: roleUpdate.name },
+                    }
+                  : {}),
+              },
+            }
+          : {}),
+      });
+    }
+    return updated;
   });
 
   if (!result) throw new Error("Employee was not found after update");
@@ -408,7 +477,7 @@ export async function update(id: string, input: UpdateEmployeeInput) {
 export async function remove(id: string) {
   const employee = await prisma.employee.findUnique({
     where: { id },
-    select: { id: true },
+    select: { id: true, workspaceId: true, version: { select: { firstName: true, lastName: true } } },
   });
 
   if (!employee) return { error: "Employee not found", code: "NOT_FOUND" as const };
@@ -425,7 +494,21 @@ export async function remove(id: string) {
     data: { logoffTime: now },
   });
 
-  await prisma.employee.delete({ where: { id } });
+  // A delete cascades through the record's history: give it longer than the default 5s.
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.employee.delete({ where: { id } });
+      await auditRecord(tx, {
+        change: "deleted",
+        entityType: "employee",
+        entityId: employee.id,
+        workspaceId: employee.workspaceId,
+        label: employee.version ? employeeLabel(employee.version) : null,
+        fields: [],
+      });
+    },
+    { timeout: 60_000 },
+  );
 
   await Promise.all(affected.map((row) => publishStationCurrentLogonsMetric(row.stationId, now)));
 

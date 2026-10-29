@@ -1,5 +1,5 @@
 import prisma, { type Prisma } from "@rw/db";
-import { logEvent } from "@rw/services/audit/index";
+import { auditContext, logEvent, runWithAuditContext } from "@rw/services/audit/index";
 import { publishEntityEvent } from "@rw/services/entity/events";
 import type { EntityEventInput } from "@rw/services/write";
 
@@ -342,9 +342,38 @@ export async function firstStep(id: string): Promise<StepResult> {
 export async function step(id: string): Promise<StepResult> {
   const changeset = await load(id);
   if (!changeset) return { kind: "done" };
-  if (changeset.status === "APPLYING") return stepApply(changeset);
-  if (changeset.status === "ROLLING_BACK") return stepRollback(changeset);
-  return { kind: "done" };
+  const run = () => {
+    if (changeset.status === "APPLYING") return stepApply(changeset);
+    if (changeset.status === "ROLLING_BACK") return stepRollback(changeset);
+    return Promise.resolve<StepResult>({ kind: "done" });
+  };
+  const applying = changeset.status === "APPLYING";
+  // Every change the run makes names the import it came from, and who
+  // proposed it when that was an agent.
+  const origin = {
+    changesetId: changeset.id,
+    title: changeset.title,
+    ...(changeset.clientName ? { proposedVia: changeset.clientName } : {}),
+    ...(applying ? {} : { undo: true }),
+  };
+  // The request that started the run already says who and from where. In the
+  // background, the run speaks for the person who started it, and one id ties
+  // together everything it wrote.
+  const request = auditContext();
+  if (request) return runWithAuditContext({ ...request, metadata: { ...request.metadata, origin } }, run);
+  return runWithAuditContext(
+    {
+      requestId: `${applying ? "apply" : "rollback"}:${changeset.id}`,
+      actor: {
+        actorId: (applying ? changeset.appliedById : changeset.rolledBackById) ?? undefined,
+        siteId: changeset.siteId,
+        // Picked up after a restart: carried on by the system, for that person.
+        via: "system",
+      },
+      metadata: { origin },
+    },
+    run,
+  );
 }
 
 const running = new Set<string>();

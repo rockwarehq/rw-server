@@ -72,15 +72,6 @@ export function formatStationLogons(sessions: ReadonlyArray<LogonNameSession>): 
     .join(", ");
 }
 
-async function distinctActiveStationIds(where: Prisma.StationLogonSessionWhereInput): Promise<string[]> {
-  const rows = await prisma.stationLogonSession.findMany({
-    where,
-    select: { stationId: true },
-    distinct: ["stationId"],
-  });
-  return rows.map((r) => r.stationId);
-}
-
 export async function publishStationCurrentLogonsMetric(stationId: string, observedAt: Date): Promise<void> {
   const station = await prisma.station.findUnique({
     where: { id: stationId },
@@ -169,6 +160,7 @@ export async function logon(input: LogonInput) {
 
   await logEvent({
     action: "OPERATOR_LOGON",
+    ...employeeEntity(employeeId),
     metadata: {
       sessionId: session.id,
       employeeId,
@@ -198,14 +190,20 @@ export async function logoff(sessionId: string, displayId: string) {
   if (session.displayId !== displayId) return { error: "Session does not belong to this display", code: "FORBIDDEN" };
   if (session.logoffTime) return { error: "Session already ended", code: "ALREADY_ENDED" };
 
-  const updated = await prisma.stationLogonSession.update({
-    where: { id: sessionId },
+  // Only while it's still open: a bulk logoff may have just ended it.
+  const { count } = await prisma.stationLogonSession.updateMany({
+    where: { id: sessionId, logoffTime: null },
     data: { logoffTime: new Date() },
+  });
+  if (count === 0) return { error: "Session already ended", code: "ALREADY_ENDED" };
+  const updated = await prisma.stationLogonSession.findUniqueOrThrow({
+    where: { id: sessionId },
     select: sessionSelect,
   });
 
   await logEvent({
     action: "OPERATOR_LOGOFF",
+    ...employeeEntity(updated.employeeId),
     metadata: {
       sessionId: updated.id,
       employeeId: updated.employeeId,
@@ -224,27 +222,56 @@ export async function logoff(sessionId: string, displayId: string) {
  */
 export async function logoffAll(displayId: string) {
   const now = new Date();
-  const affectedStationIds = await distinctActiveStationIds({ displayId, logoffTime: null });
-  const result = await prisma.stationLogonSession.updateMany({
-    where: {
-      displayId,
-      logoffTime: null,
-    },
-    data: { logoffTime: now },
+  const ended = await endSessions({ displayId, logoffTime: null }, now, { allSessions: true });
+  await publishLogonsForStations(ended.stationIds, now);
+  return { data: { count: ended.count } };
+}
+
+/**
+ * End the open sessions matching `where`, each with its own audit entry
+ * naming the person logged off, in one transaction: who was logged off, and
+ * when, is part of the record, not just how many.
+ */
+async function endSessions(
+  where: Prisma.StationLogonSessionWhereInput,
+  now: Date,
+  metadata: Record<string, unknown>,
+): Promise<{ count: number; stationIds: string[] }> {
+  return prisma.$transaction(async (tx) => {
+    const open = await tx.stationLogonSession.findMany({
+      where,
+      select: { id: true, employeeId: true, stationId: true, displayId: true },
+    });
+    if (open.length === 0) return { count: 0, stationIds: [] };
+    // Lock them and keep the ones still open: an operator logging off at the
+    // same moment ends their own session, and it gets one entry, not two.
+    const locked = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM "StationLogonSession"
+      WHERE id = ANY(${open.map((session) => session.id)}::uuid[]) AND "logoffTime" IS NULL
+      FOR UPDATE`;
+    const stillOpen = new Set(locked.map((row) => row.id));
+    const ended = open.filter((session) => stillOpen.has(session.id));
+    if (ended.length === 0) return { count: 0, stationIds: [] };
+    const result = await tx.stationLogonSession.updateMany({
+      where: { id: { in: ended.map((session) => session.id) } },
+      data: { logoffTime: now },
+    });
+    for (const session of ended) {
+      await logEvent({
+        tx,
+        action: "OPERATOR_LOGOFF",
+        ...employeeEntity(session.employeeId),
+        metadata: {
+          sessionId: session.id,
+          employeeId: session.employeeId,
+          stationId: session.stationId,
+          displayId: session.displayId,
+          ...metadata,
+        },
+      });
+    }
+    return { count: result.count, stationIds: [...new Set(ended.map((session) => session.stationId))] };
   });
-
-  await logEvent({
-    action: "OPERATOR_LOGOFF",
-    metadata: {
-      displayId,
-      allSessions: true,
-      count: result.count,
-    },
-  });
-
-  await publishLogonsForStations(affectedStationIds, now);
-
-  return { data: { count: result.count } };
 }
 
 /**
@@ -273,25 +300,9 @@ export async function logoffByScope(scope: "station" | "display", displayId: str
   }
 
   const now = new Date();
-  const affectedStationIds = await distinctActiveStationIds(where);
-  const result = await prisma.stationLogonSession.updateMany({
-    where,
-    data: { logoffTime: now },
-  });
-
-  await logEvent({
-    action: "OPERATOR_LOGOFF",
-    metadata: {
-      displayId,
-      scope,
-      autoLogoff: true,
-      count: result.count,
-    },
-  });
-
-  await publishLogonsForStations(affectedStationIds, now);
-
-  return { data: { count: result.count } };
+  const ended = await endSessions(where, now, { scope, autoLogoff: true });
+  await publishLogonsForStations(ended.stationIds, now);
+  return { data: { count: ended.count } };
 }
 
 /**
@@ -362,6 +373,7 @@ export async function transferSessions(displayId: string, stationId: string) {
   for (const { from, to } of moved) {
     await logEvent({
       action: "OPERATOR_LOGOFF",
+      ...employeeEntity(from.employeeId),
       metadata: {
         sessionId: from.id,
         employeeId: from.employeeId,
@@ -372,6 +384,7 @@ export async function transferSessions(displayId: string, stationId: string) {
     });
     await logEvent({
       action: "OPERATOR_LOGON",
+      ...employeeEntity(from.employeeId),
       metadata: {
         sessionId: to.id,
         employeeId: from.employeeId,
@@ -408,4 +421,9 @@ export async function getActiveSessions(displayId: string) {
   });
 
   return { data: sessions };
+}
+
+/** The employee an operator event is about, as its audit record (operators aren't users). */
+function employeeEntity(employeeId: string | null | undefined) {
+  return employeeId ? { entityType: "employee", entityId: employeeId } : {};
 }

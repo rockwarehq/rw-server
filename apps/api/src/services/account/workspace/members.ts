@@ -1,5 +1,6 @@
 import prisma, { type Prisma } from "@rw/db";
 import type { Level as BucketLevel, UserAccess } from "@rw/auth/iam/access";
+import { auditRecord } from "@rw/services/audit/index";
 import { syncAccountTeamMember } from "../../employee/account.js";
 
 // Member management over the bucket model. The account has one workspace,
@@ -112,8 +113,18 @@ export async function checkBuckets(
   return { ok: true, buckets };
 }
 
-/** Upsert a user's accesses (inside the caller's transaction). */
+/** Upsert a user's accesses (inside the caller's transaction), recorded in the trail. */
 export async function writeAccesses(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  accesses: Array<{ bucketId: string; level: BucketLevel }>,
+) {
+  const before = await accessSnapshot(tx, userId);
+  await upsertAccesses(tx, userId, accesses);
+  await auditAccessChange(tx, userId, before);
+}
+
+async function upsertAccesses(
   tx: Prisma.TransactionClient,
   userId: string,
   accesses: Array<{ bucketId: string; level: BucketLevel }>,
@@ -123,6 +134,98 @@ export async function writeAccesses(
       where: { bucketId_userId: { bucketId: a.bucketId, userId } },
       update: { level: a.level },
       create: { bucketId: a.bucketId, userId, level: a.level },
+    });
+  }
+}
+
+// ── Audit ────────────────────────────────────────────────────────────────
+
+type PlantAccess = { plant: string; workspaceId: string; level: BucketLevel | null; workcenters: string[] };
+
+type AccessSnapshot = {
+  label: string;
+  accountAdmin: boolean;
+  workspaceId: string | undefined;
+  plants: Map<string, PlantAccess>;
+};
+
+/** A member's access as the trail reads it: per plant, the plant level and the workcenters they're on. */
+async function accessSnapshot(tx: Prisma.TransactionClient, userId: string): Promise<AccessSnapshot | null> {
+  const user = await tx.user.findUnique({
+    where: { id: userId },
+    select: {
+      email: true,
+      firstName: true,
+      lastName: true,
+      isAccountAdmin: true,
+      bucketAccesses: {
+        select: {
+          level: true,
+          bucket: {
+            select: { kind: true, name: true, siteId: true, workspaceId: true, site: { select: { name: true } } },
+          },
+        },
+      },
+    },
+  });
+  if (!user) return null;
+  const plants = new Map<string, PlantAccess>();
+  for (const { level, bucket } of user.bucketAccesses) {
+    if (!bucket.siteId) continue;
+    const plant = plants.get(bucket.siteId) ?? {
+      plant: bucket.site?.name ?? bucket.name,
+      workspaceId: bucket.workspaceId,
+      level: null,
+      workcenters: [],
+    };
+    if (bucket.kind === "PLANT") plant.level = level as BucketLevel;
+    else plant.workcenters.push(`${bucket.name} (${level})`);
+    plants.set(bucket.siteId, plant);
+  }
+  for (const plant of plants.values()) plant.workcenters.sort((a, b) => a.localeCompare(b));
+  return {
+    label: [user.firstName, user.lastName].filter(Boolean).join(" ") || user.email,
+    accountAdmin: user.isAccountAdmin,
+    workspaceId: plants.values().next().value?.workspaceId,
+    plants,
+  };
+}
+
+/** Record what changed in a member's access since `before`: account admin, then one entry per plant. */
+async function auditAccessChange(tx: Prisma.TransactionClient, userId: string, before: AccessSnapshot | null) {
+  const after = await accessSnapshot(tx, userId);
+  if (!after) return;
+  const workspaceId = after.workspaceId ?? before?.workspaceId;
+  if (before && before.accountAdmin !== after.accountAdmin) {
+    await auditRecord(tx, {
+      change: "updated",
+      entityType: "member",
+      entityId: userId,
+      workspaceId,
+      label: after.label,
+      before: { accountAdmin: before.accountAdmin },
+      after: { accountAdmin: after.accountAdmin },
+      fields: ["accountAdmin"],
+    });
+  }
+  const siteIds = new Set([...(before?.plants.keys() ?? []), ...after.plants.keys()]);
+  for (const siteId of siteIds) {
+    const was = before?.plants.get(siteId);
+    const now = after.plants.get(siteId);
+    const from = { level: was?.level ?? null, workcenters: was?.workcenters ?? [] };
+    const to = { level: now?.level ?? null, workcenters: now?.workcenters ?? [] };
+    if (JSON.stringify(from) === JSON.stringify(to)) continue;
+    await auditRecord(tx, {
+      change: was ? "updated" : "created",
+      entityType: "member",
+      entityId: userId,
+      siteId,
+      workspaceId: now?.workspaceId ?? was?.workspaceId,
+      label: after.label,
+      before: from,
+      after: to,
+      fields: ["level", "workcenters"],
+      metadata: { plant: (now ?? was)?.plant },
     });
   }
 }
@@ -235,10 +338,11 @@ export async function updateAccess(input: UpdateAccessInput): Promise<UpdateAcce
   }
 
   await prisma.$transaction(async (tx) => {
+    const before = await accessSnapshot(tx, member.id);
     if (input.isAccountAdmin !== undefined) {
       await tx.user.update({ where: { id: member.id }, data: { isAccountAdmin: input.isAccountAdmin } });
     }
-    await writeAccesses(tx, member.id, set);
+    await upsertAccesses(tx, member.id, set);
     if (remove.length) {
       await tx.bucketAccess.deleteMany({ where: { userId: member.id, bucketId: { in: remove } } });
     }
@@ -248,6 +352,7 @@ export async function updateAccess(input: UpdateAccessInput): Promise<UpdateAcce
     await syncAccountTeamMember(tx, member.id, {
       deactivateSites: input.isAccountAdmin === false ? await allSiteIds(tx) : lostSites,
     });
+    await auditAccessChange(tx, member.id, before);
   });
 
   return { success: true, access: (await getUserAccess(member.id)) as MemberAccessSummary };
@@ -266,6 +371,7 @@ export async function removeMember(userId: string) {
   }
 
   await prisma.$transaction(async (tx) => {
+    const before = await accessSnapshot(tx, member.id);
     await tx.bucketAccess.deleteMany({ where: { userId: member.id } });
     const removed = await tx.user.update({
       where: { id: member.id },
@@ -284,6 +390,22 @@ export async function removeMember(userId: string) {
       });
       await tx.employee.update({ where: { id: removed.employeeId }, data: { status: "INACTIVE" } });
     }
+    await auditRecord(tx, {
+      change: "deleted",
+      entityType: "member",
+      entityId: member.id,
+      workspaceId: before?.workspaceId,
+      label: before?.label,
+      fields: [],
+      metadata: {
+        accountAdmin: before?.accountAdmin ?? false,
+        plants: [...(before?.plants.values() ?? [])].map(({ plant, level, workcenters }) => ({
+          plant,
+          level,
+          workcenters,
+        })),
+      },
+    });
   });
 
   return { success: true as const };
@@ -310,8 +432,10 @@ export async function removeSiteAccess(userId: string, siteId: string) {
   }
 
   await prisma.$transaction(async (tx) => {
+    const before = await accessSnapshot(tx, member.id);
     await tx.bucketAccess.deleteMany({ where: { userId: member.id, bucket: { siteId } } });
     await syncAccountTeamMember(tx, member.id, { deactivateSites: [siteId] });
+    await auditAccessChange(tx, member.id, before);
   });
   return { success: true as const };
 }

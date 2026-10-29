@@ -4,6 +4,8 @@ export type IServerOptions = {
   host: string;
   port: number;
   graceDelay: number;
+  /** Proxies in front of the API whose X-Forwarded-For is believed (TRUST_PROXY). 0 = none. */
+  trustProxy?: number;
   loggerInstance?: FastifyBaseLogger;
   /** Register the swagger plugin (/docs). Defaults to true in development, false in production. */
   swagger?: boolean;
