@@ -187,4 +187,55 @@ describe("form service", () => {
     expect(await prisma.formSubmission.count({ where: { documentId: form.id } })).toBe(0);
     expect(await prisma.documentForm.count({ where: { documentId: form.id } })).toBe(0);
   });
+  test("works out computed fields on submit, ignoring what the client sent for them", async () => {
+    const number = (fieldId: string, key: string, label: string) => ({
+      type: "numberField",
+      attrs: { fieldId, key, label, required: true },
+    });
+    const computedNode = (fieldId: string, key: string, label: string, formula: string) => ({
+      type: "computedField",
+      attrs: { fieldId, key, label, formula, decimals: 1, percent: true, required: true },
+    });
+
+    const form = ok(await forms.create({ name: "Scrap check", siteId, workspaceId }));
+    // A broken formula can be drafted but not published.
+    ok(
+      await forms.saveDraft(
+        form.id,
+        content(number("n1", "inspected", "Inspected"), computedNode("c1", "rate", "Rate", "bad / 2")),
+      ),
+    );
+    expect(await forms.publish(form.id)).toMatchObject({
+      code: "INVALID_FORM",
+      error: 'Rate: No field is named "bad"',
+    });
+
+    ok(
+      await forms.saveDraft(
+        form.id,
+        content(
+          number("n1", "inspected", "Inspected"),
+          number("n2", "good", "Good"),
+          computedNode("c2", "rate", "Scrap rate", "scrap / inspected"),
+          computedNode("c1", "scrap", "Scrap", "inspected - good"),
+        ),
+      ),
+    );
+    const published = ok(await forms.publish(form.id));
+    const formId = published.published!.id;
+    expect(published.published?.fields.find((f) => f.id === "c1")).toMatchObject({ type: "computed", required: false });
+
+    const submitted = ok(
+      await forms.submit({ documentId: form.id, formId, answers: { n1: 40, n2: 38, c1: 999, c2: "junk" } }),
+    );
+    expect(submitted.answers).toEqual({ n1: 40, n2: 38, c1: 2, c2: 0.05 });
+    expect(submitted.progress).toEqual({ answered: 2, total: 2 });
+
+    const stored = await prisma.formSubmission.findUnique({ where: { id: submitted.id }, select: { answers: true } });
+    expect(stored?.answers).toEqual({ n1: 40, n2: 38, c1: 2, c2: 0.05 });
+
+    // Division by zero leaves the result out rather than storing a non-number.
+    const zero = ok(await forms.submit({ documentId: form.id, formId, answers: { n1: 0, n2: 0 } }));
+    expect(zero.answers).toEqual({ n1: 0, n2: 0, c1: 0 });
+  });
 });

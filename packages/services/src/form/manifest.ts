@@ -5,10 +5,14 @@
  * client never sends one. Pure: no database, unit-tested in manifest.test.ts.
  *
  * A field is a node whose `type` ends in "Field" (checklistField,
- * numberField…), with attrs `fieldId`, `label` and `required`. Everything else
+ * numberField…), with attrs `fieldId`, `label`, `required` and optionally
+ * `key` (its name in formulas, see formula.ts). A computedField is worked out
+ * from the other answers by its `formula`; nobody answers it. Everything else
  * (paragraphs, headings, images, lists) is layout and ignored; the walk goes
  * into their children, never into a field's.
  */
+
+import { formulaCycle, formulaProblem, isUsableKey } from "./formula.js";
 
 export type ChecklistItem = { id: string; label: string };
 
@@ -16,6 +20,8 @@ interface BaseField {
   id: string;
   label: string;
   required: boolean;
+  /** The field's name in formulas; absent when it has none. */
+  key?: string;
 }
 
 export type FormField =
@@ -27,7 +33,8 @@ export type FormField =
   | (BaseField & { type: "dropdown"; options: string[] })
   | (BaseField & { type: "multipleChoice"; options: string[]; allowMultiple: boolean })
   | (BaseField & { type: "date"; includeTime: boolean })
-  | (BaseField & { type: "rating"; scale: number });
+  | (BaseField & { type: "rating"; scale: number })
+  | (BaseField & { type: "computed"; formula: string; decimals: number | null; unit: string; percent: boolean });
 
 export type FormFieldType = FormField["type"];
 
@@ -38,6 +45,7 @@ export type AnswersError = { error: string; code: "INVALID_ANSWERS"; data?: unde
 export const MAX_CONTENT_BYTES = 512 * 1024;
 export const MAX_SHORT_TEXT = 1000;
 export const MAX_LONG_TEXT = 20000;
+export const MAX_UNIT_LENGTH = 20;
 
 const NODE_TYPES: Record<string, FormFieldType> = {
   checklistField: "checklist",
@@ -49,6 +57,7 @@ const NODE_TYPES: Record<string, FormFieldType> = {
   multipleChoiceField: "multipleChoice",
   dateField: "date",
   ratingField: "rating",
+  computedField: "computed",
 };
 
 type Attrs = Record<string, unknown>;
@@ -114,6 +123,23 @@ function fieldExtras(type: FormFieldType, attrs: Attrs): Record<string, unknown>
       }
       return { scale };
     }
+    case "computed": {
+      const decimals = attrs.decimals === undefined ? 2 : attrs.decimals;
+      if (
+        decimals !== null &&
+        (typeof decimals !== "number" || !Number.isInteger(decimals) || decimals < 0 || decimals > 4)
+      ) {
+        return "needs decimals from 0 to 4";
+      }
+      const unit = typeof attrs.unit === "string" ? attrs.unit.trim() : "";
+      if (unit.length > MAX_UNIT_LENGTH) return `has a unit longer than ${MAX_UNIT_LENGTH} characters`;
+      return {
+        formula: typeof attrs.formula === "string" ? attrs.formula : "",
+        decimals,
+        unit,
+        percent: attrs.percent === true,
+      };
+    }
   }
 }
 
@@ -164,11 +190,14 @@ export function buildManifest(
         return;
       }
       ids.add(id);
+      const key = typeof attrs.key === "string" && attrs.key !== "" ? attrs.key : null;
       fields.push({
         id,
         type,
         label: typeof attrs.label === "string" ? attrs.label : "",
-        required: attrs.required === true,
+        // Worked out, never answered: a computed field can't be required.
+        required: type !== "computed" && attrs.required === true,
+        ...(key !== null ? { key } : {}),
         ...extras,
       } as FormField);
       return;
@@ -182,10 +211,45 @@ export function buildManifest(
   visit(content);
 
   if (failure) return { error: failure, code: "INVALID_FORM" };
-  if (mode === "strict" && fields.length === 0) {
-    return { error: "Add at least one field before publishing", code: "NO_FIELDS" };
+  if (mode === "strict") {
+    if (fields.length === 0) return { error: "Add at least one field before publishing", code: "NO_FIELDS" };
+    const problem = formulaFailure(fields);
+    if (problem) return { error: problem, code: "INVALID_FORM" };
   }
   return { data: fields };
+}
+
+/**
+ * Publish-time checks for names and formulas: every key a formula could use
+ * is well formed and unique, every computed field's formula works on this
+ * form, and no computed fields use each other's results in a loop. Fields
+ * without a key are fine; formulas just can't reach them.
+ */
+function formulaFailure(fields: FormField[]): string | null {
+  const seen = new Map<string, FormField>();
+  for (const field of fields) {
+    if (field.key === undefined) continue;
+    if (!isUsableKey(field.key)) {
+      return `${describeField(field)} has a name formulas can't use ("${field.key}"): use lowercase letters, digits and _, starting with a letter`;
+    }
+    const other = seen.get(field.key);
+    if (other) return `${describeField(other)} and ${describeField(field)} have the same name "${field.key}"`;
+    seen.set(field.key, field);
+  }
+  for (const field of fields) {
+    if (field.type !== "computed") continue;
+    const problem = formulaProblem(field, fields);
+    if (problem) return `${field.label.trim() || "Calculation"}: ${problem}`;
+  }
+  const loop = formulaCycle(fields);
+  if (loop.length > 0) {
+    return `${loop[0]?.label.trim() || "Calculation"}: These formulas use each other's results`;
+  }
+  return null;
+}
+
+function describeField(field: FormField): string {
+  return field.label.trim() ? `"${field.label.trim()}"` : `A ${field.type} field`;
 }
 
 /** A stored manifest (Json column) read back; entries that do not parse are dropped. */
@@ -218,6 +282,8 @@ function isProvided(field: FormField, value: unknown): boolean {
     case "number":
     case "rating":
       return true;
+    case "computed":
+      return typeof value === "number" || typeof value === "boolean";
   }
 }
 
@@ -276,6 +342,9 @@ function checkAnswer(field: FormField, value: unknown): { value: unknown } | str
       return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= field.scale
         ? { value }
         : `must be a rating from 1 to ${field.scale}`;
+    case "computed":
+      // People never answer a computed field; validateAnswers skips it.
+      return "is worked out, not answered";
   }
 }
 
@@ -300,6 +369,8 @@ export function validateAnswers(
   const missing: string[] = [];
 
   for (const field of fields) {
+    // Computed fields are worked out on submit, never taken from the client.
+    if (field.type === "computed") continue;
     const raw = answers[field.id];
     if (raw !== undefined && raw !== null) {
       const checked = checkAnswer(field, raw);
@@ -337,6 +408,7 @@ export function answerProgress(
   let answered = 0;
   let total = 0;
   for (const field of fields) {
+    if (field.type === "computed") continue;
     const value = answers[field.id];
     if (field.type === "checklist") {
       total += field.items.length;

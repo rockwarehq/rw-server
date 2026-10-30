@@ -1,6 +1,7 @@
 import prisma, { Prisma } from "@rw/db";
 import { auditRecord } from "../audit/index.js";
 import { normalizeLabels } from "../document/shared.js";
+import { computeAll } from "./formula.js";
 import { MAX_CONTENT_BYTES, answerProgress, buildManifest, readManifest, validateAnswers } from "./manifest.js";
 
 export * from "./manifest.js";
@@ -419,8 +420,16 @@ export async function submit(input: SubmitFormInput) {
     where: { id: document.currentFormId },
     select: { fields: true },
   });
-  const checked = validateAnswers(readManifest(form?.fields), input.answers);
+  const fields = readManifest(form?.fields);
+  const checked = validateAnswers(fields, input.answers);
   if (checked.error !== undefined) return checked;
+  // Computed fields are worked out here from the checked answers — whatever
+  // the client sent for them was dropped by validateAnswers. A result that
+  // can't be worked out yet (a number left blank) is simply not stored.
+  const answers: Record<string, unknown> = { ...checked.data };
+  for (const [fieldId, result] of computeAll(fields, checked.data)) {
+    if (result.value !== null) answers[fieldId] = result.value;
+  }
 
   let siteId = document.siteId;
   let workcenterId: string | null = null;
@@ -453,7 +462,7 @@ export async function submit(input: SubmitFormInput) {
             number: (latest._max.number ?? 0) + 1,
             documentId: input.documentId,
             formId: input.formId,
-            answers: checked.data as Prisma.InputJsonValue,
+            answers: answers as Prisma.InputJsonValue,
             siteId,
             workcenterId,
             stationId: input.stationId ?? null,

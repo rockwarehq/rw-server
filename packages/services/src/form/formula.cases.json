@@ -1,0 +1,129 @@
+{
+  "about": "Shared formula cases. rw-server packages/services/src/form/formula.cases.json is a copy; both sides must produce these results. Change both together.",
+  "fields": [
+    { "id": "f1", "key": "inspected", "type": "number", "label": "Inspected" },
+    { "id": "f2", "key": "good", "type": "number", "label": "Good" },
+    { "id": "f3", "key": "signed", "type": "checkbox", "label": "Signed off" },
+    {
+      "id": "f4",
+      "key": "checks",
+      "type": "checklist",
+      "label": "Checks",
+      "items": [{ "id": "a", "label": "A" }, { "id": "b", "label": "B" }, { "id": "c", "label": "C" }]
+    },
+    { "id": "f5", "key": "score", "type": "rating", "label": "Score", "scale": 5 },
+    { "id": "f6", "key": "note", "type": "shortText", "label": "Note" }
+  ],
+  "cases": [
+    {
+      "name": "arithmetic",
+      "formula": "inspected - good",
+      "answers": { "f1": 50, "f2": 47 },
+      "value": 3
+    },
+    {
+      "name": "division and rounding",
+      "formula": "round((inspected - good) / inspected * 100, 1)",
+      "answers": { "f1": 30, "f2": 29 },
+      "value": 3.3
+    },
+    {
+      "name": "comparison gives true or false",
+      "formula": "(inspected - good) / inspected > 0.05",
+      "answers": { "f1": 50, "f2": 47 },
+      "value": true
+    },
+    {
+      "name": "conditional",
+      "formula": "good >= inspected ? 1 : 0",
+      "answers": { "f1": 10, "f2": 10 },
+      "value": 1
+    },
+    {
+      "name": "a checklist counts its ticked items",
+      "formula": "checks",
+      "answers": { "f4": { "a": true, "b": false, "c": true } },
+      "value": 2
+    },
+    {
+      "name": "an unanswered checklist counts zero",
+      "formula": "checks == 3",
+      "answers": {},
+      "value": false
+    },
+    {
+      "name": "a checkbox is true or false, unticked is false",
+      "formula": "signed and checks == 3",
+      "answers": { "f4": { "a": true, "b": true, "c": true } },
+      "value": false
+    },
+    {
+      "name": "boolean literals",
+      "formula": "signed or true",
+      "answers": {},
+      "value": true
+    },
+    {
+      "name": "a missing number leaves the result blank",
+      "formula": "inspected - good",
+      "answers": { "f1": 50 },
+      "value": null,
+      "waitingFor": ["Good"]
+    },
+    {
+      "name": "division by zero is blank",
+      "formula": "good / inspected",
+      "answers": { "f1": 0, "f2": 0 },
+      "value": null
+    },
+    {
+      "name": "functions",
+      "formula": "max(inspected, good) + min(1, 2) + abs(-2) + floor(1.9) + ceil(0.1) + sqrt(4)",
+      "answers": { "f1": 3, "f2": 5 },
+      "value": 12
+    },
+    {
+      "name": "mod and powers",
+      "formula": "inspected mod 4 + 2 ^ 3",
+      "answers": { "f1": 10 },
+      "value": 10
+    },
+    { "name": "ratings are numbers", "formula": "score * 2", "answers": { "f5": 4 }, "value": 8 },
+    {
+      "name": "an unknown name",
+      "formula": "inspected - bad",
+      "answers": { "f1": 1 },
+      "error": "No field is named \"bad\""
+    },
+    {
+      "name": "a text field can't be used",
+      "formula": "note",
+      "answers": { "f6": "hi" },
+      "error": "\"Note\" can't be used in a formula yet"
+    },
+    {
+      "name": "functions outside the list",
+      "formula": "evaluate(inspected)",
+      "answers": { "f1": 1 },
+      "error": "There's no function \"evaluate\""
+    },
+    {
+      "name": "strings are not allowed",
+      "formula": "\"x\"",
+      "answers": {},
+      "error": "Only numbers, true and false can be written in a formula"
+    },
+    {
+      "name": "assignment is not allowed",
+      "formula": "inspected = 2",
+      "answers": {},
+      "error": "That isn't something a formula can do"
+    },
+    {
+      "name": "incomplete",
+      "formula": "inspected -",
+      "answers": {},
+      "error": "The formula isn't complete"
+    }
+  ]
+}

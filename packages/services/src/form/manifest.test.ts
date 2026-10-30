@@ -215,3 +215,116 @@ describe("answerProgress", () => {
     });
   });
 });
+
+describe("computed fields and names", () => {
+  const inspected = field("numberField", { fieldId: "f1", key: "inspected", label: "Inspected" });
+  const good = field("numberField", { fieldId: "f2", key: "good", label: "Good" });
+  const computed = (attrs: Record<string, unknown>) =>
+    field("computedField", { fieldId: "rate", key: "rate", label: "Scrap rate", ...attrs });
+
+  test("parses a computed field with its display settings, never required", () => {
+    const result = buildManifest(
+      doc(
+        inspected,
+        good,
+        computed({ formula: "(inspected - good) / inspected", required: true, decimals: 1, percent: true }),
+      ),
+      "strict",
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.data?.[0]).toEqual({
+      id: "f1",
+      type: "number",
+      label: "Inspected",
+      required: false,
+      key: "inspected",
+      min: null,
+      max: null,
+      step: null,
+    });
+    expect(result.data?.[2]).toEqual({
+      id: "rate",
+      type: "computed",
+      label: "Scrap rate",
+      required: false,
+      key: "rate",
+      formula: "(inspected - good) / inspected",
+      decimals: 1,
+      unit: "",
+      percent: true,
+    });
+  });
+
+  test("defaults decimals to 2, keeps null, refuses out of range", () => {
+    const parsed = (attrs: Record<string, unknown>) =>
+      buildManifest(doc(inspected, computed({ formula: "inspected", ...attrs })), "strict");
+    expect(parsed({}).data?.[1]).toMatchObject({ decimals: 2, unit: "", percent: false });
+    expect(parsed({ decimals: null, unit: " pcs " }).data?.[1]).toMatchObject({ decimals: null, unit: "pcs" });
+    expect(parsed({ decimals: 5 })).toMatchObject({ code: "INVALID_FORM" });
+    expect(parsed({ unit: "x".repeat(21) })).toMatchObject({ code: "INVALID_FORM" });
+  });
+
+  test("fields without a key are fine and an empty key is no key", () => {
+    const result = buildManifest(doc(field("shortTextField", { fieldId: "lot", label: "Lot", key: "" })), "strict");
+    expect(result.data?.[0]).not.toHaveProperty("key");
+  });
+
+  test("lenient keeps keys and formulas as they are", () => {
+    const result = buildManifest(
+      doc(
+        field("numberField", { fieldId: "a", key: "Bad Key", label: "A" }),
+        field("numberField", { fieldId: "b", key: "Bad Key", label: "B" }),
+        computed({ formula: "nope +" }),
+      ),
+      "lenient",
+    );
+    expect(result.data?.map((f) => f.key)).toEqual(["Bad Key", "Bad Key", "rate"]);
+    expect(result.data?.[2]).toMatchObject({ formula: "nope +" });
+  });
+
+  test("strict refuses unusable, reserved and duplicate keys by field label", () => {
+    const bad = buildManifest(doc(field("numberField", { fieldId: "a", key: "Bad Key", label: "Count" })), "strict");
+    expect(bad).toMatchObject({ code: "INVALID_FORM" });
+    expect(bad.error).toContain('"Count"');
+    const reserved = buildManifest(doc(field("numberField", { fieldId: "a", key: "max", label: "Max" })), "strict");
+    expect(reserved).toMatchObject({ code: "INVALID_FORM" });
+    const dup = buildManifest(
+      doc(
+        field("numberField", { fieldId: "a", key: "count", label: "First" }),
+        field("numberField", { fieldId: "b", key: "count", label: "Second" }),
+      ),
+      "strict",
+    );
+    expect(dup).toEqual({ error: '"First" and "Second" have the same name "count"', code: "INVALID_FORM" });
+  });
+
+  test("strict refuses bad formulas, unknown names and loops", () => {
+    const publish = (...nodes: unknown[]) => buildManifest(doc(inspected, good, ...nodes), "strict");
+    expect(publish(computed({ formula: "" }))).toEqual({ error: "Scrap rate: Write a formula", code: "INVALID_FORM" });
+    expect(publish(computed({ formula: "inspected -" }))).toEqual({
+      error: "Scrap rate: The formula isn't complete",
+      code: "INVALID_FORM",
+    });
+    expect(publish(computed({ formula: "inspected - bad", label: "" }))).toEqual({
+      error: 'Calculation: No field is named "bad"',
+      code: "INVALID_FORM",
+    });
+    expect(publish(computed({ formula: "rate + 1" }))).toEqual({
+      error: "Scrap rate: A formula can't use its own result",
+      code: "INVALID_FORM",
+    });
+    expect(
+      publish(
+        field("computedField", { fieldId: "x", key: "x", label: "X", formula: "y + 1" }),
+        field("computedField", { fieldId: "y", key: "y", label: "Y", formula: "x + 1" }),
+      ),
+    ).toEqual({ error: "X: These formulas use each other's results", code: "INVALID_FORM" });
+  });
+
+  test("computed answers are never taken from the client and don't count toward progress", () => {
+    const fields = buildManifest(doc(inspected, good, computed({ formula: "inspected - good" })), "strict")
+      .data as FormField[];
+    expect(validateAnswers(fields, { f1: 5, f2: 4, rate: "junk" })).toEqual({ data: { f1: 5, f2: 4 } });
+    expect(answerProgress(fields, { f1: 5, rate: 1 })).toEqual({ answered: 1, total: 2 });
+  });
+});

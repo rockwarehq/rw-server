@@ -630,6 +630,9 @@ importers:
       ioredis:
         specifier: ^5.10.1
         version: 5.10.1
+      mathjs:
+        specifier: ^15.2.0
+        version: 15.2.0
       nanoid:
         specifier: ^5.1.6
         version: 5.1.11
