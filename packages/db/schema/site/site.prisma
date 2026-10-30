@@ -42,6 +42,7 @@ model Site {
   dashboards              Dashboard[]
   displays                Display[]
   documents               Document[]
+  formSubmissions         FormSubmission[]
   andonRules              SiteAndonRule[]
   statusCategories        StatusCategory[]
   itemDispositions        ItemDisposition[]

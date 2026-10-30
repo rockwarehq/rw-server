@@ -72,7 +72,8 @@ const listInputSchema = z.object({
   parentId: z.uuid().nullable().optional(),
   /** Span every folder instead of scoping to `parentId`. */
   allFolders: z.boolean().default(false),
-  kind: z.enum(["FILE", "FOLDER"]).optional(),
+  /** Without a kind: files and folders. Forms are listed with kind FORM (or form.list). */
+  kind: z.enum(["FILE", "FOLDER", "FORM"]).optional(),
   includePending: z.boolean().default(false),
   labelsAny: labelsSchema.optional(),
   labelsAll: labelsSchema.optional(),

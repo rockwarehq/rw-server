@@ -1,6 +1,7 @@
 enum DocumentKind {
   FILE
   FOLDER
+  FORM
 }
 
 enum DocumentStatus {
@@ -11,7 +12,8 @@ enum DocumentStatus {
 /// A document is the stable "recording": identity, name, labels, folder,
 /// scope and links. A FILE delegates its bytes to immutable DocumentFile
 /// versions (delegated type); a new upload adds a version and moves
-/// currentFileId, the way Job moves currentVersionId.
+/// currentFileId, the way Job moves currentVersionId. A FORM delegates the
+/// same way to DocumentForm versions: publishing moves currentFormId.
 model Document {
   id String @id @default(uuid()) @db.Uuid
 
@@ -27,6 +29,13 @@ model Document {
   currentFileId String?        @unique @db.Uuid
   currentFile   DocumentFile?  @relation("DocumentCurrentFile", fields: [currentFileId], references: [id])
   files         DocumentFile[] @relation("DocumentFiles")
+
+  /// FORM only: the latest PUBLISHED version, the one people fill. Null while
+  /// a new form has only its first draft.
+  currentFormId String?          @unique @db.Uuid
+  currentForm   DocumentForm?    @relation("DocumentCurrentForm", fields: [currentFormId], references: [id])
+  forms         DocumentForm[]   @relation("DocumentForms")
+  submissions   FormSubmission[]
 
   siteId String? @db.Uuid
   site   Site?   @relation(fields: [siteId], references: [id], onDelete: Cascade)

@@ -1,0 +1,38 @@
+enum DocumentFormStatus {
+  DRAFT
+  PUBLISHED
+}
+
+/// One version of a FORM document. A document has at most one DRAFT (the
+/// version being edited, numbered max+1); publishing turns it PUBLISHED and
+/// makes it current. A PUBLISHED version never changes: submissions pin it.
+model DocumentForm {
+  id      String             @id @default(uuid()) @db.Uuid
+  version Int
+  status  DocumentFormStatus @default(DRAFT)
+
+  /// The editor document (TipTap JSON) the form is drawn from.
+  content Json
+  /// The field manifest the server derives from content: [{ id, type, label, required, ...extras }].
+  fields  Json    @default("[]")
+  note    String?
+
+  documentId String   @db.Uuid
+  document   Document @relation("DocumentForms", fields: [documentId], references: [id], onDelete: Cascade)
+
+  currentOfDocument Document?        @relation("DocumentCurrentForm")
+  submissions       FormSubmission[]
+
+  createdById String? @db.Uuid
+  createdBy   User?   @relation("DocumentFormCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  publishedById String?   @db.Uuid
+  publishedBy   User?     @relation("DocumentFormPublishedBy", fields: [publishedById], references: [id], onDelete: SetNull)
+  publishedAt   DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([documentId, version])
+  @@index([documentId])
+}

@@ -1,0 +1,37 @@
+/// One filled-in FORM. It pins the PUBLISHED version it was filled against
+/// and records where the work happened: the station (when given), its
+/// workcenter and the job it ran at submit time.
+model FormSubmission {
+  id     String @id @default(uuid()) @db.Uuid
+  /// Per-document sequence: 1, 2, 3…
+  number Int
+
+  documentId String   @db.Uuid
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  /// NoAction (not Restrict) so deleting the document can cascade through
+  /// both its versions and its submissions in one statement.
+  formId String       @db.Uuid
+  form   DocumentForm @relation(fields: [formId], references: [id], onDelete: NoAction)
+
+  /// { [fieldId]: answer }, checked against the pinned version's manifest.
+  answers Json
+
+  siteId       String?     @db.Uuid
+  site         Site?       @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  workcenterId String?     @db.Uuid
+  workcenter   Workcenter? @relation(fields: [workcenterId], references: [id], onDelete: SetNull)
+  stationId    String?     @db.Uuid
+  station      Station?    @relation(fields: [stationId], references: [id], onDelete: SetNull)
+  jobId        String?     @db.Uuid
+  job          Job?        @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  submittedById String?  @db.Uuid
+  submittedBy   User?    @relation(fields: [submittedById], references: [id], onDelete: SetNull)
+  submittedAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([documentId, number])
+  @@index([documentId, submittedAt])
+  @@index([stationId])
+  @@index([formId])
+}

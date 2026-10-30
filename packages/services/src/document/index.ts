@@ -77,7 +77,8 @@ export interface ListDocumentsInput {
   parentId?: string | null;
   /** Span every folder instead of scoping to `parentId`. */
   allFolders?: boolean;
-  kind?: "FILE" | "FOLDER";
+  /** Without a kind, files and folders: forms are listed by kind or by the form service. */
+  kind?: "FILE" | "FOLDER" | "FORM";
   includePending?: boolean;
   labelsAny?: string[];
   labelsAll?: string[];
@@ -646,7 +647,7 @@ export async function list(input: ListDocumentsInput = {}) {
     deletedAt: null,
     // Linked-document and all-folder queries span the whole folder tree.
     ...(linkedTo || allFolders ? {} : { parentId }),
-    ...(kind ? { kind } : {}),
+    ...(kind ? { kind } : { kind: { not: "FORM" } }),
     ...(includePending ? {} : { status: "READY" }),
   };
 

@@ -19,6 +19,7 @@
     "./employee/*": "./dist/employee/*.js",
     "./entity/*": "./dist/entity/*.js",
     "./facility/*": "./dist/facility/*.js",
+    "./form/*": "./dist/form/*.js",
     "./history/*": "./dist/history/*.js",
     "./events/*": "./dist/events/*.js",
     "./integration/*": "./dist/integration/*.js",
@@ -41,8 +42,9 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "vitest run --exclude '**/document/document.test.ts'",
-    "test:document": "vitest run src/document/document.test.ts"
+    "test": "vitest run --exclude '**/document/document.test.ts' --exclude '**/form/form.test.ts'",
+    "test:document": "vitest run src/document/document.test.ts",
+    "test:form": "vitest run src/form/form.test.ts"
   },
   "dependencies": {
     "@nats-io/nats-core": "^3.4.0",
