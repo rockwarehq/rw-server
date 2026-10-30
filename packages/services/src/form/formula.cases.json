@@ -12,7 +12,9 @@
       "items": [{ "id": "a", "label": "A" }, { "id": "b", "label": "B" }, { "id": "c", "label": "C" }]
     },
     { "id": "f5", "key": "score", "type": "rating", "label": "Score", "scale": 5 },
-    { "id": "f6", "key": "note", "type": "shortText", "label": "Note" }
+    { "id": "f6", "key": "note", "type": "shortText", "label": "Note" },
+    { "id": "f7", "key": "scrapped", "type": "scrap", "label": "Scrapped", "source": "rows" },
+    { "id": "f8", "key": "auto_scrap", "type": "scrap", "label": "Auto scrap", "source": "formula" }
   ],
   "cases": [
     {
@@ -124,6 +126,26 @@
       "formula": "inspected -",
       "answers": {},
       "error": "The formula isn't complete"
+    },
+    {
+      "name": "scrap rows read as their total quantity",
+      "formula": "scrapped",
+      "answers": {
+        "f7": [{ "id": "r1", "reasonId": "a", "quantity": 2 }, { "id": "r2", "reasonId": "b", "quantity": 3 }]
+      },
+      "value": 5
+    },
+    {
+      "name": "no scrap rows read as zero",
+      "formula": "scrapped + 1",
+      "answers": {},
+      "value": 1
+    },
+    {
+      "name": "scrap worked out by a formula can't be read",
+      "formula": "auto_scrap",
+      "answers": {},
+      "error": "\"Auto scrap\" can't be used in a formula yet"
     }
   ]
 }

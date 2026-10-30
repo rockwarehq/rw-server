@@ -49,6 +49,14 @@ const listSubmissionsInputSchema = documentIdInputSchema.extend({
   offset: z.number().int().min(0).default(0),
 });
 
+const fillContextInputSchema = z.object({
+  stationId: z.uuid(),
+});
+
+const scrapReasonsInputSchema = z.object({
+  siteId: z.uuid(),
+});
+
 const submissionIdInputSchema = z.object({
   submissionId: z.uuid(),
 });
@@ -128,5 +136,21 @@ export const getSubmission = userRequired.input(submissionIdInputSchema).handler
   await context.access.require("VIEW", { document: documentId });
 
   const result = await forms.getSubmission(input.submissionId);
+  return unwrap(result);
+});
+
+/** What filling a form at a station needs: its job and parts, running shift and scrap reasons. */
+export const fillContext = userRequired.input(fillContextInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { station: input.stationId });
+
+  const result = await forms.fillContext(input.stationId);
+  return unwrap(result);
+});
+
+/** The scrap reasons a form's editor offers for scrap a calculation works out. */
+export const scrapReasons = userRequired.input(scrapReasonsInputSchema).handler(async ({ input, context }) => {
+  await context.access.require("VIEW", { site: input.siteId });
+
+  const result = await forms.scrapReasons(input.siteId);
   return unwrap(result);
 });

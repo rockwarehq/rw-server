@@ -1,6 +1,9 @@
 -- CreateEnum
 CREATE TYPE "DocumentFormStatus" AS ENUM ('DRAFT', 'PUBLISHED');
 
+-- CreateEnum
+CREATE TYPE "FormWriteKind" AS ENUM ('SCRAP', 'SHIFT_NOTE', 'ENTITY');
+
 -- AlterEnum
 ALTER TYPE "DocumentKind" ADD VALUE 'FORM';
 
@@ -42,6 +45,19 @@ CREATE TABLE "FormSubmission" (
     CONSTRAINT "FormSubmission_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "FormSubmissionWrite" (
+    "id" UUID NOT NULL,
+    "submissionId" UUID NOT NULL,
+    "fieldId" TEXT NOT NULL,
+    "kind" "FormWriteKind" NOT NULL,
+    "targetId" UUID NOT NULL,
+    "label" TEXT NOT NULL,
+    "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "FormSubmissionWrite_pkey" PRIMARY KEY ("id")
+);
+
 -- CreateIndex
 CREATE INDEX "DocumentForm_documentId_idx" ON "DocumentForm"("documentId");
 
@@ -59,6 +75,12 @@ CREATE INDEX "FormSubmission_formId_idx" ON "FormSubmission"("formId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "FormSubmission_documentId_number_key" ON "FormSubmission"("documentId", "number");
+
+-- CreateIndex
+CREATE INDEX "FormSubmissionWrite_submissionId_idx" ON "FormSubmissionWrite"("submissionId");
+
+-- CreateIndex
+CREATE INDEX "FormSubmissionWrite_kind_targetId_idx" ON "FormSubmissionWrite"("kind", "targetId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Document_currentFormId_key" ON "Document"("currentFormId");
@@ -95,4 +117,7 @@ ALTER TABLE "FormSubmission" ADD CONSTRAINT "FormSubmission_jobId_fkey" FOREIGN 
 
 -- AddForeignKey
 ALTER TABLE "FormSubmission" ADD CONSTRAINT "FormSubmission_submittedById_fkey" FOREIGN KEY ("submittedById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "FormSubmissionWrite" ADD CONSTRAINT "FormSubmissionWrite_submissionId_fkey" FOREIGN KEY ("submissionId") REFERENCES "FormSubmission"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 

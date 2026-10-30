@@ -1,5 +1,12 @@
 import { describe, expect, test } from "vitest";
-import { answerProgress, buildManifest, readManifest, validateAnswers, type FormField } from "./manifest.js";
+import {
+  answerProgress,
+  buildManifest,
+  needsStation,
+  readManifest,
+  validateAnswers,
+  type FormField,
+} from "./manifest.js";
 
 function field(type: string, attrs: Record<string, unknown>) {
   return { type, attrs };
@@ -326,5 +333,160 @@ describe("computed fields and names", () => {
       .data as FormField[];
     expect(validateAnswers(fields, { f1: 5, f2: 4, rate: "junk" })).toEqual({ data: { f1: 5, f2: 4 } });
     expect(answerProgress(fields, { f1: 5, rate: 1 })).toEqual({ answered: 1, total: 2 });
+  });
+});
+
+describe("fields that write to IMM", () => {
+  const REASON = "6f1c2b0e-3d4a-4b5c-8d6e-7f8091a2b3c4";
+  const PRODUCT = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+  const MODEL = "0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9";
+  const scrapRows = field("scrapField", { fieldId: "s1", key: "scrapped", label: "Scrap", required: true });
+  const note = field("shiftNoteField", { fieldId: "n1", label: "Shift note", required: false });
+  const qty = field("numberField", { fieldId: "q", key: "qty", label: "Qty", required: false });
+  const calc = field("computedField", { fieldId: "c", key: "bad", label: "Bad", formula: "qty - 1" });
+
+  test("parses scrap (rows and formula) and shift notes, and says the form needs a station", () => {
+    const formulaScrap = field("scrapField", {
+      fieldId: "s2",
+      label: "Auto scrap",
+      source: "formula",
+      quantityKey: "bad",
+      reasonId: REASON,
+      required: true,
+    });
+    const result = buildManifest(doc(qty, calc, scrapRows, formulaScrap, note), "strict");
+    expect(result.error).toBeUndefined();
+    const fields = result.data as FormField[];
+    expect(fields.find((f) => f.id === "s1")).toEqual({
+      id: "s1",
+      type: "scrap",
+      key: "scrapped",
+      label: "Scrap",
+      required: true,
+      source: "rows",
+      quantityKey: null,
+      reasonId: null,
+    });
+    // Worked out, never answered: formula scrap can't be required.
+    expect(fields.find((f) => f.id === "s2")).toMatchObject({
+      source: "formula",
+      quantityKey: "bad",
+      reasonId: REASON,
+      required: false,
+    });
+    expect(fields.find((f) => f.id === "n1")).toEqual({
+      id: "n1",
+      type: "shiftNote",
+      label: "Shift note",
+      required: false,
+    });
+    expect(needsStation(fields)).toBe(true);
+    expect(needsStation(buildManifest(doc(qty), "strict").data as FormField[])).toBe(false);
+  });
+
+  test("formula scrap needs a calculation on the form and a reason", () => {
+    const formulaScrap = (attrs: Record<string, unknown>) =>
+      field("scrapField", { fieldId: "s2", label: "Auto scrap", source: "formula", ...attrs });
+    expect(buildManifest(doc(qty, formulaScrap({ reasonId: REASON })), "strict")).toEqual({
+      error: '"Auto scrap" needs a calculation for its quantity',
+      code: "INVALID_FORM",
+    });
+    expect(buildManifest(doc(qty, calc, formulaScrap({ quantityKey: "bad" })), "strict")).toEqual({
+      error: '"Auto scrap" needs a scrap reason',
+      code: "INVALID_FORM",
+    });
+    expect(buildManifest(doc(qty, formulaScrap({ quantityKey: "qty", reasonId: REASON })), "strict")).toEqual({
+      error: '"Auto scrap" needs a calculation on this form for its quantity',
+      code: "INVALID_FORM",
+    });
+    // Formulas read rows scrap as its total, but not scrap they work out.
+    const reads = (formula: string) =>
+      buildManifest(
+        doc(qty, scrapRows, formulaScrap({ key: "auto", quantityKey: "bad", reasonId: REASON }), {
+          ...calc,
+          attrs: { ...calc.attrs, formula },
+        }),
+        "strict",
+      );
+    expect(reads("qty - scrapped").error).toBeUndefined();
+    expect(reads("auto + 1")).toEqual({
+      error: 'Bad: "Auto scrap" can\'t be used in a formula yet',
+      code: "INVALID_FORM",
+    });
+  });
+
+  test("checks scrap rows and shift notes, and drops answers to formula scrap", () => {
+    const fields = buildManifest(
+      doc(
+        qty,
+        calc,
+        scrapRows,
+        field("scrapField", { fieldId: "s2", label: "Auto", source: "formula", quantityKey: "bad", reasonId: REASON }),
+        note,
+      ),
+      "strict",
+    ).data as FormField[];
+    const row = { id: "r1", reasonId: REASON, quantity: 3 };
+    expect(
+      validateAnswers(fields, { s1: [row, { id: "r2", reasonId: REASON, quantity: 1, productId: PRODUCT }] }),
+    ).toEqual({
+      data: { s1: [row, { id: "r2", reasonId: REASON, quantity: 1, productId: PRODUCT }] },
+    });
+    expect(validateAnswers(fields, { s1: [row], s2: [row], n1: "Mold swapped" })).toEqual({
+      data: { s1: [row], n1: "Mold swapped" },
+    });
+    expect(validateAnswers(fields, { s1: [] })).toEqual({ error: "Please complete Scrap.", code: "INVALID_ANSWERS" });
+    expect(validateAnswers(fields, { s1: [{ ...row, quantity: 1.5 }] })).toEqual({
+      error: "Scrap needs a whole quantity above zero on every row.",
+      code: "INVALID_ANSWERS",
+    });
+    expect(validateAnswers(fields, { s1: [row, row] })).toMatchObject({ code: "INVALID_ANSWERS" });
+    expect(validateAnswers(fields, { s1: [{ ...row, reasonId: "nope" }] })).toMatchObject({ code: "INVALID_ANSWERS" });
+    expect(validateAnswers(fields, { s1: Array.from({ length: 51 }, (_, i) => ({ ...row, id: `r${i}` })) })).toEqual({
+      error: "Scrap can have at most 50 rows.",
+      code: "INVALID_ANSWERS",
+    });
+    expect(validateAnswers(fields, { s1: [row], n1: "x".repeat(4001) })).toEqual({
+      error: "Shift note must be at most 4000 characters.",
+      code: "INVALID_ANSWERS",
+    });
+    // Formula scrap is an output: not counted toward progress.
+    expect(answerProgress(fields, { s1: [row], n1: "hi" })).toEqual({ answered: 2, total: 3 });
+  });
+
+  test("reads saveTo on value fields only, and only a single choice", () => {
+    const saveTo = { modelId: MODEL, field: "temp" };
+    const fields = buildManifest(
+      doc(field("numberField", { fieldId: "t", label: "Temp", required: false, saveTo })),
+      "strict",
+    ).data as FormField[];
+    expect(fields[0]).toMatchObject({ id: "t", saveTo });
+    expect(
+      buildManifest(doc(field("numberField", { fieldId: "t", label: "Temp", saveTo: null })), "strict").data?.[0],
+    ).not.toHaveProperty("saveTo");
+
+    const refuse = (node: unknown) => buildManifest(doc(node), "strict");
+    expect(refuse({ ...checklist, attrs: { ...checklist.attrs, saveTo } })).toEqual({
+      error: '"Safety checks" can\'t save to a record',
+      code: "INVALID_FORM",
+    });
+    expect(
+      refuse(
+        field("multipleChoiceField", { fieldId: "m", label: "Defects", options: ["A"], allowMultiple: true, saveTo }),
+      ),
+    ).toEqual({ error: '"Defects" can only save one choice to a record', code: "INVALID_FORM" });
+    expect(
+      refuse(field("numberField", { fieldId: "t", label: "Temp", saveTo: { modelId: "x", field: "temp" } })),
+    ).toEqual({
+      error: '"Temp" saves to a record type that doesn\'t exist',
+      code: "INVALID_FORM",
+    });
+    // A draft keeps the field and drops the broken target.
+    const lenient = buildManifest(
+      doc(field("numberField", { fieldId: "t", label: "Temp", saveTo: { modelId: MODEL } })),
+      "lenient",
+    ).data as FormField[];
+    expect(lenient[0]).toMatchObject({ id: "t", type: "number" });
+    expect(lenient[0]).not.toHaveProperty("saveTo");
   });
 });

@@ -45,8 +45,10 @@ import type { ConstantNode, EvalFunction, FactoryFunctionMap, MathNode, Operator
  *
  * What a field means in a formula: a number or rating is its number, a
  * checkbox true or false (unticked = false), a checklist how many of its items
- * are ticked (none = 0), a computed field its own result. Text, dates and
- * choices can't be used yet. A number nobody has entered leaves the result
+ * are ticked (none = 0), a computed field its own result, a scrap field whose
+ * rows people enter the total quantity of its rows (none = 0). Text, dates,
+ * choices, shift notes and a scrap field that takes its quantity from a
+ * formula (it is an output) can't be used yet. A number nobody has entered leaves the result
  * blank (null) until it is.
  */
 
@@ -113,6 +115,7 @@ export const FORMULA_INPUT_TYPES: ReadonlySet<string> = new Set([
   "checkbox",
   "checklist",
   "computed",
+  "scrap",
 ]);
 
 /** A field's name in formulas: lowercase, starts with a letter, at most 40 long. */
@@ -144,6 +147,14 @@ export interface FormulaField {
   key?: string;
   formula?: string;
   items?: { id: string }[];
+  /** A scrap field's: "rows" (people enter them) or "formula" (an output). */
+  source?: string;
+}
+
+/** Whether a formula can read this field. */
+function readable(field: FormulaField): boolean {
+  if (field.type === "scrap") return field.source !== "formula";
+  return FORMULA_INPUT_TYPES.has(field.type);
 }
 
 export interface ParsedFormula {
@@ -237,7 +248,7 @@ export function formulaProblem(field: FormulaField, fields: FormulaField[]): str
     const target = byKey.get(ref);
     if (!target) return `No field is named "${ref}"`;
     if (target.id === field.id) return "A formula can't use its own result";
-    if (!FORMULA_INPUT_TYPES.has(target.type)) {
+    if (!readable(target)) {
       return `"${target.label || ref}" can't be used in a formula yet`;
     }
   }
@@ -292,6 +303,16 @@ function inputValue(field: FormulaField, answer: unknown): number | boolean | un
     case "checklist": {
       const checked = (answer ?? {}) as Record<string, unknown>;
       return (field.items ?? []).filter((item) => checked[item.id] === true).length;
+    }
+    case "scrap": {
+      if (field.source === "formula") return undefined;
+      if (!Array.isArray(answer)) return 0;
+      let total = 0;
+      for (const row of answer) {
+        const quantity = (row as { quantity?: unknown } | null)?.quantity;
+        if (typeof quantity === "number" && Number.isFinite(quantity)) total += quantity;
+      }
+      return total;
     }
     default:
       return undefined;

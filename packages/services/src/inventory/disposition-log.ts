@@ -1,15 +1,15 @@
 import prisma, { Prisma } from "@rw/db";
 import { updateDispositionBadItems } from "@rw/services/metrics/recalc";
-import { publishEntityEvent } from "../entity/events.js";
 import { publishUiChange } from "../events/ui-changes.js";
 import { SYSTEM_ENTITY_KEYS } from "../entity/registry.js";
 import { resolveShiftStamp, toDateString } from "../facility/work-context.js";
 import { postSources, repostSources, reverseSources } from "../stock/post.js";
 import { crewFilter } from "../lib/crew-filter.js";
+import { emitEntityEvent, inTransaction, reader, runAfterCommit, type WriteOptions } from "../write.js";
 
 /** Post-commit refresh hint: dispositions change the product's on-hand stock. */
-function publishStockEvent(siteId: string, workspaceId: string, productId: string): void {
-  publishEntityEvent({
+function publishStockEvent(siteId: string, workspaceId: string, productId: string, options?: WriteOptions): void {
+  emitEntityEvent(options, {
     action: "updated",
     entityKey: SYSTEM_ENTITY_KEYS.Product,
     entityId: productId,
@@ -114,6 +114,7 @@ export async function validateDispositionReasonPair(
   itemDispositionId: string | null | undefined,
   dispositionReasonId: string | null | undefined,
   stationId?: string,
+  db: Prisma.TransactionClient = prisma,
 ): Promise<
   { error: string; code: string } | { data: { itemDispositionId: string | null; dispositionReasonId: string | null } }
 > {
@@ -128,7 +129,7 @@ export async function validateDispositionReasonPair(
     };
   }
 
-  const disposition = await prisma.itemDisposition.findUnique({
+  const disposition = await db.itemDisposition.findUnique({
     where: { id: itemDispositionId },
     select: { id: true, siteId: true, deletedAt: true },
   });
@@ -141,7 +142,7 @@ export async function validateDispositionReasonPair(
     return { error: "Disposition must belong to the same site", code: "SITE_MISMATCH" };
   }
 
-  const reason = await prisma.itemDispositionReason.findUnique({
+  const reason = await db.itemDispositionReason.findUnique({
     where: { id: dispositionReasonId },
     select: {
       id: true,
@@ -173,7 +174,7 @@ export async function validateDispositionReasonPair(
 
   // If the station filters scrap codes, the reason must pass the filter.
   if (stationId) {
-    const stationFilter = await prisma.labelFilter.findUnique({
+    const stationFilter = await db.labelFilter.findUnique({
       where: { stationId_target: { stationId, target: "DISPOSITION_REASON" } },
       select: { labels: { select: { id: true } } },
     });
@@ -197,11 +198,15 @@ export async function validateDispositionReasonPair(
  * the current version snapshots for station, product, jobProduct,
  * tool, and toolCavity.
  */
-export async function record(input: RecordDispositionLogInput): Promise<ServiceError | { data: DispositionLogRecord }> {
+export async function record(
+  input: RecordDispositionLogInput,
+  options?: WriteOptions,
+): Promise<ServiceError | { data: DispositionLogRecord }> {
   const { siteId, stationId, productId, jobId, toolCavityId, ...passthrough } = input;
+  const db = reader(options);
 
   // Resolve station → stationVersionId
-  const station = await prisma.station.findUnique({
+  const station = await db.station.findUnique({
     where: { id: stationId },
     select: { id: true, siteId: true, currentVersionId: true },
   });
@@ -214,7 +219,7 @@ export async function record(input: RecordDispositionLogInput): Promise<ServiceE
   }
 
   // Resolve product → productVersionId and product material version IDs
-  const product = await prisma.product.findUnique({
+  const product = await db.product.findUnique({
     where: { id: productId },
     select: {
       currentVersionId: true,
@@ -235,7 +240,7 @@ export async function record(input: RecordDispositionLogInput): Promise<ServiceE
   // Resolve jobProduct → jobProductVersionId (if jobId provided)
   let jobProductVersionId: string | undefined;
   if (jobId) {
-    const jobProduct = await prisma.jobProduct.findFirst({
+    const jobProduct = await db.jobProduct.findFirst({
       where: { jobId, productId, deletedAt: null },
       select: { currentVersionId: true },
     });
@@ -254,7 +259,7 @@ export async function record(input: RecordDispositionLogInput): Promise<ServiceE
   let toolVersionId: string | undefined;
   let toolId: string | undefined;
   if (toolCavityId) {
-    const toolCavity = await prisma.toolCavity.findUnique({
+    const toolCavity = await db.toolCavity.findUnique({
       where: { id: toolCavityId },
       select: {
         currentVersionId: true,
@@ -280,26 +285,33 @@ export async function record(input: RecordDispositionLogInput): Promise<ServiceE
     .map((pm) => pm.currentVersionId)
     .filter((id): id is string => id != null);
 
-  const result = await create({
-    siteId,
-    stationId,
-    jobId,
-    toolId,
-    productVersionId: product.currentVersionId,
-    stationVersionId: station.currentVersionId ?? undefined,
-    jobProductVersionId,
-    toolVersionId,
-    toolCavityVersionId,
-    productMaterialVersionIds,
-    ...passthrough,
-  });
+  const result = await create(
+    {
+      siteId,
+      stationId,
+      jobId,
+      toolId,
+      productVersionId: product.currentVersionId,
+      stationVersionId: station.currentVersionId ?? undefined,
+      jobProductVersionId,
+      toolVersionId,
+      toolCavityVersionId,
+      productMaterialVersionIds,
+      ...passthrough,
+    },
+    options,
+  );
 
   // create() posts the scrap to the stock book, so this wrapper must not
   // post it again.
   return result;
 }
 
-export async function create(input: CreateDispositionLogInput): Promise<ServiceError | { data: DispositionLogRecord }> {
+export async function create(
+  input: CreateDispositionLogInput,
+  options?: WriteOptions,
+): Promise<ServiceError | { data: DispositionLogRecord }> {
+  const db = reader(options);
   const {
     siteId,
     stationId,
@@ -319,7 +331,7 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
   } = input;
 
   // Validate station exists and belongs to site
-  const station = await prisma.station.findUnique({
+  const station = await db.station.findUnique({
     where: { id: stationId },
     select: { id: true, siteId: true, workcenterId: true, site: { select: { workspaceId: true } } },
   });
@@ -337,13 +349,14 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
     itemDispositionId,
     dispositionReasonId,
     stationId,
+    db,
   );
   if ("error" in dispositionPair) {
     return dispositionPair;
   }
 
   // Validate productVersion exists and resolve productId for order deduction
-  const productVersion = await prisma.productVersion.findUnique({
+  const productVersion = await db.productVersion.findUnique({
     where: { id: productVersionId },
     select: { id: true, productId: true },
   });
@@ -359,14 +372,14 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
   let businessDate: Date | null = null;
   let isScheduled = true;
   if (shiftId) {
-    const instance = await prisma.shiftInstance.findUnique({
+    const instance = await db.shiftInstance.findUnique({
       where: { id: shiftId },
       select: { businessDate: true, isScheduled: true },
     });
     businessDate = instance?.businessDate ?? null;
     isScheduled = instance?.isScheduled ?? true;
   } else {
-    const stamp = await resolveShiftStamp(siteId, workcenterId, new Date());
+    const stamp = await resolveShiftStamp(siteId, workcenterId, new Date(), db);
     shiftId = stamp.shiftInstanceId;
     businessDate = stamp.businessDate;
     isScheduled = stamp.isScheduled;
@@ -377,7 +390,7 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
   // ids still produce fully-stamped rows.
   let stampJobId = jobId ?? null;
   if (!stampJobId && jobProductVersionId) {
-    const jpv = await prisma.jobProductVersion.findUnique({
+    const jpv = await db.jobProductVersion.findUnique({
       where: { id: jobProductVersionId },
       select: { jobProduct: { select: { jobId: true } } },
     });
@@ -385,7 +398,7 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
   }
   let stampToolId = toolId ?? null;
   if (!stampToolId && toolVersionId) {
-    const tv = await prisma.toolVersion.findUnique({
+    const tv = await db.toolVersion.findUnique({
       where: { id: toolVersionId },
       select: { toolId: true },
     });
@@ -394,7 +407,7 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
 
   // The log and its stock movement are saved together: scrap only ever
   // affects stock (never orders), and the stock book must match the log.
-  const log = await prisma.$transaction(async (tx) => {
+  const log = await inTransaction(options, async (tx) => {
     const created = await tx.itemDispositionLog.create({
       data: {
         siteId,
@@ -426,14 +439,17 @@ export async function create(input: CreateDispositionLogInput): Promise<ServiceE
     return created;
   });
 
-  // Trigger metric recalculation for badItems
-  updateDispositionBadItems(stationId, siteId, log.createdAt, quantity ?? 1)
-    .then(() => publishUiChange({ kind: "scrap.recorded", siteId, stationId }))
-    .catch((err) => {
-      console.error(`[disposition-log] Failed to update badItems metrics for station ${stationId}:`, err);
-    });
+  // Trigger metric recalculation for badItems (after the caller's commit, when
+  // it runs this in its own transaction).
+  runAfterCommit(options, () => {
+    updateDispositionBadItems(stationId, siteId, log.createdAt, quantity ?? 1)
+      .then(() => publishUiChange({ kind: "scrap.recorded", siteId, stationId }))
+      .catch((err) => {
+        console.error(`[disposition-log] Failed to update badItems metrics for station ${stationId}:`, err);
+      });
+  });
 
-  publishStockEvent(siteId, station.site.workspaceId, productVersion.productId);
+  publishStockEvent(siteId, station.site.workspaceId, productVersion.productId, options);
 
   return { data: log };
 }

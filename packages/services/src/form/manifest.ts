@@ -10,11 +10,25 @@
  * from the other answers by its `formula`; nobody answers it. Everything else
  * (paragraphs, headings, images, lists) is layout and ignored; the walk goes
  * into their children, never into a field's.
+ *
+ * Some fields write to IMM on submit, configured on the field itself: a scrap
+ * field records scrap (rows people enter, or one quantity a calculation works
+ * out), a shift note adds a comment to the running shift, and a value field
+ * with `saveTo` fills that field of a user-made entity model (one record per
+ * model per submission). Scrap and shift notes need the station the form was
+ * filled in at (`needsStation`). What the database must confirm (the model,
+ * its field types, the scrap reason) is checked at publish by index.ts.
  */
 
 import { formulaCycle, formulaProblem, isUsableKey } from "./formula.js";
 
 export type ChecklistItem = { id: string; label: string };
+
+/** Where a value field's answer is also saved: a field (by key) of an entity model. */
+export type SaveTo = { modelId: string; field: string };
+
+/** One scrap row as answered. */
+export type ScrapRow = { id: string; reasonId: string; quantity: number; productId?: string };
 
 interface BaseField {
   id: string;
@@ -22,6 +36,8 @@ interface BaseField {
   required: boolean;
   /** The field's name in formulas; absent when it has none. */
   key?: string;
+  /** Value fields only (see SAVE_TO_TYPES); absent when it saves nowhere. */
+  saveTo?: SaveTo;
 }
 
 export type FormField =
@@ -34,7 +50,17 @@ export type FormField =
   | (BaseField & { type: "multipleChoice"; options: string[]; allowMultiple: boolean })
   | (BaseField & { type: "date"; includeTime: boolean })
   | (BaseField & { type: "rating"; scale: number })
-  | (BaseField & { type: "computed"; formula: string; decimals: number | null; unit: string; percent: boolean });
+  | (BaseField & { type: "computed"; formula: string; decimals: number | null; unit: string; percent: boolean })
+  | (BaseField & {
+      type: "scrap";
+      /** rows: people enter them; formula: one quantity from a computed field, nobody answers. */
+      source: "rows" | "formula";
+      /** formula mode: the key of the computed field giving the quantity. */
+      quantityKey: string | null;
+      /** formula mode: the scrap reason it is recorded with. */
+      reasonId: string | null;
+    })
+  | (BaseField & { type: "shiftNote" });
 
 export type FormFieldType = FormField["type"];
 
@@ -46,6 +72,23 @@ export const MAX_CONTENT_BYTES = 512 * 1024;
 export const MAX_SHORT_TEXT = 1000;
 export const MAX_LONG_TEXT = 20000;
 export const MAX_UNIT_LENGTH = 20;
+export const MAX_SHIFT_NOTE = 4000;
+export const MAX_SCRAP_ROWS = 50;
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The field kinds that can carry `saveTo`. */
+export const SAVE_TO_TYPES: ReadonlySet<FormFieldType> = new Set<FormFieldType>([
+  "number",
+  "rating",
+  "shortText",
+  "longText",
+  "checkbox",
+  "date",
+  "dropdown",
+  "multipleChoice",
+  "computed",
+]);
 
 const NODE_TYPES: Record<string, FormFieldType> = {
   checklistField: "checklist",
@@ -58,6 +101,8 @@ const NODE_TYPES: Record<string, FormFieldType> = {
   dateField: "date",
   ratingField: "rating",
   computedField: "computed",
+  scrapField: "scrap",
+  shiftNoteField: "shiftNote",
 };
 
 type Attrs = Record<string, unknown>;
@@ -140,7 +185,30 @@ function fieldExtras(type: FormFieldType, attrs: Attrs): Record<string, unknown>
         percent: attrs.percent === true,
       };
     }
+    case "scrap": {
+      if (attrs.source !== "formula") return { source: "rows", quantityKey: null, reasonId: null };
+      const quantityKey = typeof attrs.quantityKey === "string" && attrs.quantityKey ? attrs.quantityKey : null;
+      const reasonId = typeof attrs.reasonId === "string" && UUID.test(attrs.reasonId) ? attrs.reasonId : null;
+      if (!quantityKey) return "needs a calculation for its quantity";
+      if (!reasonId) return "needs a scrap reason";
+      return { source: "formula", quantityKey, reasonId };
+    }
+    case "shiftNote":
+      return {};
   }
+}
+
+/** A field's `saveTo` attr: absent, a target, or an error message. */
+function readSaveTo(type: FormFieldType, attrs: Attrs): { saveTo?: SaveTo } | string {
+  const raw = attrs.saveTo;
+  if (raw === undefined || raw === null) return {};
+  if (!SAVE_TO_TYPES.has(type)) return "can't save to a record";
+  if (type === "multipleChoice" && attrs.allowMultiple === true) return "can only save one choice to a record";
+  if (!isRecord(raw) || typeof raw.modelId !== "string" || !UUID.test(raw.modelId)) {
+    return "saves to a record type that doesn't exist";
+  }
+  if (typeof raw.field !== "string" || !raw.field.trim()) return "needs the record field it saves to";
+  return { saveTo: { modelId: raw.modelId, field: raw.field } };
 }
 
 function describe(nodeType: string, attrs: Attrs): string {
@@ -189,15 +257,25 @@ export function buildManifest(
         if (mode === "strict") failure = `${describe(nodeType, attrs)} ${extras}`;
         return;
       }
+      // A draft keeps the field without a broken target; publish refuses it.
+      let saveTo = readSaveTo(type, attrs);
+      if (typeof saveTo === "string") {
+        if (mode === "strict") {
+          failure = `${describe(nodeType, attrs)} ${saveTo}`;
+          return;
+        }
+        saveTo = {};
+      }
       ids.add(id);
       const key = typeof attrs.key === "string" && attrs.key !== "" ? attrs.key : null;
       fields.push({
         id,
         type,
         label: typeof attrs.label === "string" ? attrs.label : "",
-        // Worked out, never answered: a computed field can't be required.
-        required: type !== "computed" && attrs.required === true,
+        // Worked out, never answered: a computed field (or formula-fed scrap) can't be required.
+        required: type !== "computed" && extras.source !== "formula" && attrs.required === true,
         ...(key !== null ? { key } : {}),
+        ...saveTo,
         ...extras,
       } as FormField);
       return;
@@ -241,6 +319,13 @@ function formulaFailure(fields: FormField[]): string | null {
     const problem = formulaProblem(field, fields);
     if (problem) return `${field.label.trim() || "Calculation"}: ${problem}`;
   }
+  for (const field of fields) {
+    if (field.type !== "scrap" || field.source !== "formula") continue;
+    const source = fields.find((other) => other.key === field.quantityKey);
+    if (!source || source.type !== "computed") {
+      return `${describeField(field)} needs a calculation on this form for its quantity`;
+    }
+  }
   const loop = formulaCycle(fields);
   if (loop.length > 0) {
     return `${loop[0]?.label.trim() || "Calculation"}: These formulas use each other's results`;
@@ -250,6 +335,16 @@ function formulaFailure(fields: FormField[]): string | null {
 
 function describeField(field: FormField): string {
   return field.label.trim() ? `"${field.label.trim()}"` : `A ${field.type} field`;
+}
+
+/** Whether a form with these fields must be filled in at a station (it records scrap or shift notes). */
+export function needsStation(fields: FormField[]): boolean {
+  return fields.some((field) => field.type === "scrap" || field.type === "shiftNote");
+}
+
+/** Fields nobody answers: computed fields, and scrap a calculation works out. */
+function isOutput(field: FormField): boolean {
+  return field.type === "computed" || (field.type === "scrap" && field.source === "formula");
 }
 
 /** A stored manifest (Json column) read back; entries that do not parse are dropped. */
@@ -284,6 +379,10 @@ function isProvided(field: FormField, value: unknown): boolean {
       return true;
     case "computed":
       return typeof value === "number" || typeof value === "boolean";
+    case "scrap":
+      return Array.isArray(value) && value.length > 0;
+    case "shiftNote":
+      return typeof value === "string" && value.trim() !== "";
   }
 }
 
@@ -345,7 +444,36 @@ function checkAnswer(field: FormField, value: unknown): { value: unknown } | str
     case "computed":
       // People never answer a computed field; validateAnswers skips it.
       return "is worked out, not answered";
+    case "scrap":
+      return checkScrapRows(value);
+    case "shiftNote":
+      if (typeof value !== "string") return "must be text";
+      return value.length > MAX_SHIFT_NOTE ? `must be at most ${MAX_SHIFT_NOTE} characters` : { value };
   }
+}
+
+function checkScrapRows(value: unknown): { value: ScrapRow[] } | string {
+  if (!Array.isArray(value)) return "must be a list of scrap rows";
+  if (value.length > MAX_SCRAP_ROWS) return `can have at most ${MAX_SCRAP_ROWS} rows`;
+  const rows: ScrapRow[] = [];
+  const ids = new Set<string>();
+  for (const row of value) {
+    if (!isRecord(row) || typeof row.id !== "string" || !row.id || ids.has(row.id)) {
+      return "has a row without its own id";
+    }
+    ids.add(row.id);
+    if (typeof row.reasonId !== "string" || !UUID.test(row.reasonId)) return "needs a reason on every row";
+    const quantity = row.quantity;
+    if (typeof quantity !== "number" || !Number.isInteger(quantity) || quantity <= 0) {
+      return "needs a whole quantity above zero on every row";
+    }
+    const productId = row.productId;
+    if (productId !== undefined && productId !== null && (typeof productId !== "string" || !UUID.test(productId))) {
+      return "has a row with an unknown part";
+    }
+    rows.push({ id: row.id, reasonId: row.reasonId, quantity, ...(productId ? { productId } : {}) });
+  }
+  return { value: rows };
 }
 
 function joinNames(names: string[]): string {
@@ -369,8 +497,8 @@ export function validateAnswers(
   const missing: string[] = [];
 
   for (const field of fields) {
-    // Computed fields are worked out on submit, never taken from the client.
-    if (field.type === "computed") continue;
+    // Computed fields (and formula-fed scrap) are worked out on submit, never taken from the client.
+    if (isOutput(field)) continue;
     const raw = answers[field.id];
     if (raw !== undefined && raw !== null) {
       const checked = checkAnswer(field, raw);
@@ -408,7 +536,7 @@ export function answerProgress(
   let answered = 0;
   let total = 0;
   for (const field of fields) {
-    if (field.type === "computed") continue;
+    if (isOutput(field)) continue;
     const value = answers[field.id];
     if (field.type === "checklist") {
       total += field.items.length;

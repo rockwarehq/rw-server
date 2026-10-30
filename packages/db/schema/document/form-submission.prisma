@@ -30,8 +30,36 @@ model FormSubmission {
   submittedBy   User?    @relation(fields: [submittedById], references: [id], onDelete: SetNull)
   submittedAt   DateTime @default(now()) @db.Timestamptz(3)
 
+  /// The records this submission made in IMM (scrap, shift notes, entity
+  /// instances), each linked back to it.
+  writes FormSubmissionWrite[]
+
   @@unique([documentId, number])
   @@index([documentId, submittedAt])
   @@index([stationId])
   @@index([formId])
+}
+
+enum FormWriteKind {
+  SCRAP
+  SHIFT_NOTE
+  ENTITY
+}
+
+/// One record a submission wrote on submit, from the field that configured it.
+/// targetId is the written row (ItemDispositionLog, ShiftComment or
+/// ObjectInstance, by kind); no foreign key, since the kinds differ.
+model FormSubmissionWrite {
+  id           String         @id @default(uuid()) @db.Uuid
+  submissionId String         @db.Uuid
+  submission   FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  fieldId      String
+  kind         FormWriteKind
+  targetId     String         @db.Uuid
+  /// What it is, for people: "Scrap · 3 · Short shot", "Shift note"…
+  label        String
+  createdAt    DateTime       @default(now()) @db.Timestamptz(3)
+
+  @@index([submissionId])
+  @@index([kind, targetId])
 }

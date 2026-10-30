@@ -562,6 +562,8 @@ export const coreRouter = {
     submit: form.submit,
     listSubmissions: form.listSubmissions,
     getSubmission: form.getSubmission,
+    fillContext: form.fillContext,
+    scrapReasons: form.scrapReasons,
   },
   statusCategory: {
     create: statusCategory.create,

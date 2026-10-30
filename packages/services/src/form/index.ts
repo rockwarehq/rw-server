@@ -1,10 +1,21 @@
 import prisma, { Prisma } from "@rw/db";
 import { auditRecord } from "../audit/index.js";
 import { normalizeLabels } from "../document/shared.js";
+import { publishEntityEvent } from "../entity/events.js";
+import type { EntityEventInput } from "../write.js";
 import { computeAll } from "./formula.js";
-import { MAX_CONTENT_BYTES, answerProgress, buildManifest, readManifest, validateAnswers } from "./manifest.js";
+import {
+  MAX_CONTENT_BYTES,
+  answerProgress,
+  buildManifest,
+  needsStation,
+  readManifest,
+  validateAnswers,
+} from "./manifest.js";
+import { type PlannedWrite, listScrapReasons, performWrite, planWrites, publishProblem } from "./writes.js";
 
 export * from "./manifest.js";
+export { fillContext } from "./writes.js";
 
 /*
  * Forms are documents (kind FORM) that delegate their content to DocumentForm
@@ -16,9 +27,10 @@ export * from "./manifest.js";
  *
  * Name, description, labels and deletion stay on the document service.
  *
- * Later slices add computed fields, blocks that write to records on submit
- * (in the submit transaction, each write linked to the submission) and
- * requested forms; the manifest and pinned versions are what they build on.
+ * Some fields write to IMM on submit (scrap, shift notes, entity records; see
+ * writes.ts). They are all checked before anything is created, then created
+ * with the submission in one transaction, each linked to it by a
+ * FormSubmissionWrite row; their post-commit events fire after it commits.
  */
 
 const EMPTY_CONTENT = { type: "doc", content: [] };
@@ -59,9 +71,12 @@ function toUser(user: UserRef) {
 }
 
 function toVersion({ createdBy, publishedBy, fields, ...version }: VersionRecord) {
+  const manifest = readManifest(fields);
   return {
     ...version,
-    fields: readManifest(fields),
+    fields: manifest,
+    /** It records scrap or shift notes, so it is filled in at a station. */
+    needsStation: needsStation(manifest),
     createdBy: toUser(createdBy),
     publishedBy: toUser(publishedBy),
   };
@@ -280,6 +295,8 @@ export async function publish(documentId: string, input: { note?: string | null;
 
   const manifest = buildManifest(draft.content, "strict");
   if (manifest.error !== undefined) return manifest;
+  const problem = await publishProblem(manifest.data, found.data.siteId);
+  if (problem) return { error: problem, code: "INVALID_FORM" };
 
   const previousFormId = found.data.currentFormId;
   const previous = previousFormId
@@ -357,6 +374,10 @@ const submissionInclude = {
   station: { select: { id: true, name: true } },
   workcenter: { select: { id: true, name: true } },
   job: { select: { id: true, currentVersion: { select: { name: true } } } },
+  writes: {
+    select: { kind: true, fieldId: true, targetId: true, label: true },
+    orderBy: { createdAt: "asc" },
+  },
 } satisfies Prisma.FormSubmissionInclude;
 
 type SubmissionRecord = Prisma.FormSubmissionGetPayload<{ include: typeof submissionInclude }>;
@@ -378,6 +399,8 @@ function toSubmissionSummary(record: SubmissionRecord) {
     workcenter: record.workcenter,
     job: record.job ? { id: record.job.id, name: record.job.currentVersion?.name ?? "" } : null,
     progress: answerProgress(readManifest(record.form.fields), answersOf(record.answers)),
+    /** What it wrote to IMM on submit, in the order it wrote them. */
+    writes: record.writes,
   };
 }
 
@@ -421,6 +444,9 @@ export async function submit(input: SubmitFormInput) {
     select: { fields: true },
   });
   const fields = readManifest(form?.fields);
+  if (needsStation(fields) && !input.stationId) {
+    return { error: "Choose the station this was filled in at", code: "NEEDS_STATION" };
+  }
   const checked = validateAnswers(fields, input.answers);
   if (checked.error !== undefined) return checked;
   // Computed fields are worked out here from the checked answers — whatever
@@ -432,53 +458,119 @@ export async function submit(input: SubmitFormInput) {
   }
 
   let siteId = document.siteId;
-  let workcenterId: string | null = null;
-  let jobId: string | null = null;
+  let station: Parameters<typeof planWrites>[0]["station"] = null;
   if (input.stationId) {
-    const station = await prisma.station.findUnique({
+    const found = await prisma.station.findUnique({
       where: { id: input.stationId },
-      select: { siteId: true, workcenterId: true, currentJobId: true, deletedAt: true },
+      select: {
+        id: true,
+        name: true,
+        siteId: true,
+        currentJobId: true,
+        deletedAt: true,
+        workcenter: { select: { id: true, name: true } },
+      },
     });
-    if (!station || station.deletedAt) return { error: "Station not found", code: "STATION_NOT_FOUND" };
-    if (document.siteId && document.siteId !== station.siteId) {
+    if (!found || found.deletedAt) return { error: "Station not found", code: "STATION_NOT_FOUND" };
+    if (document.siteId && document.siteId !== found.siteId) {
       return { error: "This form belongs to another site", code: "SITE_MISMATCH" };
     }
-    siteId = station.siteId;
-    workcenterId = station.workcenterId;
-    jobId = station.currentJobId;
+    siteId = found.siteId;
+    station = {
+      id: found.id,
+      name: found.name,
+      siteId: found.siteId,
+      workcenterId: found.workcenter?.id ?? null,
+      workcenterName: found.workcenter?.name ?? null,
+      currentJobId: found.currentJobId,
+    };
   }
+
+  // Every write is resolved and checked before anything is created.
+  const plan = await planWrites({
+    fields,
+    answers,
+    station,
+    siteId,
+    submittedById: input.submittedById ?? null,
+  });
+  if (plan.error !== undefined) return plan;
 
   // TODO(forms): publish a `form.submitted` domain event (runtime *-events.ts
   // subject + stream) once something consumes it.
   for (let attempt = 0; attempt < 3; attempt++) {
+    // Collected per attempt; only a committed attempt announces anything.
+    const events: EntityEventInput[] = [];
+    const afterCommit: Array<() => void> = [];
     try {
-      const created = await prisma.$transaction(async (tx) => {
-        const latest = await tx.formSubmission.aggregate({
-          where: { documentId: input.documentId },
-          _max: { number: true },
-        });
-        return tx.formSubmission.create({
-          data: {
-            number: (latest._max.number ?? 0) + 1,
-            documentId: input.documentId,
-            formId: input.formId,
-            answers: answers as Prisma.InputJsonValue,
-            siteId,
-            workcenterId,
-            stationId: input.stationId ?? null,
-            jobId,
-            submittedById: input.submittedById ?? null,
-          },
-          include: submissionInclude,
-        });
+      const submissionId = await prisma.$transaction(
+        async (tx) => {
+          const latest = await tx.formSubmission.aggregate({
+            where: { documentId: input.documentId },
+            _max: { number: true },
+          });
+          const created = await tx.formSubmission.create({
+            data: {
+              number: (latest._max.number ?? 0) + 1,
+              documentId: input.documentId,
+              formId: input.formId,
+              answers: answers as Prisma.InputJsonValue,
+              siteId,
+              workcenterId: station?.workcenterId ?? null,
+              stationId: station?.id ?? null,
+              jobId: station?.currentJobId ?? null,
+              submittedById: input.submittedById ?? null,
+            },
+            select: { id: true },
+          });
+          const links: Prisma.FormSubmissionWriteCreateManyInput[] = [];
+          const start = Date.now();
+          for (const [index, write] of plan.data.entries()) {
+            const result = await performWrite(write, { tx, events, afterCommit });
+            if ("error" in result) throw new WriteFailed(write, result);
+            links.push({
+              submissionId: created.id,
+              fieldId: write.fieldId,
+              kind: write.kind,
+              targetId: result.id,
+              label: write.label,
+              // Spaced a millisecond apart so they read back in the order written.
+              createdAt: new Date(start + index),
+            });
+          }
+          if (links.length > 0) await tx.formSubmissionWrite.createMany({ data: links });
+          return created.id;
+        },
+        { timeout: 30_000 },
+      );
+      for (const event of events) publishEntityEvent(event);
+      for (const fn of afterCommit) fn();
+      const record = await prisma.formSubmission.findUniqueOrThrow({
+        where: { id: submissionId },
+        include: submissionInclude,
       });
-      return { data: toSubmission(created) };
+      return { data: toSubmission(record) };
     } catch (error) {
+      if (error instanceof WriteFailed) return error.result;
       // Two submissions took the same number; the next attempt reads the new max.
       if (!isUniqueViolation(error)) throw error;
     }
   }
   return { error: "Too many submissions at once; try again", code: "VERSION_CONFLICT" };
+}
+
+/** A write the plan passed but its service refused inside the transaction; rolls everything back. */
+class WriteFailed extends Error {
+  readonly result: { error: string; code: string };
+  constructor(write: PlannedWrite, result: { error: string; code: string }) {
+    super(`${write.label}: ${result.error}`);
+    this.result = { error: `${write.label}: ${result.error}`, code: result.code };
+  }
+}
+
+/** The scrap reasons a form's editor offers (formula-fed scrap): the site's system Scrap disposition's active reasons. */
+export async function scrapReasons(siteId: string) {
+  return { data: (await listScrapReasons(siteId)).reasons };
 }
 
 export interface ListSubmissionsInput {
