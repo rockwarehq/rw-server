@@ -80,6 +80,9 @@ model User {
   setupChangesetsRolledBack SetupChangeset[]       @relation("SetupChangesetRolledBackBy")
   savedViewsCreated       SavedView[]
   documentFilesCreated    DocumentFile[]           @relation("DocumentFileCreatedBy")
+  documentFormsCreated    DocumentForm[]           @relation("DocumentFormCreatedBy")
+  documentFormsPublished  DocumentForm[]           @relation("DocumentFormPublishedBy")
+  formSubmissions         FormSubmission[]
 
   // SMS consent decisions this user recorded
   smsConsentEvents SmsConsentEvent[]

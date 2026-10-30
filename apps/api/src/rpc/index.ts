@@ -14,6 +14,7 @@ import * as dashboard from "./dashboard.js";
 import * as savedViewRpc from "./saved-view.js";
 import * as display from "./display.js";
 import * as document from "./document.js";
+import * as form from "./form.js";
 import * as statusCategory from "./status-category.js";
 import * as statusReason from "./status-reason.js";
 import * as callRpc from "./call.js";
@@ -549,6 +550,20 @@ export const coreRouter = {
     context: document.context,
     listForDisplayContext: document.listForDisplayContext,
     displayContext: document.displayContext,
+  },
+  form: {
+    list: form.list,
+    create: form.create,
+    get: form.get,
+    saveDraft: form.saveDraft,
+    publish: form.publish,
+    discardDraft: form.discardDraft,
+    listVersions: form.listVersions,
+    submit: form.submit,
+    listSubmissions: form.listSubmissions,
+    getSubmission: form.getSubmission,
+    fillContext: form.fillContext,
+    scrapReasons: form.scrapReasons,
   },
   statusCategory: {
     create: statusCategory.create,

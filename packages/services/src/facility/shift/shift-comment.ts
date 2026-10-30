@@ -1,6 +1,7 @@
-import prisma from "@rw/db";
+import prisma, { type Prisma } from "@rw/db";
 
 import { resolveEmployee } from "../../employee/actor-role.js";
+import { reader, type WriteOptions } from "../../write.js";
 
 export interface CreateShiftCommentInput {
   siteId: string;
@@ -102,7 +103,13 @@ const commentSelect = {
   },
 } as const;
 
-export async function create(input: CreateShiftCommentInput) {
+type ShiftCommentRecord = Prisma.ShiftCommentGetPayload<{ select: typeof commentSelect }>;
+
+export async function create(
+  input: CreateShiftCommentInput,
+  options?: WriteOptions,
+): Promise<{ error: string; code: string } | { data: ShiftCommentRecord }> {
+  const db = reader(options);
   const { siteId, shiftInstanceId, workcenterId, stationId, text, createdById, createdByEmployeeId } = input;
 
   const trimmed = text.trim();
@@ -116,7 +123,7 @@ export async function create(input: CreateShiftCommentInput) {
     return { error: "Choose who is writing this comment", code: "EMPLOYEE_REQUIRED" };
   }
 
-  const shiftInstance = await prisma.shiftInstance.findUnique({
+  const shiftInstance = await db.shiftInstance.findUnique({
     where: { id: shiftInstanceId },
     select: { id: true, siteId: true, workCenterId: true, site: { select: { workspaceId: true } } },
   });
@@ -137,7 +144,7 @@ export async function create(input: CreateShiftCommentInput) {
   }
 
   if (stationId) {
-    const station = await prisma.station.findUnique({
+    const station = await db.station.findUnique({
       where: { id: stationId },
       select: { id: true, siteId: true, workcenterId: true },
     });
@@ -161,7 +168,7 @@ export async function create(input: CreateShiftCommentInput) {
   const author = await resolveEmployee(shiftInstance.site.workspaceId, createdByEmployeeId, createdById ?? undefined);
   if ("error" in author) return author;
 
-  const comment = await prisma.shiftComment.create({
+  const comment = await db.shiftComment.create({
     data: {
       siteId,
       shiftInstanceId,

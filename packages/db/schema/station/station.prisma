@@ -48,6 +48,7 @@ model Station {
   calls                Call[]
   modeLogs             StationModeLog[]
   jobHistoryAmendments JobHistoryAmendment[]
+  formSubmissions      FormSubmission[]
   stockMovements       StockMovement[]
 
   @@unique([siteId, name])

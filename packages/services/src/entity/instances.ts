@@ -10,6 +10,7 @@ import { SYSTEM_ENTITY_KEYS } from "./registry.js";
 import { publishEntityEvent } from "./events.js";
 import { errorResult, type EntityScope, type ListResult, type ServiceResult } from "./types.js";
 import { asValueRecord, validateInstanceValues } from "./validation.js";
+import { emitEntityEvent, reader, type WriteOptions } from "../write.js";
 
 const instanceInclude = {
   schema: {
@@ -26,8 +27,8 @@ const instanceInclude = {
   },
 };
 
-async function getSchemaWithFields(schemaId: string, scope: EntityScope) {
-  const schema = await prisma.objectSchema.findUnique({
+async function getSchemaWithFields(schemaId: string, scope: EntityScope, db: Prisma.TransactionClient = prisma) {
+  const schema = await db.objectSchema.findUnique({
     where: { id: schemaId },
     include: { fields: { where: { isDeleted: false }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] } },
   });
@@ -40,9 +41,9 @@ async function getSchemaWithFields(schemaId: string, scope: EntityScope) {
   return { data: schema };
 }
 
-async function validateObjectRefs(refs: readonly string[], scope: EntityScope) {
+async function validateObjectRefs(refs: readonly string[], scope: EntityScope, db: Prisma.TransactionClient = prisma) {
   if (refs.length === 0) return null;
-  const count = await prisma.objectInstance.count({
+  const count = await db.objectInstance.count({
     where: {
       id: { in: [...refs] },
       siteId: scope.siteId,
@@ -609,16 +610,21 @@ async function listSystemInstances(
   return errorResult("ENTITY_NOT_FOUND", "System entity not found");
 }
 
-export async function create(input: CreateObjectInstanceInput, scope: EntityScope): Promise<ServiceResult<unknown>> {
-  const schemaResult = await getSchemaWithFields(input.schemaId, scope);
+export async function create(
+  input: CreateObjectInstanceInput,
+  scope: EntityScope,
+  options?: WriteOptions,
+): Promise<ServiceResult<unknown>> {
+  const db = reader(options);
+  const schemaResult = await getSchemaWithFields(input.schemaId, scope, db);
   if ("error" in schemaResult) return schemaResult;
 
   const validation = validateInstanceValues(schemaResult.data.fields, input.values ?? {});
   if (validation.errors.length > 0) return errorResult("INVALID_VALUES", validation.errors.join("; "));
-  const refError = await validateObjectRefs(validation.objectInstanceRefs, scope);
+  const refError = await validateObjectRefs(validation.objectInstanceRefs, scope, db);
   if (refError) return refError;
 
-  const instance = await prisma.objectInstance.create({
+  const instance = await db.objectInstance.create({
     data: {
       schemaId: input.schemaId,
       siteId: scope.siteId,
@@ -627,7 +633,7 @@ export async function create(input: CreateObjectInstanceInput, scope: EntityScop
     },
     include: instanceInclude,
   });
-  publishEntityEvent({
+  emitEntityEvent(options, {
     action: "created",
     entityKey: instance.schema.key,
     entityId: instance.id,

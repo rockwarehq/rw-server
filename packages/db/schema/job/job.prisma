@@ -22,6 +22,7 @@ model Job {
   itemDispositionLogs  ItemDispositionLog[]
   stateLogs            StationStateLog[]
   jobHistoryAmendments JobHistoryAmendment[]
+  formSubmissions      FormSubmission[]
 
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
